@@ -16,6 +16,7 @@ import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playgro
 import { HostDiscoveryRoutes, type HostDiscoveryRouteService } from './playground/host-discovery-routes.ts';
 import type { HookReceiptRoutes } from './hooks/hook-receipt-endpoint.ts';
 import type { HostMcpRoutes } from './host-mcp-routes.ts';
+import { HostSessionRoutes, type HostSessionRouteService } from './sessions/host-session-routes.ts';
 import { LifecycleReplayRoutes, type LifecycleReplayRouteService } from './playground/lifecycle-replay-routes.ts';
 import { McpProbeRoutes, type McpProbeRouteService } from './playground/mcp-probe-routes.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
@@ -89,7 +90,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'mcp-apps' | 'route-invocations' | 'server' | 'trace';
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'host-sessions' | 'logs' | 'mcp-apps' | 'route-invocations' | 'server' | 'trace';
 }
 
 export interface ForegroundServerStartFailure {
@@ -180,6 +181,7 @@ export interface ForegroundServerOptions {
   readonly hostDiscovery?: HostDiscoveryRouteService;
   /** Stateful MCP surface used only by stable development host proxies. */
   readonly hostMcp?: HostMcpRoutes;
+  readonly hostSessions?: HostSessionRouteService;
   /** User-initiated read-only initialize and tools/list probing over trusted artifact servers. */
   readonly mcpProbe?: McpProbeRouteService;
   /** Read-only semantic lifecycle replay over the latest valid prepared graph. */
@@ -417,6 +419,7 @@ export class ForegroundServer {
   readonly #hookReceiptRoutes: HookReceiptRoutes | undefined;
   readonly #hostDiscoveryRoutes: HostDiscoveryRoutes;
   readonly #hostMcpRoutes: HostMcpRoutes | undefined;
+  readonly #hostSessionRoutes: HostSessionRoutes;
   readonly #host: string;
   readonly #inspectorRoutes: InspectorRoutes;
   readonly #lifecycleReplayRoutes: LifecycleReplayRoutes;
@@ -483,6 +486,10 @@ export class ForegroundServer {
     this.#skillDocuments = options.skillDocuments;
     this.#testing = options.testing;
     this.sessionToken = options.sessionToken ?? randomUUID();
+    this.#hostSessionRoutes = new HostSessionRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.hostSessions === undefined ? {} : { service: options.hostSessions }),
+    });
     this.#workbenchDevOrigins = Object.freeze(new Set(workbenchDevOrigins));
     this.#webHostRoutes = new WebHostRoutes({
       authorize: (request) => this.#assertWebHostNavigation(request),
@@ -726,6 +733,8 @@ export class ForegroundServer {
     this.#artifactRoutes.close();
     const releaseRouteInvocations = this.#routeInvocationRoutes.close();
     void releaseRouteInvocations.catch(() => undefined);
+    const releaseHostSessions = this.#hostSessionRoutes.close();
+    void releaseHostSessions.catch(() => undefined);
     this.#routeManifestRoutes.close();
     this.#lifecycleReplayRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
@@ -772,12 +781,13 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    const [server, coordinator, evalRoutes, evalService, hookPlayground, logs, routeInvocations, trace] = await Promise.allSettled([
+    const [server, coordinator, evalRoutes, evalService, hookPlayground, hostSessions, logs, routeInvocations, trace] = await Promise.allSettled([
       releaseServer,
       releaseCoordinator,
       releaseEvals,
       releaseEvalService,
       releaseHookPlayground,
+      releaseHostSessions,
       releaseLogs,
       releaseRouteInvocations,
       releaseTrace,
@@ -794,6 +804,7 @@ export class ForegroundServer {
     if (hookPlayground.status === 'rejected') {
       failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
     }
+    if (hostSessions.status === 'rejected') failures.push(Object.freeze({ error: hostSessions.reason, resource: 'host-sessions' }));
     if (logs.status === 'rejected') failures.push(Object.freeze({ error: logs.reason, resource: 'logs' }));
     if (routeInvocations.status === 'rejected') {
       failures.push(Object.freeze({ error: routeInvocations.reason, resource: 'route-invocations' }));
@@ -827,6 +838,7 @@ export class ForegroundServer {
     if (await this.#inspectorRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;
     if (await this.#routeInvocationRoutes.handle(request, response)) return;
+    if (await this.#hostSessionRoutes.handle(request, response)) return;
     if (this.#routeManifestRoutes.handle(request, response)) return;
     if (await this.#evalRoutes.handle(request, response)) return;
     if (await this.#devLogRoutes.handle(request, response)) return;

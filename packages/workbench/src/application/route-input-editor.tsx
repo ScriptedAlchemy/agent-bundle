@@ -245,6 +245,8 @@ const scalarControl = (
 };
 
 export interface RouteInputEditorProps {
+  /** Rendered beside Run (the `Open in <host>` launchers). */
+  readonly actions?: React.ReactNode;
   readonly cliSurface?: boolean;
   readonly disabled?: boolean;
   readonly fixtures?: readonly RouteInputFixture[];
@@ -259,7 +261,7 @@ const isRunShortcut = (event: React.KeyboardEvent): boolean =>
   event.key === 'Enter' && (event.metaKey || event.ctrlKey);
 
 /** The workspace's input panel: form or raw JSON, fixtures, argv preview, and Run. */
-export const RouteInputEditor = ({ cliSurface, disabled = false, fixtures = [], leaf, onChange, onRun, running, value }: RouteInputEditorProps): React.ReactNode => {
+export const RouteInputEditor = ({ actions, cliSurface, disabled = false, fixtures = [], leaf, onChange, onRun, running, value }: RouteInputEditorProps): React.ReactNode => {
   const schema = leaf.inputSchema;
   const submission = routeInputSubmission(leaf, value, cliSurface);
   const fieldErrors = value.attempted && submission.fieldErrors !== undefined ? submission.fieldErrors : {};
@@ -398,6 +400,7 @@ export const RouteInputEditor = ({ cliSurface, disabled = false, fixtures = [], 
         type="button"
       >{running ? 'Running…' : 'Run'}</button>
       <span className="route-input-shortcut">Ctrl/⌘ + Enter</span>
+      {actions}
       {value.attempted && submission.error !== undefined && value.mode !== 'raw'
         ? <span className="route-input-error" role="alert">{submission.error}</span>
         : undefined}

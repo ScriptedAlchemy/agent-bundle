@@ -28,6 +28,58 @@ projections, diagnostics, and timings. Trace entries link to that full snapshot 
 duplicating it. A cancelled invocation has `status: "cancelled"` and no `outcome`; cancelling an
 already-final invocation returns `AB8256` (409).
 
+## Host sessions
+
+Every route in this table requires the foreground session cookie or
+`x-agent-bundle-session` bearer value. Session ids match `hs_[0-9a-z]{16}`, JSON request bodies
+are strict, input is limited to 16 KiB of UTF-8 text, and terminal dimensions are integers from
+1 through 500.
+
+| Method | Path | Body and response |
+| --- | --- | --- |
+| `GET` | `/api/sessions` | `{ sessions: HostSession[], hosts: HostAvailability[] }` |
+| `POST` | `/api/sessions` | `{ host: "claude" \| "codex", prompt?: string, cols, rows }`; `201` with `{ session }` |
+| `GET` | `/api/sessions/<id>` | `{ session }` |
+| `GET` | `/api/sessions/<id>/stream` | Server-sent `state`, `output`, and terminal `end` events |
+| `POST` | `/api/sessions/<id>/input` | `{ data: string }`; `204` |
+| `POST` | `/api/sessions/<id>/resize` | `{ cols, rows }`; `204` |
+| `POST` | `/api/sessions/<id>/terminate` | `{}`; `200` with `{ session }` |
+| `POST` | `/api/sessions/<id>/restart` | `{ cols, rows }`; `201` with the replacement `{ session }` |
+| `DELETE` | `/api/sessions/<id>` | `204`; a running session cannot be forgotten |
+
+`HostSession` reports `id`, `host`, `state`, `startedAt`, optional terminal `endedAt`,
+`exitCode`, `signal`, `pid`, `cols`, `rows`, the optional seeded `prompt`, and optional
+`restartOf` and `traceSessionId`. Its `authority` contains the absolute `projectRoot`, adopted
+`epochId`, and host plugin `install` destination. `HostAvailability` contains `host`,
+`launchable`, and optional `reason` and resolved `executable`.
+
+The stream starts with a state frame, replays up to 256 KiB of retained output as one frame, then continues
+with live state and output. It sends a keep-alive comment every 15 seconds and closes after
+`end`. Each event has one JSON `data:` object:
+
+```text
+event: state
+data: { "session": HostSession }
+
+event: output
+data: { "data": "<base64 PTY bytes>" }
+
+event: end
+data: { "session": HostSession }
+```
+
+Host-session failures use these diagnostics:
+
+| Code | Meaning |
+| --- | --- |
+| `AB8260` | `@lydell/node-pty` is unavailable from the project and framework fallback. |
+| `AB8261` | The body, path, query, dimensions, input, method state, or live-session delete is malformed. |
+| `AB8262` | The session id is well formed but unknown. |
+| `AB8263` | The executable is absent from `PATH`, no development install is attached to the adopted epoch, or spawning failed. |
+| `AB8264` | Four sessions are already live. |
+| `AB8265` | The host-session service is closed or unavailable. |
+| `AB8266` | A hook receipt or proxy request supplied an invalid `AGENT_BUNDLE_DEV_SESSION` value. |
+
 ## Development runtime runs
 
 `POST /api/runtime/runs` accepts a `DevRuntimeInvocationRequest` with `surfaceId`, `target`,
@@ -75,6 +127,7 @@ interface TraceEntry {
     | 'kernel'
     | 'mcp'
     | 'hook'
+    | 'session'
     | 'log'
     | 'diagnostic';
   readonly kind: string;

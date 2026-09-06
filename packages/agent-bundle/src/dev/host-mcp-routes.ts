@@ -4,17 +4,45 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { ProtocolError, Server, type ReadResourceResult } from '@modelcontextprotocol/server';
 
+import { isHostSessionId } from '../contracts/host-sessions.ts';
 import { EpochStoreError, type EpochStore } from './epoch-store.ts';
 import {
   subscribeToEpochAdoption,
   type EpochAdoptionSource,
 } from './epoch-adoption-policy.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
+import { diagnostic, requestError, singleHeader } from './http.ts';
 import {
   McpSessionStaleEpochError,
   type McpSession,
   type McpSessionService,
 } from './mcp-session/mcp-session-service.ts';
+
+export const HOST_MCP_DEV_SESSION_CODE = 'AB8266';
+const hostDevSessionHeader = 'x-agent-bundle-dev-session';
+const hostDevPidHeader = 'x-agent-bundle-dev-pid';
+
+export const hostDevSessionId = (headers: IncomingMessage['headers']): string | undefined => {
+  const value = singleHeader(headers[hostDevSessionHeader]);
+  if (value === undefined) return undefined;
+  if (!isHostSessionId(value)) {
+    throw requestError(diagnostic(
+      HOST_MCP_DEV_SESSION_CODE,
+      'AGENT_BUNDLE_DEV_SESSION must be a host-session id (hs_ + 16 lowercase characters).',
+      400,
+    ));
+  }
+  return value;
+};
+
+export const hostDevProcessId = (headers: IncomingMessage['headers']): number | undefined => {
+  const value = singleHeader(headers[hostDevPidHeader]);
+  if (value === undefined) return undefined;
+  if (!/^[1-9]\d{0,9}$/u.test(value)) {
+    throw requestError(diagnostic(HOST_MCP_DEV_SESSION_CODE, 'x-agent-bundle-dev-pid must be a process id.', 400));
+  }
+  return Number(value);
+};
 
 const hostMcpPathPrefix = '/mcp/host/';
 const internalErrorCode = -32_603;
@@ -48,11 +76,14 @@ interface HostMcpEpochSession {
   readonly session: McpSession;
 }
 
-interface HostMcpRoutesOptions {
+export interface HostMcpRoutesOptions {
   readonly adoption?: EpochAdoptionSource;
   readonly epochStore: EpochStore;
   readonly eventHub: ProjectEventHub;
   readonly mcpSessions: McpSessionService;
+  readonly traceSessionId?: (devSession: string) => string;
+  /** Resolves the Workbench host session owning a proxy process when the host did not forward `AGENT_BUNDLE_DEV_SESSION`. */
+  readonly sessionForProcess?: (pid: number) => Promise<string | undefined>;
 }
 
 const requestSessionId = (request: IncomingMessage): string | undefined => {
@@ -81,9 +112,11 @@ const isEpochDrift = (error: unknown): boolean =>
 class HostMcpConnection {
   readonly #adoption: EpochAdoptionSource | undefined;
   readonly #binding: HostMcpBinding;
+  readonly #devSession: string | undefined;
   readonly #epochStore: EpochStore;
   readonly #mcpSessions: McpSessionService;
   readonly #onSessionInitialized: (sessionId: string, connection: HostMcpConnection) => void;
+  readonly #traceSessionId: (devSession: string) => string;
   readonly #epochSessions = new Set<HostMcpEpochSession>();
   readonly #server: Server;
   readonly transport: NodeStreamableHTTPServerTransport;
@@ -97,14 +130,18 @@ class HostMcpConnection {
 
   constructor(
     binding: HostMcpBinding,
-    options: Pick<HostMcpRoutesOptions, 'adoption' | 'epochStore' | 'mcpSessions'>,
+    options: Pick<HostMcpRoutesOptions, 'adoption' | 'epochStore' | 'mcpSessions' | 'traceSessionId'> & {
+      readonly devSession?: string;
+    },
     onSessionInitialized: (sessionId: string, connection: HostMcpConnection) => void,
   ) {
     this.#adoption = options.adoption;
     this.#binding = binding;
+    this.#devSession = options.devSession;
     this.#epochStore = options.epochStore;
     this.#mcpSessions = options.mcpSessions;
     this.#onSessionInitialized = onSessionInitialized;
+    this.#traceSessionId = options.traceSessionId ?? ((id) => id);
     this.#server = new Server(
       { name: `agent-bundle-dev:${binding.serverName}`, version: '0.1.0' },
       {
@@ -232,10 +269,12 @@ class HostMcpConnection {
 
   async #openEpochSession(epochId: string): Promise<HostMcpEpochSession> {
     const target = this.#binding.target ?? await this.#targetFor(epochId);
+    const devSession = this.#devSession;
     const session = await this.#mcpSessions.open({
       epochId,
       serverName: this.#binding.serverName,
       target,
+      ...(devSession === undefined ? {} : { sessionId: () => this.#traceSessionId(devSession) }),
     });
     const binding: HostMcpEpochSession = {
       epochId,
@@ -355,12 +394,16 @@ export class HostMcpRoutes {
   readonly #mcpSessions: McpSessionService;
   readonly #sessions = new Map<string, HostMcpConnection>();
   readonly #subscription: ProjectEventSubscription;
+  readonly #sessionForProcess: HostMcpRoutesOptions['sessionForProcess'];
+  readonly #traceSessionId: HostMcpRoutesOptions['traceSessionId'];
   #closed = false;
 
   constructor(options: HostMcpRoutesOptions) {
     this.#adoption = options.adoption;
     this.#epochStore = options.epochStore;
     this.#mcpSessions = options.mcpSessions;
+    this.#sessionForProcess = options.sessionForProcess;
+    this.#traceSessionId = options.traceSessionId;
     this.#subscription = subscribeToEpochAdoption(options.adoption, options.eventHub, (epochId) => {
       for (const connection of this.#connections) connection.refreshCatalog(epochId);
     });
@@ -389,9 +432,18 @@ export class HostMcpRoutes {
       return true;
     }
 
+    const pid = hostDevProcessId(request.headers);
+    const devSession = hostDevSessionId(request.headers)
+      ?? (pid === undefined ? undefined : await this.#sessionForProcess?.(pid));
     const connection = new HostMcpConnection(
       binding,
-      { adoption: this.#adoption, epochStore: this.#epochStore, mcpSessions: this.#mcpSessions },
+      {
+        adoption: this.#adoption,
+        epochStore: this.#epochStore,
+        mcpSessions: this.#mcpSessions,
+        ...(this.#traceSessionId === undefined ? {} : { traceSessionId: this.#traceSessionId }),
+        ...(devSession === undefined ? {} : { devSession }),
+      },
       (id, initialized) => this.#sessions.set(id, initialized),
     );
     this.#connections.add(connection);

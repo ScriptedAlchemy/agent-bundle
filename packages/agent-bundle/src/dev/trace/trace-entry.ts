@@ -13,6 +13,8 @@ export const traceSources = Object.freeze([
   'log',
   /** Build, contract-gate, and host-attach diagnostics. */
   'diagnostic',
+  /** Lifecycle of a Workbench-launched host session (`dev/sessions`). */
+  'session',
 ] as const);
 
 export type TraceSource = (typeof traceSources)[number];

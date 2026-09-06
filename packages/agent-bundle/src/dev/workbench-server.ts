@@ -20,6 +20,7 @@ import { attachHookReceipts } from './hooks/hook-receipt-endpoint.ts';
 import { createInspectorLauncher } from './inspector-launcher.ts';
 import { HookPlaygroundService } from './playground/hook-playground-service.ts';
 import { DevHostInstallManager } from './host-install-manager.ts';
+import { HostSessionService } from './sessions/host-session-service.ts';
 import {
   HostDiscoveryService,
   type HostDiscoveryServiceOptions,
@@ -621,7 +622,11 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
   const traceHub = new TraceHub({ projectRoot: root });
-  const hookReceipts = attachHookReceipts({ projectRoot: root, trace: traceHub });
+  const hookReceipts = attachHookReceipts({
+    attachHostSession: (devSession, hostSessionId) => hostSessions.attach(devSession, hostSessionId),
+    projectRoot: root,
+    trace: traceHub,
+  });
   let hookReceiptUrl: string | undefined;
   const logs = new DevLogService({ projectRoot: root, trace: traceHub });
   const detachProjectLogs = attachProjectEventLogs(logs, eventHub);
@@ -831,7 +836,24 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         projectRoot: root,
         platformRuntime,
       });
-  const hostMcp = new HostMcpRoutes({ adoption: epochAdoption, epochStore, eventHub, mcpSessions });
+  const hostSessions = new HostSessionService({
+    attached: (host) => hostInstalls?.attached(host),
+    currentEpochId: () => epochAdoption.currentEpochId,
+    environment: () => ({
+      ...process.env,
+      ...(hookReceiptUrl === undefined ? {} : hookReceipts.environment(hookReceiptUrl)),
+    }),
+    projectRoot: root,
+    trace: traceHub,
+  });
+  const hostMcp = new HostMcpRoutes({
+    adoption: epochAdoption,
+    epochStore,
+    eventHub,
+    mcpSessions,
+    sessionForProcess: (pid) => hostSessions.sessionForProcess(pid),
+    traceSessionId: (devSession) => hostSessions.traceSessionId(devSession),
+  });
   const hookPlayground = new HookPlaygroundService({
     epochStore,
     hookService: new HookService({
@@ -1046,6 +1068,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     hookReceipts: hookReceipts.routes,
     hostDiscovery,
     hostMcp,
+    hostSessions,
     inspector,
     lifecycleReplay,
     logs,

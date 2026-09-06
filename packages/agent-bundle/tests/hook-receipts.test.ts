@@ -12,9 +12,11 @@ import { attachHookReceipts, HookReceiptRoutes } from '../src/dev/hooks/hook-rec
 import {
   decodeHookReceipt,
   HOOK_RECEIPT_MALFORMED_CODE,
+  HOOK_RECEIPT_SESSION_CODE,
   HOOK_RECEIPT_TOO_LARGE_CODE,
   HOOK_RECEIPT_UNAUTHORIZED_CODE,
   HookReceiptDecodeError,
+  HookReceiptSessionError,
   lowerHookReceipt,
 } from '../src/dev/hooks/hook-receipts.ts';
 import { diagnostic, isRequestDiagnostic, responseDiagnostic } from '../src/dev/http.ts';
@@ -23,6 +25,7 @@ import { TraceHub } from '../src/dev/trace/trace-hub.ts';
 import {
   DEV_INSTALL_MARKER_FILE,
   EVENT_TRACE_RECEIPT_PATH,
+  EVENT_TRACE_RECEIPT_SESSION_ENV,
   EVENT_TRACE_RECEIPT_TOKEN_ENV,
   EVENT_TRACE_RECEIPT_URL_ENV,
   eventTraceReceiptEndpointPath,
@@ -111,6 +114,25 @@ it('projects host ids from the native payload without carrying the payload', () 
   expect(eventTraceReceiptIdentity('cursor', { conversation_id: 'conv-1', generation_id: 'gen-1' }))
     .toEqual({ conversationId: 'conv-1', sessionId: 'conv-1' });
   expect(eventTraceReceiptIdentity('cursor', { session_id: '   ' })).toEqual({});
+});
+
+const hostSessionId = 'hs_0123456789abcdef';
+
+it('accepts a valid top-level devSession and rejects a malformed one with AB8266', () => {
+  expect(decodeHookReceipt({ ...receipt(), devSession: hostSessionId })).toEqual({
+    ...receipt(),
+    devSession: hostSessionId,
+  });
+  expect(lowerHookReceipt({ ...receipt(), devSession: hostSessionId })[0]?.correlation.sessionId).toBe('session-1');
+  let caught: unknown;
+  try {
+    decodeHookReceipt({ ...receipt(), devSession: 'hs_nope' });
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(HookReceiptSessionError);
+  expect((caught as HookReceiptSessionError).code).toBe(HOOK_RECEIPT_SESSION_CODE);
+  expect((caught as HookReceiptSessionError).path).toBe('devSession');
 });
 
 it('projects the lineage axis without the live tree', () => {
@@ -344,6 +366,8 @@ it('refuses receipts without the token, with an Origin header, over the size cap
     .resolves.toEqual({ code: HOOK_RECEIPT_TOO_LARGE_CODE, status: 413 });
   await expect(code(await fetch(`${new URL(EVENT_TRACE_RECEIPT_PATH, url).href}?replay=1`, { body, headers: jsonHeaders('secret-token'), method: 'POST' })))
     .resolves.toEqual({ code: HOOK_RECEIPT_MALFORMED_CODE, status: 400 });
+  await expect(code(await post(url, JSON.stringify({ ...receipt(), devSession: 'hs_nope' }), jsonHeaders('secret-token'))))
+    .resolves.toEqual({ code: HOOK_RECEIPT_SESSION_CODE, status: 400 });
   expect(hub.latestSequence).toBe(0);
 
   routes.close();
@@ -460,6 +484,70 @@ it('records kernel events through the tracer and posts one bounded receipt that 
 
   const silent = await openEventTraceReceipt({ anchor: 'file:///nowhere/hooks/x.mjs', env: {}, execution: traced, fetch: fetchStub });
   expect(silent).toBeUndefined();
+});
+
+it('posts a top-level devSession when AGENT_BUNDLE_DEV_SESSION is set and keeps the host identity', async () => {
+  const posted: EventTraceReceipt[] = [];
+  const traced = eventTraceExecution({ event: 'tool/before', host: 'claude', nativeEvent: 'PreToolUse' });
+  const recorder = await openEventTraceReceipt({
+    anchor: 'file:///nowhere/hooks/x.mjs',
+    env: {
+      [EVENT_TRACE_RECEIPT_SESSION_ENV]: hostSessionId,
+      [EVENT_TRACE_RECEIPT_TOKEN_ENV]: 't',
+      [EVENT_TRACE_RECEIPT_URL_ENV]: 'http://127.0.0.1:6000',
+    },
+    execution: traced,
+    fetch: async (_input, init) => {
+      posted.push(JSON.parse(init!.body as string) as EventTraceReceipt);
+      return new Response(null, { status: 204 });
+    },
+  });
+  recorder!.identity({ session_id: 'host-session', tool_use_id: 'u' });
+  createEventTracer({ execution: traced, now: () => 1, observer: recorder!.observer }).executeStart('standalone');
+  await recorder!.send();
+  expect(posted[0]!.devSession).toBe(hostSessionId);
+  expect(posted[0]!.identity).toEqual({ conversationId: 'host-session', requestId: 'u', sessionId: 'host-session' });
+
+  const stray = await openEventTraceReceipt({
+    anchor: 'file:///nowhere/hooks/x.mjs',
+    env: {
+      [EVENT_TRACE_RECEIPT_SESSION_ENV]: 'not-a-workbench-session',
+      [EVENT_TRACE_RECEIPT_TOKEN_ENV]: 't',
+      [EVENT_TRACE_RECEIPT_URL_ENV]: 'http://127.0.0.1:6000',
+    },
+    execution: traced,
+    fetch: async (_input, init) => {
+      posted.push(JSON.parse(init!.body as string) as EventTraceReceipt);
+      return new Response(null, { status: 204 });
+    },
+  });
+  createEventTracer({ execution: traced, now: () => 1, observer: stray!.observer }).executeStart('standalone');
+  await stray!.send();
+  expect(posted[1]).not.toHaveProperty('devSession');
+});
+
+it('calls attachHostSession only for a session/start receipt carrying devSession', async () => {
+  const attached: [string, string | undefined][] = [];
+  const hub = new TraceHub({ projectRoot: '/work/project' });
+  const routes = new HookReceiptRoutes({
+    attachHostSession: (devSession, hostSessionId) => {
+      attached.push([devSession, hostSessionId]);
+    },
+    token: 'secret-token',
+    trace: hub,
+  });
+  const { url } = await listen((request, response) => routes.handle(request, response));
+  const start = { ...execution, event: 'session/start', nativeEvent: 'SessionStart' } as const;
+  const accepted = await post(url, JSON.stringify({ ...receipt({ execution: start }), devSession: hostSessionId }), jsonHeaders('secret-token'));
+  expect(accepted.status).toBe(204);
+  // A nested host run's tool hook carries the same devSession with its own session id; it must not move the alias.
+  const nested = await post(url, JSON.stringify({
+    ...receipt({ identity: { conversationId: 'agent-8', requestId: 'toolu_2', sessionId: 'session-2' } }),
+    devSession: hostSessionId,
+  }), jsonHeaders('secret-token'));
+  expect(nested.status).toBe(204);
+  expect(attached).toEqual([[hostSessionId, 'session-1']]);
+  expect(hub.replay().entries[0]?.correlation.sessionId).toBe('session-1');
 });
 
 it('does not post a receipt when nothing was traced', async () => {

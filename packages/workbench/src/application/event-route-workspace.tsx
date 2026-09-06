@@ -212,6 +212,7 @@ const ReplayTab = ({ controller, defaultHost, lifecycle }: {
 };
 
 export interface EventRouteWorkspaceProps {
+  readonly actions?: React.ReactNode;
   readonly clients: Pick<WorkspaceClients, 'lifecycleClient'>;
   readonly controller: RouteInvocationController;
   readonly invocationId?: string;
@@ -236,7 +237,7 @@ const useLifecycle = (client: LifecycleClient, leaf: ApplicationLeaf): Lifecycle
 };
 
 /** Host selector → executable body with the event codec tabs. */
-export const EventRouteWorkspace = ({ clients, controller, invocationId, leaf, onNavigate, tab, trace }: EventRouteWorkspaceProps): React.ReactNode => {
+export const EventRouteWorkspace = ({ actions, clients, controller, invocationId, leaf, onNavigate, tab, trace }: EventRouteWorkspaceProps): React.ReactNode => {
   const lifecycleState = useLifecycle(clients.lifecycleClient, leaf);
   const lifecycle = lifecycleState.state === 'ready' ? lifecycleState.lifecycle : undefined;
   const fixtures = useMemo(() => eventFixturesFor(lifecycle), [lifecycle]);
@@ -299,6 +300,7 @@ export const EventRouteWorkspace = ({ clients, controller, invocationId, leaf, o
   ];
 
   return <ExecutableRouteWorkspace
+    actions={actions}
     controller={controller}
     extraTabs={extraTabs}
     fixtures={hostFixtures}

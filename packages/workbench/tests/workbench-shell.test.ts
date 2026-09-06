@@ -49,15 +49,15 @@ const shell = (location: ShellProps['location'], problems: readonly Problem[] = 
     ...extra,
   }));
 
-it('renders the primary destinations in order, without Sessions, and marks the active one', () => {
-  expect(workbenchNavItems.map((item) => item.label)).toEqual(['Application', 'Trace', 'Problems', 'Advanced']);
+it('renders the primary destinations in order and marks the active one', () => {
+  expect(workbenchNavItems.map((item) => item.label)).toEqual(['Application', 'Trace', 'Host sessions', 'Problems', 'Advanced']);
   const markup = shell({ area: 'trace' });
   expect(markup).toContain('data-testid="workbench-nav"');
-  expect(markup).not.toContain('Sessions');
   expect(markup).toMatch(/<a[^>]*aria-current="page"[^>]*data-area="trace"/u);
   expect(markup).not.toMatch(/aria-current="page"[^>]*data-area="application"/u);
   expect(markup).toContain('href="/"');
   expect(markup).toContain('href="/trace"');
+  expect(markup).toContain('href="/sessions"');
   expect(markup).toContain('href="/problems"');
   expect(markup).toContain('href="/advanced/evals"');
   expect(markup).toContain('data-testid="workbench-area-trace"');

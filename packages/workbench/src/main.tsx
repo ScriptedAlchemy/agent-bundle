@@ -37,6 +37,8 @@ import { ProblemsPage } from './problems/problems-page.tsx';
 import { projectFailureText, ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { RouteManifestClient } from './routes/route-manifest-client.ts';
 import { RuntimeClient, type RuntimeBootstrap } from './runtime-client.ts';
+import { HostSessionClient } from './sessions/host-session-client.ts';
+import { SessionsPage } from './sessions/sessions-page.tsx';
 import type { RuntimeProfileOption } from './runtime-model.ts';
 import {
   createRuntimeEventBuffer,
@@ -112,6 +114,7 @@ const createClients = () => {
     evalClient: new EvalClient({ foreground }),
     foreground,
     hookClient: new HookClient({ foreground }),
+    hostSessionClient: new HostSessionClient({ foreground }),
     inspectorLaunch: createMcpInspectorLaunchController({ routes: mcpRoutes }),
     invocationClient: new InvocationClient({ foreground }),
     lifecycleClient: new LifecycleClient({ foreground }),
@@ -411,6 +414,7 @@ const Workbench = () => {
     evalClient: clients.evalClient,
     foreground: clients.foreground,
     hookClient: clients.hookClient,
+    hostSessionClient: clients.hostSessionClient,
     lifecycleClient: clients.lifecycleClient,
     mcpRoutes: clients.mcpRoutes,
     skillClient: clients.skillClient,
@@ -452,7 +456,7 @@ const Workbench = () => {
       case 'problems':
         return <ProblemsPage onNavigate={navigate} onRepair={repair} problems={problems} status={status} />;
       case 'sessions':
-        return <main className="shell-page"><h1>Sessions</h1><p>Embedded host sessions arrive in a later release.</p></main>;
+        return <SessionsPage client={clients.hostSessionClient} onNavigate={navigate} session={location.session} />;
       case 'advanced':
         return <AdvancedPage
           clients={{

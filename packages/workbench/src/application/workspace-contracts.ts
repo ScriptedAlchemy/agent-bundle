@@ -15,6 +15,7 @@ import type { JsonValue } from '../../../agent-bundle/src/contracts/strict-json.
 import type { EvalClient } from '../evals/eval-client.ts';
 import type { HookClient } from '../hooks/hook-client.ts';
 import type { LifecycleClient } from '../lifecycles/lifecycle-client.ts';
+import type { HostSessionClient } from '../sessions/host-session-client.ts';
 import type { McpAppClient } from '../mcp/mcp-app-client.ts';
 import type { ForegroundRouteClient, McpRouteClient } from '../mcp/mcp-route-client.ts';
 import type { SkillClient } from '../skill-client.ts';
@@ -49,6 +50,7 @@ export interface WorkspaceClients {
   readonly evalClient: EvalClient;
   readonly foreground: ForegroundRouteClient;
   readonly hookClient: HookClient;
+  readonly hostSessionClient: HostSessionClient;
   readonly lifecycleClient: LifecycleClient;
   readonly mcpRoutes: McpRouteClient;
   readonly skillClient: SkillClient;

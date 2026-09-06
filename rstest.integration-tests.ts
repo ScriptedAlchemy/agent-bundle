@@ -60,6 +60,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/host-mcp-proxy.test.ts',
   'packages/agent-bundle/tests/host-install-proof.test.ts',
   'packages/agent-bundle/tests/host-install-session.test.ts',
+  'packages/agent-bundle/tests/host-session-pty.test.ts',
   'packages/agent-bundle/tests/integration-matrix.test.ts',
   'packages/agent-bundle/tests/layout-build.test.ts',
   'packages/agent-bundle/tests/lifecycle-replay-dev-server.test.ts',
@@ -117,6 +118,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/rsbuild-closure.test.ts',
   'packages/workbench/tests/rsbuild-workbench.test.ts',
   'packages/workbench/tests/route-editor-atoms-disposal.test.ts',
+  'packages/workbench/tests/sessions.e2e.test.ts',
   'packages/workbench/tests/web-command.e2e.test.ts',
   'packages/workbench/tests/workbench-dev-command.test.ts',
 ];
@@ -131,6 +133,7 @@ export const integrationTestFiles: readonly string[] = [
  */
 export const nativeHostTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/host-adapters.native.test.ts',
+  'packages/agent-bundle/tests/native-host-sessions.test.ts',
 ];
 
 /**

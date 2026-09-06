@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { AgentLineage, Observed } from '@agent-bundle/runtime';
 
+import { isHostSessionId } from '../contracts/host-sessions.ts';
 import type { RequestLineageProvenance, RequestProvenanceAxis } from '../contracts/request-provenance.ts';
 import { isLoopbackHttpOrigin } from '../core/loopback-origin.ts';
 import type { EventTraceEvent, EventTraceExecution, EventTraceObserver } from './trace.ts';
@@ -19,6 +20,7 @@ export const EVENT_TRACE_RECEIPT_PATH = '/api/trace/receipts';
 export const EVENT_TRACE_RECEIPT_MAX_BYTES = 16 * 1024;
 export const EVENT_TRACE_RECEIPT_URL_ENV = 'AGENT_BUNDLE_DEV_TRACE_URL';
 export const EVENT_TRACE_RECEIPT_TOKEN_ENV = 'AGENT_BUNDLE_DEV_TRACE_TOKEN';
+export const EVENT_TRACE_RECEIPT_SESSION_ENV = 'AGENT_BUNDLE_DEV_SESSION';
 export const EVENT_TRACE_RECEIPT_ENDPOINT_FILE = 'hook-receipts.json';
 /**
  * The dev host installer's marker at the installed bundle root
@@ -45,6 +47,8 @@ type DistributiveOmit<Value, Key extends PropertyKey> = Value extends unknown ? 
 export type EventTraceReceiptEvent = DistributiveOmit<EventTraceEvent, 'execution'>;
 
 export interface EventTraceReceipt {
+  /** Workbench host-session id (`hs_…`) when the wrapper ran under `AGENT_BUNDLE_DEV_SESSION`. */
+  readonly devSession?: string;
   readonly events: readonly EventTraceReceiptEvent[];
   readonly execution: EventTraceExecution;
   readonly identity: EventTraceReceiptIdentity;
@@ -219,7 +223,9 @@ export const openEventTraceReceipt = async (
     send: async () => {
       if (sent || startedAt === undefined) return;
       sent = true;
+      const session = options.env[EVENT_TRACE_RECEIPT_SESSION_ENV];
       const receipt: EventTraceReceipt = {
+        ...(isHostSessionId(session) ? { devSession: session } : {}),
         events,
         execution: options.execution,
         identity,

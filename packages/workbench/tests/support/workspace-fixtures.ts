@@ -15,6 +15,7 @@ import { LifecycleClient } from '../../src/lifecycles/lifecycle-client.ts';
 import { McpAppClient } from '../../src/mcp/mcp-app-client.ts';
 import { ForegroundRouteClient, McpRouteClient } from '../../src/mcp/mcp-route-client.ts';
 import { ProjectClient } from '../../src/project-client.ts';
+import { HostSessionClient } from '../../src/sessions/host-session-client.ts';
 import { SkillClient } from '../../src/skill-client.ts';
 
 export const neverFetch: typeof fetch = async () => { throw new Error('Effects do not run during server rendering.'); };
@@ -237,6 +238,7 @@ export const clients = (): WorkspaceClients => {
     evalClient: new EvalClient({ foreground }),
     foreground,
     hookClient: new HookClient({ foreground }),
+    hostSessionClient: new HostSessionClient({ foreground }),
     lifecycleClient: new LifecycleClient({ foreground }),
     mcpRoutes: new McpRouteClient({ fetch: neverFetch, foreground }),
     skillClient: new SkillClient({ fetch: neverFetch }),

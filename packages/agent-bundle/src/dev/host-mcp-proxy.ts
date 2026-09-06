@@ -6,8 +6,28 @@ import {
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { resolve } from 'node:path';
 
+import { isHostSessionId } from '../contracts/host-sessions.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { discoverDevServerUrl } from './dev-lock.ts';
+
+export const HOST_MCP_DEV_SESSION_HEADER = 'x-agent-bundle-dev-session';
+export const HOST_MCP_DEV_PID_HEADER = 'x-agent-bundle-dev-pid';
+
+/** The proxy always names its pid; the session id rides along only when the host forwarded the env. */
+export const hostMcpProxyRequestInit = (
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  pid = process.pid,
+): { readonly requestInit: { readonly headers: Readonly<Record<string, string>> } } => {
+  const session = env.AGENT_BUNDLE_DEV_SESSION;
+  return {
+    requestInit: {
+      headers: {
+        [HOST_MCP_DEV_PID_HEADER]: String(pid),
+        ...(isHostSessionId(session) ? { [HOST_MCP_DEV_SESSION_HEADER]: session } : {}),
+      },
+    },
+  };
+};
 
 export const hostMcpUnavailableCode = 'AB8025';
 
@@ -96,7 +116,10 @@ export const runHostMcpProxy = async (options: RunHostMcpProxyOptions): Promise<
 
   try {
     const origin = loopbackOrigin(options.url ?? await discoverDevServerUrl({ projectRoot }));
-    const transport = new StreamableHTTPClientTransport(hostEndpoint(origin, options.serverName, target));
+    const transport = new StreamableHTTPClientTransport(
+      hostEndpoint(origin, options.serverName, target),
+      hostMcpProxyRequestInit(),
+    );
     remote = transport;
     transport.onmessage = (message) => {
       void stdio.send(message).catch(reportUnavailable);
