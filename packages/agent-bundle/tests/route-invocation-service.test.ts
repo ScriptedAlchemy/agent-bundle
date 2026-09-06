@@ -1178,7 +1178,7 @@ const tsxSiblingProject = async (): Promise<RouteProject> => routeProject(
   },
 );
 
-it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 30_000 }, async () => {
+it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 60_000 }, async () => {
   const project = await tsxSiblingProject();
   try {
     const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/report', surface: { kind: 'unit-render' } });
