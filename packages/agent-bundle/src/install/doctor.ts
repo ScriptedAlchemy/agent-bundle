@@ -79,6 +79,7 @@ import { cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-mar
 import { bundleInventory, installedBundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
 import {
   inspectInstalledStateOwnership,
+  isRecordedDerivedStateRoot,
   resolveInstalledStateRoots,
 } from './state-root.ts';
 
@@ -669,10 +670,12 @@ const inspectInstalledDurableState = async (
   const effectiveAll: DoctorDurableStateReport[] = [];
   for (const [root, current] of grouped) {
     const recorded = receipt?.state?.roots.find((candidate) => candidate.root === root);
+    const legacyPurgeable = receipt?.state === undefined &&
+      isRecordedDerivedStateRoot(receipt?.stateRoot, root);
     const decision = recorded === undefined || receipt?.state === undefined
       ? undefined
       : await inspectInstalledStateOwnership(receipt.state, recorded);
-    const ownership = recorded?.ownership.kind ?? 'unrecorded';
+    const ownership = recorded?.ownership.kind ?? (legacyPurgeable ? 'derived' : 'unrecorded');
     const inspected = await inspectDurableState(
       root,
       current.source === 'derived' ? 'derived' : 'native',
@@ -684,7 +687,7 @@ const inspectInstalledDurableState = async (
       ...(recorded?.ownership.kind === 'unowned'
         ? { ownershipReason: recorded.ownership.reason }
         : decision?.reason === undefined ? {} : { ownershipReason: decision.reason }),
-      purgeable: decision?.action === 'purge',
+      purgeable: decision?.action === 'purge' || legacyPurgeable,
       servers: Object.freeze(current.servers),
     }));
   }
@@ -716,7 +719,9 @@ const inspectInstalledDurableState = async (
   const legacyDiagnostic = diagnostic(
     'AB7332',
     `Legacy durable state remains at ${JSON.stringify(legacyRoot)} while this install resolves framework state to ${JSON.stringify(effective.directory)}.`,
-    'Run `agent-bundle uninstall <host> --purge-data --confirm-purge` for this install to remove both roots, or move required pre-#640 data before deleting the legacy directory.',
+    effective.purgeable
+      ? 'Run `agent-bundle uninstall <host> --purge-data --confirm-purge` for this install to remove both roots, or move required pre-#640 data before deleting the legacy directory.'
+      : `Run \`agent-bundle uninstall <host> --purge-data --confirm-purge\` to remove the legacy in-tree root; it retains the ${effective.ownership} effective root because the receipt does not prove exclusive ownership. Move required data before deleting either directory by hand.`,
     'info',
     host,
   );

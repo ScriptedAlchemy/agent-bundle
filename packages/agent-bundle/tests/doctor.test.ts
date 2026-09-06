@@ -560,12 +560,12 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
       servers: ['default'],
       writable: true,
     });
-    expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        code: 'AB7332',
-        message: expect.stringContaining(legacyStateRoot),
-      }),
-    ]));
+    const legacyDiagnostic = report.diagnostics.find((entry) => entry.code === 'AB7332');
+    expect(legacyDiagnostic).toMatchObject({
+      message: expect.stringContaining(legacyStateRoot),
+      recovery: expect.stringContaining('retains the unrecorded effective root'),
+    });
+    expect(legacyDiagnostic?.recovery).not.toContain('both roots');
 
     const human = captureCliTerminal();
     const humanCode = await runCli(['doctor'], human.output, { runDoctor: async () => report });
@@ -581,6 +581,83 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
       exists: true,
       summary: { bytes: 15, stores: 1 },
       writable: true,
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports a current-environment legacy state root as unrecorded and retained', async () => {
+  const fixture = await temporaryDoctor();
+  const originalEnvironment = { XDG_STATE_HOME: join(fixture.root, 'original-state-home') };
+  const currentEnvironment = { XDG_STATE_HOME: join(fixture.root, 'current-state-home') };
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    await mkdir(join(fixture.home, '.cursor'), { recursive: true });
+    await installBundle({
+      environment: originalEnvironment,
+      from: bundle,
+      home: fixture.home,
+      host: 'cursor',
+    });
+    const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
+    const originalStateRoot = userDataStateRoot(destination, originalEnvironment, fixture.home);
+    const currentStateRoot = userDataStateRoot(destination, currentEnvironment, fixture.home);
+    await mkdir(originalStateRoot, { recursive: true });
+    await mkdir(currentStateRoot, { recursive: true });
+    await writeFile(join(originalStateRoot, 'state.sqlite'), 'original\n');
+    await writeFile(join(currentStateRoot, 'unrelated.txt'), 'unrelated\n');
+    const receiptPath = join(destination, installReceiptFile);
+    const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
+    const {
+      hostDirectories: _hostDirectories,
+      mode: _mode,
+      registrations: _registrations,
+      scope: _scope,
+      state: _state,
+      stateRoot: _stateRoot,
+      updatedAt: _updatedAt,
+      ...legacy
+    } = receipt;
+    await writeFile(receiptPath, JSON.stringify({
+      ...legacy,
+      format: 'agent-bundle-install-receipt/1',
+    }));
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      environment: currentEnvironment,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find(
+      (entry) => entry.entry === 'doctor-fixture',
+    );
+    expect(finding?.durableState).toMatchObject({
+      directory: currentStateRoot,
+      exists: true,
+      ownership: 'unrecorded',
+      purgeable: false,
+      servers: ['default'],
+    });
+    const human = captureCliTerminal();
+    expect(await runCli(['doctor'], human.output, { runDoctor: async () => report })).toBe(0);
+    expect(human.stdout()).toContain(`state root: ${currentStateRoot} (exists, writable, derived)`);
+    expect(human.stdout()).toContain('ownership: unrecorded, retained, servers: default');
+
+    const plan = await uninstallBundle({
+      confirmPurge: true,
+      environment: currentEnvironment,
+      from: bundle,
+      home: fixture.home,
+      host: 'cursor',
+      plan: true,
+      purgeData: true,
+    });
+    expect(plan.data).toMatchObject({
+      outcome: 'kept',
+      paths: [],
+      retained: [{ path: currentStateRoot, reason: 'unproven' }],
     });
   } finally {
     await fixture.cleanup();

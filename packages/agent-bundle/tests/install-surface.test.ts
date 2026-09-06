@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
+import { userDataStateRoot } from '@agent-bundle/runtime';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import type { TargetArtifactWrite } from '../src/adapters/types.ts';
@@ -501,11 +502,12 @@ const run = async (
   installer: string,
   args: readonly string[],
   home: string,
+  environment: Readonly<NodeJS.ProcessEnv> = {},
 ): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
   try {
     const result = await execFile(process.execPath, [installer, ...args], {
       cwd: dirname(installer),
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, ...environment },
       // A regression that reads a FIFO receipt would otherwise hang the whole suite.
       timeout: 30_000,
     });
@@ -840,6 +842,84 @@ it('emitted install.mjs marks new explicit state roots and retains pre-existing 
     expect(retained.code).toBe(0);
     expect(retained.stdout).toContain(`Retained ${sharedRoot} (pre-existing)`);
     expect(await readFile(sentinel, 'utf8')).toBe('keep\n');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 60_000);
+
+it('emitted install.mjs never derives legacy purge ownership from the current environment', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-legacy-state-mjs-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const cursorRoot = join(home, '.cursor');
+  const destination = join(cursorRoot, 'plugins', 'local', 'install-fixture');
+  const installer = join(bundle, 'install.mjs');
+  const originalEnvironment = { XDG_STATE_HOME: join(root, 'original-state-home') };
+  const currentEnvironment = { XDG_STATE_HOME: join(root, 'current-state-home') };
+  const originalStateRoot = userDataStateRoot(destination, originalEnvironment, home);
+  const currentStateRoot = userDataStateRoot(destination, currentEnvironment, home);
+  const currentSentinel = join(currentStateRoot, 'unrelated.txt');
+  try {
+    const writes = writesFor('cursor');
+    await Promise.all([
+      mkdir(join(bundle, '.cursor-plugin'), { recursive: true }),
+      mkdir(cursorRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(installer, writes.get('install.mjs') ?? ''),
+      writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
+      writeFile(join(bundle, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
+      writeFile(join(bundle, 'payload.txt'), 'payload\n'),
+    ]);
+    expect(await run(installer, [], home, originalEnvironment)).toMatchObject({ code: 0, stderr: '' });
+    await mkdir(originalStateRoot, { recursive: true });
+    await writeFile(join(originalStateRoot, 'state.sqlite'), 'original\n');
+    const receiptPath = join(destination, installReceiptFile);
+    const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
+    const {
+      hostDirectories: _hostDirectories,
+      mode: _mode,
+      registrations: _registrations,
+      scope: _scope,
+      state: _state,
+      stateRoot: _stateRoot,
+      updatedAt: _updatedAt,
+      ...legacy
+    } = receipt;
+    await writeFile(receiptPath, JSON.stringify({
+      ...legacy,
+      format: legacyInstallReceiptFormat,
+    }));
+    await mkdir(currentStateRoot, { recursive: true });
+    await writeFile(currentSentinel, 'unrelated\n');
+
+    const plan = await run(
+      installer,
+      ['--uninstall', '--purge-data', '--confirm-purge', '--plan'],
+      home,
+      currentEnvironment,
+    );
+    expect(plan).toMatchObject({ code: 0, stderr: '' });
+    expect(plan.stdout).toContain('Data (purge): kept');
+    expect(plan.stdout).toContain(`Retained ${currentStateRoot} (unproven)`);
+
+    const kept = await run(installer, ['--uninstall', '--keep-data'], home, currentEnvironment);
+    expect(kept.stdout).toContain(`Retained ${currentStateRoot} (unproven)`);
+    const remnant = await readInstallReceipt(destination);
+    expect(remnant?.state).toBeUndefined();
+    expect(remnant?.stateRoot).toBeUndefined();
+
+    const purged = await run(
+      installer,
+      ['--uninstall', '--purge-data', '--confirm-purge'],
+      home,
+      currentEnvironment,
+    );
+    expect(purged).toMatchObject({ code: 0, stderr: '' });
+    expect(purged.stdout).toContain('Data (purge): kept');
+    expect(purged.stdout).toContain(`Retained ${currentStateRoot} (unproven)`);
+    expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
+    expect(await readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).toBe('original\n');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

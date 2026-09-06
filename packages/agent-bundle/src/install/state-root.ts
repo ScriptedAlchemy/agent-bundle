@@ -21,6 +21,12 @@ export interface InstalledStateRoot {
   readonly source: 'derived' | 'native';
 }
 
+/** Compatibility receipts authorize a derived purge only when they record that exact root. */
+export const isRecordedDerivedStateRoot = (
+  recorded: InstalledStateRoot | undefined,
+  root: string,
+): boolean => recorded?.source === 'derived' && recorded.root === root;
+
 export interface InstalledStateLocation {
   readonly root?: string;
   readonly server: string;

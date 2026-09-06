@@ -170,7 +170,9 @@ Claude、Codex 与 Cursor 市场模式的安装把回执放在 `<宿主根目录
 包的 Cursor 副本在回执中记录的 `PLUGIN_DATA` 目录，除非传入 `--purge-data --confirm-purge` 否则保留，且结果如实说明宿主自行决定而 Agent Bundle 无法左右的部分（Claude 把缓存
 副本标为 orphaned 并保留约 14 天；Codex 删除缓存树且没有 keep-data 选项）。缺少回执（`AB7009`）或内容不匹配
 （`AB7007`）会被拒绝，除非 `--force`；属于另一个插件的目录无论如何都被拒绝；再次运行是 `not-installed` 空操作。
-格式 2 之前写入的回执会在补全生命周期字段后读取并给出诊断（`AB7329`），绝不被拒绝。
+格式 2 之前写入的回执会在补全生命周期字段后读取并给出诊断（`AB7329`），绝不被拒绝。如果这种回执既未记录
+状态位置也未记录归属，从当前环境或 home 解析出的根只会列为无法证明并保留；`--keep-data` 也不能把这次观察变成
+以后 purge 的权限。
 
 宿主安装证明会在安装前与卸载后对隔离的 home 做快照：Cursor 本地与可移植 Agent Plugins 包做到字节一致；Claude 与
 Codex 做到零 Agent Bundle 残留，并逐项列出宿主自有的记录文件。

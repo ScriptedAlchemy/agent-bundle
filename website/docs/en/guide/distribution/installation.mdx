@@ -212,7 +212,10 @@ Agent Bundle cannot (Claude orphans its cached copy for a ~14-day grace period; 
 cached tree and offers no keep-data option). A missing receipt (`AB7009`) or a content mismatch
 (`AB7007`) is refused unless `--force`; a directory that belongs to another plugin is refused
 regardless; a second run is a `not-installed` no-op. Receipts written before format 2 are read with
-their lifecycle fields synthesized and diagnosed (`AB7329`), never rejected.
+their lifecycle fields synthesized and diagnosed (`AB7329`), never rejected. When such a receipt
+records neither a state location nor ownership, a root resolved from the current environment or home
+is listed as unproven and retained; `--keep-data` cannot turn that observation into later purge
+authority.
 
 The host-install proofs snapshot an isolated home before install and after uninstall: byte-identical
 for Cursor local and the portable Agent Plugins package, and zero Agent Bundle residue plus an

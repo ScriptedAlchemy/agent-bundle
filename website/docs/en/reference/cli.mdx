@@ -242,7 +242,10 @@ evidence authorizes deletion. The default
 `AGENT_BUNDLE_STATE_ROOT` is owned only when installation created the previously absent directory
 and wrote its install-identity marker. A pre-existing directory is never recursively removed merely
 because a server or the current uninstall environment names it. Multiple servers and roots are
-recorded and judged independently.
+recorded and judged independently. A supported older receipt with neither recorded state metadata
+nor a recorded `stateRoot` cannot make the current environment or home a source of purge authority:
+Doctor and uninstall report the observed root as `unrecorded` / unproven and retain it, including
+after `--keep-data`.
 
 ## doctor
 

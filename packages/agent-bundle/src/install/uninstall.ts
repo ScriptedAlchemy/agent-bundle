@@ -61,7 +61,12 @@ import {
   type InstallRegistration,
   type StoredInstallReceipt,
 } from './receipt.ts';
-import { inspectInstalledStateOwnership, installedWebDataRoot, resolveInstalledStateRoot } from './state-root.ts';
+import {
+  inspectInstalledStateOwnership,
+  installedWebDataRoot,
+  isRecordedDerivedStateRoot,
+  resolveInstalledStateRoot,
+} from './state-root.ts';
 
 /**
  * `agent-bundle uninstall <host>` (#101): the receipt-owned reverse of
@@ -483,7 +488,7 @@ const cursorLocalData = async (
   } else {
     const observed = receipt?.stateRoot ?? await resolveInstalledStateRoot(destination, 'cursor', environment, home);
     if (observed.root !== stateDirectory && await realDirectory(observed.root, 'cursor') !== undefined) {
-      if (receipt !== undefined && observed.source === 'derived') {
+      if (isRecordedDerivedStateRoot(receipt?.stateRoot, observed.root)) {
         paths.push(observed.root);
         kinds.push(`derived framework state root ${observed.root}`);
       } else {
@@ -633,8 +638,8 @@ const uninstallCursorLocal = async (
   }
   files.push(...data.emptyStateFiles);
   if (ownership.receipt !== undefined || await exists(receiptPath)) files.push(receiptPath);
-  // External state kept by --keep-data needs the remnant receipt and canonical install path so a later purge can
-  // derive and remove the same root even though no plugin content remains.
+  // External state kept by --keep-data needs the remnant receipt and recorded ownership so a later purge can
+  // remove the same root even though no plugin content remains.
   const keepRoot = policy === 'keep' &&
     [...data.report.paths, ...(data.report.retained ?? []).map((entry) => entry.path)]
       .some((path) => path !== join(destination, 'state'));
@@ -1177,7 +1182,7 @@ const publicHostData = async (
         !paths.includes(observed.root) &&
         await realDirectory(observed.root, host) !== undefined
       ) {
-        if (receipt !== undefined && observed.source === 'derived') paths.push(observed.root);
+        if (isRecordedDerivedStateRoot(receipt?.stateRoot, observed.root)) paths.push(observed.root);
         else retainedState.push({ path: observed.root, reason: 'unproven' });
       }
     }
