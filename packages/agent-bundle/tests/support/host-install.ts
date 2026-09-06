@@ -19,6 +19,7 @@ import {
   cursorPluginValidator,
 } from '../../src/adapters/cursor.ts';
 import { createAdapterValidator } from '../../src/adapters/types.ts';
+import { parseArtifactManifest } from '../../src/build/manifest.ts';
 import { reindexArtifactManifest } from '../../src/build/manifest-reindex.ts';
 import { isInsideOrEqual } from '../../src/core/paths.ts';
 import { validatePortablePluginFiles } from '../../src/host-contracts/portable-plugin-validation.ts';
@@ -40,7 +41,7 @@ import type { ArtifactEpoch } from '../../src/dev/types.ts';
 import { startDevServer } from '../../src/dev/workbench-server.ts';
 import { runDoctor, type DoctorCommandRunner } from '../../src/install/doctor.ts';
 import { installBundle, type InstallHost } from '../../src/install/install.ts';
-import { readInstallReceipt } from '../../src/install/receipt.ts';
+import { manifestInventory, readInstallReceipt } from '../../src/install/receipt.ts';
 import {
   normalClaudeSettingsAndPluginsUnchanged,
   packedNativeEnvironment,
@@ -1731,14 +1732,28 @@ export const runPortableHostInstallProof = async (
       portableFinding?.state === 'installed' && portableFinding.launch?.state === 'expanded',
       `Doctor inventory did not report the portable install as expanded: ${JSON.stringify(portableFinding)}`,
     );
+    const coreInventory = await manifestInventory(
+      fixture.portableBundle,
+      parseArtifactManifest(await readFile(join(fixture.portableBundle, 'agent-bundle.manifest.json'), 'utf8')),
+    );
+    const emittedReceipt = await readInstallReceipt(destination);
+    assertProof(
+      JSON.stringify(emittedReceipt?.files) === JSON.stringify(coreInventory.files),
+      `The emitted installer file order disagrees with the core manifest inventory: ${JSON.stringify(emittedReceipt?.files)} vs ${JSON.stringify(coreInventory.files)}.`,
+    );
 
     await install('Already installed');
 
     // Same-version rebuild through the emitted install.mjs: owned files replaced in place, then a no-op.
     const marker = join(fixture.portableBundle, sameVersionRebuildMarker);
     await writeFile(marker, '# same-version rebuild\n');
+    let indexed = false;
     let sameVersionRebuild: SameVersionRebuildProof;
     try {
+      await reindexArtifactManifest(fixture.portableBundle, {
+        added: [{ kind: 'generated', path: sameVersionRebuildMarker }],
+      });
+      indexed = true;
       await install('Replaced');
       await access(join(destination, sameVersionRebuildMarker)).catch(() =>
         fail('Portable emitted installer did not refresh the installed copy for the same-version rebuild.'));
@@ -1746,6 +1761,11 @@ export const runPortableHostInstallProof = async (
       sameVersionRebuild = 'replaced';
     } finally {
       await rm(marker, { force: true });
+      if (indexed) {
+        await reindexArtifactManifest(fixture.portableBundle, {
+          removed: [sameVersionRebuildMarker],
+        });
+      }
     }
 
     return Object.freeze({
