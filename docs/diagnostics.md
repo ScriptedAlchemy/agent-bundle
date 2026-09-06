@@ -57,6 +57,7 @@ even when no error diagnostic was reported.
 | `AB8263` | Workbench host sessions: the host is not launchable because its executable is absent from `PATH`, its dev install is not attached to the adopted epoch, or PTY spawn failed (409). Install the host CLI, attach its current dev install, and retry. |
 | `AB8264` | Workbench host sessions: four sessions are already live (409). Terminate a live session before launching another. |
 | `AB8265` | Workbench host-session routes are closed or no service was mounted (503). Restart the development server. |
+| `AB8266` | Invalid `AGENT_BUNDLE_DEV_SESSION` on a hook receipt (`devSession`) or host MCP proxy request (`x-agent-bundle-dev-session`): the value must match `/^hs_[0-9a-z]{16}$/` (400). |
 | `AB8110`–`AB8113` | Workbench standalone MCP Inspector routes (`/api/inspector/status`, `/api/inspector/launch`): `AB8110` invalid path, `AB8111` invalid request shape or query, `AB8112` the Inspector could not be launched (spawn failure, exit before publishing a URL, or the 30 s startup budget elapsed; 502), `AB8113` routes not available (404 when the launcher is not composed, 503 after shutdown). |
 | `AB8120`–`AB8123` | Workbench route manifest (`/api/routes/manifest`): `AB8120` invalid path, `AB8121` not available (404/409/503), `AB8122` query string on the request, `AB8123` the browser client could not decode the response (see below). |
 | `AB8024`–`AB8025` | Live host MCP proxy: epoch drift behind a host connection and dev-server unavailability (see below). |

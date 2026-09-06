@@ -9,6 +9,8 @@ export const traceSources = Object.freeze([
   'mcp',
   /** A host-invoked hook or event route observed against the dev plugin. */
   'hook',
+  /** A PTY-backed Claude Code / Codex host session in the Workbench. */
+  'session',
   /** A dev log record that carries a correlation key. */
   'log',
   /** Build, contract-gate, and host-attach diagnostics. */

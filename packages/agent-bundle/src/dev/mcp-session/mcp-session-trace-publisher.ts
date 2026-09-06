@@ -39,6 +39,8 @@ export interface McpSessionTracePublisherOptions {
   readonly binding: McpSessionBinding;
   /** Redaction root for stderr and error text (`safeDevWireText`). */
   readonly projectRoot: string;
+  /** Resolved per frame into `correlation.sessionId`; a frame `_meta` value still wins. */
+  readonly resolveSessionId?: () => string;
   readonly sessionId: McpSessionId;
   readonly trace: TracePublisher;
 }
@@ -137,8 +139,16 @@ const messageOf = (entry: McpSessionFrameTraceEntry): Readonly<Record<string, un
  * frame stays on the session's own trace behind `href`.
  */
 export const createMcpSessionTraceSink = (options: McpSessionTracePublisherOptions): McpSessionTraceSink => {
-  const { binding, projectRoot, sessionId, trace } = options;
-  const base: TraceCorrelation = Object.freeze({ epochId: binding.epochId, host: binding.target, mcpSessionId: sessionId });
+  const { binding, projectRoot, resolveSessionId, sessionId, trace } = options;
+  const base = (): TraceCorrelation => {
+    const resolved = resolveSessionId?.();
+    return Object.freeze({
+      epochId: binding.epochId,
+      host: binding.target,
+      mcpSessionId: sessionId,
+      ...(typeof resolved === 'string' && resolved !== '' ? { sessionId: resolved } : {}),
+    });
+  };
   const pending = new Map<string, PendingRequest>();
   const progressTokens = new Map<string, string>();
   const protocolHref = hrefFor(undefined, sessionId);
@@ -177,7 +187,7 @@ export const createMcpSessionTraceSink = (options: McpSessionTracePublisherOptio
     const routeId = routeIdFor(method, params, binding.serverName);
     const meta = entry.meta;
     const correlation: TraceCorrelation = Object.freeze({
-      ...base,
+      ...base(),
       ...(meta?.correlationId === undefined ? {} : { correlationId: meta.correlationId }),
       ...(meta?.conversationId === undefined ? {} : { conversationId: meta.conversationId }),
       mcpRequestId: id,
@@ -208,7 +218,7 @@ export const createMcpSessionTraceSink = (options: McpSessionTracePublisherOptio
   const response = (entry: McpSessionFrameTraceEntry, id: string): void => {
     const message = messageOf(entry);
     const matched = forget(id);
-    const correlation = matched?.correlation ?? Object.freeze({ ...base, mcpRequestId: id });
+    const correlation = matched?.correlation ?? Object.freeze({ ...base(), mcpRequestId: id });
     const label = matched?.label ?? 'response';
     const error = isRecord(message.error) ? message.error : undefined;
     const result = message.result;
@@ -241,7 +251,7 @@ export const createMcpSessionTraceSink = (options: McpSessionTracePublisherOptio
     const params = message.params;
     const cancelled = method === 'notifications/cancelled' && isRecord(params) ? jsonRpcId(params.requestId) : undefined;
     const matched = cancelled === undefined ? undefined : pending.get(cancelled);
-    const correlation = matched?.correlation ?? Object.freeze({ ...base, ...(cancelled === undefined ? {} : { mcpRequestId: cancelled }) });
+    const correlation = matched?.correlation ?? Object.freeze({ ...base(), ...(cancelled === undefined ? {} : { mcpRequestId: cancelled }) });
     publish({
       correlation,
       details: { direction: entry.direction, method },
@@ -264,7 +274,7 @@ export const createMcpSessionTraceSink = (options: McpSessionTracePublisherOptio
     const payload = isRecord(entry.payload) ? entry.payload : undefined;
     const token = payload === undefined ? undefined : jsonRpcId(payload.progressToken);
     const matched = token === undefined ? undefined : pending.get(progressTokens.get(token) ?? token);
-    const correlation = matched?.correlation ?? base;
+    const correlation = matched?.correlation ?? base();
     const current = typeof payload?.progress === 'number' && Number.isFinite(payload.progress) ? payload.progress : undefined;
     const total = typeof payload?.total === 'number' && Number.isFinite(payload.total) ? payload.total : undefined;
     publish({
@@ -287,7 +297,7 @@ export const createMcpSessionTraceSink = (options: McpSessionTracePublisherOptio
     const level = wireText(payload?.level);
     const logger = wireText(payload?.logger);
     publish({
-      correlation: base,
+      correlation: base(),
       details: { ...(level === undefined ? {} : { level }), ...(logger === undefined ? {} : { logger }) },
       href: protocolHref,
       kind: 'mcp.logging',
@@ -298,7 +308,7 @@ export const createMcpSessionTraceSink = (options: McpSessionTracePublisherOptio
 
   const stderr = (entry: McpSessionStderrTraceEntry): void => {
     publish({
-      correlation: base,
+      correlation: base(),
       details: { bytes: Buffer.byteLength(entry.text) },
       href: protocolHref,
       kind: 'mcp.stderr',
@@ -314,7 +324,7 @@ export const createMcpSessionTraceSink = (options: McpSessionTracePublisherOptio
       const restarted = started && entry.operation === 'restart';
       started = true;
       publish({
-        correlation: base,
+        correlation: base(),
         details: { operation: entry.operation },
         href: protocolHref,
         kind: 'mcp.session.started',
@@ -327,7 +337,7 @@ export const createMcpSessionTraceSink = (options: McpSessionTracePublisherOptio
     if (entry.operation === 'close' && entry.phase !== 'started' && !closed) {
       closed = true;
       publish({
-        correlation: base,
+        correlation: base(),
         details: { operation: entry.operation },
         href: protocolHref,
         kind: 'mcp.session.closed',

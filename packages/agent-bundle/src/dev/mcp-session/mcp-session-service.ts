@@ -397,7 +397,13 @@ export class McpSessionService {
           this.#traceSink,
           this.#trace === undefined
             ? undefined
-            : createMcpSessionTraceSink({ binding, projectRoot: this.#projectRoot, sessionId, trace: this.#trace }),
+            : createMcpSessionTraceSink({
+              binding,
+              projectRoot: this.#projectRoot,
+              sessionId,
+              trace: this.#trace,
+              ...(options.sessionId === undefined ? {} : { resolveSessionId: options.sessionId }),
+            }),
         );
         const session = yield* liftTry(() => new McpSession({
           assertEpochAvailable: async () => {

@@ -43,6 +43,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 | `AGENT_BUNDLE_HOOK_SIMULATION` | 生成的钩子 wrapper | `1` 标记一次模拟调用；Workbench 的事件路由工作区会设置它。 |
 | `AGENT_BUNDLE_DEV_TRACE_URL` | 开发环境中的生成式钩子 wrapper | 提交不含载荷的钩子 Trace 收据所使用的内部 loopback origin。前台服务器为模拟调用设置它；由宿主调用的开发包装器通常从开发安装标记发现同一端点。 |
 | `AGENT_BUNDLE_DEV_TRACE_TOKEN` | 开发环境中的生成式钩子 wrapper | 与 `AGENT_BUNDLE_DEV_TRACE_URL` 配对的内部 bearer token。它认证 `POST /api/trace/receipts`，不得记录日志，也不得持久化到私有开发端点记录之外。 |
+| `AGENT_BUNDLE_DEV_SESSION` | 开发环境中的生成式钩子 wrapper 与 `agent-bundle dev proxy` | Workbench 在 PTY 宿主进程上设置的宿主会话 id（`hs_` + 16 个小写字符）。设置后，钩子 wrapper 把它作为收据的 `devSession` 字段提交；值合法时，代理以 `x-agent-bundle-dev-session` 发送。不得记录日志。 |
 | `AGENT_BUNDLE_NATIVE_HOST_CONTRACTS` | 贡献者测试套件 | `1` 用于比对已安装宿主 CLI 的契约。 |
 | `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE` | 贡献者测试套件 | `1` 用于运行已登录的 Claude 原生冒烟测试。 |
 | `AGENT_BUNDLE_NATIVE_CODEX_SMOKE` | 贡献者测试套件 | `1` 用于运行已登录的 Codex 原生冒烟测试。 |

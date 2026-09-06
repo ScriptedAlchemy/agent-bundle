@@ -119,5 +119,5 @@ it('formats times to the millisecond, durations by magnitude, and kinds to short
   expect(traceKindLabel(sampleTraceEntries[7]!)).toBe('build started');
   expect(traceKindLabel(traceEntry(1, { correlation: {}, kind: 'mcp.tasks.polled', occurredAt: '2026-09-05T07:00:00.000Z', source: 'mcp', summary: 'x' }))).toBe('tasks polled');
   expect(traceKindLabel(traceEntry(1, { correlation: {}, kind: 'session.started', occurredAt: '2026-09-05T07:00:00.000Z', source: 'hook', summary: 'x' }))).toBe('session started');
-  expect(new Set(['invocation', 'kernel', 'mcp', 'hook', 'log', 'diagnostic'].map((source) => traceSourceGlyph(source as 'mcp'))).size).toBe(6);
+  expect(new Set(['invocation', 'kernel', 'mcp', 'hook', 'session', 'log', 'diagnostic'].map((source) => traceSourceGlyph(source as 'mcp'))).size).toBe(7);
 });

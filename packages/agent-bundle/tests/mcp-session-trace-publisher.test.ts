@@ -190,6 +190,36 @@ it('publishes session started and closed once from the lifecycle operations and 
   expect(trace.published.every((entry) => entry.correlation.mcpSessionId === sessionId && entry.correlation.host === 'claude')).toBe(true);
 });
 
+it('resolves a lazy sessionId per frame and lets a frame _meta sessionId win', () => {
+  const resolved: string[] = [];
+  let current = 'hs_0123456789abcdef';
+  const trace = fakePublisher();
+  const sink = createMcpSessionTraceSink({
+    binding,
+    projectRoot,
+    resolveSessionId: () => {
+      resolved.push(current);
+      return current;
+    },
+    sessionId,
+    trace,
+  });
+  sink(binding, frame('client', { id: 1, jsonrpc: '2.0', method: 'tools/list' }, 1));
+  current = 'codex-session';
+  sink(binding, frame('client', {
+    id: 2,
+    jsonrpc: '2.0',
+    method: 'tools/call',
+    params: { _meta: { 'x-codex-turn-metadata': { session_id: 'meta-session' } }, arguments: {}, name: 'search' },
+  }, 2));
+  sink(binding, Object.freeze({ kind: 'logging', occurredAt: 3, payload: { level: 'info' }, sequence: ++sequence }));
+
+  expect(resolved).toHaveLength(3);
+  expect(trace.published[0]?.correlation.sessionId).toBe('hs_0123456789abcdef');
+  expect(trace.published[1]?.correlation.sessionId).toBe('meta-session');
+  expect(trace.published[2]?.correlation.sessionId).toBe('codex-session');
+});
+
 it('isolates a throwing trace publisher from the session trace log and its sibling sinks', () => {
   const seen: McpSessionTraceEntry[] = [];
   const throwing: TracePublisher = {

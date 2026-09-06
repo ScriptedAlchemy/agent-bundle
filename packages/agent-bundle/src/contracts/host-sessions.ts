@@ -28,3 +28,6 @@ export interface HostAvailability {
   readonly reason?: string;
   readonly executable?: string;
 }
+
+export const isHostSessionId = (value: unknown): value is string =>
+  typeof value === 'string' && /^hs_[0-9a-z]{16}$/.test(value);

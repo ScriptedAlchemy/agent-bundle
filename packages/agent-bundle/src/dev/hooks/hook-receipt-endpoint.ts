@@ -18,9 +18,11 @@ import type { TracePublisher } from '../trace/trace-hub.ts';
 import {
   decodeHookReceipt,
   HOOK_RECEIPT_MALFORMED_CODE,
+  HOOK_RECEIPT_SESSION_CODE,
   HOOK_RECEIPT_TOO_LARGE_CODE,
   HOOK_RECEIPT_UNAUTHORIZED_CODE,
   HookReceiptDecodeError,
+  HookReceiptSessionError,
   lowerHookReceipt,
 } from './hook-receipts.ts';
 
@@ -50,16 +52,19 @@ const sameToken = (expected: string, actual: string): boolean => {
 };
 
 export interface HookReceiptRoutesOptions {
+  readonly attachHostSession?: (devSession: string, hostSessionId: string | undefined) => void;
   readonly token: string;
   readonly trace: TracePublisher;
 }
 
 export class HookReceiptRoutes {
+  readonly #attachHostSession: HookReceiptRoutesOptions['attachHostSession'];
   readonly #token: string;
   readonly #trace: TracePublisher;
   #closed = false;
 
   constructor(options: HookReceiptRoutesOptions) {
+    this.#attachHostSession = options.attachHostSession;
     this.#token = options.token;
     this.#trace = options.trace;
   }
@@ -89,15 +94,22 @@ export class HookReceiptRoutes {
         message: 'Hook receipt exceeds 16 KiB.',
       },
     });
-    let entries: readonly TraceEntryInput[];
+    let receipt;
     try {
-      entries = lowerHookReceipt(decodeHookReceipt(body));
+      receipt = decodeHookReceipt(body);
     } catch (error) {
       if (error instanceof HookReceiptDecodeError) {
         throw requestError(diagnostic(HOOK_RECEIPT_MALFORMED_CODE, error.message, 400));
       }
+      if (error instanceof HookReceiptSessionError) {
+        throw requestError(diagnostic(HOOK_RECEIPT_SESSION_CODE, error.message, 400));
+      }
       throw error;
     }
+    if (receipt.devSession !== undefined) {
+      this.#attachHostSession?.(receipt.devSession, receipt.identity.sessionId);
+    }
+    const entries: readonly TraceEntryInput[] = lowerHookReceipt(receipt);
     for (const entry of entries) this.#trace.publish(entry);
     response.writeHead(204, { 'cache-control': 'no-store' });
     response.end();
@@ -114,6 +126,7 @@ export class HookReceiptRoutes {
 }
 
 export interface AttachHookReceiptsOptions {
+  readonly attachHostSession?: HookReceiptRoutesOptions['attachHostSession'];
   /** The project whose dev server this is; the endpoint record lands under its `.agent-bundle/`. */
   readonly projectRoot: string;
   readonly trace: TracePublisher;
@@ -136,7 +149,11 @@ export interface HookReceiptAttachment {
 
 export const attachHookReceipts = (options: AttachHookReceiptsOptions): HookReceiptAttachment => {
   const token = randomBytes(32).toString('base64url');
-  const routes = new HookReceiptRoutes({ token, trace: options.trace });
+  const routes = new HookReceiptRoutes({
+    ...(options.attachHostSession === undefined ? {} : { attachHostSession: options.attachHostSession }),
+    token,
+    trace: options.trace,
+  });
   const recordPath = eventTraceReceiptEndpointPath(resolve(options.projectRoot));
   const endpoint = (url: string): EventTraceReceiptEndpoint => {
     if (!isLoopbackHttpOrigin(url)) {

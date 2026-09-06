@@ -6,8 +6,19 @@ import {
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { resolve } from 'node:path';
 
+import { isHostSessionId } from '../contracts/host-sessions.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { discoverDevServerUrl } from './dev-lock.ts';
+
+export const HOST_MCP_DEV_SESSION_HEADER = 'x-agent-bundle-dev-session';
+
+export const hostMcpProxyRequestInit = (
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+): { readonly requestInit: { readonly headers: Readonly<Record<string, string>> } } | undefined => {
+  const session = env.AGENT_BUNDLE_DEV_SESSION;
+  if (!isHostSessionId(session)) return undefined;
+  return { requestInit: { headers: { [HOST_MCP_DEV_SESSION_HEADER]: session } } };
+};
 
 export const hostMcpUnavailableCode = 'AB8025';
 
@@ -96,7 +107,10 @@ export const runHostMcpProxy = async (options: RunHostMcpProxyOptions): Promise<
 
   try {
     const origin = loopbackOrigin(options.url ?? await discoverDevServerUrl({ projectRoot }));
-    const transport = new StreamableHTTPClientTransport(hostEndpoint(origin, options.serverName, target));
+    const transport = new StreamableHTTPClientTransport(
+      hostEndpoint(origin, options.serverName, target),
+      hostMcpProxyRequestInit(),
+    );
     remote = transport;
     transport.onmessage = (message) => {
       void stdio.send(message).catch(reportUnavailable);
