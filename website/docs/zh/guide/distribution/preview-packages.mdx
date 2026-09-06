@@ -60,6 +60,12 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 在启用这条路径之前，发布负责人必须解决两件事：最终的包名与许可证，以及 `agent-bundle` 仓库层面的
 `"access": "restricted"` 策略——目前它并没有被 `publishConfig.access` 覆盖。
 
+`Release packages` 工作流会记录 `version-maintenance-only`、`qualified-without-publish`、
+`published` 或 `failed` 之一，并列出已执行与已跳过的阶段。资格认定针对精确的版本化候选
+SHA，而不是预版本的 main 提交。成功刷新 Version Packages PR，或既没有刷新该 PR 也没有对版本化候选做资格认定的
+`main` 推送，结果都是 `version-maintenance-only`。未启用发布时摘要写明 **NOT PUBLISHED**；只有在发布被单独
+授权时才会做注册表核验。
+
 `pnpm release` 会在发布之前运行发布门禁 —— `pnpm pack:dry-run`、`pnpm lint:release` 与
 `pnpm test:packed:release`。`lint:release` 先对打包后的 `agent-bundle`、`@agent-bundle/runtime`、`rsc-markdown-stream` 与
 `create-agent-bundle` tarball 以 `esm-only` profile 运行 `attw`，再用

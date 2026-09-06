@@ -95,11 +95,16 @@ changes a publishable package carries a `.changeset/*.md`; on each push to
 a machine-owned **Version Packages** pull request up to date with the pending
 bumps and `CHANGELOG.md` entries. Merging that PR versions the packages but,
 by default, publishes nothing: the workflow only runs the release gates
-(`pnpm check:release`). Publishing turns on when the repository variable
-`AGENT_BUNDLE_NPM_PUBLISH` is `true` *and* the `NPM_TOKEN` secret exists;
-the action then runs `pnpm release` (`pnpm check:release && changeset
-publish`) with npm provenance. Until then, previews below are the only
-installable artifacts.
+(`pnpm check:release`) against that exact versioned candidate SHA and
+records `qualified-without-publish`. A push that only refreshes the Version
+Packages PR — or that neither refreshes it nor qualifies a versioned
+candidate — records `version-maintenance-only`. Publishing turns on when the
+repository variable `AGENT_BUNDLE_NPM_PUBLISH` is `true` *and* the
+`NPM_TOKEN` secret exists; the action then runs `pnpm release`
+(`pnpm check:release && changeset publish`) with npm provenance and records
+`published` after registry verification. Disabled publication reports
+**NOT PUBLISHED**. Until then, previews below are the only installable
+artifacts.
 
 ## Where previews come from
 

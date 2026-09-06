@@ -341,6 +341,9 @@ grace period; a purge also removes external framework state, web-data, `state/`,
 and `plugins/data/<id>/`); Codex reports external state as `kept` / `purged`,
 while in-tree `state/` is removed by the host and cannot be kept (codex-cli
 0.147.0 has no keep-data option).
+An older receipt that records no state location never makes a root derived
+from the current environment or home purgeable; it is reported unproven and
+retained, including after a keep-data cycle.
 `--plan` reports the same exact paths and host verbs without opening a writer.
 A missing receipt (`AB7009`) or an owned-content, version, or `HEAD` mismatch
 (`AB7007`) is refused unless `--force`; a receipt or manifest naming another
