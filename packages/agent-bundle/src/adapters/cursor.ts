@@ -34,6 +34,7 @@ import {
   emptyHookDocument,
   encodeCursorPlaygroundInput,
   encodeCursorPlaygroundOutput,
+  nativeHooksFor,
   planHooks,
   readCursorNativeHookCommands,
   type TargetHookContract,
@@ -60,7 +61,7 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 import { pluginLogoManifestRef, withPluginLogoEntry } from './plugin-logo.ts';
-import { folderDiscoveryShadowed, hookWrapperPath } from './composite-layout.ts';
+import { hookWrapperPath } from './composite-layout.ts';
 
 const cursorName = 'cursor';
 
@@ -581,6 +582,12 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   const mcpRelativePath = mcpRuntime.manifestPath;
   const selectedCommands = (model.commands ?? []).filter((command) => isSelected(command.targets));
   const selectedRules = (model.rules ?? []).filter((rule) => isSelected(rule.targets));
+  const claudeHooks = selected.includes('claude') && (
+    model.hooks.some((hook) => hook.targets.includes('claude'))
+    || nativeHooksFor(model, 'claude')?.document !== undefined
+  );
+  const portableMcp = selected.includes('portable')
+    && model.mcpServers.some((server) => server.targets.includes('portable'));
   const diagnostics: Diagnostic[] = [];
   if (!isValidCursorPluginName(model.metadata.name)) {
     diagnostics.push(errorDiagnostic('cursor.name', cursorPluginNameError(model.metadata.name)));
@@ -596,7 +603,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   // document is still emitted when the portable `mcp.json` or Claude's
   // `hooks/hooks.json` shares the root; Cursor never loads another host's (#555).
   const mcp = Object.keys(servers).length === 0
-    ? (folderDiscoveryShadowed('mcp.json', selected) ? { mcpServers: {} } : undefined)
+    ? (portableMcp ? { mcpServers: {} } : undefined)
     : { mcpServers: servers };
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
@@ -604,7 +611,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   const generatedHooks = planHooks(model, cursorName, planContract);
   diagnostics.push(...generatedHooks.diagnostics);
   const hookDocument = generatedHooks.document
-    ?? (folderDiscoveryShadowed('hooks/hooks.json', selected) ? emptyHookDocument(planContract) : undefined);
+    ?? (claudeHooks ? emptyHookDocument(planContract) : undefined);
   const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
   if (hookDocument !== undefined) diagnostics.push(...schemaDiagnostics('hooks', hookDocumentValid, validateHooks.errors));
 

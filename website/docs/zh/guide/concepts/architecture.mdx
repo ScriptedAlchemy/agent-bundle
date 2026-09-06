@@ -172,8 +172,7 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
    身份。`inspect --bundler` 仍然组合完整的所选集合。
 
 `adapters/composite-layout.ts` 拥有选择相关的辅助函数：`sortedProjections`、
-`projectionIdentity`（排序后的名称以 `+` 连接，例如 `claude+codex`）、`hookWrapperPath`
-与 `folderDiscoveryShadowed`。
+`projectionIdentity`（排序后的名称以 `+` 连接，例如 `claude+codex`）与 `hookWrapperPath`。
 
 命令、规则、钩子或脚本上声明级的 `targets` 仍然表示“这个组件到达这些宿主”。当该集合
 与所选集合有交集时，组件就会被包含。命令或规则若只限定在所选宿主的子集上，却位于另一个所选
@@ -217,9 +216,9 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
   （`hooks/<name>.<host>.mjs`）；只到达单个宿主的钩子保留 `hooks/<name>.mjs`
   （`hookWrapperPath`）。
 - Codex 与 Cursor 的钩子/MCP 文档与各自的清单并列（`.codex-plugin/hooks.json`、
-  `.cursor-plugin/mcp.json`……）。当另一个所选宿主认领了约定的 `hooks/hooks.json` /
-  `.mcp.json` / `mcp.json` 路径时，这些投影会发出一份空的屏蔽文档，使目录发现无法加载
-  另一个宿主的文件。
+  `.cursor-plugin/mcp.json`……）。当另一个所选宿主有到达约定 `hooks/hooks.json` /
+  `.mcp.json` / `mcp.json` 路径的钩子或 MCP 服务器时，这些投影会发出一份空的屏蔽文档，
+  使目录发现无法加载该文件。
 
 构建阶段拿到的 `CompositePlan` 携带 `entries`、`hookEntries`、`selected`、`identity`、
 `projections`（每个所选宿主一份已规划的投影）、`cliBin`（当任一所选宿主接纳路由式 CLI

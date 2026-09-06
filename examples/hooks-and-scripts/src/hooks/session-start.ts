@@ -1,10 +1,12 @@
 import type { HookHandler } from 'agent-bundle';
 
+import { releaseContext } from '../release-context.ts';
+
 export default ((event) => ({
-  additionalContext: [
-    `This release preparation session is active for ${event.sessionId} from ${event.source ?? 'an unknown source'}.`,
-    `Run verify-release from ${event.cwd ?? process.cwd()} to confirm the manifest is ready for packaging.`,
-    'Run detect-risk to surface open high-severity release blockers before publishing.',
-  ].join(' '),
+  additionalContext: releaseContext(
+    event.sessionId,
+    event.cwd ?? process.cwd(),
+    event.source ?? 'an unknown source',
+  ),
   outcome: 'continue',
 })) satisfies HookHandler<'sessionStart'>;

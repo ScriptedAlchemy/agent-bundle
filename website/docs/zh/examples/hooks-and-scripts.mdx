@@ -16,8 +16,8 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个脚本
 
 ## 它证明什么
 
-- **钩子是写成处理函数，而不是宿主文档。** `src/hooks/session-start.ts` 只是一个模块。构建会把它降级为
-  各宿主自己的钩子文档形状，并在共享的 `hooks/` 目录中输出各宿主文档所运行的包装器。见
+- **钩子是写成处理函数，而不是宿主文档。** `src/hooks/session-start.ts` 调用应用自有的
+  `releaseContext` 函数。构建把这个普通 Node 依赖捆入各宿主包装器，不启动 MCP 服务器或渲染 worker。见
   [钩子](../guide/authoring/hooks.mdx)。
 - **两种脚本声明方式都在。** `verify-release` 按约定发布——`src/scripts/` 下任何未被声明占用的普通脚本
   都会被发现——而 `detect-risk` 保持显式配置，因为它要把自己的 target 限制为 `portable`。示例故意让两种
@@ -35,6 +35,7 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个脚本
 | 路径 | 是什么 |
 | --- | --- |
 | `src/hooks/session-start.ts` | `sessionStart` 处理函数，把发布会话导向那两项检查。 |
+| `src/release-context.ts` | 普通 Hook 处理函数调用的共享应用函数。 |
 | `src/scripts/verify-release.ts` | 以清单为依据的打包检查，按约定被发现。 |
 | `src/scripts/detect-risk.ts` | 风险登记表检查，显式配置以限制它的 target。 |
 | `release/release-manifest.json` | 被作为资源复制的打包发布清单。 |

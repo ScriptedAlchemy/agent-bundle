@@ -31,6 +31,7 @@ import {
 } from '../dev/routes/application-tree.ts';
 import { applicationNodePath } from '../dev/routes/application-node.ts';
 import { routeManifestFor } from '../dev/routes/route-manifest.ts';
+import { staticDocumentsFor, type ServedStaticDocument } from '../dev/skill-document-service.ts';
 import type {
   RouteManifest,
   RouteManifestCliCommand,
@@ -251,6 +252,7 @@ export interface WorkbenchSurfaceFromGraphInput {
   readonly sourceRevision: string;
   readonly notices?: NormalizedNotices;
   readonly skills?: readonly { readonly id: string; readonly label: string; readonly source?: string }[];
+  readonly staticDocuments?: readonly ServedStaticDocument[];
   readonly state?: NormalizedStateDefinition;
   readonly targets: readonly string[];
 }
@@ -267,6 +269,7 @@ export const workbenchSurfaceFromRouteGraph = (input: WorkbenchSurfaceFromGraphI
     inspection: input.inspection,
     manifest,
     skills: input.skills,
+    staticDocuments: input.staticDocuments,
     state: 'fresh',
   });
   const advanced: AdvancedSection[] = [
@@ -431,6 +434,7 @@ export const inspectWorkbenchSurface = async (
       label: skill.name,
       source: skill.provenance.sourcePath,
     })),
+    staticDocuments: staticDocumentsFor(model, prepared.registry),
     ...(model.state === undefined ? {} : { state: model.state }),
     targets,
   });
