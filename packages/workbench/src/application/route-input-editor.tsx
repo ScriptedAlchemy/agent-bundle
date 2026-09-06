@@ -147,40 +147,56 @@ const parseRawArgs = (raw: string): readonly string[] | undefined => {
   }
 };
 
+const cliSurfaceDraft = (command: NonNullable<ApplicationLeaf['command']>, args: readonly string[]): RouteInputSubmission =>
+  Object.freeze({
+    draft: Object.freeze({
+      surface: Object.freeze({ args, command: command.path.join(' '), kind: 'cli' }),
+    }),
+  });
+
 const cliDraft = (leaf: ApplicationLeaf, argumentsValue: RouteInputArguments): RouteInputSubmission => {
   if (leaf.command === undefined) return Object.freeze({ error: 'This CLI route has no compiled command grammar to build argv from.' });
   const args = cliCommandArgv(leaf.command, argumentsValue);
   return args === undefined
     ? Object.freeze({ error: 'A required CLI option is missing.' })
-    : Object.freeze({ draft: Object.freeze({ args }) });
+    : cliSurfaceDraft(leaf.command, args);
 };
 
 /** The validated input the current editor value submits, or why it cannot run. */
-export const routeInputSubmission = (leaf: ApplicationLeaf, value: RouteInputValue): RouteInputSubmission => {
-  const isCli = leaf.ref.kind === 'cli';
+export const routeInputSubmission = (
+  leaf: ApplicationLeaf,
+  value: RouteInputValue,
+  cliSurface = leaf.ref.kind === 'cli',
+): RouteInputSubmission => {
   if (value.mode === 'raw' || leaf.inputSchema === undefined) {
-    if (isCli) {
+    if (cliSurface) {
       const args = parseRawArgs(value.raw);
-      if (args !== undefined) return Object.freeze({ draft: Object.freeze({ args }) });
+      if (args !== undefined && leaf.command !== undefined) return cliSurfaceDraft(leaf.command, args);
     }
     const validated = validateRawRouteInput(value.raw);
     if (validated.error !== undefined || validated.arguments === undefined) {
-      return Object.freeze({ error: isCli ? 'Enter a JSON array of argv strings or a JSON object of option values.' : validated.error ?? 'Enter a valid JSON object.' });
+      return Object.freeze({ error: cliSurface ? 'Enter a JSON array of argv strings or a JSON object of option values.' : validated.error ?? 'Enter a valid JSON object.' });
     }
-    return isCli ? cliDraft(leaf, validated.arguments) : Object.freeze({ draft: Object.freeze({ input: validated.arguments }) });
+    return cliSurface ? cliDraft(leaf, validated.arguments) : Object.freeze({ draft: Object.freeze({ input: validated.arguments }) });
   }
   const validated = validateRouteInput(leaf.inputSchema, value.draft);
   if (validated.arguments === undefined) {
     return Object.freeze({ error: 'Fix the highlighted fields before running.', fieldErrors: validated.errors });
   }
-  return isCli ? cliDraft(leaf, validated.arguments) : Object.freeze({ draft: Object.freeze({ input: validated.arguments }) });
+  return cliSurface ? cliDraft(leaf, validated.arguments) : Object.freeze({ draft: Object.freeze({ input: validated.arguments }) });
 };
 
 /** The JSON the workspace persists as the leaf's last input: the argv array for CLI leaves, the input object otherwise. */
-export const routeInputJson = (leaf: ApplicationLeaf, value: RouteInputValue): JsonValue | undefined => {
-  const submission = routeInputSubmission(leaf, value);
+export const routeInputJson = (
+  leaf: ApplicationLeaf,
+  value: RouteInputValue,
+  cliSurface = leaf.ref.kind === 'cli',
+): JsonValue | undefined => {
+  const submission = routeInputSubmission(leaf, value, cliSurface);
   if (submission.draft === undefined) return undefined;
-  return submission.draft.args === undefined ? submission.draft.input : Object.freeze([...submission.draft.args]);
+  return submission.draft.surface?.kind === 'cli'
+    ? Object.freeze([...submission.draft.surface.args])
+    : submission.draft.input;
 };
 
 const editorId = (leafKey: string, key: string): string =>
@@ -229,6 +245,7 @@ const scalarControl = (
 };
 
 export interface RouteInputEditorProps {
+  readonly cliSurface?: boolean;
   readonly disabled?: boolean;
   readonly fixtures?: readonly RouteInputFixture[];
   readonly leaf: ApplicationLeaf;
@@ -242,9 +259,9 @@ const isRunShortcut = (event: React.KeyboardEvent): boolean =>
   event.key === 'Enter' && (event.metaKey || event.ctrlKey);
 
 /** The workspace's input panel: form or raw JSON, fixtures, argv preview, and Run. */
-export const RouteInputEditor = ({ disabled = false, fixtures = [], leaf, onChange, onRun, running, value }: RouteInputEditorProps): React.ReactNode => {
+export const RouteInputEditor = ({ cliSurface, disabled = false, fixtures = [], leaf, onChange, onRun, running, value }: RouteInputEditorProps): React.ReactNode => {
   const schema = leaf.inputSchema;
-  const submission = routeInputSubmission(leaf, value);
+  const submission = routeInputSubmission(leaf, value, cliSurface);
   const fieldErrors = value.attempted && submission.fieldErrors !== undefined ? submission.fieldErrors : {};
   const rawError = value.attempted && value.mode === 'raw' && submission.error !== undefined ? submission.error : undefined;
   const locked = disabled || running;
@@ -261,7 +278,7 @@ export const RouteInputEditor = ({ disabled = false, fixtures = [], leaf, onChan
     if (mode === value.mode) return;
     if (mode === 'raw') {
       // Carry the form over so switching never loses an edit.
-      const json = routeInputJson(leaf, value);
+      const json = routeInputJson(leaf, value, cliSurface);
       onChange(Object.freeze({ ...value, mode, raw: json === undefined ? value.raw : rawJson(json) }));
       return;
     }
@@ -281,9 +298,9 @@ export const RouteInputEditor = ({ disabled = false, fixtures = [], leaf, onChan
     }
     onRun();
   };
-  const argv = leaf.command === undefined || submission.draft?.args === undefined
+  const argv = submission.draft?.surface?.kind !== 'cli'
     ? undefined
-    : [...leaf.command.path, ...submission.draft.args].join(' ');
+    : [submission.draft.surface.command, ...submission.draft.surface.args].join(' ');
 
   return <section
     aria-label={`Input for ${leaf.label}`}
@@ -313,7 +330,7 @@ export const RouteInputEditor = ({ disabled = false, fixtures = [], leaf, onChan
     </div>
     {value.mode === 'raw' || schema === undefined
       ? <label className="route-input-raw" htmlFor={editorId(leaf.key, 'raw')}>
-          <span>{leaf.ref.kind === 'cli' ? 'Argv as a JSON array, or option values as a JSON object' : 'Input as a JSON object'}</span>
+          <span>{cliSurface === true || leaf.ref.kind === 'cli' ? 'Argv as a JSON array, or option values as a JSON object' : 'Input as a JSON object'}</span>
           <textarea
             aria-invalid={rawError === undefined ? undefined : true}
             disabled={locked}

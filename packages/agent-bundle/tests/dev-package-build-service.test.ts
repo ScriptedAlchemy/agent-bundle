@@ -56,7 +56,20 @@ const invalidation = (
   reason,
 });
 
+const compileEvidence = (): PackageBuildResult['evidence'] => ({
+  assets: [{
+    externals: [],
+    packages: [],
+    path: 'dist/bin/tool.js',
+    sha256: '0'.repeat(64),
+  }],
+  coverage: { rewritable: false, unobserved: [] },
+  policy: { name: 'closed-world-externals', revision: 1 },
+  producer: { name: 'agent-bundle', rspack: 'test', version: '0.0.0' },
+});
+
 const buildResult = (sourceInputs: readonly string[]): PackageBuildResult => ({
+  evidence: compileEvidence(),
   files: [{
     bytes: 1,
     kind: 'bundle',
@@ -245,6 +258,7 @@ it('removes the outputs it published when the package build disappears', async (
 
   const service = new DevPackageBuildService({
     buildOutputs: (async () => ({
+      evidence: compileEvidence(),
       files: [
         { bytes: 1, kind: 'bundle' as const, path: 'bin/tool.js', sha256: '0'.repeat(64), sourceInputs: ['src/cli.ts'] },
         { bytes: 1, kind: 'bundle' as const, path: 'index.js', sha256: '0'.repeat(64), sourceInputs: ['src/index.ts'] },
@@ -277,6 +291,7 @@ it('prunes the output root entirely when it only held published outputs', async 
 
   const service = new DevPackageBuildService({
     buildOutputs: (async () => ({
+      evidence: compileEvidence(),
       files: [
         { bytes: 1, kind: 'bundle' as const, path: 'bin/tool.js', sha256: '0'.repeat(64), sourceInputs: ['src/cli.ts'] },
       ],

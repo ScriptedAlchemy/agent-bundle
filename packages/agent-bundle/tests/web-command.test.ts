@@ -8,7 +8,7 @@ import { formatServeAppReadyLine, serveAppAllowCapabilities } from '../src/serve
 import { runWebCommand, webHelp, webUsageLine, type WebCommandOptions, type WebCommandRuntime } from '../src/web-host/command.ts';
 import type { StartWebHostOptions, WebHost } from '../src/web-host/host-server.ts';
 import { WebLaunchError, type ResolveWebLaunchOptions } from '../src/web-host/launch.ts';
-import type { WebManifest, WebManifestApp } from '../src/web-host/manifest.ts';
+import type { ArtifactManifestLaunch, WebManifest, WebManifestApp, WebManifestDocument } from '../src/web-host/manifest.ts';
 import type { McpAppJsonValue } from '../src/contracts/mcp-apps.ts';
 import type { AppSelection, AppSelectionSource, OpenAppRequest } from '../src/web-host/select-app.ts';
 import type { StdioAppSession, StdioLaunch } from '../src/web-host/session.ts';
@@ -23,9 +23,6 @@ afterEach(async () => {
 const statusApp: WebManifestApp = Object.freeze<WebManifestApp>({
   allow: ['open-external-link'],
   app: 'status/status',
-  args: [],
-  entry: 'mcp/mcp-status-073c1634.mjs',
-  env: { STATUS_TOKEN: 'from-manifest' },
   input: { verbose: true },
   name: 'status',
   resourceUri: 'ui://status/status.html',
@@ -36,15 +33,29 @@ const statusApp: WebManifestApp = Object.freeze<WebManifestApp>({
 const notesApp: WebManifestApp = Object.freeze<WebManifestApp>({
   allow: [],
   app: 'notes/notes',
-  args: [],
-  entry: 'mcp/mcp-notes-1a2b3c4d.mjs',
-  env: {},
   name: 'notes',
   resourceUri: 'ui://notes/notes.html',
   server: 'notes-server',
 });
 
+const statusLaunch: ArtifactManifestLaunch = Object.freeze<ArtifactManifestLaunch>({
+  args: [],
+  entry: 'mcp/mcp-status-073c1634.mjs',
+  env: { STATUS_TOKEN: 'from-manifest' },
+});
+
+const notesLaunch: ArtifactManifestLaunch = Object.freeze<ArtifactManifestLaunch>({
+  args: [],
+  entry: 'mcp/mcp-notes-1a2b3c4d.mjs',
+  env: {},
+});
+
+const compiledLaunches: ReadonlyMap<string, ArtifactManifestLaunch> = new Map([['status', statusLaunch], ['notes-server', notesLaunch]]);
+
 const manifestOf = (apps: readonly WebManifestApp[], open: WebManifest['open'] = 'never'): WebManifest => Object.freeze({ apps, open });
+
+const documentOf = (web: WebManifest | undefined, launches = compiledLaunches): WebManifestDocument =>
+  Object.freeze({ hosts: ['claude'], launches, ...(web === undefined ? {} : { web }) });
 
 const bridgeOf = (sessionId: string): StdioAppSession['bridge'] => Object.freeze({
   callTool: async () => null,
@@ -95,10 +106,10 @@ const selectionOf = (request: OpenAppRequest): AppSelection => Object.freeze({
 });
 
 const launchOf = (options: ResolveWebLaunchOptions): StdioLaunch => Object.freeze({
-  args: Object.freeze([join(options.pluginRoot, options.app.entry)]),
+  args: Object.freeze([join(options.pluginRoot, options.launch.entry)]),
   command: process.execPath,
   cwd: options.pluginRoot,
-  env: Object.freeze({ ...options.app.env }),
+  env: Object.freeze({ ...options.launch.env }),
 });
 
 interface Recorded {
@@ -111,7 +122,7 @@ interface Recorded {
 }
 
 interface RuntimeOptions {
-  readonly manifest?: WebManifest | (() => Promise<WebManifest | undefined>);
+  readonly manifest?: WebManifest | (() => Promise<WebManifestDocument>);
   readonly openApp?: WebCommandRuntime['openApp'];
   readonly openStdioAppSession?: WebCommandRuntime['openStdioAppSession'];
   readonly resolveWebLaunch?: WebCommandRuntime['resolveWebLaunch'];
@@ -140,9 +151,9 @@ const recorded = (options: RuntimeOptions = {}): Recorded => {
       sessions.push({ identity, launch, timeoutMs });
       return fake.session;
     }),
-    readWebManifest: async () => {
+    readWebManifestDocument: async () => {
       if (options.manifest === undefined) throw new Error('the manifest must not be read for this argv');
-      return typeof options.manifest === 'function' ? options.manifest() : options.manifest;
+      return typeof options.manifest === 'function' ? options.manifest() : documentOf(options.manifest);
     },
     resolveWebLaunch: options.resolveWebLaunch ?? (async (launchOptions) => {
       launches.push(launchOptions);
@@ -184,7 +195,7 @@ const invoke = async (
   const pluginRoot = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-web-command-')));
   roots.push(pluginRoot);
   const manifestPath = join(pluginRoot, 'agent-bundle.manifest.json');
-  if (options.manifest !== 'absent') await writeFile(manifestPath, '{}\n');
+  if (options.manifest !== 'absent') await writeFile(manifestPath, '{"manifestVersion":2}\n');
   const stdout: string[] = [];
   const stderr: string[] = [];
   const commandOptions: WebCommandOptions = {
@@ -292,7 +303,7 @@ describe('<plugin> web', () => {
     });
 
     it('requires a web section in it', async () => {
-      const { runtime } = recorded({ manifest: async () => undefined });
+      const { runtime } = recorded({ manifest: async () => documentOf(undefined) });
       const run = await invoke([], runtime);
       expect(await run.done).toBe(1);
       expect(run.stderr()).toBe(`${manifestRequirement} (${run.manifestPath} has no web section: configure web.apps and rebuild.)\n`);
@@ -310,6 +321,16 @@ describe('<plugin> web', () => {
       const run = await invoke([], runtime);
       expect(await run.done).toBe(1);
       expect(run.stderr()).toBe(`Cannot read the web section of ${run.manifestPath}: web.apps[0].entry must be a string.\n`);
+    });
+
+    it('requires the exposed App\'s server to have a launch record', async () => {
+      const { runtime, launches: resolved } = recorded({ manifest: async () => documentOf(manifestOf([statusApp]), new Map()) });
+      const run = await invoke([], runtime);
+      expect(await run.done).toBe(1);
+      expect(run.stderr()).toBe(
+        `${run.manifestPath} exposes status/status, but executables.mcpServers has no launch record for server "status"; rebuild the plugin.\n`,
+      );
+      expect(resolved).toEqual([]);
     });
 
     it('names the executable in the requirement when the shell told it', async () => {
@@ -370,7 +391,7 @@ describe('<plugin> web', () => {
       const run = await invoke([], runtime, { signal: controller.signal });
       await eventually(() => run.stdout().length > 0);
 
-      expect(launches).toEqual([{ app: statusApp, env: process.env, pluginRoot: run.pluginRoot }]);
+      expect(launches).toEqual([{ app: statusApp, env: process.env, launch: statusLaunch, pluginRoot: run.pluginRoot }]);
       expect(sessions).toEqual([{ identity: { serverName: 'status', target: 'web' }, launch: launchOf(launches[0]!), timeoutMs: 30_000 }]);
       expect(opens).toEqual([{
         request: { input: { verbose: true }, resourceUri: 'ui://status/status.html', server: 'status', tool: 'show_status' },

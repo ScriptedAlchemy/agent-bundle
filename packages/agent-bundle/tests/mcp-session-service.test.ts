@@ -1,4 +1,4 @@
-import { access, cp, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -7,8 +7,14 @@ import { expect, it } from '@rstest/core';
 import type { Transport } from '@modelcontextprotocol/client';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import {
+  artifactManifestName,
+  assembleArtifactManifest,
+  parseArtifactManifest,
+} from '../src/build/manifest.ts';
 import { build } from './support/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 
 import { EpochStore } from '../src/dev/epoch-store.ts';
@@ -121,7 +127,7 @@ const publishFixtureEpoch = async (
     '  return {',
     "    _meta: { ui: { resourceUri: 'ui://fixture/result.html' }, opaque: { nested: ['exact', 42] } },",
     '    content: [',
-    "      { type: 'text', text: JSON.stringify({ cwd: process.cwd(), data: process.env.FIXTURE_DATA, inherited: process.env.AGENT_BUNDLE_PERSISTENT_INHERITED, pid: process.pid, root: process.env.FIXTURE_ROOT, workspace: process.env.FIXTURE_WORKSPACE }) },",
+    "      { type: 'text', text: JSON.stringify({ cwd: process.cwd(), data: process.env.FIXTURE_DATA, inherited: process.env.AGENT_BUNDLE_PERSISTENT_INHERITED, pid: process.pid, root: process.env.FIXTURE_ROOT, stateRoot: process.env.AGENT_BUNDLE_STATE_ROOT, workspace: process.env.FIXTURE_WORKSPACE }) },",
     "      { type: 'resource_link', name: 'fixture', uri: 'ui://fixture/resource.txt' },",
     '    ],',
     "    structuredContent: { answer: 42, opaque: { exact: true } },",
@@ -147,7 +153,9 @@ const publishFixtureEpoch = async (
             env: {
               FIXTURE_DATA: targets.includes('claude') ? pathTokens.pluginData : '${PLUGIN_DATA}',
               FIXTURE_ROOT: targets.includes('claude') ? pathTokens.pluginRoot : '${PLUGIN_ROOT}',
-              ...(targets.includes('claude') ? { FIXTURE_WORKSPACE: pathTokens.workspaceRoot } : {}),
+              ...(targets.includes('claude') && !targets.includes('portable')
+                ? { FIXTURE_WORKSPACE: pathTokens.workspaceRoot }
+                : {}),
             },
           },
         },
@@ -159,7 +167,7 @@ const publishFixtureEpoch = async (
     registry,
   );
   const artifact = join(root, 'compiled');
-  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
   const store = new EpochStore({ projectRoot: root });
   const staging = await store.createStagingEpoch({
@@ -198,7 +206,7 @@ const publishRemoteEpoch = async (root: string, id: string): Promise<EpochStore>
     registry,
   );
   const artifact = join(root, 'compiled');
-  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
   const store = new EpochStore({ projectRoot: root });
   const staging = await store.createStagingEpoch({ epoch: epochFor(root, id), targets: ['portable'] });
@@ -255,8 +263,10 @@ it('keeps one generated server and plugin-data directory bound to the selected e
       readonly inherited: string;
       readonly pid: number;
       readonly root: string;
+      readonly stateRoot: string;
     };
     expect(firstState.root).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
+    expect(firstState.stateRoot).toBe(join(root, '.agent-bundle', 'state'));
     expect(firstState.inherited).toBe('resolved-on-open');
     await expect(access(firstState.data)).resolves.toBeUndefined();
     expect(session.events().some((event) => event.type === 'stderr' && event.text === 'fixture stderr\n')).toBe(true);
@@ -415,6 +425,35 @@ it('lowers every session trace entry onto the unified trace with request/respons
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);
+
+it('rejects an MCP server not declared for the selected projection', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-hosts-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-hosts', ['claude', 'portable']);
+    const epochRoot = join(root, '.agent-bundle', 'epochs', 'epoch-hosts');
+    const manifestPath = join(epochRoot, artifactManifestName);
+    const manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+    const mcpServers = manifest.executables.mcpServers.map((server) =>
+      server.name === 'fixture' ? { ...server, hosts: ['claude'] } : server);
+    await writeFile(
+      manifestPath,
+      assembleArtifactManifest({
+        ...manifest,
+        executables: { ...manifest.executables, mcpServers },
+      }).bytes,
+    );
+    const service = new McpSessionService({ epochStore, projectRoot: root });
+
+    await expect(service.open({
+      epochId: 'epoch-hosts',
+      serverName: 'fixture',
+      target: 'portable',
+    })).rejects.toThrow('Expected exactly one portable MCP server matching "fixture".');
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 it('uses the admitted session timeout for initialization, catalog, operations, and restart', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-timeout-'));

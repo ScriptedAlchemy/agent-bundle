@@ -32,6 +32,7 @@ import {
 import { replaceWatchedSource } from './support/watched-files.ts';
 import { browserLaunchOptions, browserTrace, waitForWorkbenchIdle, workbenchUrl } from './support/workbench-e2e.ts';
 import { deepFreeze } from '../src/freeze.ts';
+import { expectHeading } from './support/workbench-acceptance.ts';
 
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
 const browserTimeout = 12_000 * timeScale;
@@ -333,12 +334,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await waitForWorkbenchIdle(page, browserTimeout);
       await expect(page.getByTestId('application-tree')).toContainText('review', { timeout: browserTimeout });
       await page.goto(workbenchUrl(origin, '/advanced/artifact'));
-      await expect(page.getByRole('heading', { name: 'Artifact', exact: true })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByRole('heading', { name: 'Emitted files', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Artifact');
+      await expectHeading(page, 'Emitted files');
 
       phase = 'MCP and App page';
       await page.goto(workbenchUrl(origin, '/advanced/protocol'));
-      await expect(page.getByRole('heading', { name: 'MCP playground', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'MCP playground');
       await page.locator('#mcp-target').selectOption('portable');
       await page.locator('#mcp-server-name').fill('fixture');
       const openedOldBrowserMcpSession = page.waitForResponse((response) =>
@@ -371,13 +372,13 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const logsReplayListing = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/logs/replay');
       await openAdvancedSection('Raw logs');
       phase = 'Logs page heading';
-      await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Logs');
       phase = 'Logs page replay';
       const logsReplayListingResponse = await logsReplayListing;
       if (!logsReplayListingResponse.ok()) throw new Error(`The Logs page replay route failed with ${logsReplayListingResponse.status()}: ${await logsReplayListingResponse.text()}`);
       await openAdvancedSection('Evals');
       phase = 'Evals page heading';
-      await expect(page.getByRole('heading', { name: 'Evals', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Evals');
       phase = 'Evals suite catalog';
       await expect(page.getByLabel('Suite')).toContainText('packed-deterministic', { timeout: browserTimeout });
       const compareTab = page.getByRole('tab', { name: 'Compare' });
@@ -449,10 +450,10 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'artifact epoch diff';
       await openAdvancedSection('Artifact');
-      await expect(page.getByRole('heading', { name: 'Artifact', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Artifact');
       await page.locator('#artifact-diff-base').fill(epochId);
       await page.getByRole('button', { name: 'Compare builds' }).click();
-      await expect(page.getByRole('heading', { name: 'Build comparison', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Build comparison');
       const changedRows = page.locator('.artifact-diff-group').filter({
         has: page.getByRole('heading', { name: /^Changed \([1-9][0-9]*\)$/u }),
       }).locator('tbody tr');
@@ -520,7 +521,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       };
       page.on('response', collectLogsReplay);
       await openAdvancedSection('Raw logs');
-      await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Logs');
       let logsReplayDocument: unknown;
       while (logsReplayDocument === undefined) {
         const candidate = await nextLogsReplay();
@@ -663,7 +664,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'Evals live evidence and comparisons';
       await openAdvancedSection('Evals');
-      await expect(page.getByRole('heading', { name: 'Evals', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Evals');
       await page.getByLabel('Suite').selectOption('packed-deterministic');
       await page.getByLabel('Harness').selectOption('deterministic');
       const uiEvalAdmitted = page.waitForResponse((response) =>
@@ -683,8 +684,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         })}`, { cause: error });
       }
       phase = 'Evals durable evidence';
-      await expect(page.getByRole('heading', { name: 'Durable event timeline', exact: true })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByRole('heading', { name: 'Host / model matrix', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Durable event timeline');
+      await expectHeading(page, 'Host / model matrix');
       await expect(page.locator('.eval-counts')).toHaveText('1 passed · 0 failed · 0 inconclusive', { timeout: browserTimeout });
       await expect(page.locator('.eval-timeline .eval-event-sequence')).not.toHaveCount(0, { timeout: browserTimeout });
       await expect(page.locator('.eval-timeline')).toContainText('run.completed');
@@ -724,7 +725,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       );
       await closeChild(stoppedChild);
       phase = 'foreground restart/reconnect disconnected state';
-      await expect(page.getByRole('heading', { name: 'Foreground connection unavailable', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Foreground connection unavailable');
       await expect(page.getByText('Waiting for the foreground server to recover.')).toBeVisible({ timeout: browserTimeout });
       phase = 'foreground restart/reconnect browser recovery';
       child = startInstalledServer(port);
@@ -766,7 +767,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'foreground restart/reconnect fresh B browser MCP session';
       await page.goto(workbenchUrl(origin, '/advanced/protocol'));
-      await expect(page.getByRole('heading', { name: 'MCP playground', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'MCP playground');
       await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
       await expect(page.locator('#mcp-epoch')).toHaveValue(recoveredEpochId, { timeout: browserTimeout });
       await expect(page.locator('#mcp-target')).toHaveValue('portable');

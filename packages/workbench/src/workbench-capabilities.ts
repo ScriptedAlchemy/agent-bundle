@@ -132,13 +132,15 @@ export const loadWorkbenchCapabilities = async ({
   ]);
   signal?.throwIfAborted();
   if (inspection.epochId !== buildId) throw new Error('Capability catalog did not match the current build.');
+  const application = inspection.application;
   const counts = Object.freeze({
     evalSuites: evalListing.suites.length,
-    hooks: inspection.runtime.hooks.length,
-    mcpServers: inspection.runtime.mcpServers.length,
-    scripts: inspection.runtime.scripts.length,
+    hooks: application.events.reduce((count, event) => count + event.hooks.length, 0) +
+      application.hooks.reduce((count, group) => count + group.hooks.length, 0),
+    mcpServers: application.servers.length,
+    scripts: application.scripts.length,
     skills: skillTree.skills.length,
-    targets: inspection.targets.length,
+    targets: application.hosts.length,
   });
   return Object.freeze({
     buildId,

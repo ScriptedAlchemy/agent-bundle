@@ -46,7 +46,7 @@ hosts sorted and joined by `+`, such as `claude+codex` — never once per host. 
 `dist/` package build compose their bundler config the same way — profile, `tools.rsbuild`,
 `tools.rspack`, then the framework invariants — as described under
 [`tools`](../../reference/configuration.mdx#tools). `agent-bundle inspect --bundler` prints the
-result; its `distPath.root` is the artifact output itself.
+lowered Rspack configuration of every compiled output; its `output.path` is the artifact output itself.
 
 ## What ships inside the root
 

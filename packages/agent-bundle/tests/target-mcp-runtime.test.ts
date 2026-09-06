@@ -21,6 +21,7 @@ import {
 import { createMcpPathTokenResolver, resolveMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
 import { McpService } from '../src/services/mcp-service.ts';
 import { build } from './support/build.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 
 const metadata = Object.freeze({
   adapterRevision: 'test',
@@ -356,7 +357,13 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
   try {
     await mkdir(root, { recursive: true });
     await writeFile(configPath, 'export default {};\n');
-    await build({ model: model(configPath), outputRoot: artifact, projectRoot: root, registry });
+    await build({
+      model: model(configPath),
+      outputRoot: artifact,
+      projectRoot: root,
+      registry,
+      routeGraph: emptyCompiledRouteGraph,
+    });
 
     const service = new McpService({
       createClient: () => ({

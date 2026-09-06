@@ -9,6 +9,7 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
+import { expectHeading } from './support/workbench-acceptance.ts';
 
 const browserTimeout = 8_000 * timeScale;
 
@@ -69,7 +70,7 @@ e2e('opens one browser MCP session with an immutable timeout', { timeout: 90_000
     });
 
     await page.goto(`${foregroundOrigin}/advanced/protocol`);
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'MCP playground');
     await expect(page.getByTestId('advanced-nav').getByRole('link', { name: 'Protocol' })).toHaveAttribute('aria-current', 'page');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');

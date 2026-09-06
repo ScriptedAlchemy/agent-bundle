@@ -11,6 +11,7 @@ import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/t
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
 import { browserLaunchOptions, browserTrace, buildWorkbench, waitForWorkbenchIdle, workbenchUrl } from './support/workbench-e2e.ts';
+import { expectHeading } from './support/workbench-acceptance.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
@@ -113,7 +114,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
       if (requestUrl.pathname.startsWith('/api/runtime/')) runtimeRequests.push(`${request.method()} ${requestUrl.pathname}`);
     });
     await page.goto(`${serverUrl}/advanced/protocol`);
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'MCP playground');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
@@ -125,7 +126,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     }> };
     expect(openedSession.session.binding).toEqual({ epochId, serverName: 'fixture', target: 'portable' });
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Tools' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Tools');
     await expect(page.getByRole('button', { name: 'echo', exact: true })).toBeVisible({ timeout: browserTimeout });
     const prompts = page.locator('[aria-label="Prompts"]');
     const resources = page.locator('[aria-label="Resources"]');
@@ -237,7 +238,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
     expect(await page.locator('body').textContent()).not.toContain(initialConfigValue);
     expect(await page.locator('body').textContent()).not.toContain(changedConfigValue);
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible();
+    await expectHeading(page, 'MCP playground');
     expect(artifactMcpSessionRequests).toContain('POST /api/mcp/sessions');
     expect(artifactMcpSessionRequests.some((request) => request.startsWith('POST /api/mcp/sessions/'))).toBe(true);
     expect(runtimeRequests).toEqual([]);
@@ -357,7 +358,7 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
   });
   try {
     await page.goto(`${server.url}/advanced/protocol`);
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'MCP playground');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
@@ -368,7 +369,7 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
 
     const port = Number(new URL(server.url).port);
     await server.close();
-    await expect(page.getByRole('heading', { name: 'Foreground connection unavailable' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Foreground connection unavailable');
     const retainedNavigation = page.getByTestId('workbench-nav').getByRole('link', { name: 'Application' });
     await expect(page.locator('.connection-content')).toHaveAttribute('inert', '');
     await expect(retainedNavigation).toBeVisible();
@@ -376,7 +377,7 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
     expect(await retainedNavigation.evaluate((element) => element === document.activeElement)).toBe(false);
 
     server = await startRestartableServer(port);
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'MCP playground');
     await expect(page.locator('.connection-content')).not.toHaveAttribute('data-recovery-probe', 'foreground-a');
     await expect(page.locator('#mcp-target')).toHaveValue('portable');
     await expect(page.locator('#mcp-server-name')).toHaveValue('fixture');

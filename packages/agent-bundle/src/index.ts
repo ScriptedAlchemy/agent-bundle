@@ -4,7 +4,7 @@ import type { CursorConfigExtension } from './adapters/cursor.ts';
 import type { PortableConfigExtension } from './adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts';
 
-export { defineConfig, definePrebuilt, pathTokens, pluginRootEnvAnchor } from './core/types.ts';
+export { defineConfig, definePrebuilt, pathTokens, pluginRootEnvAnchor, pluginStateRootEnvAnchor } from './core/types.ts';
 export { defineSkill, Skill } from './skills/define.ts';
 export {
   classifySkillToken,
@@ -125,7 +125,7 @@ export type {
   EventTraceRenderStart,
   EventTraceRuntime,
 } from './events/trace.ts';
-export { compareEvals, runEvals, startDevServer } from './api.ts';
+export { compareEvals, inspectArtifact, runEvals, startDevServer } from './api.ts';
 export {
   createCodexEvalHarness,
   createEvalHarness,
@@ -145,11 +145,18 @@ export type {
   RunCodexEvalTrialOptions,
 } from './eval/index.ts';
 export {
+  artifactCompilerRecordVersion,
+  artifactManifestName,
+  artifactManifestSchema,
+  artifactManifestVersion,
   assembleArtifactManifest,
   parseArtifactManifest,
+  readArtifactManifest,
   serializeArtifactManifest,
+  validateArtifactManifestSchema,
 } from './api.ts';
 export type {
+  CompareEvalsOptions,
   EvalAssertionSummary,
   EvalCaseSummary,
   EvalComparison,
@@ -158,7 +165,7 @@ export type {
   EvalServiceNativeOptions,
   EvalSuiteListing,
   EvalSuiteSummary,
-  CompareEvalsOptions,
+  InspectArtifactResult,
   RunEvalsOptions,
 } from './api.ts';
 export type {
@@ -171,9 +178,45 @@ export type {
   ArtifactManifestProject,
   ArtifactManifestRuntime,
   ArtifactManifestSourceInput,
-  ArtifactManifestTarget,
-  ArtifactManifestTargetSchema,
-  ArtifactManifestTargetValidation,
+  ArtifactManifestApplication,
+  ArtifactManifestBin,
+  ArtifactManifestBuiltInHost,
+  ArtifactManifestCli,
+  ArtifactManifestCliCommand,
+  ArtifactManifestCliCommandMcp,
+  ArtifactManifestCliOption,
+  ArtifactManifestCliProjection,
+  ArtifactManifestCompiler,
+  ArtifactManifestCompilerAdapter,
+  ArtifactManifestDistribution,
+  ArtifactManifestDistributionChannel,
+  ArtifactManifestDistributionInstall,
+  ArtifactManifestEventExecution,
+  ArtifactManifestExecutables,
+  ArtifactManifestHook,
+  ArtifactManifestLaunch,
+  ArtifactManifestLaunchArgument,
+  ArtifactManifestLayout,
+  ArtifactManifestMcpApp,
+  ArtifactManifestMcpServer,
+  ArtifactManifestPayload,
+  ArtifactManifestProjection,
+  ArtifactManifestProjectionDocuments,
+  ArtifactManifestProjectionMarketplace,
+  ArtifactManifestProjectionSchema,
+  ArtifactManifestProjectionValidation,
+  ArtifactManifestProvenance,
+  ArtifactManifestProvider,
+  ArtifactManifestReadResult,
+  ArtifactManifestRoute,
+  ArtifactManifestRouteContract,
+  ArtifactManifestRouteContractOrigin,
+  ArtifactManifestRouteKind,
+  ArtifactManifestRouteProvenance,
+  ArtifactManifestRoutes,
+  ArtifactManifestScript,
+  ArtifactManifestScriptRendered,
+  ArtifactManifestServer,
   ArtifactManifest,
   ArtifactManifestValidation,
   ArtifactManifestValidationRecord,

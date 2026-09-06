@@ -6,6 +6,7 @@ import type {
 import type {
   RouteInvocation,
   RouteInvocationKind,
+  RouteInvocationOutcome,
   RouteInvocationRequest,
   RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
@@ -91,8 +92,13 @@ const selectedSurface = (
   leaf: ApplicationLeaf,
   request?: RouteInvocationRequest,
 ): DevRuntimeSurface | undefined => {
+  if (
+    request?.surface !== undefined
+    && request.surface.kind !== 'mcp'
+    && request.surface.kind !== 'event'
+  ) return undefined;
   const matches = surfaces.filter((surface) => surfaceMatches(surface, leaf));
-  const host = request?.event?.host;
+  const host = request?.surface?.kind === 'event' ? request.surface.host : undefined;
   return host === undefined
     ? matches[0]
     : matches.find((surface) =>
@@ -103,7 +109,7 @@ const selectedTarget = (
   surface: DevRuntimeSurface,
   request: RouteInvocationRequest,
 ): string | undefined => {
-  const host = request.event?.host;
+  const host = request.surface?.kind === 'event' ? request.surface.host : undefined;
   if (host !== undefined && surface.targets.includes(host)) return host;
   if (
     surface.defaultTarget !== undefined &&
@@ -165,6 +171,22 @@ const invocationKind = (kind: RouteInvocationKind) => {
   }
 };
 
+/**
+ * The runtime backend has no process surface and no MCP projection, so the
+ * document's own status is the whole verdict when present. A succeeded
+ * runtime run without document events is still a completed successful
+ * boundary, so it carries the success outcome required by the wire invariant.
+ */
+const outcomeForRun = (
+  run: Exclude<DevRuntimeRun, { readonly status: 'running' }>,
+  document: RouteInvocation['document'],
+): RouteInvocationOutcome | undefined => {
+  if (run.status !== 'succeeded') return undefined;
+  return document === undefined || document.status === 'success'
+    ? Object.freeze({ kind: 'success' })
+    : Object.freeze({ kind: 'represented-error', summary: `The document reports status ${document.status}.` });
+};
+
 const completedRun = (
   run: DevRuntimeRun,
 ): Exclude<DevRuntimeRun, { readonly status: 'running' }> => {
@@ -196,13 +218,16 @@ const invocationForRun = (
     : Object.freeze([]);
   const document = documentFor(events);
   const timings = run.status === 'succeeded'
-    ? Object.freeze(run.result.trace.map((span) => Object.freeze({
-        durationMs: span.durationMs ?? 0,
-        phase: span.phase,
-        startedAt: span.startedAt,
-      })))
+    ? Object.freeze(run.result.trace.flatMap((span) => span.durationMs === undefined
+      ? []
+      : [Object.freeze({
+          durationMs: span.durationMs,
+          phase: span.phase,
+          startedAt: span.startedAt,
+        })]))
     : Object.freeze([]);
   const result = run.status === 'succeeded' ? run.result.agentVisible : undefined;
+  const outcome = outcomeForRun(run, document);
   return Object.freeze({
     completedAt: run.completedAt,
     context: Object.freeze({
@@ -224,6 +249,7 @@ const invocationForRun = (
     input: run.input,
     kind,
     manifestDigest: run.vector.runtimeGenerationId,
+    ...(outcome === undefined ? {} : { outcome }),
     projection: Object.freeze({}),
     providers: Object.freeze([]),
     ...(result === undefined ? {} : { result }),
@@ -232,6 +258,14 @@ const invocationForRun = (
     sourceRevision: run.vector.sourceRevision,
     startedAt: run.startedAt,
     status: run.status,
+    surface: kind === 'event-route'
+      ? Object.freeze({
+          ...(run.target === 'claude' || run.target === 'codex' || run.target === 'cursor'
+            ? { host: run.target }
+            : {}),
+          kind: 'event' as const,
+        })
+      : Object.freeze({ kind: 'mcp' as const }),
     timings,
   });
 };

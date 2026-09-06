@@ -11,6 +11,7 @@ import { validate } from '../src/api.ts';
 import type { BuildOptions } from '../src/build/build.ts';
 import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { build } from './support/build.ts';
 
 type RspackMutator = (config: Rspack.Configuration) => void;
@@ -123,6 +124,7 @@ const buildFixture = async (
   outputRoot: join(root, 'dist'),
   projectRoot: root,
   registry: new TargetRegistry().register(portableAdapter, { default: true }),
+  routeGraph: emptyCompiledRouteGraph,
   tools,
 }).then(() => undefined, (error: unknown) => error);
 

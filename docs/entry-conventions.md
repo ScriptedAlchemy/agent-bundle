@@ -150,23 +150,33 @@ Volatile lifetimes use the memory driver. Request lifetime opens and releases
 fresh project and notice stores per invocation; process lifetime shares them
 for the generated worker or executable process.
 
-Workspace-durable generated MCP workers store under
-`$AGENT_BUNDLE_PLUGIN_ROOT/state`. If that host-provided anchor is absent,
-the worker derives the artifact root from the parent of its own `mcp/`
-directory. The npm package's routed CLI bin and rendered scripts use
-`$AGENT_BUNDLE_PLUGIN_ROOT/state` when present and otherwise
-`$PWD/.agent-bundle/state`; the artifact-hosted routed CLI bin
-(`bin/<name>.mjs` in the plugin root) derives the artifact root from the parent of its
-own `bin/` directory instead, like the MCP worker. Each generated process
-resolves that anchor exactly once (`resolvePluginRoot` from
-`@agent-bundle/runtime`, #468): the state kernel, the notice ledger, the
-lineage journal, and every request scope the process opens read the same
-value, published as `(await agent()).plugin` — `{ root, stateRoot }` with
-`source: 'native'` from `AGENT_BUNDLE_PLUGIN_ROOT` or `'derived'` from the
-fallback — and handed to conventional providers as `plugin` beside
-`invocation` and `signal`. An anchor still carrying an unexpanded `${…}`
-token is treated as unset (reported once on stderr), never joined into a
-path. Notice authorization is deliberately permissive
+Workspace-durable artifact shells — generated MCP workers, artifact CLI bins
+and their render workers, rendered script workers, and standalone hook
+wrappers — call `resolvePluginRoot`
+with `stateAnchor: 'user-data'`. `AGENT_BUNDLE_PLUGIN_ROOT` still names the
+code root and otherwise falls back to the artifact root derived from the
+shell's own location. An expanded, non-blank `AGENT_BUNDLE_STATE_ROOT`
+independently overrides the framework state root and is made absolute with
+`resolve()`; otherwise the state root is
+`~/.agent-bundle/state/<plugin>-<digest>`, or
+`$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>` when `XDG_STATE_HOME` is an absolute path (a relative value is ignored).
+`<plugin>` is the code root's safe basename (or `plugin`) and `<digest>`
+is the first 16 hexadecimal characters of SHA-256 over that code root's
+realpath, so symlinked spellings share one state root while distinct installs
+do not. `resolvePluginRoot` uses `os.homedir()` unless its `home` test seam is
+supplied. The npm package's routed CLI bin and rendered scripts keep the default
+`stateAnchor: 'root'`: `$AGENT_BUNDLE_PLUGIN_ROOT/state` when supplied and
+otherwise `$PWD/.agent-bundle/state`.
+
+Each generated process resolves both roots exactly once
+(`resolvePluginRoot` from `@agent-bundle/runtime`, #468): the state kernel,
+notice ledger, lineage journal, and every request scope the process opens read
+the same `stateRoot`, published with the code `root` as
+`(await agent()).plugin` and handed to conventional providers as `plugin`
+beside `invocation` and `signal`. `source` records whether the code root was
+native or derived; `stateSource` does the same independently for the state
+root. An unexpanded `${…}` token in either root override is treated as unset
+(and reported once on stderr), never joined into a path. Notice authorization is deliberately permissive
 in generated mounting v1 (`authorized`); recipient/principal matching remains
 enforced by the ledger — every generated scope mounts the request's `lineage`
 on the notice principal, so `recipient.conversation` / `recipient.root` are
@@ -272,7 +282,7 @@ interface AgentProviderContext {
   host: Observed<{ name }>;             // exactly what the route reads on `await agent()`
   session: Observed<{ sessionId }>;
   workspace: Observed<{ root }>;
-  plugin: Observed<{ root; stateRoot }>; // the resolved plugin root (#468)
+  plugin: Observed<{ root; stateRoot }>; // resolved code and framework state roots (#468)
   lineage: Observed<AgentLineage>;      // own chain plus the live `tree` (#457)
   state?: { lifetime; read(options?) }; // the mounted state handle, `read` only
   notices?: { inbox(); published() };   // the request's notice handle, reads only
@@ -911,10 +921,12 @@ executable bit — invoke it as `node <plugin-root>/bin/<plugin-name>.mjs
 <args>`, exactly like `scripts/*.mjs`. Help, argv parsing, output modes,
 exit codes, and signals are identical to the package bin. One deliberate
 difference: workspace-durable state without a host-supplied
-`AGENT_BUNDLE_PLUGIN_ROOT` anchors on the **artifact root** (the parent of
-`bin/`, the same fallback the generated MCP worker beside it uses) rather
-than `$PWD/.agent-bundle/state`, so a co-installed CLI and server observe
-one store. The npm package bin keeps its `cwd` fallback.
+`AGENT_BUNDLE_STATE_ROOT` uses `stateAnchor: 'user-data'`, deriving
+`~/.agent-bundle/state/<plugin>-<digest>` (or the `XDG_STATE_HOME` equivalent)
+from the artifact code root. The generated MCP worker beside it makes the
+same derivation, so a co-installed CLI and server observe one store without
+writing beneath a read-only artifact. The npm package bin keeps
+`stateAnchor: 'root'` and its `cwd` fallback, `$PWD/.agent-bundle/state`.
 
 Reaching the bin from the other surfaces:
 
@@ -1249,12 +1261,13 @@ export default defineConfig({
   native command as `node "<root>/<payload path>" <args…>` — one config
   declaration replaces a hand-rolled `hooks/hooks.json` per host. Prebuilt
   hook `args` (for example `--host claude`) accept shell-safe strings only.
-- **Prebuilt means opaque.** Payload files are exempt from generated-output
-  content validation (bundled-ESM import graphs, strict generated JSON) but
+- **Prebuilt means opaque.** Payload files are exempt from compiler dependency
+  evidence, the emitted-module walk, and strict generated-JSON validation but
   remain hash-locked to the manifest. Declaration provenance is recorded as
   `kind: 'prebuilt'`. Hooks with prebuilt handlers are packaged like native
   hook documents: they do not compile wrappers and do not appear in the
-  simulatable hook index. MCP Apps declared on a prebuilt server stay a
+  manifest's `executables.hooks[]` rows, so `hooks list` and `hooks simulate`
+  do not see them. MCP Apps declared on a prebuilt server stay a
   development surface (the Workbench compiles them live); the build assumes
   the payload already serves the resource.
 - **Declare what the payload loads.** Because payload trees are opaque,
@@ -1302,21 +1315,41 @@ module specifiers are protected the same way: a hatch that externalizes
 `agent-bundle/mcp-entry` or a generated module specifier (`agent-bundle/meta`,
 or a registry specifier such as `agent-bundle/mcp-apps`) fails the build with
 a hard diagnostic — at config inspection for statically visible `externals`,
-and from the emitted bundle's residual imports for function-form `externals`.
-The hatch customizes *how code compiles*, never *what the artifact promises*. The framework's own
-profile keeps the same promise: `output.autoExternal` is `false`, `bundle:
-true`, `splitChunks: false`, and no `externals` are added. The compiler service
-lowers every host-pack surface and package-build entry. The framework-owned
-`ArtifactDependencyAuditPlugin` taps `thisCompilation` and records every module
-Rspack kept external, and the service reads that evidence before trusting an
-asset. `AB6005` rejects anything Rspack kept external except a Node built-in,
-`pnpapi`, or an emitted sibling of the same artifact, whatever spelling the
-bundle uses. The emitted-module walk remains behind that check as defense in
-depth. A `require`,
-`createRequire(…)(…)`, or `import.meta.resolve(…)` call the compiler does not
-resolve is not a module dependency; content the compiler did not compile is
-opaque and must declare what it needs. Run-time path references are kept the
-same way: a `new URL(…, import.meta.url)` or
+from the build-time guard that wraps function-form `externals`, and from the
+compilation's externals evidence (`AB6005`) for anything that still reaches
+the module graph; the emitted bytes are no longer scanned for reserved text.
+The hatch customizes *how code compiles*, never *what the artifact promises*.
+The framework's own profile keeps the same promise: `output.autoExternal` is
+`false`, `bundle: true`, `splitChunks: false`, and no `externals` are added.
+The compiler service lowers every host-pack surface and package-build entry.
+The framework-owned `ArtifactDependencyAuditPlugin` taps `thisCompilation`
+and records every module Rspack kept external, and the service reads that
+evidence before trusting an asset. `AB6005` rejects anything Rspack kept
+external except a Node built-in, `pnpapi`, or an emitted sibling of the same
+artifact, whatever spelling the bundle uses. `agent-bundle build` writes that
+evidence as `agent-bundle.compile-evidence.json` at the artifact root (listed
+in `agent-bundle.manifest.json` as a `generated` file); `agent-bundle validate
+--artifact` re-checks a listed record against the file table without reading
+JavaScript (`AB6039`). An expression request
+(`import(expr)`, `require(expr)`) is outside the compiler's view: Rslib's
+profile leaves it verbatim, and the compile evidence record lists those forms
+as unobserved. The emitted-module walk
+(`src/build/validate-artifact-modules.ts`) remains for exactly what the
+compiler cannot see: it fails an expression `import()` in any emitted module
+(`AB6005 has a non-literal dynamic import`), parses in full and resolves the
+imports of JavaScript the framework did not compile (`install.mjs`, copied
+scripts), and does the same for every module of a build whose `tools` hatch
+may have rewritten the emitted bytes (`coverage.rewritable`). A compiled
+module the record covers is lexed, not parsed, and each literal import it
+still carries is held to the record: a Node built-in or one of the file's
+recorded externals passes; any other request is one the build was told to
+ignore (`rspackIgnore`/`webpackIgnore` — Rspack leaves it verbatim with no
+module, external, or warning) and fails `AB6005 loads "<request>", which the
+compiler neither bundled nor recorded as an external`. A matching digest
+proves the bytes are the compiler's, not that every import in them was
+resolved. Content the compiler did not compile is opaque and must declare
+what it needs. Run-time
+path references are kept the same way: a `new URL(…, import.meta.url)` or
 `new Worker(new URL(…))` in consumer or generated code names a file beside the
 artifact, so the invariant layer turns the bundler's URL and worker asset
 processing off after the hatch and the expression reaches the artifact
@@ -1392,24 +1425,42 @@ kind whose row is not `supported`. The full matrix is in
 agent-bundle inspect --bundler [--target <t>] [--json]
 ```
 
-Dumps the synthesized bundler configuration for every output the build
-composes — artifact scripts, MCP entries, hook wrappers, the composite root's
-MCP Apps Rsbuild config, and the `dist/` package build — exactly as the build
-lowers it: in production mode whatever `NODE_ENV` says, the framework profile
-with the consumer `tools` hatch merged over it and the invariant hook appended
-last (functions render as `[function <name>]`). Entries the framework wraps also carry the generated
-wrapper module source (`generatedEntry`). The composition comes from the same
-functions the build uses, so the dump cannot drift from what compiles.
+Dumps the **lowered Rspack configuration** of every output the build
+compiles — artifact scripts, MCP entries, hook wrappers, the routed CLI bin,
+each MCP App view, and the `dist/` package build's `bin` and `lib` entries —
+one entry per compiler. The framework profile, the consumer `tools` hatch,
+and the invariant layer are composed exactly as the build composes them, then
+handed to the build's own engine — Rslib for executables, Rsbuild for MCP App
+views — and stopped where the build would start compiling. What prints is
+what the compiler receives: resolved `resolve.alias` entries (the
+`agent-bundle/*` runtime modules and the project-rooted
+`.agent-bundle-virtual/` generated modules beside the consumer's own
+aliases), the `externals` list, the framework plugins
+(`[object VirtualModulesPlugin]`, `[object ArtifactDependencyAuditPlugin]`),
+`output.path`, module rules, and every default the engine fills in. The
+lowering runs in production mode whatever `NODE_ENV` says and restores it
+afterwards, and it runs the build's invariant assertions: a `tools` value the
+build would refuse (a reserved alias, an `externals` entry naming a framework
+runtime module) makes the inspection `invalid` with an `AB7001` diagnostic
+carrying the refusal, instead of a config that never compiles. Entries the
+framework wraps also carry the generated wrapper module source
+(`generatedEntry`).
 
-Nothing is redacted (this is a local debugging surface), but two build-time
-values are replaced with stable tokens so output is deterministic for one
-project: the composite artifact root (chosen per build) appears as
-`<output>`, and the synthesized declaration tsconfig (a temporary
-file generated per package build) appears as `<generated-dts-tsconfig>`. The
-package build's output root appears as its published destination, `dist`,
-although each real build stages outputs before publishing them atomically.
-Resolved post-bundler internals stay Rslib's domain; this surfaces
-agent-bundle's own composition, which is where the `tools` hatch lands.
+The JSON rendering keeps the config's shape without dropping values JSON
+cannot carry: functions render as `[function <name>]` (Rslib lowers each
+entry's file name to `[function jsFilename]`), plugin instances as
+`[object <ClassName>]`, regular expressions as `[regexp /<source>/]`.
+
+Nothing is redacted (this is a local debugging surface; the lowered configs
+carry absolute paths of the project and of agent-bundle's installed
+toolchain), but two build-time values are replaced with stable tokens so the
+output is deterministic for one project: the composite artifact root (chosen
+per build) appears as `<output>` — as `output.path` and inside any path
+beneath it — and the synthesized declaration tsconfig (a temporary file
+generated per package build) appears as `<generated-dts-tsconfig>`. The
+package build's `output.path` is its published destination,
+`<project root>/dist`, although each real build stages outputs before
+publishing them atomically.
 
 ## Dev-watch of the package build
 
@@ -1590,11 +1641,12 @@ resolve '../events'`). The route graph reports such an import first, as
 `agent-bundle`, `agent-bundle/api`, `agent-bundle/config`,
 `agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, and
 `agent-bundle/test/browser`, matched exactly; `import type` and type-only
-usage are not reported), while an external bare import (`AB6005 uses
-unsupported specifier`) or a non-literal `import(spec)` (`AB6005 has a
-non-literal dynamic import`) still fails artifact validation. From an
-installed artifact the supported command is `<plugin> web` on
-`bin/<plugin>.mjs` (emitted when `web` is configured, even with no
+usage are not reported), while an external bare import fails `AB6005` from
+the compiler's externals evidence and a non-literal `import(spec)`, which the
+compiler leaves verbatim, still fails artifact validation from the
+emitted-module walk (`AB6005 has a non-literal dynamic import`). From an
+installed artifact the supported command is `<plugin> web`
+on `bin/<plugin>.mjs` (emitted when `web` is configured, even with no
 `src/cli/**` commands). It reads the manifest `web` section beside `bin/`,
 launches the plugin's own packed MCP server, and prints the same ready line
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` —
@@ -1652,7 +1704,11 @@ input, and a refresh rebinds that retained result. `<plugin> web` keeps the
 installed artifact immutable: framework-owned per-server web state
 (`${PLUGIN_DATA}` in declared env) lives under the user's home
 (`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`), never inside the
-plugin root, so a read-only install still launches.
+plugin root. The spawned server's SQLite state kernel, notice ledger, and
+lineage journal likewise use `stateAnchor: 'user-data'` and live under
+`~/.agent-bundle/state/<plugin>-<digest>` (or the `XDG_STATE_HOME` equivalent)
+unless `AGENT_BUNDLE_STATE_ROOT` overrides it, so a read-only install still
+launches.
 
 ## `agent-bundle/app` — the App-side bridge client
 

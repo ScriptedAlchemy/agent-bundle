@@ -11,9 +11,15 @@ export default {
             template: './views/status.html',
           },
         },
+        // One artifact-path argument (the packaged payload file) beside a
+        // literal, and env carrying a plugin-data token: the launch record
+        // must carry all three for <plugin> web to start the server with them.
+        args: ['--config', 'agent-bundle:path:plugin-root/config/status.json'],
+        env: { STATUS_CACHE: 'agent-bundle:path:plugin-data/cache', STATUS_MODE: 'packed' },
       },
     },
   },
+  payload: { config: './payload/config' },
   plugin: {
     description: 'A plugin whose MCP App is exposed through web.apps and opened with <plugin> web.',
     name: 'web-surface-fixture',

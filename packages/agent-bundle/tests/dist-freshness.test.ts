@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -13,10 +13,12 @@ import {
   isSkippedInputDirectory,
   newestEntry,
   runtimeExampleBuildOutputs,
+  runtimeRebundleFixtureMarker,
   workspaceBuildOutputs,
   type DistDescriptor,
   type DistFreshness,
 } from '../../../scripts/dist-freshness.mjs';
+import { digestTree } from './support/tree-snapshot.ts';
 
 const workspaceRoot = process.cwd();
 
@@ -79,6 +81,14 @@ const createPackageFixture = async (): Promise<PackageFixture> => {
 const touch = (path: string, mtime: Date): Promise<void> => utimes(path, mtime, mtime);
 
 describe('distFreshness', () => {
+  it('checks the marker emitted by the runtime fixture', async () => {
+    const fixture = await readFile(
+      join(workspaceRoot, 'packages/agent-bundle/tests/fixtures/runtime-rebundle/private-sibling.ts'),
+      'utf8',
+    );
+    expect(fixture).toContain(`'${runtimeRebundleFixtureMarker}'`);
+  });
+
   it('is fresh when every input predates the newest built file, ignoring declared inputs that do not exist', async () => {
     const { descriptor, root } = await createPackageFixture();
     const result = distFreshness(descriptor);
@@ -119,6 +129,17 @@ describe('distFreshness', () => {
     expect(distFreshness(descriptor).status).toBe('missing');
     await mkdir(join(root, 'dist/chunks'));
     expect(distFreshness(descriptor).status).toBe('missing');
+  });
+
+  it('rejects a fresh dist containing the packed runtime fixture marker', async () => {
+    const { descriptor, root } = await createPackageFixture();
+    const marked = join(root, 'dist/chunks/shared.js');
+    await writeFile(marked, runtimeRebundleFixtureMarker);
+    await touch(marked, buildTime);
+    expect(distFreshness(descriptor)).toMatchObject({
+      fixtureMarkerPath: marked,
+      status: 'contaminated',
+    });
   });
 
   it('skips node_modules, dist, .rstest-temp and dot-directories inside inputs', async () => {
@@ -178,6 +199,15 @@ describe('newestEntry', () => {
   });
 });
 
+describe('digestTree', () => {
+  it('changes when any built byte changes', async () => {
+    const { root } = await createPackageFixture();
+    const before = await digestTree(join(root, 'dist'));
+    await writeFile(join(root, 'dist/chunks/shared.js'), 'changed');
+    expect(await digestTree(join(root, 'dist'))).not.toBe(before);
+  });
+});
+
 describe('formatDistFreshnessFailure and assertFreshDist', () => {
   const fresh: DistFreshness = {
     name: 'fresh-package',
@@ -200,15 +230,26 @@ describe('formatDistFreshnessFailure and assertFreshDist', () => {
     output: '/repo/packages/workbench/dist',
     status: 'missing',
   };
+  const contaminated: DistFreshness = {
+    fixtureMarkerPath: '/repo/packages/agent-bundle/dist/mcp-server-runtime.js',
+    name: 'agent-bundle',
+    newestInput: { mtimeMs: sourceTime.getTime(), path: '/repo/packages/agent-bundle/src/index.ts' },
+    newestOutput: { mtimeMs: buildTime.getTime(), path: '/repo/packages/agent-bundle/dist/index.js' },
+    output: '/repo/packages/agent-bundle/dist',
+    status: 'contaminated',
+  };
 
-  it('names every stale or missing output with its evidence and ends with the rebuild instruction', () => {
-    const message = formatDistFreshnessFailure([fresh, stale, missing], { relativeTo: '/repo' });
+  it('names every rejected output with its evidence and ends with the rebuild instruction', () => {
+    const message = formatDistFreshnessFailure([fresh, stale, missing, contaminated], { relativeTo: '/repo' });
     expect(message).not.toContain('fresh-package');
     expect(message).toContain(
       '  @agent-bundle/runtime: stale — packages/rsc-runtime/src/index.ts (2026-01-03T00:00:00.000Z)'
       + ' is newer than packages/rsc-runtime/dist/index.js (2026-01-02T00:00:00.000Z)',
     );
     expect(message).toContain('  agent-bundle-workbench: missing — packages/workbench/dist has no built files');
+    expect(message).toContain(
+      '  agent-bundle: contaminated — packages/agent-bundle/dist/mcp-server-runtime.js contains the packed runtime fixture marker',
+    );
     expect(message.endsWith('run `pnpm build`.')).toBe(true);
   });
 
@@ -225,7 +266,7 @@ describe('formatDistFreshnessFailure and assertFreshDist', () => {
     expect(() => assertFreshDist([descriptor])).not.toThrow();
     await touch(join(root, 'src/index.ts'), editTime);
     expect(() => assertFreshDist([descriptor], { relativeTo: root })).toThrow(
-      /^Built output is stale or missing[\s\S]*fixture: stale — src\/index\.ts[\s\S]*run `pnpm build`\.$/u,
+      /^Built output is stale, missing, or contaminated[\s\S]*fixture: stale — src\/index\.ts[\s\S]*run `pnpm build`\.$/u,
     );
     expect(checkDistFreshness([descriptor]).map((result) => result.status)).toEqual(['stale']);
   });

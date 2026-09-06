@@ -7,7 +7,6 @@ import { afterAll, beforeAll, describe, expect, it } from '@rstest/core';
 import { codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import { build, type BuildProjectResult, inspect, validate } from '../src/api.ts';
-import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
 import { type ArtifactManifest, parseArtifactManifest } from '../src/build/manifest.ts';
 import { type Diagnostic, DiagnosticError } from '../src/core/diagnostics.ts';
 
@@ -141,7 +140,7 @@ describe('one root projecting every built-in host (#569 "lays every host manifes
   }, 180_000);
 
   it('places each selected host\'s manifest at the root exactly once and never lists one path twice', async () => {
-    expect(built.manifest.targets.map((target) => target.name)).toEqual(['claude', 'codex', 'cursor', 'portable']);
+    expect(built.manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'codex', 'cursor', 'portable']);
     for (const path of Object.values(hostManifestPaths)) {
       await expect(readFile(join(built.output, path), 'utf8')).resolves.toContain('"composite-fixture"');
       expect(listed(built.manifest, path), path).toBe(1);
@@ -214,8 +213,7 @@ describe('one root projecting every built-in host (#569 "lays every host manifes
     expect(wrappers).toEqual([`${stem}.claude.mjs`, `${stem}.codex.mjs`, `${stem}.cursor.mjs`]);
     for (const wrapper of wrappers) expect(listed(built.manifest, `hooks/${wrapper}`)).toBe(1);
 
-    const index = parseArtifactHookIndex(await readFile(join(built.output, 'agent-bundle.hooks.json'), 'utf8'));
-    expect(index?.hooks.map((hook) => [hook.target, hook.path])).toEqual([
+    expect(built.manifest.executables.hooks.map((hook) => [hook.host, hook.path])).toEqual([
       ['claude', `hooks/${stem}.claude.mjs`],
       ['codex', `hooks/${stem}.codex.mjs`],
       ['cursor', `hooks/${stem}.cursor.mjs`],

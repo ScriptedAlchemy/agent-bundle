@@ -45,12 +45,15 @@ const bindingSchema = z.strictObject({
   hook: textSchema,
   target: textSchema,
 });
+// Mirrors `ArtifactManifestHook`: the manifest's own hook row (#592 step 3).
 const hookSchema = z.strictObject({
   event: textSchema,
+  host: textSchema,
   id: textSchema,
+  kind: z.enum(['config', 'event-route']),
   name: textSchema,
   path: textSchema,
-  target: textSchema,
+  routeId: textSchema.optional(),
   timeout: z.number().optional(),
 });
 const hookListSchema = z.strictObject({

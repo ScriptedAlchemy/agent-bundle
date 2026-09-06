@@ -58,6 +58,15 @@ export const workbenchTestId = (page: Page, id: keyof typeof workbenchTestIds): 
 const navLinkLabels = async (page: Page): Promise<readonly string[]> =>
   workbenchTestId(page, 'workbenchNav').locator('.nav-label').allInnerTexts();
 
+/** Headings whose text prefixes another heading on the page (`Skills` / `Source skills`) need `exact`. */
+export const expectHeading = async (
+  scope: Page | Locator,
+  name: string,
+  timeout = browserTimeout,
+): Promise<void> => {
+  await expect(scope.getByRole('heading', { exact: true, name })).toBeVisible({ timeout });
+};
+
 export const expectPrimaryNav = async (page: Page, timeout = browserTimeout): Promise<void> => {
   const nav = workbenchTestId(page, 'workbenchNav');
   await expect(nav).toBeVisible({ timeout });
@@ -245,8 +254,15 @@ export const editWatchedSource = async (
 };
 
 export const runSelectedRoute = async (page: Page, timeout = browserTimeout): Promise<void> => {
-  await workbenchTestId(page, 'routeRun').click();
   const status = workbenchTestId(page, 'routeStatus');
+  const invocationId = status.locator('.route-status-id');
+  const previousId = await invocationId.count() === 0 ? undefined : await invocationId.textContent();
+  await workbenchTestId(page, 'routeRun').click();
+  await expect.poll(async () => {
+    const className = await status.getAttribute('class');
+    const currentId = await invocationId.count() === 0 ? undefined : await invocationId.textContent();
+    return className?.includes('route-status--running') === true || currentId !== previousId;
+  }, { timeout }).toBe(true);
   await expect(status).toHaveClass(/route-status--succeeded/u, { timeout });
 };
 

@@ -603,22 +603,25 @@ const readPluginRoot = (env: Record<string, string | undefined>): string | undef
 
 在路由内部完全不需要读取这个变量。每个生成的外壳——MCP 入口及其 Flight worker、路由式 CLI 可执行文件
 及其渲染 worker、hook 包装器——都在启动时用 `@agent-bundle/runtime` 的 `resolvePluginRoot` 解析一次
-锚点，把 SQLite 状态、通知账本与 lineage 日志挂载在 `<root>/state` 之下，并在它打开的每个请求上以
-`(await agent()).plugin` 发布同一个值：
+代码根目录与框架状态根目录，并在它打开的每个请求上以 `(await agent()).plugin` 发布这两个值：
 
 ```ts
 const { plugin } = await agent();
 if (plugin.state === 'available') {
-  plugin.value.root;      // 安装根目录：AGENT_BUNDLE_PLUGIN_ROOT，或外壳的回退值
-  plugin.value.stateRoot; // `<root>/state`，defineState / 通知 / lineage 已经存放于此
-  plugin.source;          // 来自变量为 'native'，来自回退为 'derived'
+  plugin.value.root;      // 代码根目录：AGENT_BUNDLE_PLUGIN_ROOT，或外壳的回退值
+  plugin.value.stateRoot; // 框架状态根目录：AGENT_BUNDLE_STATE_ROOT，或默认位置
+  plugin.source;          // 代码根目录来自变量为 'native'，来自回退为 'derived'
 }
 ```
 
 `source: 'native'` 表示宿主提供了已展开的 `AGENT_BUNDLE_PLUGIN_ROOT`；`'derived'` 表示外壳使用了回退——
 在构建产物内是产物根目录（`mcp/`、`bin/` 或 `hooks/` 的父目录），对 npm 包 bin 则是 `$PWD/.agent-bundle`。
 仍带有未展开 `${…}` token 的值（宿主把清单原样透传）会被视为未设置，在 stderr 上报告一次，且绝不会被
-拼接进路径。约定式 provider 在其工厂上下文中收到同样的被观察值 `plugin`，与 `invocation`、`signal` 并列，
+拼接进路径。产物宿主外壳把 `plugin.value.stateRoot` 默认为
+`~/.agent-bundle/state/<plugin>-<digest>`（或 `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`），由
+代码根目录的安全 basename 及其真实路径 SHA-256 摘要的前 16 位十六进制字符推导而来。
+`AGENT_BUNDLE_STATE_ROOT` 覆盖该位置；npm 包 bin 仍使用 `$PWD/.agent-bundle/state`。约定式
+provider 在其工厂上下文中收到同样的被观察值 `plugin`，与 `invocation`、`signal` 并列，
 因此把文件放在框架状态旁边的 provider 自己不必再推导任何东西。route-unit 与 `mcp-in-memory` 测试层级
 以同样方式解析它（回退到 `<项目根目录>/.agent-bundle`），并像其他每个轴一样接受 `context.plugin` 覆盖；
 在生成的作用域之外，该轴为 `unavailable('not-provided')`。
@@ -888,8 +891,9 @@ web: {
 （error）；各消息形状见[诊断参考](../../reference/diagnostics.md)。
 
 配置了 `web` 时，组合产物的 `agent-bundle.manifest.json` 会增加 `web` 节，即使没有 `src/cli/**`
-命令也会输出 `bin/<plugin>.mjs`。宿主页面装在该 bin 里——产物中没有 `web/` 目录。`AB6005` 像遍历
-其他每个可执行文件一样遍历它。
+命令也会输出 `bin/<plugin>.mjs`。宿主页面装在该 bin 里——产物中没有 `web/` 目录。它的编译与其他
+每个可执行文件一样提供 external-module 证据，因此 `AB6005` 会拒绝 Node 内建模块、`pnpapi` 或已输出
+同级文件之外的任何 external。
 
 从已构建产物或已安装插件根目录运行：
 
@@ -899,10 +903,12 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 ```
 
 默认 App 是唯一被暴露的那个；暴露了多个却未选择时是用法错误（退出码 `2`）并列出它们。`bin/` 旁边
-缺少 `agent-bundle.manifest.json` 则以 `1` 退出。该命令启动插件自己的 MCP 服务器
-（`node <root>/mcp/<entry>.mjs`，`AGENT_BUNDLE_PLUGIN_ROOT=<root>`，已声明的静态 env 并展开路径
-令牌——plugin-data 令牌解析到产物之外的 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`，
-因此只读安装也能启动），先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用 loopback origin 提供 App，并为
+缺少 `agent-bundle.manifest.json` 则以 `1` 退出。该命令按 `executables.mcpServers[]` 的 `launch` 记录启动插件自己的 MCP 服务器
+（`node <root>/<launch.entry> <args>`——`artifact` 参数解析到 `<root>` 之下，literal 参数展开路径
+令牌——并带上 `AGENT_BUNDLE_PLUGIN_ROOT=<root>` 与已声明的静态 env，路径令牌同样展开；plugin-data
+令牌解析到产物之外的 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`，
+因此只读安装也能启动）。被拉起的服务器自己的持久框架状态同样落在产物之外的
+`~/.agent-bundle/state/<plugin>-<digest>`（或 `AGENT_BUNDLE_STATE_ROOT`）。随后先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用 loopback origin 提供 App，并为
 App 文档再开一个 loopback 沙箱 origin（与 `agent-bundle serve-app` 以及 Workbench 同一套宿主栈与
 同意行为），打印 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)`（或带
 `--json` 时打印一行 `{ app, server, tool, url, port, resourceUri, sandboxOrigin }`），并一直运行
@@ -917,8 +923,10 @@ args、cwd、声明的 env、运行时绑定）的 projection 无需询问即可
 并列出可选项——只有 Claude 或 Codex projection 的构建不需要 portable projection 或 `mcp.json` 就能
 打开它的 App。Web 会话按 epoch、服务器与解析后的启动身份缓存；一次成功的重建会退役旧 epoch 中未被
 使用的会话（仍被页面租用的保持有效，直到最后一个租约释放时关闭），失败的重建则不退役任何会话。标注了 `readOnlyHint: true` 的
-开场工具在每次页面加载时运行；其他开场工具在每个会话、工具、App 与输入组合下只运行一次，刷新会重新
-绑定保留的结果。
+开场工具在每次页面加载时运行；其他开场工具在每个会话、工具、App 与输入组合下只运行一次。并发的首次加载
+共享同一个进行中的调用，刷新只重新绑定保留的结果，并不会重新获得执行操作的权限。结果按独立上限保留；
+结果被淘汰、调用失败而副作用未知，或有界执行记录已满时，页面会收到一份错误结果，要求用户从 App
+显式运行该工具，而不会自动重试。
 
 `agent-bundle serve-app` 保持不变：它是 checkout 时的形态，会构建或指向一份产物，并需要已安装的
 框架。全部选项见[命令行参考](../../reference/cli.mdx#serve-app)。
@@ -958,9 +966,10 @@ npx agent-bundle mcp invoke --artifact artifact --target claude --server curator
 npx agent-bundle mcp run --artifact artifact --target claude --server curator
 ```
 
-`mcp run` 在前台执行一个已构建的 stdio 服务器：它从该 target 的 MCP 清单中解析出生成入口（其文件名带有
-服务器名称的摘要），通过 target 适配器展开路径 token，加载项目根目录的 `.env` 集合，并转发子进程的退出码。不带
-`--artifact` 时会先构建一个临时产物。
+`mcp run` 在前台执行一个已构建的 stdio 服务器：它从产物清单的 `executables.mcpServers[]` 行中解析出编译后
+的入口（其文件名带有服务器名称的摘要），通过宿主适配器展开路径 token，加载项目根目录的 `.env` 集合，并转发
+子进程的退出码。`--target` 是可选的——省略时，清单的 `projections[]` 必须恰好指出一个具备 MCP 能力的宿主；
+有多个时是一条点名候选宿主的错误。不带 `--artifact` 时会先构建一个临时产物。
 
 ## 实时宿主 MCP 代理
 
@@ -983,8 +992,9 @@ npx agent-bundle mcp run --artifact artifact --target claude --server curator
 
 该代理通过项目的开发锁发现 loopback 服务器，并连接到位于 `/mcp/host/<serverName>` 的稳定 Streamable
 HTTP 端点。`--target` 默认为 `portable`，`--url` 可覆盖发现过程。重建成功时会保持 stdio 连接不断、
-把新调用路由到当前 epoch、让已受理的调用在其原始 epoch 上完成，并转发 MCP 目录变更通知。若 epoch 或
-开发服务器消失，代理会以 MCP 错误以及 `AB8024` 或 `AB8025` 诊断失败关闭。
+把新调用路由到当前 epoch、让已受理的调用在其原始 epoch 上完成，并转发 MCP 目录变更通知。开发期 MCP
+会话与 Workbench 调用共享项目的 `<project>/.agent-bundle/state` 根目录，它不在会被退役的 epoch
+目录之内。若 epoch 或开发服务器消失，代理会以 MCP 错误以及 `AB8024` 或 `AB8025` 诊断失败关闭。
 
 该端点刻意不做认证，因为开发服务器只绑定 loopback，绝不会暴露到本机之外。
 

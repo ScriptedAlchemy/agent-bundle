@@ -100,11 +100,19 @@ const contractSchema: z.ZodType<RouteManifestContract> = z.strictObject({
   routes: z.array(z.string()),
 });
 
+const eventExecutionSchema = z.strictObject({
+  fallback: z.enum(['none', 'standalone']),
+  preflight: z.string().optional(),
+  providers: z.array(z.string()).optional(),
+  runtime: z.enum(['shared', 'standalone']),
+});
+
 const routeSchema: z.ZodType<RouteManifestRoute> = z.strictObject({
   contract: z.string().optional(),
   config: z.array(configEntrySchema),
   description: z.string().optional(),
   event: z.string().optional(),
+  execution: eventExecutionSchema.optional(),
   id: z.string(),
   inputSchema: inputSchema.optional(),
   kind: z.enum(['app', 'cli', 'event-route', 'prompt', 'resource', 'script', 'tool']),

@@ -1,14 +1,14 @@
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
 import type {
+  ApplicationExplorer,
   ArtifactEpochDiff,
   ArtifactInspection,
   ArtifactInspectionDirectoryNode,
   ArtifactInspectionFile,
   ArtifactInspectionFileNode,
+  ArtifactInspectionProjection,
   ArtifactInspectionProvenance,
-  ArtifactInspectionRuntime,
   ArtifactInspectionSourceInput,
-  ArtifactInspectionTarget,
   ArtifactInspectionTreeNode,
 } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import { deepFreeze } from '../freeze.ts';
@@ -33,41 +33,6 @@ export interface ArtifactTreeRow {
   readonly name: string;
   readonly path: string;
   readonly sha256?: string;
-}
-
-export interface ArtifactHookRow {
-  readonly bytes: number;
-  readonly event: string;
-  readonly key: string;
-  readonly label: string;
-  readonly path: string;
-  readonly sha256: string;
-  readonly target: string;
-  readonly timeout?: number;
-}
-
-export interface ArtifactMcpServerRow {
-  readonly entryPaths: readonly string[];
-  readonly key: string;
-  readonly kind: 'stdio' | 'streamable-http';
-  readonly label: string;
-  readonly manifestPath: string;
-  readonly target: string;
-}
-
-export interface ArtifactExecutableRow {
-  readonly bytes: number;
-  readonly key: string;
-  readonly kind: ArtifactInspectionFile['kind'];
-  readonly mode?: string;
-  readonly path: string;
-  readonly sha256: string;
-}
-
-export interface ArtifactRuntimeView {
-  readonly executables: readonly ArtifactExecutableRow[];
-  readonly hooks: readonly ArtifactHookRow[];
-  readonly mcpServers: readonly ArtifactMcpServerRow[];
 }
 
 export interface ArtifactProvenanceRow {
@@ -100,10 +65,10 @@ export interface ArtifactDiffView {
   readonly summary: string;
 }
 
-export interface ArtifactTargetOption {
+export interface ArtifactProjectionOption {
+  readonly host: string;
   readonly key: string;
   readonly label: string;
-  readonly name: string;
 }
 
 export interface ArtifactViewOptions {
@@ -111,38 +76,30 @@ export interface ArtifactViewOptions {
   readonly diff: ArtifactEpochDiff | undefined;
   readonly epochId: string | undefined;
   readonly inspection: ArtifactInspection | undefined;
-  readonly selectedTarget: string | undefined;
+  readonly selectedProjection: string | undefined;
 }
 
 export interface ArtifactView {
+  readonly application: ApplicationExplorer | undefined;
   readonly diagnostics: readonly Diagnostic[];
   readonly diff: ArtifactDiffView | undefined;
   readonly epochId: string | undefined;
-  readonly executables: readonly ArtifactExecutableRow[];
-  readonly hooks: readonly ArtifactHookRow[];
   readonly identity: readonly ArtifactDetailRow[];
-  readonly mcpServers: readonly ArtifactMcpServerRow[];
+  readonly projections: readonly ArtifactProjectionOption[];
   readonly provenance: readonly ArtifactProvenanceRow[];
-  readonly selected: ArtifactTargetOption | undefined;
+  readonly selected: ArtifactProjectionOption | undefined;
   readonly state: ArtifactViewState;
   readonly summary: string;
-  readonly targets: readonly ArtifactTargetOption[];
   readonly tree: readonly ArtifactTreeRow[];
 }
 
 const noDiagnostics: readonly Diagnostic[] = Object.freeze([]);
 
-const noExecutables: readonly ArtifactExecutableRow[] = Object.freeze([]);
-
-const noHooks: readonly ArtifactHookRow[] = Object.freeze([]);
-
-const noMcpServers: readonly ArtifactMcpServerRow[] = Object.freeze([]);
-
 const noProvenance: readonly ArtifactProvenanceRow[] = Object.freeze([]);
 
 const noRows: readonly ArtifactDetailRow[] = Object.freeze([]);
 
-const noTargets: readonly ArtifactTargetOption[] = Object.freeze([]);
+const noProjections: readonly ArtifactProjectionOption[] = Object.freeze([]);
 
 const noTree: readonly ArtifactTreeRow[] = Object.freeze([]);
 
@@ -189,14 +146,18 @@ const treeRows = (node: ArtifactInspectionTreeNode, depth: number): readonly Art
   ];
 };
 
-export const artifactTreeRowsFor = (target: ArtifactInspectionTarget): readonly ArtifactTreeRow[] =>
-  Object.freeze(treeRows(target.tree, 0));
+export const artifactTreeRowsFor = (projection: ArtifactInspectionProjection): readonly ArtifactTreeRow[] =>
+  Object.freeze(treeRows(projection.tree, 0));
 
-export const artifactTargetOptionsFor = (
-  targets: readonly ArtifactInspectionTarget[],
-): readonly ArtifactTargetOption[] => deepFreeze(
-  targets
-    .map((target): ArtifactTargetOption => ({ key: target.name, label: target.name, name: target.name }))
+export const artifactProjectionOptionsFor = (
+  hosts: ApplicationExplorer['hosts'],
+): readonly ArtifactProjectionOption[] => deepFreeze(
+  hosts
+    .map((host): ArtifactProjectionOption => ({
+      host: host.host,
+      key: host.host,
+      label: host.host,
+    }))
     .sort((left, right) => left.key.localeCompare(right.key)),
 );
 
@@ -209,41 +170,6 @@ export const artifactEpochIdentityRowsFor = (inspection: ArtifactInspection): re
     row('Config path', inspection.project.configPath),
     row('Emitted files', String(inspection.files.length)),
   ]);
-
-export const artifactRuntimeViewFor = (runtime: ArtifactInspectionRuntime): ArtifactRuntimeView => deepFreeze({
-  executables: runtime.executables
-      .map((file): ArtifactExecutableRow => Object.freeze({
-        bytes: file.bytes,
-        key: file.path,
-        kind: file.kind,
-        ...modeFields(file),
-        path: file.path,
-        sha256: file.sha256,
-      }))
-      .sort((left, right) => left.key.localeCompare(right.key)),
-  hooks: runtime.hooks
-      .map((hook): ArtifactHookRow => Object.freeze({
-        bytes: hook.file.bytes,
-        event: hook.event,
-        key: `${hook.target}/${hook.id}`,
-        label: `${hook.name} · ${hook.event} · ${hook.target}`,
-        path: hook.path,
-        sha256: hook.file.sha256,
-        target: hook.target,
-        ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
-      }))
-      .sort((left, right) => left.key.localeCompare(right.key)),
-  mcpServers: runtime.mcpServers
-      .map((server): ArtifactMcpServerRow => Object.freeze({
-        entryPaths: Object.freeze([...server.entryPaths].sort((left, right) => left.localeCompare(right))),
-        key: `${server.target}/${server.name}`,
-        kind: server.kind,
-        label: `${server.name} · ${server.kind} · ${server.target}`,
-        manifestPath: server.manifestPath,
-        target: server.target,
-      }))
-      .sort((left, right) => left.key.localeCompare(right.key)),
-});
 
 export const artifactProvenanceRowsFor = (
   provenance: readonly ArtifactInspectionProvenance[],
@@ -301,8 +227,8 @@ const summaryFor = (state: ArtifactViewState, inspection: ArtifactInspection | u
   if (state === 'no-epoch') return 'No successful build is available, so there is no generated output to inspect.';
   if (state === 'diagnostics') return 'This build failed validation, so its generated output cannot be inspected.';
   if (state === 'ready' && inspection !== undefined) {
-    return `Build ${inspection.epochId} contains ${inspection.files.length} files ` +
-      `across ${inspection.targets.length} targets.`;
+    return `${inspection.application.identity.name}@${inspection.application.identity.version} build ${inspection.epochId} contains ` +
+      `${inspection.files.length} files across ${inspection.application.hosts.length} hosts.`;
   }
   return 'Generated output has not been loaded for this build yet.';
 };
@@ -314,23 +240,20 @@ export const artifactViewFor = (options: ArtifactViewOptions): ArtifactView => {
     : options.diagnostics.length > 0 ? 'diagnostics'
       : inspection === undefined ? 'empty'
         : 'ready';
-  const targets = inspection === undefined ? noTargets : artifactTargetOptionsFor(inspection.targets);
-  const selected = targets.find((option) => option.name === options.selectedTarget) ?? targets[0];
-  const runtime = inspection === undefined ? undefined : artifactRuntimeViewFor(inspection.runtime);
-  const target = inspection?.targets.find((entry) => entry.name === selected?.name);
+  const projections = inspection === undefined ? noProjections : artifactProjectionOptionsFor(inspection.application.hosts);
+  const selected = projections.find((option) => option.host === options.selectedProjection) ?? projections[0];
+  const projection = inspection?.projections.find((entry) => entry.host === selected?.host);
   return Object.freeze({
+    application: inspection?.application,
     diagnostics: options.diagnostics.length === 0 ? noDiagnostics : Object.freeze([...options.diagnostics]),
     diff: options.diff === undefined ? undefined : artifactDiffViewFor(options.diff),
     epochId: options.epochId,
-    executables: runtime?.executables ?? noExecutables,
-    hooks: runtime?.hooks ?? noHooks,
     identity: inspection === undefined ? noRows : artifactEpochIdentityRowsFor(inspection),
-    mcpServers: runtime?.mcpServers ?? noMcpServers,
+    projections,
     provenance: inspection === undefined ? noProvenance : artifactProvenanceRowsFor(inspection.provenance),
     selected,
     state,
     summary: summaryFor(state, inspection),
-    targets,
-    tree: target === undefined ? noTree : artifactTreeRowsFor(target),
+    tree: projection === undefined ? noTree : artifactTreeRowsFor(projection),
   });
 };

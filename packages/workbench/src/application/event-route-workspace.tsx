@@ -3,7 +3,7 @@
  * selector in front of it. `Canonical` submits the canonical event payload the
  * route's schema describes; `Claude | Codex | Cursor` submit that host's
  * native hook payload — seeded from the served lifecycle fixture — as
- * `event: { host, fixtureId }` so the service canonicalizes it exactly as the
+ * `surface: { kind: 'event', host, fixtureId }` so the service canonicalizes it exactly as the
  * emitted wrapper would. The plugin-visible decision (the rendered document)
  * stays the default result; the codec panes the old Hooks page led with are
  * secondary tabs: canonical → host mapping, native in / out, canonical
@@ -19,8 +19,9 @@ import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 import type { TraceClient } from '../trace/trace-client.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
 import { ExecutableRouteWorkspace } from './executable-route-workspace.tsx';
+import { outcomeLabel, statusLabel } from './invocation-model.ts';
 import { displayAgentDocumentValue } from './rendered-document.tsx';
-import type { ResultTabDefinition } from './result-tabs.tsx';
+import { OutcomeBadge, StatusBadge, type ResultTabDefinition } from './result-tabs.tsx';
 import { requestContextRows } from './route-inspector.tsx';
 import {
   invocationOf,
@@ -57,6 +58,15 @@ export const lifecycleForLeaf = (lifecycles: readonly Lifecycle[], leaf: Applica
 export const eventHostTarget = (lifecycle: Lifecycle | undefined, host: RouteInvocationEventHost): LifecycleTarget | undefined =>
   lifecycle?.targets.find((target) => target.target === host);
 
+export const defaultEventHostSelection = (
+  leaf: ApplicationLeaf,
+  lifecycle: Lifecycle | undefined,
+): EventHostSelection => {
+  if (leaf.preflight === undefined) return 'canonical';
+  const first = lifecycle?.targets.find((target) => isEventHost(target.target))?.target;
+  return first !== undefined && isEventHost(first) ? first : eventHosts[0]!;
+};
+
 /** One native payload fixture per host the lifecycle catalog serves for this route. */
 export const eventFixturesFor = (lifecycle: Lifecycle | undefined): readonly RouteInputFixture[] => Object.freeze(
   (lifecycle?.targets ?? [])
@@ -72,10 +82,15 @@ export const eventFixturesFor = (lifecycle: Lifecycle | undefined): readonly Rou
 export const eventRequestFor = (
   host: EventHostSelection,
   draft: RouteInvocationDraft,
-): RouteInvocationDraft => {
-  if (host === 'canonical') return draft;
-  return Object.freeze({ ...draft, event: Object.freeze({ host }) });
-};
+  fixtureId?: string,
+): RouteInvocationDraft => Object.freeze({
+  ...draft,
+  surface: Object.freeze({
+    ...(fixtureId === undefined ? {} : { fixtureId }),
+    ...(host === 'canonical' ? {} : { host }),
+    kind: 'event',
+  }),
+});
 
 const Rows = ({ rows }: { readonly rows: readonly { readonly label: string; readonly value: string }[] }): React.ReactNode => <dl className="inspector-rows">
   {rows.map((entry) => <div key={entry.label}><dt>{entry.label}</dt><dd>{entry.value}</dd></div>)}
@@ -136,7 +151,8 @@ const CanonicalResultTab = ({ invocation }: { readonly invocation?: RouteInvocat
   return <div className="event-canonical">
     <Rows rows={[
       { label: 'Document status', value: invocation.document?.status ?? 'no document' },
-      { label: 'Invocation status', value: invocation.status },
+      { label: 'Execution', value: statusLabel(invocation.status) },
+      { label: 'Outcome', value: invocation.outcome === undefined ? 'none (the boundary did not complete)' : outcomeLabel(invocation.outcome) },
     ]} />
     {value === undefined
       ? <Empty>The document carries no value; the decision is expressed by its nodes (see Rendered).</Empty>
@@ -166,7 +182,10 @@ const ReplayTab = ({ controller, defaultHost, lifecycle }: {
       return;
     }
     setError(undefined);
-    controller.run(Object.freeze({ event: Object.freeze({ host }), input: parsed as JsonObject }));
+    controller.run(Object.freeze({
+      input: parsed as JsonObject,
+      surface: Object.freeze({ host, kind: 'event' }),
+    }));
   };
   return <div className="event-replay">
     <p className="result-note">Replay a receipt a real host produced: paste its native payload and run it through this route exactly as the emitted wrapper would.</p>
@@ -187,7 +206,8 @@ const ReplayTab = ({ controller, defaultHost, lifecycle }: {
       ? <Empty>No host-submitted invocations of this route have been recorded in this dev session.</Empty>
       : <ol className="result-trace">{observed.map((summary) => <li className="result-trace-entry" key={summary.id}>
         <button onClick={() => controller.load(summary.id)} type="button">
-          <span className={`result-trace-status result-trace-status--${summary.status}`}>{summary.status}</span>
+          <StatusBadge status={summary.status} />
+          {summary.outcome === undefined ? undefined : <OutcomeBadge outcome={summary.outcome} />}
           <span className="result-trace-host">{summary.event?.host}</span>
           <span className="result-trace-time">{summary.startedAt}</span>
           <span className="result-trace-id">{summary.id}</span>
@@ -226,13 +246,13 @@ export const EventRouteWorkspace = ({ clients, controller, invocationId, leaf, o
   const lifecycle = lifecycleState.state === 'ready' ? lifecycleState.lifecycle : undefined;
   const fixtures = useMemo(() => eventFixturesFor(lifecycle), [lifecycle]);
   const invocation = invocationOf(controller.state);
-  const [host, setHost] = useState<EventHostSelection>('canonical');
+  const [host, setHost] = useState<EventHostSelection>(() => defaultEventHostSelection(leaf, lifecycle));
 
   // A loaded host invocation switches the selector to its host so the editor
   // shows the native payload it was actually run with.
   useEffect(() => {
-    if (invocation?.event?.host !== undefined) setHost(invocation.event.host);
-  }, [invocation]);
+    setHost(invocation?.event?.host ?? defaultEventHostSelection(leaf, lifecycle));
+  }, [invocation, leaf, lifecycle]);
 
   const nativeLeaf = useMemo<ApplicationLeaf>(() => {
     const { inputSchema: _schema, ...rest } = leaf;
@@ -247,7 +267,11 @@ export const EventRouteWorkspace = ({ clients, controller, invocationId, leaf, o
       return <button
         aria-pressed={host === candidate}
         data-testid={`event-host-${candidate}`}
-        disabled={missing || (candidate !== 'canonical' && lifecycleState.state === 'loading')}
+        disabled={
+          (candidate === 'canonical' && leaf.preflight !== undefined)
+          || missing
+          || (candidate !== 'canonical' && lifecycleState.state === 'loading')
+        }
         key={candidate}
         onClick={() => setHost(candidate)}
         title={missing ? `No ${hostLabels[candidate]} wrapper is generated for this event.` : target === undefined ? undefined : `${target.nativeEvent} · ${target.hostContractRevision}`}

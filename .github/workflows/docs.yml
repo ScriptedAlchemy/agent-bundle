@@ -61,6 +61,8 @@ jobs:
           node-version: 22.19.0
       # Website-only PRs skip every ci.yml job that lints, so lint here too.
       - run: pnpm lint
+      # TypeDoc consumes the declarations shipped from package dist trees.
+      - run: pnpm build
       # Typecheck the site config, run the locale-drift and diagnostics-
       # coverage checks (website/scripts), build with the persistent Rspack
       # cache off, then walk the emitted HTML for dead links and anchors.

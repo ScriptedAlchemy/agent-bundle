@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@rstest/core';
 
-import { build, type ReadyInspectResult, validate } from '../src/api.ts';
+import { build, parseArtifactManifest, type ReadyInspectResult, validate } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
@@ -399,7 +399,11 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   // The rendered .tsx script (#102 stage 3) ships beside plain scripts in
   // the target artifact with the same output contract.
   const scriptPath = join(root, 'artifact', 'scripts', 'summarize.mjs');
-  await expect(stat(join(root, 'artifact', 'scripts', 'summarize-flight.mjs'))).resolves.toMatchObject({});
+  // Its render worker anchors on the artifact root like the MCP worker and
+  // derives its state root from it (#637), never `<cwd>/.agent-bundle/state`.
+  const scriptWorker = await readFile(join(root, 'artifact', 'scripts', 'summarize-flight.mjs'), 'utf8');
+  expect(scriptWorker).toContain("stateAnchor: 'user-data'");
+  expect(scriptWorker).not.toContain("join(process.cwd(), '.agent-bundle')");
   const scriptMarkdown = await execFile(process.execPath, [scriptPath, 'alpha', 'beta']);
   expect(scriptMarkdown.stdout).toBe('Summarized 2 arguments.\n');
   // The rendered script's provider sees `invocation.kind === 'script'` (#313).
@@ -744,5 +748,16 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       'tool:demo/purge',
       'tool:demo/submit',
     ]);
+  });
+
+  it('serializes the projection onto the artifact manifest command from the same compiled graph', async () => {
+    const manifest = parseArtifactManifest(await readFile(join(root, 'artifact', 'agent-bundle.manifest.json'), 'utf8'));
+    const commands = manifest.routes.cli?.commands ?? [];
+    expect(commands.map((command) => command.path.join(' '))).toEqual(['demo ping', 'purge', 'submit']);
+    expect(commands.find((command) => command.routeId === 'tool:demo/submit')?.projection)
+      .toEqual({ mapInput: true, module: projectionModule });
+    expect(commands.find((command) => command.routeId === 'tool:demo/purge')?.projection)
+      .toEqual({ mapInput: true, module: 'src/mcp/demo/tools/purge.cli.ts' });
+    expect(commands.find((command) => command.routeId === 'tool:demo/ping')).not.toHaveProperty('projection');
   });
 });

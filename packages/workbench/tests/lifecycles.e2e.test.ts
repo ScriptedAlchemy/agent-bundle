@@ -51,7 +51,7 @@ e2e(
       await fixtureSelector.selectOption({ index: 1 });
       await expect(input).toHaveValue(/PostToolUse/u);
       await run.click();
-      await expect(page.getByTestId('route-status')).toContainText('Succeeded', { timeout: browserTimeout });
+      await expect(page.getByTestId('route-status')).toContainText('Completed', { timeout: browserTimeout });
       await expect(stage).toContainText(/Recorded .* from claude/u, { timeout: browserTimeout });
       await page.getByRole('tab', { name: 'Native in / out' }).click();
       await expect(page.getByRole('tabpanel')).toContainText('hookSpecificOutput');
@@ -60,7 +60,7 @@ e2e(
       await host.getByRole('button', { name: 'Codex' }).click();
       await fixtureSelector.selectOption({ index: 1 });
       await run.click();
-      await expect(page.getByTestId('route-status')).toContainText('Succeeded', { timeout: browserTimeout });
+      await expect(page.getByTestId('route-status')).toContainText('Completed', { timeout: browserTimeout });
       await page.getByRole('tab', { name: 'Rendered' }).click();
       await expect(stage).toContainText(/Recorded .* from codex/u, { timeout: browserTimeout });
 
@@ -79,7 +79,7 @@ e2e(
       });
       await replay.getByLabel('Native receipt (JSON)').fill(observedReceipt);
       await replay.getByRole('button', { name: 'Replay receipt' }).click();
-      await expect(page.getByTestId('route-status')).toContainText('Succeeded', { timeout: browserTimeout });
+      await expect(page.getByTestId('route-status')).toContainText('Completed', { timeout: browserTimeout });
       await page.getByRole('tab', { name: 'Rendered' }).click();
       await expect(stage).toContainText('Recorded observed-lifecycle.txt from claude', { timeout: browserTimeout });
       await page.getByRole('tab', { name: 'Canonical → host mapping' }).click();
@@ -130,7 +130,7 @@ e2e(
       await repairedReplay.getByLabel('Host').selectOption('claude');
       await repairedReplay.getByLabel('Native receipt (JSON)').fill(observedReceipt);
       await repairedReplay.getByRole('button', { name: 'Replay receipt' }).click();
-      await expect(page.getByTestId('route-status')).toContainText('Succeeded', { timeout: browserTimeout });
+      await expect(page.getByTestId('route-status')).toContainText('Completed', { timeout: browserTimeout });
       await page.getByRole('tab', { name: 'Rendered' }).click();
       await expect(stage).toContainText('Recorded observed-lifecycle.txt from claude', { timeout: browserTimeout });
       expect(pageErrors).toEqual([]);

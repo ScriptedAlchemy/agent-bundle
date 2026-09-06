@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
+import { userDataStateRoot } from '@agent-bundle/runtime';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import type { TargetArtifactWrite } from '../src/adapters/types.ts';
@@ -23,6 +24,7 @@ import {
   type DoctorHost,
   type DoctorReport,
 } from '../src/install/doctor.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 
 const writeJson = async (path: string, value: unknown): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -126,6 +128,14 @@ const createBundle = async (
       writeFile(join(bundle, 'install.mjs'), '// installer\n'),
     ]);
   }
+  await writeInstallFixtureManifest(
+    bundle,
+    { name: 'doctor-fixture', version },
+    [{
+      host,
+      ...(host === 'cursor' ? {} : { marketplace: 'doctor-fixture-marketplace' }),
+    }],
+  );
   return bundle;
 };
 
@@ -505,7 +515,9 @@ it('accepts a versionless Cursor inventory manifest as installed', async () => {
 it('inventories durable SQLite stores and sidecars without opening them', async () => {
   const fixture = await temporaryDoctor();
   const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'stateful');
-  const stateRoot = join(pluginRoot, 'state');
+  const environment = { XDG_STATE_HOME: join(fixture.root, 'state-home') };
+  const stateRoot = userDataStateRoot(pluginRoot, environment, fixture.home);
+  const legacyStateRoot = join(pluginRoot, 'state');
   const store = 'project-tasks-0123456789abcdef.sqlite';
   try {
     await Promise.all([
@@ -514,6 +526,7 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
         { name: 'stateful', version: '1.0.0' },
       ),
       mkdir(stateRoot, { recursive: true }),
+      mkdir(legacyStateRoot, { recursive: true }),
     ]);
     await Promise.all([
       writeFile(join(stateRoot, store), 'database'),
@@ -524,6 +537,7 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
 
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
+      environment,
       home: fixture.home,
       hosts: ['cursor'],
     });
@@ -532,6 +546,7 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
     );
     expect(finding?.durableState).toMatchObject({
       directory: stateRoot,
+      exists: true,
       findings: [{
         bytes: 15,
         file: store,
@@ -540,19 +555,115 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
       }],
       status: 'known',
       summary: { bytes: 15, stores: 1 },
+      ownership: 'unrecorded',
+      purgeable: false,
+      servers: ['default'],
+      writable: true,
     });
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7332',
+        message: expect.stringContaining(legacyStateRoot),
+      }),
+    ]));
 
     const human = captureCliTerminal();
     const humanCode = await runCli(['doctor'], human.output, { runDoctor: async () => report });
     expect(humanCode).toBe(0);
     expect(human.stdout()).toContain('durable state: 1 store, 15 B');
+    expect(human.stdout()).toContain(`state root: ${stateRoot} (exists, writable, derived)`);
+    expect(human.stdout()).toContain('ownership: unrecorded, retained, servers: default');
 
     const json = captureCliTerminal();
     await runCli(['doctor', '--json'], json.output, { runDoctor: async () => report });
     expect(JSON.parse(json.stdout()).hosts[0].inventory.findings[0].durableState).toMatchObject({
       findings: [{ bytes: 15, file: store }],
+      exists: true,
       summary: { bytes: 15, stores: 1 },
+      writable: true,
     });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports a missing derived state root and a declared state-root override', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'configured-state');
+  const declaredStateRoot = join(fixture.root, 'declared-state');
+  try {
+    await Promise.all([
+      writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), { name: 'configured-state', version: '1.0.0' }),
+      writeJson(join(pluginRoot, '.cursor-plugin/mcp.json'), {
+        mcpServers: {
+          configured: {
+            command: 'node',
+            env: { AGENT_BUNDLE_STATE_ROOT: declaredStateRoot },
+          },
+        },
+      }),
+    ]);
+    await writeInstallFixtureManifest(
+      pluginRoot,
+      { name: 'configured-state', version: '1.0.0' },
+      [{ host: 'cursor', mcp: '.cursor-plugin/mcp.json' }],
+    );
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find((entry) => entry.entry === 'configured-state');
+    expect(finding?.durableState).toMatchObject({
+      directory: declaredStateRoot,
+      exists: false,
+      findings: [],
+      ownership: 'unrecorded',
+      purgeable: false,
+      servers: ['configured'],
+      summary: { bytes: 0, stores: 0 },
+      writable: false,
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports an unresolved relative state override without treating the plugin root as state', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'relative-state');
+  try {
+    await Promise.all([
+      writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), { name: 'relative-state', version: '1.0.0' }),
+      writeJson(join(pluginRoot, '.cursor-plugin/mcp.json'), {
+        mcpServers: {
+          configured: {
+            command: 'node',
+            env: { AGENT_BUNDLE_STATE_ROOT: '../state' },
+          },
+        },
+      }),
+    ]);
+    await writeInstallFixtureManifest(
+      pluginRoot,
+      { name: 'relative-state', version: '1.0.0' },
+      [{ host: 'cursor', mcp: '.cursor-plugin/mcp.json' }],
+    );
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find((entry) => entry.entry === 'relative-state');
+    expect(finding?.durableState).toMatchObject({
+      directory: '<unresolved state root: configured>',
+      exists: false,
+      ownership: 'unrecorded',
+      ownershipReason: 'relative override has no provable execution directory',
+      purgeable: false,
+      servers: ['configured'],
+    });
+    expect(finding?.durableState?.directory).not.toBe(pluginRoot);
   } finally {
     await fixture.cleanup();
   }
@@ -629,9 +740,21 @@ it('prints a web surface line when the bundle manifest exposes Apps', async () =
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
-    await writeJson(join(bundle, 'agent-bundle.manifest.json'), {
-      web: { apps: [{ app: 'status/status' }, { app: 'status/other' }] },
+    await mkdir(join(bundle, 'mcp'), { recursive: true });
+    await writeFile(join(bundle, 'mcp/status.mjs'), '// server\n');
+    const app = (name: string) => ({
+      allow: [],
+      app: `status/${name}`,
+      name,
+      resourceUri: `ui://status/${name}`,
+      server: 'status',
     });
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'cursor' }],
+      { apps: [app('other'), app('status')], open: 'never' },
+    );
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
       from: bundle,
@@ -916,6 +1039,11 @@ it('validates --from Codex bytes without running the live schema generator', asy
       name: 'Invalid Codex Name',
       version: '1.2.3',
     });
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'codex', marketplace: 'doctor-fixture-marketplace' }],
+    );
 
     const report = await runDoctor({
       commandRunner: async (request) => {
@@ -956,6 +1084,11 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
       name: 'doctor-fixture',
       version: '1.2.3',
     });
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'claude', marketplace: 'doctor-fixture-marketplace' }],
+    );
 
     const report = await runDoctor({
       commandRunner: async (request) => {
@@ -1154,7 +1287,7 @@ it('inventories Claude and Codex installs from their pinned plugin list --json v
       hosts: ['claude', 'codex'],
     });
     expect(report.diagnostics.some((entry) => entry.code === 'AB7303')).toBe(false);
-    expect(hostReport(report, 'claude').inventory).toEqual({
+    expect(hostReport(report, 'claude').inventory).toMatchObject({
       findings: [
         {
           enabled: true,
@@ -1175,7 +1308,7 @@ it('inventories Claude and Codex installs from their pinned plugin list --json v
       ],
       status: 'known',
     });
-    expect(hostReport(report, 'codex').inventory).toEqual({
+    expect(hostReport(report, 'codex').inventory).toMatchObject({
       findings: [{
         entry: 'beta@beta-marketplace',
         name: 'beta',
@@ -1215,7 +1348,38 @@ it('reports a Claude listing with a malformed scope as unknown inventory (AB7303
   }
 });
 
-it('reports a malformed host bundle as a Doctor error', async () => {
+it('reports AB7306 when the bundle identity fails for a reason that is not a manifest diagnostic', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    // The manifest points at `.cursor-plugin/plugin.json`; making `.cursor-plugin` a regular
+    // file turns the pointer check into an ENOTDIR read failure rather than a missing file.
+    await rm(join(bundle, '.cursor-plugin'), { recursive: true });
+    await writeFile(join(bundle, '.cursor-plugin'), 'not a directory\n');
+    const report = await runDoctor({
+      commandRunner: versionRunner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(hostReport(report, 'cursor').bundle?.state).toBe('failed');
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7306',
+        message: expect.stringContaining('ENOTDIR'),
+        recovery: expect.stringContaining('rerun Doctor'),
+        severity: 'error',
+        target: 'cursor',
+      }),
+    ]));
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7001')).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports an unresolvable --from root under the same AB7001 install refuses it with', async () => {
   const fixture = await temporaryDoctor();
   try {
     const report = await runDoctor({
@@ -1227,7 +1391,13 @@ it('reports a malformed host bundle as a Doctor error', async () => {
     });
     expect(hostReport(report, 'claude').bundle?.state).toBe('failed');
     expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7306', severity: 'error' }),
+      expect.objectContaining({
+        code: 'AB7001',
+        message: expect.stringContaining('No agent-bundle.manifest.json in'),
+        recovery: expect.stringContaining('rerun Doctor'),
+        severity: 'error',
+        target: 'claude',
+      }),
     ]));
   } finally {
     await fixture.cleanup();
@@ -1316,6 +1486,11 @@ it('compares the installed Cursor copy against the artifact: current, stale, for
     expect(current.diagnostics.filter((entry) => entry.severity !== 'info')).toEqual([]);
 
     await writeFile(join(bundle, 'payload.txt'), 'rebuilt\n');
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'cursor' }],
+    );
     const rebuiltHash = (await treeInventory(bundle)).hash;
     const stale = hostReport(await doctor(), 'cursor');
     expect(stale.bundle).toMatchObject({
@@ -1390,7 +1565,7 @@ it('treats a versionless Cursor destination as drifted rather than conflicted', 
   }
 });
 
-it('turns a symlink inside a Cursor bundle into a corrupt finding', async () => {
+it('ignores an unlisted symlink in the authoritative artifact inventory', async () => {
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
@@ -1402,10 +1577,8 @@ it('turns a symlink inside a Cursor bundle into a corrupt finding', async () => 
       home: fixture.home,
       hosts: ['cursor'],
     });
-    expect(hostReport(report, 'cursor').bundle?.state).toBe('corrupt');
-    expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7310', severity: 'error' }),
-    ]));
+    expect(hostReport(report, 'cursor').bundle?.state).toBe('missing');
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7310' || entry.code === 'AB7319')).toBe(false);
   } finally {
     await fixture.cleanup();
   }
@@ -1667,7 +1840,7 @@ it('reports a Claude copy the host refused to load as load-failed (AB7325) inste
       state: 'registered',
     });
     expect(host.bundle?.comparison).not.toHaveProperty('installedContentHash');
-    expect(host.inventory).toEqual({
+    expect(host.inventory).toMatchObject({
       findings: [{
         enabled: true,
         entry: 'doctor-fixture@doctor-fixture-marketplace (user)',
@@ -1730,7 +1903,7 @@ it('reports an installed-but-disabled Claude copy as disabled (AB7327) with the 
       },
       state: 'registered',
     });
-    expect(host.inventory).toEqual({
+    expect(host.inventory).toMatchObject({
       findings: [{
         enabled: false,
         entry: 'doctor-fixture@doctor-fixture-marketplace (project)',
@@ -2031,6 +2204,11 @@ it('surfaces the placed → registered → enabled → active lifecycle per host
     });
     expect(cursorPlaced.bundle?.receipt).toMatchObject({ mode: 'local', scope: 'user' });
     expect(cursorPlaced.inventory.findings[0]?.receipt).toMatchObject({ mode: 'local' });
+    expect(cursorPlaced.inventory.findings[0]?.durableState).toMatchObject({
+      ownership: 'derived',
+      purgeable: false,
+      servers: ['default'],
+    });
   } finally {
     await fixture.cleanup();
   }
@@ -2248,7 +2426,7 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     await uninstallBundle({ from: bundle, home: fixture.home, host: 'cursor' });
     const remnant = hostReport(await doctor(), 'cursor');
     expect(remnant.inventory.findings).toEqual([expect.objectContaining({
-      durableState: expect.objectContaining({ summary: { bytes: 8, stores: 1 } }),
+      legacyDurableState: expect.objectContaining({ summary: { bytes: 8, stores: 1 } }),
       name: 'doctor-fixture',
       path: destination,
       receipt: expect.objectContaining({ mode: 'local' }),
@@ -3075,6 +3253,11 @@ it('accepts --from unified bundle Cursor bytes whose manifest names hooks/hooks-
   const bundle = join(fixture.root, 'bundle-plugin');
   try {
     await writeUnifiedBundleCursorView(bundle);
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'unified-fixture', version: '0.3.5' },
+      [{ host: 'cursor' }],
+    );
 
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,

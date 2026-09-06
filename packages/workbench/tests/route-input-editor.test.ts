@@ -69,19 +69,31 @@ describe('route input submission', () => {
 
     const value = routeInputValueFromJson(cliLeaf, { region: ['us'], title: 'Dune' });
     const submission = routeInputSubmission(cliLeaf, value);
-    expect(submission.draft).toEqual({ args: ['Dune', '--region', 'us'] });
+    expect(submission.draft).toEqual({
+      surface: {
+        args: ['Dune', '--region', 'us'],
+        command: 'audible search',
+        kind: 'cli',
+      },
+    });
     expect(routeInputJson(cliLeaf, value)).toEqual(['Dune', '--region', 'us']);
   });
 
   it('accepts raw argv arrays and raw option objects for CLI leaves', () => {
     const base = defaultRouteInputValue(cliLeaf);
-    expect(routeInputSubmission(cliLeaf, { ...base, mode: 'raw', raw: '["Dune", "--verbose"]' }).draft).toEqual({ args: ['Dune', '--verbose'] });
-    expect(routeInputSubmission(cliLeaf, { ...base, mode: 'raw', raw: '{"title":"Dune","verbose":true}' }).draft).toEqual({ args: ['Dune', '--verbose'] });
+    expect(routeInputSubmission(cliLeaf, { ...base, mode: 'raw', raw: '["Dune", "--verbose"]' }).draft).toEqual({
+      surface: { args: ['Dune', '--verbose'], command: 'audible search', kind: 'cli' },
+    });
+    expect(routeInputSubmission(cliLeaf, { ...base, mode: 'raw', raw: '{"title":"Dune","verbose":true}' }).draft).toEqual({
+      surface: { args: ['Dune', '--verbose'], command: 'audible search', kind: 'cli' },
+    });
     expect(routeInputSubmission(cliLeaf, { ...base, mode: 'raw', raw: '[1, 2]' }).error).toContain('JSON array of argv strings');
     // A restored argv array re-opens the CLI leaf in raw mode with the array intact.
     const restored = routeInputValueFromJson(cliLeaf, ['Dune', '--verbose']);
     expect(restored.mode).toBe('raw');
-    expect(routeInputSubmission(cliLeaf, restored).draft).toEqual({ args: ['Dune', '--verbose'] });
+    expect(routeInputSubmission(cliLeaf, restored).draft).toEqual({
+      surface: { args: ['Dune', '--verbose'], command: 'audible search', kind: 'cli' },
+    });
   });
 });
 

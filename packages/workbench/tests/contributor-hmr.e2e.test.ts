@@ -18,6 +18,7 @@ import {
   workspaceRoot,
   type WorkbenchServer,
 } from './support/workbench-e2e.ts';
+import { expectHeading } from './support/workbench-acceptance.ts';
 
 /**
  * The documented contributor HMR loop (#572 §3 P1):
@@ -94,7 +95,7 @@ const startContributorLoop = async (project: ProjectFixture): Promise<Contributo
     await closing?.close();
   };
   try {
-    const documented = createWorkbenchConfig(foreground.url);
+    const documented = createWorkbenchConfig(foreground.url, 'development');
     if (!('server' in documented)) throw new Error('The documented Workbench config did not configure the /api proxy.');
     const rsbuild = await createRsbuild({
       config: {
@@ -219,7 +220,7 @@ e2e('completes a Workbench session through the documented contributor HMR proxy 
     expect(unlisted.url).toBe(foreground.url);
     const noFlagLine = `AB8003 — Origin ${devOrigin} is not allowed by the foreground server at ${unlisted.url}. `
       + `Open ${unlisted.url} instead, or start agent-bundle dev with --workbench-dev-origin ${devOrigin} to allow this origin.`;
-    await expect(page.getByRole('heading', { name: 'Foreground connection unavailable' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Foreground connection unavailable');
     await expect(page.getByRole('alert')).toHaveText(noFlagLine, { timeout: browserTimeout });
     expect(new URL(page.url()).origin).toBe(devOrigin);
     expect(pageErrors).toEqual([]);
@@ -243,7 +244,7 @@ e2e('completes a Workbench session through the documented contributor HMR proxy 
     expect(bootstrapBody).toMatchObject({ origin: unlisted.url });
     expect(bootstrapBody).not.toHaveProperty('devOrigins');
     try {
-      await expect(page.getByRole('heading', { name: 'Foreground connection unavailable' })).toBeVisible({ timeout: browserTimeout });
+      await expectHeading(page, 'Foreground connection unavailable');
     } catch (reason) {
       throw new Error(
         `The connection gate did not appear on ${page.url()} without the dev-origin allowlist.\n${await page.locator('body').innerText()}`,

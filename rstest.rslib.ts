@@ -62,10 +62,9 @@ export const rstestHygiene = {
  * The lib entry is found by `libId` (line 53: `lib.find((l) => l.id ===
  * libId) || {}`); without a `libId`, or with one no entry carries, the entry
  * is silently `{}` and only the top-level fields count. That is why the entry
- * has an `id` and these options pass it: the top-level fields happen to carry
- * everything the pools need, so the result was right by accident, and a field
- * moved into the entry — `output.target`, `source.define` — would have
- * vanished from every pool without a diagnostic. Of the entry, only `source`,
+ * has an `id` and these options pass it: a field moved into the selected
+ * public entry — `output.target`, `source.define` — would otherwise vanish
+ * from every pool without a diagnostic. Of the entry, only `source`,
  * `output`, `tools`, `plugins`, and `resolve` are merged over the top-level
  * config (lines 54-61); `format` is read once more, directly, as the fallback
  * for `output.module` (line 105).

@@ -182,9 +182,10 @@ export const cliBinRslibEntries = (
       ...(cli.projectionSources === undefined ? {} : { projectionSources: cli.projectionSources }),
       routes: cli.routes,
       ...(model.state === undefined ? {} : { state: model.state }),
-      // Durable state anchors on the artifact root (the parent of `bin/`),
-      // the same fallback the generated MCP worker beside it uses, so a
-      // co-installed CLI and server observe one store.
+      // The code root falls back to the artifact root (the parent of `bin/`)
+      // and the state root derives from it, the same two roots the generated
+      // MCP worker beside it resolves, so a co-installed CLI and server
+      // observe one store.
       stateFallback: 'artifact',
       ...(entry.bin.web === true
         ? {
@@ -232,8 +233,8 @@ export const planCliBinsSurface = (
   const planned = planCompiledCliBins(model, options);
   return {
     entries: planned.length === 0 ? [] : cliBinRslibEntries(planned, model),
-    finish: async (evidence) => {
-      const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+    finish: async (result) => {
+      const evidenceByPath = new Map(result.assets.map((entry) => [entry.path, entry.sourceInputs]));
       const bundledInputs = (path: string, label: string): readonly string[] => {
         const inputs = evidenceByPath.get(path);
         if (inputs === undefined) throw new Error(`Missing bundled routed CLI ${label} evidence for ${JSON.stringify(path)}.`);

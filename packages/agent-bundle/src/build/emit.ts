@@ -11,24 +11,24 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
-import { sha256Hex, stableJson } from '../core/digest.ts';
+import { sha256Hex } from '../core/digest.ts';
 import { assertInside, exists, toPosixPath } from '../core/paths.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
 import {
-  artifactHookIndexName,
-  compareArtifactHooks,
-  type ArtifactHook,
-  type ArtifactHookIndex,
-} from './hook-index.ts';
+  compileEvidenceFileName,
+  serializeCompileEvidenceRecord,
+  type CompileEvidenceRecord,
+} from './compile-evidence.ts';
 import {
+  artifactManifestName,
   assembleArtifactManifest,
   parseArtifactManifest,
   type ArtifactManifestFile,
+  type ArtifactManifestProvenance,
   type ArtifactManifest,
 } from './manifest.ts';
 import type { ArtifactOutputProvenance } from './provenance.ts';
 import { deepFreeze } from '../core/freeze.ts';
-
 
 export type ManifestFile = ArtifactManifestFile;
 
@@ -51,9 +51,7 @@ export interface ArtifactFilesystemSnapshot {
   readonly files: readonly ArtifactFile[];
 }
 
-export { artifactHookIndexName } from './hook-index.ts';
-export type { ArtifactHook, ArtifactHookIndex } from './hook-index.ts';
-export const artifactManifestName = 'agent-bundle.manifest.json';
+export { artifactManifestName } from './manifest.ts';
 
 const normalizeRelativePath = toPosixPath;
 
@@ -62,6 +60,38 @@ const executableFileMode = (file: ArtifactFile): number | undefined =>
 
 export const resolveArtifactDestination = (root: string, relativePath: string): string =>
   assertInside(root, resolve(root, relativePath));
+
+export const inspectArtifactFile = async (
+  root: string,
+  relativePath: string,
+): Promise<ArtifactFile> => {
+  const destination = resolveArtifactDestination(root, relativePath);
+  const metadata = await lstat(destination);
+  if (!metadata.isFile()) {
+    throw new Error(`Artifact path ${JSON.stringify(relativePath)} is not a file.`);
+  }
+  const contents = await readFile(destination);
+  return Object.freeze({
+    bytes: contents.byteLength,
+    mode: metadata.mode & 0o777,
+    path: normalizeRelativePath(relativePath),
+    sha256: sha256Hex(contents),
+  });
+};
+
+export const createArtifactManifestFile = (
+  file: ArtifactFile,
+  kind: ArtifactManifestFile['kind'],
+): ArtifactManifestFile => {
+  const mode = executableFileMode(file);
+  return Object.freeze({
+    bytes: file.bytes,
+    kind,
+    ...(mode === undefined ? {} : { mode }),
+    path: file.path,
+    sha256: file.sha256,
+  });
+};
 
 export const assertUniqueArtifactDestinations = (
   destinations: readonly string[],
@@ -178,7 +208,10 @@ export const listArtifactFiles = async (
 export const createArtifactManifestFiles = (options: {
   readonly files: readonly ArtifactFile[];
   readonly outputProvenance: readonly ArtifactOutputProvenance[];
-}): readonly ArtifactManifestFile[] => {
+}): {
+  readonly files: readonly ArtifactManifestFile[];
+  readonly provenance: readonly ArtifactManifestProvenance[];
+} => {
   const filesByPath = new Map<string, ArtifactFile>();
   for (const file of options.files) {
     if (file.path === artifactManifestName) {
@@ -206,18 +239,15 @@ export const createArtifactManifestFiles = (options: {
   }
 
   const manifestFiles: ArtifactManifestFile[] = [];
+  const manifestProvenance: ArtifactManifestProvenance[] = [];
   for (const [path, file] of filesByPath) {
     const provenance = provenanceByPath.get(path);
     if (provenance === undefined) {
       throw new Error('Output provenance must contain exactly one record for every pre-manifest artifact file.');
     }
-    const mode = executableFileMode(file);
-    manifestFiles.push({
-      bytes: file.bytes,
-      kind: provenance.kind,
-      ...(mode === undefined ? {} : { mode }),
+    manifestFiles.push(createArtifactManifestFile(file, provenance.kind));
+    manifestProvenance.push({
       path,
-      sha256: file.sha256,
       sourceInputs: provenance.sourceInputs,
     });
   }
@@ -227,7 +257,12 @@ export const createArtifactManifestFiles = (options: {
     }
   }
 
-  return Object.freeze(manifestFiles.sort((left, right) => left.path.localeCompare(right.path)));
+  const byPath = (left: { readonly path: string }, right: { readonly path: string }): number =>
+    left.path.localeCompare(right.path);
+  return Object.freeze({
+    files: Object.freeze(manifestFiles.sort(byPath)),
+    provenance: Object.freeze(manifestProvenance.sort(byPath)),
+  });
 };
 
 export const writeManifest = async (options: {
@@ -240,23 +275,15 @@ export const writeManifest = async (options: {
   return parseArtifactManifest(await readFile(manifestPath, 'utf8'));
 };
 
-export const writeHookIndex = async (options: {
+export const writeCompileEvidence = async (options: {
   readonly artifactRoot: string;
-  readonly hooks: readonly ArtifactHook[];
-}): Promise<ArtifactHookIndex> => {
-  const hooks = options.hooks
-    .slice()
-    .sort(compareArtifactHooks)
-    .map((hook) => Object.freeze({ ...hook }));
-  const index: ArtifactHookIndex = {
-    hooks: Object.freeze(hooks),
-  };
+  readonly evidence: CompileEvidenceRecord;
+}): Promise<void> => {
   await writeFile(
-    join(options.artifactRoot, artifactHookIndexName),
-    `${stableJson(index)}\n`,
+    join(options.artifactRoot, compileEvidenceFileName),
+    serializeCompileEvidenceRecord(options.evidence),
     'utf8',
   );
-  return Object.freeze(index);
 };
 
 export const publishArtifact = async (options: {
