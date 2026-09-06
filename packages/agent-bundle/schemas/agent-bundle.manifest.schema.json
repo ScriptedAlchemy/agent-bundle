@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scriptedalchemy.github.io/agent-bundle/schemas/agent-bundle.manifest.schema.json",
   "title": "agent-bundle artifact manifest",
-  "description": "The authoritative `agent-bundle.manifest.json` written at the root of every compiled artifact (manifestVersion 2). The public contract and the operational `compiler` record are versioned independently (`compiler.recordVersion`). Keys are closed at every level. This schema mirrors the structural rules of `parseArtifactManifest`; the parser additionally enforces what JSON Schema cannot express: canonical `stableJson` bytes, sorted arrays with unique sort keys, cross-references between sections (hosts name declared projections, referenced paths name manifest files, `compiler.provenance` paths equal `files` paths, `compiler.adapters` hosts equal `projections` hosts, `compiler.project.revision` and `compiler.project.configDigest` match `compiler.project.sourceInputs`, each provenance `sourceInput` names a `compiler.project.sourceInputs` path, `compiler.validation.projections` mirror `projections`, server routes carry their server's id, rendered scripts name a script route, `inputSchema.required` names declared properties), the generated runtime floor for `runtime.node`, and npm package-name and semantic-version validity for `compiler.project.packageName` and `compiler.project.packageVersion`.",
+  "description": "The authoritative `agent-bundle.manifest.json` written at the root of every compiled artifact (manifestVersion 3). The public contract and the operational `compiler` record are versioned independently (`compiler.recordVersion`). Keys are closed at every level. This schema mirrors the structural rules of `parseArtifactManifest`; the parser additionally enforces what JSON Schema cannot express: canonical `stableJson` bytes, sorted arrays with unique sort keys, cross-references between sections (hosts name declared projections, referenced paths name manifest files, `compiler.provenance` paths equal `files` paths, `compiler.adapters` hosts equal `projections` hosts, `compiler.project.revision` and `compiler.project.configDigest` match `compiler.project.sourceInputs`, each provenance `sourceInput` names a `compiler.project.sourceInputs` path, `compiler.validation.projections` mirror `projections`, server routes carry their server's id, rendered scripts name a script route, `inputSchema.required` names declared properties), the generated runtime floor for `runtime.node`, and npm package-name and semantic-version validity for `compiler.project.packageName` and `compiler.project.packageVersion`.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -27,7 +27,7 @@
       "uniqueItems": true
     },
     "manifestVersion": {
-      "const": 2
+      "const": 3
     },
     "projections": {
       "type": "array",

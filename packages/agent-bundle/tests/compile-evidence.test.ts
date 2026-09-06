@@ -144,7 +144,7 @@ describe('compile evidence records', () => {
       expect.stringContaining('was judged under policy'),
       expect.stringContaining('does not cover compiled file "uncovered.js"'),
       expect.stringContaining('for "mismatch.js" describes different bytes'),
-      expect.stringContaining('manifest does not list as a compiled file'),
+      expect.stringContaining('file table does not list as a compiled file'),
       expect.stringContaining('"left-pad" as a built-in; it is not one'),
       expect.stringContaining('sibling "./missing.js", which the artifact does not contain'),
     ]));

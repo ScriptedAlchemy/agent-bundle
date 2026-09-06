@@ -245,17 +245,29 @@ repository is self-referential and causes churn on every table edit.
 npx agent-bundle prepack --root . --output artifact --json
 ```
 
-`prepack` runs the release build and `npm pack --dry-run --json --ignore-scripts`, then gates the
-exact package and artifact inventory, manifest hashes, package bin targets, release-version
-agreement, and the installed-dependency fields of `package.json`. The build inlines every
-dependency into `dist/bin` and the host packs, so a published plugin should install nothing:
+`prepack` runs the release build, creates the canonical npm root at `dist/`, and runs
+`npm pack --dry-run --json --ignore-scripts` from that root. The generated package copies the
+validated composite artifact unchanged, points routed `package.json` bins at the
+manifest-declared `bin/<name>.mjs`, and adds only separately authored bins and libraries. The gate
+checks that exact inventory, manifest hashes, package bin targets, release-version agreement,
+package-only compile evidence, and the installed-dependency fields of `package.json`. Authored
+`package.json.files` and `.npmignore` rules never narrow the generated root: every selected hidden
+host directory and every manifest file is packed, or prepack fails before publication. The build
+inlines every dependency into authored package entries and the host packs, so a published plugin should install nothing:
 declare the framework, `@agent-bundle/runtime`, `react`, `zod`, and the rest of the stack under
 `devDependencies`. A compiled bundle — a host-pack module or a `dist` bundle alike — cannot keep
 a bare package external: the compiler reports `AB6005` before `prepack` reaches the inventory. So
 bundling a package does not prove that consumers need it installed. `--output` is an artifact path
 relative to `--root` that overrides the configured
-`output.distPath`, defaulting to `artifact`. Use it as an npm `prepack` script; `--ignore-scripts`
-prevents recursion, and no npm lifecycle ever performs a host install.
+`output.distPath`, defaulting to `artifact`. Run the gate directly (generated projects expose
+`pack:check`), then publish the generated root with `npm publish ./dist --ignore-scripts`.
+No npm lifecycle ever performs a host install.
+
+Consumer `preinstall`, `install`, and `postinstall` scripts are preserved only when they do not
+invoke Node directly, or when they are one `node <generated-package-path>` command. Known authored
+paths below the source `dist/` root are rebased to the generated root and checked against staged
+files. Unsupported Node commands and absent source assets report `AB4768`; the package builder
+never copies the source tree to make a lifecycle path work.
 
 That inlining is the compiler's contract, not a bundler default a toolchain upgrade may flip.
 Generated executables — artifact scripts, the routed CLI, MCP entries, hook wrappers, and the
@@ -296,12 +308,12 @@ names or runs, or a prebuilt payload declares in `runtimeDependencies` (`defineP
 
 | Code | Meaning |
 | --- | --- |
-| `AB7010` | The dry-run npm inventory omits a package output, artifact manifest or file, install surface, or README. Include `dist` and the artifact directory in the package `files` allowlist. |
-| `AB7011` | An on-disk artifact file no longer matches its manifest SHA-256. Rebuild, and do not modify generated host packs. |
-| `AB7012` | A `package.json` bin points outside the packed `dist` output (including `src/`) or names a file npm omitted. Point it at the generated `dist/bin` file. |
+| `AB7010` | The dry-run npm inventory omits an expected npm-root file. Pack the generated root without excluding its files. |
+| `AB7011` | A copied artifact file in the npm root no longer matches its manifest SHA-256. Rebuild, and do not modify the generated root. |
+| `AB7012` | A `package.json` bin points into `src/` or names a file npm omitted. Point routed CLIs at their manifest-declared `bin/<name>.mjs` and authored bins at generated `bin/*.js` files. |
 | `AB7013` | `package.json`, normalized plugin metadata, a host manifest, or artifact provenance reports a different release version. Make every release identity agree. |
 | `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages a consumer never needs installed. Use requires one of the three evidence sources above; compiled bundles that inline a package do not count. The diagnostic names any `dist` bundles that inlined an otherwise unused package. It is an error for `dependencies` and `optionalDependencies`, and a warning for `peerDependencies`; optional peers are skipped, and an `optionalDependencies` entry supersedes the same name under `dependencies`. |
-| `AB7015` | A `dependencies`, `optionalDependencies`, or `peerDependencies` entry a consumer's npm cannot resolve through a registry. Name and specifier are read with `npm-package-arg`, npm's own parser, and come out as one of three kinds: registry (a version, range, dist-tag, or `npm:` alias of one), fetched (a git, GitHub-shorthand, remote-tarball, or path source — npm 12 refuses git and remote fetches by default (`allow-git`, `allow-remote`), and a path never exists on the consumer's disk), or unparseable (a name npm rejects, a scheme it lacks such as `link:`, `portal:`, or a typo, a selector that is neither a range nor a URL-safe dist-tag, an alias of a non-registry target, or an invalid URL — the manifest read itself fails, so this is reported even on an optional peer). A fetched `optionalDependencies` entry warns because npm can continue without it, but escalates to an error when an install script needs the package: its `bin` command appears in command position, a `node_modules/<name>/` file is run, or a bare package is preloaded with `-r`/`--require`/`--import`/`--loader` (including through `NODE_OPTIONS`). A peer also present in `dependencies` or `optionalDependencies` is judged by that concrete entry. `workspace:`/`catalog:` are allowed only when the pack lifecycle rewrites them; packed `bundleDependencies` and installable in-package `file:` sources are not reported. Depend on a published version, or bundle the package and declare it under `devDependencies`. |
+| `AB7015` | A `dependencies`, `optionalDependencies`, or `peerDependencies` entry a consumer's npm cannot resolve through a registry. Name and specifier are read with `npm-package-arg`, npm's own parser, and come out as one of three kinds: registry (a version, range, dist-tag, or `npm:` alias of one), fetched (a git, GitHub-shorthand, remote-tarball, or path source — npm 12 refuses git and remote fetches by default (`allow-git`, `allow-remote`), and a path never exists on the consumer's disk), or unparseable (a name npm rejects, a scheme it lacks such as `link:`, `portal:`, or a typo, a selector that is neither a range nor a URL-safe dist-tag, an alias of a non-registry target, or an invalid URL — the manifest read itself fails, so this is reported even on an optional peer). A fetched `optionalDependencies` entry warns because npm can continue without it, but escalates to an error when an install script needs the package: its `bin` command appears in command position, a `node_modules/<name>/` file is run, or a bare package is preloaded with `-r`/`--require`/`--import`/`--loader` (including through `NODE_OPTIONS`). A peer also present in `dependencies` or `optionalDependencies` is judged by that concrete entry. The canonical root is validated for `npm publish ./dist`, so `workspace:` and `catalog:` are always rejected; packed `bundleDependencies` and installable in-package `file:` sources are not reported. Depend on a published version, or bundle the package and declare it under `devDependencies`. |
 
 A release build also refuses a project with **no** release version at all (`AB4013`), so a
 published artifact never carries the `0.0.0-dev.<short-revision>` development fallback. A

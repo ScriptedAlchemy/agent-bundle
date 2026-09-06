@@ -46,7 +46,7 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
   发送给传入了 progress token 的客户端，再用完成后的分析替换它，而最终的结构化收据不变。没有任何
   `progress.report()` 调用重复这条消息。
 - **包构建归框架所有。** 配置没有声明 `bin`，也没有声明 `scripts`。`src/cli/` 下的路由命令编译为
-  `dist/bin/audiobook-curator.js` 以服务 `package.json` 的 `bin`，而 `dist/index.js` 加声明文件服务
+  `dist/bin/audiobook-curator.mjs` 以服务 `package.json` 的 `bin`，而 `dist/index.js` 加声明文件服务
   `exports`。见 [CLI 与库包入口](../guide/authoring/package-entries.mdx)。
 - **`package.json` 是唯一的版本来源。** 配置没有声明 `plugin.version`；解析出的版本会流入项目上下文、
   产物清单、`inspect` 输出、dev 状态，以及这个插件导入的 `agent-bundle/meta` 常量。
@@ -93,7 +93,7 @@ pnpm --filter @agent-bundle-example/audiobook-curator typecheck
 
 ```sh
 cd examples/audiobook-curator
-ln -s "$(pwd)/dist/bin/audiobook-curator.js" ~/.local/bin/audiobook-curator
+ln -s "$(pwd)/dist/bin/audiobook-curator.mjs" ~/.local/bin/audiobook-curator
 audiobook-curator --help
 ```
 

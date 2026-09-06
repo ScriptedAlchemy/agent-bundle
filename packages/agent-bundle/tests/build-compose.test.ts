@@ -347,7 +347,7 @@ describe('composite plugin root (#555)', () => {
   it('defaults to the portable projection when targets are omitted (acceptance 4)', { timeout: 120_000 }, async () => {
     const { output, result } = await buildFixture(undefined);
 
-    expect(result.build.manifest.manifestVersion).toBe(2);
+    expect(result.build.manifest.manifestVersion).toBe(3);
     expect(result.build.manifest.projections.map((projection) => projection.host)).toEqual(['portable']);
     expect(result.build.manifest.projections[0]!.documents.plugin).toBe('plugin.json');
     expect(result.build.manifest.projections[0]!.documents.mcp).toBe('mcp.json');

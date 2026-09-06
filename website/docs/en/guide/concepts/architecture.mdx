@@ -195,8 +195,7 @@ distribution form, or the application.
 
 `adapters/composite-layout.ts` owns the selection helpers:
 `sortedProjections`, `projectionIdentity` (sorted names joined by `+`, for
-example `claude+codex`), `hookWrapperPath`, and
-`folderDiscoveryShadowed`.
+example `claude+codex`), and `hookWrapperPath`.
 
 Declaration-level `targets` on a command, rule, hook, or script still
 mean "this component reaches these hosts." A component is included when that
@@ -249,9 +248,9 @@ then `codex`, `claude`, and `cursor`. There is no `plugin` adapter.
   (`hookWrapperPath`).
 - Codex and Cursor hook/MCP documents live beside their manifests
   (`.codex-plugin/hooks.json`, `.cursor-plugin/mcp.json`, …). When another
-  selected host claims the conventional `hooks/hooks.json` / `.mcp.json` /
-  `mcp.json` path, those projections emit an empty shield document so folder
-  discovery cannot load the other host's file.
+  selected host has a Hook or MCP server that reaches the conventional
+  `hooks/hooks.json` / `.mcp.json` / `mcp.json` path, those projections emit
+  an empty shield document so folder discovery cannot load that file.
 
 The `CompositePlan` the build stages carries `entries`, `hookEntries`,
 `selected`, `identity`, `projections` (one planned host each), `cliBin`
@@ -424,7 +423,7 @@ keeps only the outline.
 ### Sections the writer emits
 
 The document has two parts with two version numbers. The **public
-contract** (`manifestVersion: 2`) is what consumers read. The
+contract** (`manifestVersion: 3`) is what consumers read. The
 **compiler record** (`compiler`, `recordVersion: 1`) is the operational
 account of the run — producer, project digests, provenance, adapter
 revisions, pinned schemas, validation — and changes without bumping
@@ -432,7 +431,7 @@ revisions, pinned schemas, validation — and changes without bumping
 
 | Section | What it records |
 | --- | --- |
-| `manifestVersion` | `2` |
+| `manifestVersion` | `3` |
 | `application` | Host-independent identity: `id`, `name`, `version`, optional `description` |
 | `files[]` | Every emitted file except the manifest (`path`, `bytes`, `sha256`, `kind`, optional `mode`) |
 | `runtime` | `{ node }` from `NormalizedPlugin.runtime` |
@@ -585,8 +584,9 @@ issue:
 | [#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) | Generated typed App client + shared bridge |
 | [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) | Production `web` surface on that same bridge |
 
-Step 3 landed an authoritative `agent-bundle.manifest.json`
-(`manifestVersion` 2). The field contract is
+Step 3 landed the authoritative `agent-bundle.manifest.json` as version 2;
+the distribution install pointers advance the current contract to
+`manifestVersion` 3. The field contract is
 [Artifact manifest](../../reference/artifact-manifest.mdx).
 #592 stays open until the remaining acceptance criteria on that issue
 land.

@@ -1,5 +1,5 @@
 ---
-description: 'The agent-bundle.manifest.json contract (manifestVersion 2): the index of the composite plugin root that build writes once — every section and field, who writes it, who reads it, the shipped JSON Schema, the reserved keys, and the versioning rule.'
+description: 'The agent-bundle.manifest.json contract (manifestVersion 3): the index of the composite plugin root that build writes once — every section and field, who writes it, who reads it, the shipped JSON Schema, the reserved keys, and the versioning rule.'
 ---
 
 # Artifact manifest
@@ -19,11 +19,11 @@ directory layout to find out.
 | Property | Rule |
 | --- | --- |
 | Written once | Only `agent-bundle build` writes it, after the staged root is complete. Nothing else creates it; the one edit after the build is the re-index of a derived variant described under `files[]`, which re-measures non-compiled rows and never touches a compiled one. |
-| `manifestVersion` | `2`. A reader refuses any other value. |
+| `manifestVersion` | `3`. A reader refuses any other value. |
 | Canonical bytes | The file is the canonical JSON serialization of the document — object keys sorted, no insignificant whitespace, one trailing newline. Every reader re-serializes what it parsed and rejects the file unless the bytes are identical. A hand edit, a reformat, or a duplicate key fails the read. |
 | Closed keys | Every object admits exactly its documented keys. An unknown key at any level is a parse error. |
 | Sorted arrays | Every array has an explicit sort key (named per section below) and no duplicates. |
-| Lean reader | The rows above describe the full parser (`parseArtifactManifest`), which every consumer in the table below uses except one: the `<plugin> web` support bundled into a generated bin reads the manifest without the parser. It validates only the slices it launches from and ignores every other key, but those slices it refuses rather than filters, under the same checks the full parser runs (`web-host/manifest.ts` owns them; both import it): a `manifestVersion` other than `2` or a duplicate JSON key; a `projections[]` row that is not an object, names no host, or repeats one; an `executables.mcpServers[]` row that is not an object, has an unknown `kind`, carries a `launch` record when its kind must not (or lacks one when it must), or repeats a server `name` — two rows of one name never resolve to the later one; a malformed `launch` record, or one whose entry is not the `files[]` row its server kind starts (`bundle` for `compiled`, `prebuilt` for `prebuilt`), whose worker is not a `bundle` row, or whose `artifact` argument is not inside the root (an argument may name a directory under the root that holds rows); and a `web.apps[]` row whose `server` is not a row with a launch record. |
+| Lean reader | The rows above describe the full parser (`parseArtifactManifest`), which every consumer in the table below uses except one: the `<plugin> web` support bundled into a generated bin reads the manifest without the parser. It validates only the slices it launches from and ignores every other key, but those slices it refuses rather than filters, under the same checks the full parser runs (`web-host/manifest.ts` owns them; both import it): a `manifestVersion` other than `3` or a duplicate JSON key; a `projections[]` row that is not an object, names no host, or repeats one; an `executables.mcpServers[]` row that is not an object, has an unknown `kind`, carries a `launch` record when its kind must not (or lacks one when it must), or repeats a server `name` — two rows of one name never resolve to the later one; a malformed `launch` record, or one whose entry is not the `files[]` row its server kind starts (`bundle` for `compiled`, `prebuilt` for `prebuilt`), whose worker is not a `bundle` row, or whose `artifact` argument is not inside the root (an argument may name a directory under the root that holds rows); and a `web.apps[]` row whose `server` is not a row with a launch record. |
 | Paths | Every path is POSIX, relative to the root, and safe: no leading `/`, no backslash, no `.` or `..` segment, and never a build-machine absolute path. Moving the entire composite root to a different absolute directory keeps every reader working: every path stays root-relative and resolves inside the moved tree. Every path a section points at — a host document, an executable, an App view, an install file — is also a `files[]` row. |
 
 ## Who writes it
@@ -65,7 +65,7 @@ and are versioned separately.
 
 | Field | Contents |
 | --- | --- |
-| `manifestVersion` | `2`. Versions the public contract consumers read. |
+| `manifestVersion` | `3`. Versions the public contract consumers read. |
 | `runtime` | `{ node }` — the consumer-facing generated-executable runtime floor the root was built for, as a canonical `major.minor.patch` string that satisfies the framework's floor. |
 
 ### `application`
@@ -338,7 +338,7 @@ event route, and a routed CLI. Digests are elided; keys appear in canonical (sor
     { "bytes": 412, "kind": "generated", "path": ".claude-plugin/plugin.json",
       "sha256": "…" }
   ],
-  "manifestVersion": 2,
+  "manifestVersion": 3,
   "projections": [
     { "builtInHost": "claude",
       "documents": { "hooks": "hooks/hooks.json", "marketplace": ".claude-plugin/marketplace.json",
@@ -391,7 +391,7 @@ The same entry point exports the reader:
 | `readArtifactManifest(root)` | Opens `<root>/agent-bundle.manifest.json` and returns `{ status: 'ok', manifest, path, root }`, `{ status: 'missing', … }`, or `{ status: 'invalid', detail, … }`. This is the one way the framework's own consumers open a built root. |
 | `parseArtifactManifest(bytes)` | Parses and validates canonical bytes into a frozen `ArtifactManifest`; throws on any violation, including a duplicate key or non-canonical bytes. |
 | `artifactManifestName` | `'agent-bundle.manifest.json'`. |
-| `artifactManifestVersion` | `2`. |
+| `artifactManifestVersion` | `3`. |
 | `artifactCompilerRecordVersion` | `1`. |
 
 The types (`ArtifactManifest`, `ArtifactManifestCompiler`, `ArtifactManifestCompilerAdapter`,
@@ -400,7 +400,7 @@ are in the generated [Type API](./api.mdx).
 
 ## Reserved keys
 
-These keys are part of the design but **not emitted**, and a v2 reader rejects them like any
+These keys are part of the design but **not emitted**, and a v3 reader rejects them like any
 other unknown key. They are listed so that a consumer does not invent its own spelling:
 
 | Reserved key | Intended contents |
@@ -420,7 +420,9 @@ lean web reader rejects the version mismatch itself, before it reads a slice).
   `runtime`, `projections[]`, `routes`, `executables`, `distribution`). It bumps on **any**
   change an old closed reader would reject — adding, renaming, or removing a public-contract
   key (optional or not), or changing an enumerated value set a reader closes. Within one
-  version the key inventory is frozen. Readers refuse any other `manifestVersion`. Version 2
+  version the key inventory is frozen. Readers refuse any other `manifestVersion`. Version 3 marks
+  the canonical npm-root guarantee that packages preserve the manifest-owned bytes and executable;
+  version 2 already reserved the same `distribution.install` pointer shape. Version 2
   renamed `targets[]` to `projections[]`, moved the hook rows that `agent-bundle.hooks.json`
   used to carry into `executables.hooks[]` and deleted that file, and added `application`,
   `routes`, `executables`, `distribution`, and `projections[].documents`.

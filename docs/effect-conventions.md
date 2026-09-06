@@ -645,8 +645,8 @@ Wiring rules:
 - **Protocol stdout stays raw.** MCP stdio JSON-RPC (`mcp-entry.ts`,
   `mcp run`), hook result JSON (`adapters/hook-contract.ts`), the emitted
   routed-CLI shell (`cli-entry.ts`'s `writeOut`/`writeErr` ports and the
-  `entry-shell.ts` bin template), generated installers (`install-entry.ts`,
-  `install/surface.ts`), and child/worker stderr forwarding keep their direct
+  `entry-shell.ts` bin template), installers (`install/surface.ts`), and
+  child/worker stderr forwarding keep their direct
   `process.stdout`/`process.stderr` adapters: emitted artifacts must not carry
   a platform runtime, and byte-exact protocol frames are not terminal text.
 - **The route-facing terminal capability is plain Node, not `Terminal`.**

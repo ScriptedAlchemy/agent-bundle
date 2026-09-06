@@ -430,7 +430,7 @@ it('rejects a files[] row at or under a root entry the artifact does not own, in
 
 it('rejects any manifestVersion other than the closed current version', () => {
   const manifest = clone() as unknown as Record<string, unknown>;
-  manifest.manifestVersion = 3;
+  manifest.manifestVersion = 2;
   expect(() => parseArtifactManifest(canonicalBytes(manifest)))
     .toThrow(`manifestVersion must be ${artifactManifestVersion}.`);
 });

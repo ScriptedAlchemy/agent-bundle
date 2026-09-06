@@ -18,6 +18,10 @@ emitted only when the build selects `portable`, into the shared `scripts/` of
 the one plugin root every selected host installs — so the example keeps both
 modes covered.
 
+The plain Hook imports the application-owned `releaseContext` function from
+`src/release-context.ts`; the emitted wrapper bundles it without starting an MCP
+service or render worker.
+
 ## Workbench walkthrough
 
 1. The shell header reports the authoritative current-or-stale epoch state and

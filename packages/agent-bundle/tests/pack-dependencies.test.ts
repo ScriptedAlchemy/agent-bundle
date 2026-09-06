@@ -5,7 +5,6 @@ import {
   declarationPackageReferences,
   isWorkspaceProtocol,
   packageNameOf,
-  rewritesWorkspaceProtocols,
   shellWords,
 } from '../src/build/pack-dependencies.ts';
 import { declaredDependencies, isBarePackageName } from '../src/core/package-dependencies.ts';
@@ -118,18 +117,13 @@ it.each([
 });
 
 
-it('tells workspace protocols apart and knows which packers rewrite them', () => {
+it('tells workspace protocols apart', () => {
   expect(isWorkspaceProtocol('workspace:*')).toBe(true);
   expect(isWorkspaceProtocol('catalog:default')).toBe(true);
   // No packer rewrites a value that merely contains the protocol; npm then reads it as an invalid dist-tag.
   expect(isWorkspaceProtocol(' catalog:default')).toBe(false);
   expect(isWorkspaceProtocol('npm:effect@^4')).toBe(false);
   expect(isWorkspaceProtocol('github:owner/repo')).toBe(false);
-  expect(rewritesWorkspaceProtocols('pnpm/10.18.0 npm/? node/v24.0.0 linux x64')).toBe(true);
-  expect(rewritesWorkspaceProtocols('yarn/4.9.1 npm/? node/v24.0.0 linux x64')).toBe(true);
-  expect(rewritesWorkspaceProtocols('bun/1.2.0 npm/? node/v24.0.0 linux x64')).toBe(true);
-  expect(rewritesWorkspaceProtocols('npm/11.4.2 node/v24.0.0 linux x64 workspaces/false')).toBe(false);
-  expect(rewritesWorkspaceProtocols(undefined)).toBe(false);
 });
 
 it.each([

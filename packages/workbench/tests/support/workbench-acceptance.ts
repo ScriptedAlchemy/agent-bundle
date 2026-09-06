@@ -4,7 +4,11 @@ import type { Locator, Page } from 'playwright-core';
 import type { CompletedBuildAttempt } from '../../../agent-bundle/src/dev/types.ts';
 import { workbenchLeafPath } from '../../../agent-bundle/src/test/index.ts';
 import { timeScale } from '../../../agent-bundle/tests/support/time-scale.ts';
-import { replaceWatchedSourceAndAwaitRebuild, type WatchedBuildSession } from '../../../agent-bundle/tests/support/watched-files.ts';
+import {
+  removeWatchedSourceAndAwaitRebuild,
+  replaceWatchedSourceAndAwaitRebuild,
+  type WatchedBuildSession,
+} from '../../../agent-bundle/tests/support/watched-files.ts';
 import { applicationLeaves, type ApplicationLeaf, type ApplicationTree } from '../../src/application/application-tree-model.ts';
 import { routeInputLabel } from '../../src/routes/routes-model.ts';
 import { waitForWorkbenchIdle, workbenchUrl } from './workbench-e2e.ts';
@@ -27,14 +31,15 @@ export const workbenchTestIds = Object.freeze({
   resultTabRendered: 'result-tab-rendered',
   resultTabStructured: 'result-tab-structured',
   resultTabTrace: 'result-tab-trace',
-  routeOutcome: 'route-outcome',
-  routeInputEditor: 'route-input-editor',
   routeCancel: 'route-cancel',
+  routeInputEditor: 'route-input-editor',
+  routeOutcome: 'route-outcome',
   routeRun: 'route-run',
   routeRunningStatus: 'route-running-status',
   routeStatus: 'route-status',
   routeWorkspace: 'route-workspace',
   shellBuildStatus: 'shell-build-status',
+  staticAuthoredDocument: 'static-authored-document',
   traceDetail: 'trace-detail',
   traceEntry: 'trace-entry',
   traceGroup: 'trace-group',
@@ -253,6 +258,17 @@ export const editWatchedSource = async (
     attempt = await awaitFollowUpAttempt(server, attempt, timeout);
   }
   expect(attempt.outcome, `rebuild of ${path} (${attempt.sourceRevision}): ${JSON.stringify(attempt.diagnostics)}`).toBe(expectedOutcome);
+  await waitForBuildIdle(server, timeout);
+};
+
+export const removeWatchedSource = async (
+  server: WatchedBuildSession,
+  path: string,
+  timeout = rebuildTimeout,
+): Promise<void> => {
+  await waitForBuildIdle(server, timeout);
+  const attempt = await removeWatchedSourceAndAwaitRebuild(server, path, { timeoutMs: timeout });
+  expect(attempt.outcome, `rebuild after deleting ${path}: ${JSON.stringify(attempt.diagnostics)}`).toBe('succeeded');
   await waitForBuildIdle(server, timeout);
 };
 

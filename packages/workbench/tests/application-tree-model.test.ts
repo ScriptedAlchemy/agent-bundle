@@ -37,6 +37,7 @@ const skillTree: SkillDocumentTree = {
     provenance: { kind: 'conventional', sourcePath: 'skills/review/SKILL.md' },
     resources: [],
   }],
+  staticDocuments: [],
 };
 
 const inspection: ArtifactInspection = {

@@ -112,8 +112,8 @@ export default async function inspect(
 ```
 
 The compiler statically projects `inputSchema` onto argv, generates nested help (`--help` at
-every level, `--version` at the root), and emits `dist/bin/<plugin-name>.js` through the same
-bundler synthesis as every other bin. At run time the shell resolves the command path, parses and
+every level, `--version` at the root), and emits `bin/<plugin-name>.mjs` in the composite
+artifact. At run time the shell resolves the command path, parses and
 coerces argv, validates through the module's own schemas, executes the default function inside
 the typed Agent request context, writes one canonical JSON line to stdout, and maps exit codes
 deterministically:
@@ -370,19 +370,19 @@ projection field; `ToolConfig` gains nothing.
 Short `-x` aliases (the shell rejects single-dash tokens today) and an async `mapInput` are
 deferred.
 
-### The routed CLI inside host artifacts
+### The same routed CLI in every distribution
 
-The package bin only reaches users who install the npm package, while hooks, Skills, and scripts
-ship with the host artifact. So the build also emits the same compiled command graph once into
-the artifact root as `bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when any
+Hooks, Skills, scripts, and npm consumers all use the plugin root, so the build emits the compiled
+command graph once into the artifact root as `bin/<plugin-name>.mjs` (plus
+`bin/<plugin-name>-flight.mjs` when any
 command renders), shared by every selected host. Every built-in target publishes the `cli`
-capability that admits it. The artifact bin is a self-contained ESM module with no shebang or
-executable bit — run it as `node <plugin-root>/bin/<plugin-name>.mjs <command>`, exactly like
-`scripts/*.mjs`. Help, argv parsing, output modes, exit codes, and signals match the package bin;
-the one difference is that
-the artifact-hosted CLI and MCP server derive the same framework state root from the same code
-root — `~/.agent-bundle/state/<plugin>-<digest>`, or `AGENT_BUNDLE_STATE_ROOT` when set — so they
-share one store. The npm package bin keeps `$PWD/.agent-bundle/state`.
+capability that admits it. The artifact bin is a self-contained executable ESM module with a Node
+shebang. The npm root copies it unchanged and points `package.json` `bin` directly at it, so help,
+argv parsing, output modes, exit codes, signals, and the complete command set are byte-for-byte
+the same. Both forms resolve plugin code from the root above `bin/` and derive the same framework
+state root from that code root — `~/.agent-bundle/state/<plugin>-<digest>` (or the
+`XDG_STATE_HOME` equivalent), or `AGENT_BUNDLE_STATE_ROOT` when set — so the CLI and MCP server
+share one store.
 
 Reach it from the other surfaces with the plugin-root token — `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`
 in Claude Skill Markdown and hook commands, `${PLUGIN_ROOT}/…` in Codex hooks, `${CURSOR_PLUGIN_ROOT}/…`
@@ -390,8 +390,8 @@ in Cursor hooks — or, from a compiled script, as the sibling
 `new URL('../bin/<plugin-name>.mjs', import.meta.url)`. `inspect` accounts for the bin as one `cli`
 component per target and the artifact manifest records both files. A target without the `cli`
 capability omits the bin and reports `AB4765`; a host-emitted file at the same path (a `claude.bin`
-directory shipping `<plugin-name>.mjs`) is `AB4766`. The package build's `dist/bin/<plugin-name>.js`
-is unchanged.
+directory shipping `<plugin-name>.mjs`) is `AB4766`. The npm root copies this manifest-declared
+executable; it does not compile another routed CLI.
 
 ### Projecting MCP tools into the CLI
 
@@ -433,16 +433,22 @@ Outside an agent-bundle compilation the published module throws rather than repo
 fabricated identity, and a release build refuses a project with no release version at all
 (`AB4013`).
 
-## Packaging and installers
+## Packaging the npm root
 
-When package outputs and at least one Claude, Codex, or Cursor projection are built inside the
-project, the framework also emits one self-contained package-relative installer at
-`dist/bin/<plugin-name>.js` — or `<plugin-name>-install.js` when that name is taken, with a
-numeric suffix if both are. Declare the matching `package.json` `bin` value. Its grammar is
-`install <host> [--scope <scope>] [--json]`, help lists only built hosts, and it resolves the
-shipped artifact directory from `import.meta.url` rather than the caller's working directory, so
-it works from `node_modules` regardless of the current directory. No npm lifecycle performs an
+When package outputs are enabled, `dist/` contains the complete validated composite artifact plus
+the package metadata, standard documentation, and package-only entries. A generated routed CLI is
+not compiled a second time: the installed `package.json` points at the
+`bin/<plugin-name>.mjs` executable declared by `agent-bundle.manifest.json` and copied unchanged
+from the artifact. The tarball therefore has one plugin root and one routed CLI, with no nested
+`artifact/` directory or package-relative installer wrapper. No npm lifecycle performs a host
 installation.
+
+The generated root owns its inventory. Source `files` and `bin` fields are replaced; package entry
+paths (`exports`, `imports`, `main`, `module`, `types`, and `typesVersions`) are rebased from
+`dist/` to the generated root. Pack and publish hooks are removed, while other scripts are copied
+unchanged and must already name paths relative to that root. Only manifest-owned artifact files,
+compiled package entries, and standard README, license, and notice files are carried; arbitrary
+source-project extras are not.
 
 ```sh
 npx agent-bundle prepack --root . --output artifact --json
@@ -450,7 +456,14 @@ npx agent-bundle prepack --root . --output artifact --json
 
 `prepack` runs the release build and `npm pack --dry-run --json --ignore-scripts`, then gates the
 exact package and artifact inventory, manifest hashes, package bin targets, and release-version
-agreement. Use it as an npm `prepack` script; `--ignore-scripts` prevents recursion.
+agreement. It removes pack and publish lifecycle hooks from the generated package metadata, so a
+source-project `prepack` cannot recurse from `dist/`; consumer install scripts remain intact. Run
+the gate directly rather than relying on a source-package lifecycle hook, then publish the npm root
+it validated:
+
+```sh
+npm publish ./dist --ignore-scripts
+```
 
 ## Prebuilt payloads
 
@@ -501,12 +514,7 @@ silently overriding the contract. Reserved module specifiers are protected the s
 that externalizes `agent-bundle/mcp-entry`, `agent-bundle/meta`, or `agent-bundle/mcp-apps` fails
 the build. Externalization in general is bounded too: `AB4725` rejects statically visible
 package `externals`, while relative, function-form, and mutator externals are judged from the
-compilation's own evidence (`AB6005`). A hatch also runs after the compiler judged the module graph
-and can rewrite the emitted bytes, so the build's compile evidence record marks
-`coverage.rewritable` and artifact validation parses every emitted module in full and resolves its
-imports, instead of trusting the record; without a hatch a compiled module is lexed and its literal
-imports held to the record's externals (an `rspackIgnore` import fails `AB6005`). Run-time
-path references are kept the same way: a
+compilation's own evidence (`AB6005`). Run-time path references are kept the same way: a
 `new URL(…, import.meta.url)` or `new Worker(new URL(…))` in your code or a generated entry names
 a file beside the artifact, so the invariant layer turns the bundler's URL and worker asset
 processing off after the hatch and the expression reaches the artifact verbatim. The hatch

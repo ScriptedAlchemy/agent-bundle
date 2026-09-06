@@ -10,7 +10,7 @@ export default defineConfig({
   // `--output` flag still wins.
   // output: { distPath: 'artifact' },
   // No `bin` or `scripts` fields needed: the routed `src/cli/**` commands
-  // compile into the package executable (dist/bin/my-agent-plugin.js), the
+  // compile into the shared artifact/package executable (bin/my-agent-plugin.mjs), the
   // conventional `src/scripts/hello.ts` ships as `scripts/hello.mjs` inside
   // every host artifact, and `src/index.ts` becomes the library export with
   // declarations — all by convention.

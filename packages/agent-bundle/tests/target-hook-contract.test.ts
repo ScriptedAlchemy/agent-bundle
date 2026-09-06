@@ -420,9 +420,9 @@ it('runs event-route preflight in the per-host wrapper before shared IPC', () =>
   expect(source).toContain('AbortSignal.timeout(timeoutMs)');
   expect(source).toContain('process.once(terminationSignal, terminate)');
   expect(source).toContain('process.off(terminationSignal, terminate)');
-  expect(source).toContain('observedAt: props.canonical.observedAt, sequence: props.canonical.sequence');
+  expect(source).toContain('...(gate === "execute" ? {} : { preflight: gate.data })');
   expect(entry.executeVirtualSource).toContain('const observation = { observedAt, sequence };');
-  expect(entry.executeVirtualSource).toContain('observedAt: observation?.observedAt, sequence: observation?.sequence');
+  expect(entry.executeVirtualSource).toContain('observedAt: observation?.observedAt, preflight, sequence: observation?.sequence');
   expect(source).not.toContain('AGENT_BUNDLE_HOOK_HOST');
   expect(source).not.toContain('createAgentRenderDispatcher');
   expect(source).not.toContain('import * as routeModule');

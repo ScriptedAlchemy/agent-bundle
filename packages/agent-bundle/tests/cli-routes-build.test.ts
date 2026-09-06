@@ -257,13 +257,13 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   expect(result.model.packageBuild?.bins).toMatchObject([
     { name: 'cli-bin-fixture', provenance: { kind: 'conventional' } },
   ]);
-  const binPath = join(root, 'dist', 'bin', 'cli-bin-fixture.js');
+  const binPath = join(root, 'dist', 'bin', 'cli-bin-fixture.mjs');
   const binSource = await readFile(binPath, 'utf8');
   expect(binSource.startsWith('#!/usr/bin/env node\n')).toBe(true);
   expect(binSource).not.toMatch(/from\s*['"]agent-bundle\/cli-entry['"]/u);
   expect((await stat(binPath)).mode & 0o111).not.toBe(0);
   // The emitted executable's provenance names every command route module.
-  const binEvidence = result.packageBuild!.files.find((file) => file.path === 'bin/cli-bin-fixture.js');
+  const binEvidence = result.packageBuild!.files.find((file) => file.path === 'bin/cli-bin-fixture.mjs');
   expect(binEvidence?.sourceInputs).toEqual(expect.arrayContaining([
     'src/cli/doctor.ts',
     'src/cli/library/audit.ts',
@@ -506,7 +506,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
   beforeAll(async () => {
     // `process.cwd()` in the child is the resolved path; the fixture compares against it.
     root = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-cli-projection-')));
-    binPath = join(root, 'dist', 'bin', 'cli-projection-fixture.js');
+    binPath = join(root, 'dist', 'bin', 'cli-projection-fixture.mjs');
     await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
     await Promise.all([
       writeProjectFile(root, 'package.json', JSON.stringify({
@@ -624,7 +624,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       { name: 'cli-projection-fixture', provenance: { kind: 'conventional' } },
     ]);
     await expect(stat(binPath)).resolves.toMatchObject({});
-    const evidence = built.packageBuild!.files.find((file) => file.path === 'bin/cli-projection-fixture.js');
+    const evidence = built.packageBuild!.files.find((file) => file.path === 'bin/cli-projection-fixture.mjs');
     expect(evidence?.sourceInputs).toEqual(expect.arrayContaining([
       'src/mcp/demo/tools/ping.tsx',
       'src/mcp/demo/tools/purge.cli.ts',

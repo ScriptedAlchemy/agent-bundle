@@ -51,7 +51,7 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # emitted once
 ├── INSTALL.md                            # when any built-in host is selected
 ├── install.mjs                           # when cursor or portable is selected
-├── agent-bundle.manifest.json            # the artifact index (manifestVersion 2)
+├── agent-bundle.manifest.json            # the artifact index (manifestVersion 3)
 └── agent-bundle.compile-evidence.json    # compiler record per compiled file
 ```
 
@@ -80,9 +80,9 @@ layout. Claude Code and the portable Agent Plugins format load their documents f
 conventional plugin-root locations and cannot be redirected; Codex and Cursor manifests carry
 explicit `hooks` and MCP pointers, so their documents sit beside their manifests. Both of those
 hosts also fall back to folder discovery of the conventional paths when the pointer is absent, so
-a Codex or Cursor projection with no document of its own still points at an empty one whenever
-another selected host claims the conventional path — Cursor never loads Claude Code's
-`hooks/hooks.json`.
+a Codex or Cursor projection with no document of its own still points at an empty one when a Hook
+or MCP server reaches another selected host's conventional path — Cursor never loads Claude
+Code's `hooks/hooks.json`.
 
 ### Hook wrappers
 
@@ -142,7 +142,7 @@ inventory checks the same paths (`AB7010`).
 
 ## agent-bundle.manifest.json
 
-One manifest is emitted per root (`manifestVersion: 2`). It is the root's **index** — the one
+One manifest is emitted per root (`manifestVersion: 3`). It is the root's **index** — the one
 document every consumer reads to learn what the root contains — and the input to every later
 integrity check: `validate --artifact`, `prepack`, `install`, `doctor --from`, `serve-app`, `mcp`,
 `hooks`, and the packed and installed-host proof levels. The full field reference is the
@@ -150,7 +150,7 @@ integrity check: `validate --artifact`, `prepack`, `install`, `doctor --from`, `
 
 | Section | Contents |
 | --- | --- |
-| `manifestVersion`, `runtime` | `2`, and `{ node }`, the consumer-facing generated-executable floor. |
+| `manifestVersion`, `runtime` | `3`, and `{ node }`, the consumer-facing generated-executable floor. |
 | `application` | The identity, once and host-independent: `id`, `name`, `version`, optional `description`. What `install`, `doctor`, and `uninstall` act on. |
 | `files[]` | Every emitted file: `path`, `bytes`, `sha256`, `kind` (`bundle`, `copy`, `generated`, `prebuilt`), optional `mode`. |
 | `projections[]` | One row per selected host, sorted by `host`: `host`, optional `builtInHost`, the `documents` pointers to the host plugin, marketplace, MCP, and hooks documents the projection emitted, and its `marketplace` name. |

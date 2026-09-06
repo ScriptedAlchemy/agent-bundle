@@ -1,4 +1,4 @@
-import { rename, writeFile } from 'node:fs/promises';
+import { rename, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -50,15 +50,14 @@ const pollIntervalMs = 25;
  * load — the race behind the retired `{ retry: 2 }` guards in
  * `examples-real.e2e.test.ts`.
  */
-export const replaceWatchedSourceAndAwaitRebuild = async (
+const changeWatchedSourceAndAwaitRebuild = async (
   session: WatchedBuildSession,
-  projectRoot: string,
   path: string,
-  content: string,
+  change: () => Promise<void>,
   options: AwaitWatcherRebuildOptions,
 ): Promise<CompletedBuildAttempt> => {
   const known = attemptIds(session.status());
-  await replaceWatchedSource(projectRoot, path, content);
+  await change();
   const deadline = Date.now() + options.timeoutMs;
   for (;;) {
     const status = session.status();
@@ -78,3 +77,27 @@ export const replaceWatchedSourceAndAwaitRebuild = async (
     await sleep(pollIntervalMs);
   }
 };
+
+export const replaceWatchedSourceAndAwaitRebuild = (
+  session: WatchedBuildSession,
+  projectRoot: string,
+  path: string,
+  content: string,
+  options: AwaitWatcherRebuildOptions,
+): Promise<CompletedBuildAttempt> => changeWatchedSourceAndAwaitRebuild(
+  session,
+  path,
+  () => replaceWatchedSource(projectRoot, path, content),
+  options,
+);
+
+export const removeWatchedSourceAndAwaitRebuild = (
+  session: WatchedBuildSession,
+  path: string,
+  options: AwaitWatcherRebuildOptions,
+): Promise<CompletedBuildAttempt> => changeWatchedSourceAndAwaitRebuild(
+  session,
+  path,
+  () => rm(path),
+  options,
+);

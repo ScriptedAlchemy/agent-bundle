@@ -51,7 +51,7 @@ Two MCP servers ship in the plugin:
   judged against the wire.
 
 The rendered CLI `host-test dump [--conversation <id>] [--full] [--log <file>]`
-(`dist/bin/host-test.js`) reads the same log outside any host.
+(`dist/bin/host-test.mjs`) reads the same log outside any host.
 
 The log lives at `$HOST_TEST_LOG_DIR/captures.ndjson` when that variable is
 set, otherwise `$AGENT_BUNDLE_PLUGIN_ROOT/state/host-test/captures.ndjson`

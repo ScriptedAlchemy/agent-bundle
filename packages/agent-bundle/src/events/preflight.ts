@@ -1,5 +1,5 @@
 import { settleBeforeAbort } from '../core/abort.ts';
-import { isRecord } from '../core/strict-json.ts';
+import { isRecord, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import type { CanonicalAgentEvent } from '../routes/events.ts';
 import type { AgentEventCanonicalIdentity } from '../routes/public.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
@@ -7,12 +7,13 @@ import type { EventTracer } from './trace.ts';
 
 /**
  * The gate result a conventional event route's re-exported preflight may return (#595).
- * `execute` is the only value that loads the rendered route; `continue` is a
- * pass-through with no host decision; `deny` blocks through the existing
- * canonical event outcome projection and always carries a nonempty reason.
+ * The bare `execute` value or an `execute` object carrying JSON data loads the
+ * rendered route; `continue` passes through with no host decision; `deny`
+ * blocks through the existing canonical event outcome projection.
  */
-export type EventPreflightResult =
+export type EventPreflightResult<Data extends JsonValue = JsonValue> =
   | 'execute'
+  | { readonly outcome: 'execute'; readonly data: Data }
   | { readonly outcome: 'continue' }
   | { readonly outcome: 'deny'; readonly reason: string };
 
@@ -29,14 +30,17 @@ export interface EventPreflightContext<E extends CanonicalAgentEvent = Canonical
   readonly terminal: AgentTerminal;
 }
 
-export type EventPreflight<E extends CanonicalAgentEvent = CanonicalAgentEvent> = (
+export type EventPreflight<
+  E extends CanonicalAgentEvent = CanonicalAgentEvent,
+  Data extends JsonValue = JsonValue,
+> = (
   context: EventPreflightContext<E>,
-) => EventPreflightResult | Promise<EventPreflightResult>;
+) => EventPreflightResult<Data> | Promise<EventPreflightResult<Data>>;
 
-type PreflightObjectOutcome = 'continue' | 'deny';
+type PreflightObjectOutcome = 'continue' | 'deny' | 'execute';
 
 const isPreflightObjectOutcome = (value: unknown): value is PreflightObjectOutcome =>
-  value === 'continue' || value === 'deny';
+  value === 'continue' || value === 'deny' || value === 'execute';
 
 const unsupportedResult = (detail: string): never => {
   throw new TypeError(`Event preflight result ${detail}`);
@@ -100,13 +104,16 @@ export const validateEventPreflightResult = (
 ): EventPreflightResult => {
   if (value === 'execute') return 'execute';
   if (!isRecord(value)) {
-    return unsupportedResult('must be "execute" or a continue/deny object.');
+    return unsupportedResult('must be "execute" or an execute/continue/deny object.');
   }
   const outcome = value.outcome;
   if (!isPreflightObjectOutcome(outcome)) {
     return unsupportedResult(`outcome ${JSON.stringify(outcome)} is not supported.`);
   }
   switch (outcome) {
+    case 'execute':
+      unexpectedFields(value, new Set(['outcome', 'data']));
+      return Object.freeze({ data: snapshotStrictJsonValue(value.data), outcome: 'execute' });
     case 'continue':
       unexpectedFields(value, new Set(['outcome']));
       return Object.freeze({ outcome: 'continue' });
@@ -131,11 +138,14 @@ export const validateEventPreflightResult = (
  * Runs the gate inside the common event kernel and validates its result before
  * any caller projects host output or loads the rendered route runtime.
  */
-export const executeEventPreflight = async <E extends CanonicalAgentEvent>(
-  preflight: EventPreflight<E>,
+export const executeEventPreflight = async <
+  E extends CanonicalAgentEvent,
+  Data extends JsonValue = JsonValue,
+>(
+  preflight: EventPreflight<E, Data>,
   context: EventPreflightContext<E>,
   trace?: EventTracer,
-): Promise<EventPreflightResult> => {
+): Promise<EventPreflightResult<Data>> => {
   trace?.preflightStart();
   try {
     context.signal.throwIfAborted();
@@ -147,7 +157,7 @@ export const executeEventPreflight = async <E extends CanonicalAgentEvent>(
     });
     const value = await settleBeforeAbort(Promise.resolve().then(() => preflight(frozenContext)), context.signal);
     context.signal.throwIfAborted();
-    const result = validateEventPreflightResult(value, context.canonical.event);
+    const result = validateEventPreflightResult(value, context.canonical.event) as EventPreflightResult<Data>;
     trace?.preflightOutcome(result);
     return result;
   } catch (error) {

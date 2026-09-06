@@ -1207,21 +1207,32 @@ it('admits documented Codex component path and inline manifest forms', async () 
   }
 });
 
+it('does not manufacture Codex MCP or hook documents from a static Claude selection', () => {
+  const model: NormalizedPlugin = { ...plugin, hooks: [], mcpServers: [] };
+  const documents = writeContents(model, 'codex');
+  expect(documents).not.toHaveProperty(codexArtifactPaths.hooksManifest);
+  expect(documents).not.toHaveProperty(codexArtifactPaths.mcp);
+  const manifest = JSON.parse(documents[codexArtifactPaths.plugin]!) as Record<string, unknown>;
+  expect(manifest).toMatchObject({
+    interface: { capabilities: ['skills'] },
+  });
+  expect(manifest).not.toHaveProperty('hooks');
+  expect(manifest).not.toHaveProperty('mcpServers');
+});
+
 it('plans byte-stable native Codex and Claude plugin trees from the same frozen model', async () => {
   const registry = createDefaultRegistry();
   expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor']);
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(Object.isFrozen(plugin)).toBe(true);
 
-  // Both projections share one composite root (#555): Codex keeps its hook
-  // and MCP documents beside its manifest, and shields Claude's conventional
-  // `hooks/hooks.json` with an empty document of its own. The install surface
-  // is composed once over the selection, not planned per host.
+  // Both projections share one composite root (#555): Codex keeps its MCP
+  // document beside its manifest. No Hook reaches Claude, so there is no
+  // conventional document to shield. The install surface is composed once.
   const codex = planEntries(plugin, 'codex');
   const claude = planEntries(plugin, 'claude');
   expect(codex.map((entry) => entry.relativePath)).toEqual([
     codexArtifactPaths.marketplace,
-    codexArtifactPaths.hooksManifest,
     codexArtifactPaths.mcp,
     codexArtifactPaths.plugin,
     'skills/review/SKILL.md',
@@ -1243,17 +1254,12 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
       relativePath: codexArtifactPaths.marketplace,
     },
     {
-      content: '{"hooks":{}}\n',
-      kind: 'write',
-      relativePath: codexArtifactPaths.hooksManifest,
-    },
-    {
       content: '{"mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"streamable-http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","./tools/server.mjs"],"command":"node","cwd":"./","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"./","CACHE_DIR":"cache"},"type":"stdio"}}}\n',
       kind: 'write',
       relativePath: codexArtifactPaths.mcp,
     },
     {
-      content: '{"author":{"name":"review-tools"},"description":"Review code and explain findings.","hooks":"./.codex-plugin/hooks.json","interface":{"capabilities":["mcp","hooks","skills"],"category":"Productivity","defaultPrompt":["Help me use review-tools."],"developerName":"review-tools","displayName":"review-tools","longDescription":"Review code and explain findings.","shortDescription":"Review code and explain findings."},"mcpServers":"./.codex-plugin/mcp.json","name":"review-tools","skills":"./skills/","version":"1.2.3"}\n',
+      content: '{"author":{"name":"review-tools"},"description":"Review code and explain findings.","interface":{"capabilities":["mcp","skills"],"category":"Productivity","defaultPrompt":["Help me use review-tools."],"developerName":"review-tools","displayName":"review-tools","longDescription":"Review code and explain findings.","shortDescription":"Review code and explain findings."},"mcpServers":"./.codex-plugin/mcp.json","name":"review-tools","skills":"./skills/","version":"1.2.3"}\n',
       kind: 'write',
       relativePath: codexArtifactPaths.plugin,
     },
@@ -1282,7 +1288,6 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
     { bytes: 8, kind: 'copy', relativePath: 'skills/review/references/guide.md', source: '/workspace/src/skills/review/references/guide.md' },
   ]);
   expect(codex.map((entry) => entry.sourceInputs)).toEqual([
-    ['/workspace/agent-bundle.config.ts'],
     ['/workspace/agent-bundle.config.ts'],
     ['/workspace/agent-bundle.config.ts'],
     ['/workspace/agent-bundle.config.ts', '/workspace/src/skills/review/SKILL.md'],
@@ -2683,11 +2688,10 @@ it('keeps Codex plugin and marketplace interface validator contracts separate', 
     readonly interface: Record<string, unknown>;
   };
 
-  // The root is shared with Claude, whose conventional `hooks/hooks.json`
-  // Codex would otherwise discover, so Codex points at an empty hooks
-  // document of its own and declares the capability (#555).
+  // The root is shared with Claude, but no Hook reaches Claude and therefore
+  // no conventional hooks document needs shielding (#555).
   expect(pluginManifest.interface).toMatchObject({
-    capabilities: ['mcp', 'hooks', 'skills'],
+    capabilities: ['mcp', 'skills'],
     defaultPrompt: ['Help me use review-tools.'],
     developerName: 'review-tools',
   });
