@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { ProjectEventHub } from '../events.ts';
@@ -37,6 +38,19 @@ import {
 
 const streamQueueByteLimit = 256 * 1024;
 const streamQueueEntryLimit = 128;
+
+interface PendingFrame {
+  readonly bytes: number;
+  readonly final: boolean;
+  /** Arrived after the replay snapshot was taken. */
+  readonly live: boolean;
+  readonly text: string;
+}
+
+const pendingFrame = (message: RouteInvocationStreamMessage, live: boolean): PendingFrame => {
+  const text = `event: ${message.type}\ndata: ${JSON.stringify(message)}\n\n`;
+  return { bytes: Buffer.byteLength(text, 'utf8'), final: message.type === 'final', live, text };
+};
 const invalidShape = badRequest(
   ROUTE_INVOCATION_MALFORMED_REQUEST_CODE,
   'Route invocation request has an invalid shape.',
@@ -272,24 +286,28 @@ export class RouteInvocationRoutes {
       stream.unsubscribe?.();
       response.end();
     };
-    const deliver = (message: RouteInvocationStreamMessage): void => {
-      const result = writer.enqueue(`event: ${message.type}\ndata: ${JSON.stringify(message)}\n\n`);
-      if (result === 'overflow') response.destroy();
-      if (message.type === 'final') terminal = true;
+    const deliver = (frame: PendingFrame): void => {
+      if (writer.enqueue(frame.text) === 'overflow') response.destroy();
+      if (frame.final) terminal = true;
       finish();
     };
-    const replay: RouteInvocationStreamMessage[] = [];
+    // The replay drains one frame per socket drain. Live frames that arrive
+    // meanwhile wait behind it, held to the live queue's own limits.
+    const pending: PendingFrame[] = [];
     let replaying = true;
     let subscribed = false;
-    // Live messages that arrive while the replay is still draining are bounded
-    // like the live queue; the replay itself is bounded by retention.
-    let liveWhileReplaying = 0;
+    let liveBytes = 0;
+    let liveRecords = 0;
     const pump = (): void => {
       while (replaying && writer.idle && !response.destroyed) {
-        const next = replay.shift();
+        const next = pending.shift();
         if (next === undefined) {
           replaying = false;
           break;
+        }
+        if (next.live) {
+          liveBytes -= next.bytes;
+          liveRecords -= 1;
         }
         deliver(next);
       }
@@ -305,11 +323,13 @@ export class RouteInvocationRoutes {
       stream.unsubscribe?.();
     });
     stream.unsubscribe = service.subscribe(id, (message) => {
-      if (!replaying) return deliver(message);
-      replay.push(message);
-      if (!subscribed) return;
-      liveWhileReplaying += 1;
-      if (liveWhileReplaying > streamQueueEntryLimit) response.destroy();
+      const frame = pendingFrame(message, subscribed);
+      if (!replaying) return deliver(frame);
+      pending.push(frame);
+      if (!frame.live) return;
+      liveBytes += frame.bytes;
+      liveRecords += 1;
+      if (liveBytes > streamQueueByteLimit || liveRecords > streamQueueEntryLimit) response.destroy();
     });
     subscribed = true;
     writeKeepAliveStreamHead(response, {
