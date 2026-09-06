@@ -68,7 +68,6 @@ const publicApiEntryPoints = [
   'app.d.ts',
   'cli-entry.d.ts',
   'config/index.d.ts',
-  'contracts/runtime.d.ts',
   'eval/index.d.ts',
   'launch-env.d.ts',
   'mcp-apps.d.ts',

@@ -43,12 +43,12 @@ import {
   redactInspectionDiagnostics,
 } from './inspection-security.js';
 import type { JsonObject, JsonValue } from 'agent-bundle';
-import { maximumDevRuntimeFlightPreviewBytes } from 'agent-bundle/runtime-contracts';
 import {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
   createRuntimeGenerationStore,
   createRuntimeMcpRegistry,
+  maximumDevRuntimeFlightPreviewBytes,
   type DevRuntimeAsset,
   type DevRuntimeAssetRequest,
   type DevRuntimeClientSurfaceEndpoint,

@@ -221,9 +221,7 @@ it('publishes directly executable built entrypoints with declarations', async ()
   await expect(import('agent-bundle/app')).resolves.toBeDefined();
   const configEntrypoint = await import('agent-bundle/config');
   await expect(import('agent-bundle/eval')).resolves.toBeDefined();
-  const runtimeContractsEntrypoint = await import('agent-bundle/runtime-contracts');
   expect(configEntrypoint.defineConfig).toBe(rootEntrypoint.defineConfig);
-  expect(runtimeContractsEntrypoint.maximumDevRuntimeFlightPreviewBytes).toBe(32 * 1024);
 
   const binPath = join(packageRoot, manifest.bin['agent-bundle']);
   const binSource = await readFile(binPath, 'utf8');
