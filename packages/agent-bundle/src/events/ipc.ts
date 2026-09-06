@@ -7,7 +7,6 @@ import { StringDecoder } from 'node:string_decoder';
 import { Context, Duration, Effect, Exit, Fiber, Layer, Random, Ref, type Scope } from 'effect';
 import { z } from 'zod';
 
-import { snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { isAbortError, makeScopedEffectRuntime, runPromise, type ScopedEffectRuntime } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 
@@ -66,7 +65,6 @@ const eventRequestSchema = z.object({
   hostContractRevision: z.string().min(1),
   native: z.record(z.string(), z.unknown()),
   observedAt: z.string().min(1).optional(),
-  preflight: z.unknown().optional(),
   protocolVersion: z.literal(EVENT_RUNTIME_PROTOCOL_VERSION),
   sequence: z.number().int().positive().optional(),
   target: z.string().min(1),
@@ -132,7 +130,6 @@ export interface EventRuntimeRequest {
   readonly hostContractRevision: string;
   readonly native: Readonly<Record<string, unknown>>;
   readonly observedAt?: string;
-  readonly preflight?: JsonValue;
   readonly sequence?: number;
   readonly target: string;
 }
@@ -345,7 +342,6 @@ const handleConnection = Effect.fnUntraced(function*(
     hostContractRevision: parsed.data.hostContractRevision,
     native: parsed.data.native,
     observedAt: parsed.data.observedAt,
-    ...(parsed.data.preflight === undefined ? {} : { preflight: snapshotStrictJsonValue(parsed.data.preflight) }),
     sequence: parsed.data.sequence,
     target: parsed.data.target,
   }, signal)).pipe(Effect.exit);
@@ -1147,7 +1143,6 @@ const requestProgram = (
       hostContractRevision: options.hostContractRevision,
       native: options.native,
       observedAt: options.observedAt,
-      preflight: options.preflight,
       protocolVersion: EVENT_RUNTIME_PROTOCOL_VERSION,
       sequence: options.sequence,
       target: options.target,

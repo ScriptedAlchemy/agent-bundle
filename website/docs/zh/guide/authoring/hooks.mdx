@@ -241,16 +241,13 @@ provider，实际开销并不会降低。通过裸包名导入、形成循环、
 `preflight`，都会导致构建错误；编译器不会悄悄退回高开销的路由路径。
 这些无效形式由 `inspect`、`validate`、`build` 和 `dev` 以 `AB4840` 报告。
 
-`preflight` 可以是同步或异步的，并且恰好只有四种结果：
+`preflight` 可以是同步或异步的，并且恰好只有三种结果：
 
 | 结果 | 含义 |
 | --- | --- |
 | `'execute'` | 加载渲染式路由入口，解析其声明的 provider，并渲染它。 |
-| `{ outcome: 'execute', data }` | 加载并渲染路由，同时把严格 JSON 的 `data` 作为其 `preflight` prop。 |
 | `{ outcome: 'continue' }` | 返回放行输出，不表达任何宿主决定。 |
 | `{ outcome: 'deny', reason: string }` | 按该事件既有的规范结果规则投影一次拒绝。 |
-
-当渲染式路由需要门控已经算出的值时，请用同一种 JSON 形状标注两端——`EventPreflight<'tool/after', CompletedTickets>` 与 `AgentEventRouteProps<'tool/after', CompletedTickets>`——再返回 `{ outcome: 'execute', data }`；路由会从可选的 `preflight` prop 收到该值（返回裸 `'execute'` 或没有门控时此字段缺失）。内核会先把 `data` 快照为严格 JSON，再让它跨过既有的延迟执行器与共享运行时边界，因此函数、类实例、循环引用、访问器与非有限数字都会失败即关闭，而不会到达路由。
 
 `execute` 是唯一会加载渲染式路由运行时的结果。返回 `undefined`、未知字段或未知结果，或给出空的拒绝
 原因，都会无法通过框架校验并终止执行。仅用于观察的事件不能拒绝。

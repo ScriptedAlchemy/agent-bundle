@@ -1007,14 +1007,7 @@ const startEventRuntime = async (
           kind: 'event',
           // The event payload crosses the render boundary as data; the route
           // props type is what gives it shape on the other side.
-          props: {
-            event,
-            payload: {
-              canonical: props.canonical,
-              native: props.native,
-              ...(request.preflight === undefined ? {} : { preflight: request.preflight }),
-            } as never,
-          },
+          props: { event, payload: { canonical: props.canonical, native: props.native } as never },
         },
         signal,
       }),

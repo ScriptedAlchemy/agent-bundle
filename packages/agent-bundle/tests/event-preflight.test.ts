@@ -68,10 +68,6 @@ it('classifies deny legality for every canonical event family', () => {
 
 it('validates execute and continue results without a host decision', () => {
   expect(validateEventPreflightResult('execute', 'tool/before')).toBe('execute');
-  expect(validateEventPreflightResult(
-    { data: { tickets: ['cc-7'] }, outcome: 'execute' },
-    'tool/after',
-  )).toEqual({ data: { tickets: ['cc-7'] }, outcome: 'execute' });
   expect(validateEventPreflightResult({ outcome: 'continue' }, 'tool/after')).toEqual({
     outcome: 'continue',
   });
@@ -108,9 +104,7 @@ it('rejects unsupported preflight fields and results', () => {
   expect(() => validateEventPreflightResult({ outcome: 'ask' }, 'tool/before'))
     .toThrow(/not supported/u);
   expect(() => validateEventPreflightResult({ outcome: 'execute' }, 'tool/before'))
-    .toThrow(/JSON values/u);
-  expect(() => validateEventPreflightResult({ data: new Date(), outcome: 'execute' }, 'tool/before'))
-    .toThrow(/JSON objects must be plain objects/u);
+    .toThrow(/not supported/u);
   expect(() => validateEventPreflightResult({ outcome: 'continue', reason: 'x' }, 'tool/before'))
     .toThrow(/unsupported field/u);
   expect(() => validateEventPreflightResult(
@@ -184,11 +178,8 @@ it('re-exports the preflight contract through the public production path', () =>
   expect(rootValidateEventPreflightResult).toBe(validateEventPreflightResult);
   expect(rootEventFamilyAllowsPreflightDeny).toBe(eventFamilyAllowsPreflightDeny);
   const result: PublicEventPreflightResult = publicValidateEventPreflightResult('execute', 'tool/before');
-  const context: PublicEventPreflightContext<'tool/before'> = {} as EventPreflightContext<'tool/before'>;
-  const authoring: EventPreflight<'tool/before', { readonly ticket: string }> = () => ({
-    data: { ticket: 'cc-7' },
-    outcome: 'execute',
-  });
+  const context: PublicEventPreflightContext = {} as EventPreflightContext;
+  const authoring: EventPreflight = () => result;
   expect(result).toBe('execute');
-  expect(authoring(context)).toEqual({ data: { ticket: 'cc-7' }, outcome: 'execute' });
+  expect(authoring(context)).toBe('execute');
 });

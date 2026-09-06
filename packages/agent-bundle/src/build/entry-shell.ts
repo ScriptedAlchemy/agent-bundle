@@ -1167,7 +1167,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     '    }, async () => {',
     '      let validationError;',
     "      const props = message.invocation.kind === 'event'",
-    '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), ...(message.invocation.props.payload.preflight === undefined ? {} : { preflight: Object.freeze(message.invocation.props.payload.preflight) }), signal: controller.signal })',
+    '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
     // The MCP server hands the worker input the SDK already validated; only
     // the Workbench, which bypasses the SDK, asks the worker to validate.
     '        : message.validateInput !== true ? { input: message.invocation.props.input, signal: controller.signal } : (() => {',

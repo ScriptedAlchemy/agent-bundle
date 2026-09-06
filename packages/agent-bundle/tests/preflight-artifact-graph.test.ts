@@ -64,7 +64,7 @@ const projectFiles: Readonly<Record<string, string>> = {
     'export default ({ canonical }: { readonly canonical: { readonly payload?: Record<string, unknown> } }) => {',
     "  const tool = canonical.payload?.['toolInput'] as { readonly value?: { readonly command?: unknown } } | undefined;",
     "  const command = typeof tool?.value?.command === 'string' ? tool.value.command : '';",
-    "  if (mentionsCargo(command)) return { outcome: 'execute', data: { ticket: 'cc-7' } };",
+    "  if (mentionsCargo(command)) return 'execute';",
     "  return command === 'blocked' ? { outcome: 'deny', reason: PREFLIGHT_LEAF_SENTINEL } : { outcome: 'continue' };",
     '};',
     '',
@@ -73,12 +73,11 @@ const projectFiles: Readonly<Record<string, string>> = {
   // artifact, with a declared provider and a deliberately heavy import graph.
   'src/events/tool/before.tsx': [
     "import { Agent } from '@agent-bundle/runtime';",
-    "import type { AgentEventRouteProps } from 'agent-bundle';",
     "import { RENDERED_ROUTE_SENTINEL } from '../../heavy/rendered-route.js';",
     "export { default as preflight } from './before.preflight.js';",
     "export const config = { providers: ['daemonProbe'], runtime: 'standalone' };",
-    "export default async function ToolBefore({ canonical, preflight }: AgentEventRouteProps<'tool/before', { readonly ticket: string }>) {",
-    "  return <Agent.Result value={{ outcome: 'deny', reason: `${RENDERED_ROUTE_SENTINEL}:${preflight?.ticket}` }}><Agent.Context>{canonical.event}</Agent.Context></Agent.Result>;",
+    'export default async function ToolBefore({ canonical }) {',
+    "  return <Agent.Result value={{ outcome: 'deny', reason: RENDERED_ROUTE_SENTINEL }}><Agent.Context>{canonical.event}</Agent.Context></Agent.Result>;",
     '}',
     '',
   ].join('\n'),
@@ -304,20 +303,20 @@ describe('preflight artifact graph (#595)', () => {
     }));
   });
 
-  const invoke = (command: string) => runNodeScript({
-    args: [join(artifactRoot, entryPath)],
-    input: JSON.stringify({
-      cwd: root,
-      hook_event_name: 'PreToolUse',
-      session_id: 'session-1',
-      tool_input: { command },
-      tool_name: 'Bash',
-      tool_use_id: 'use-1',
-      transcript_path: join(root, 'transcript.json'),
-    }),
-  });
+  it('runs continue, deny, and deferred execute outcomes through the published hook process', async () => {
+    const invoke = (command: string) => runNodeScript({
+      args: [join(artifactRoot, entryPath)],
+      input: JSON.stringify({
+        cwd: root,
+        hook_event_name: 'PreToolUse',
+        session_id: 'session-1',
+        tool_input: { command },
+        tool_name: 'Bash',
+        tool_use_id: 'use-1',
+        transcript_path: join(root, 'transcript.json'),
+      }),
+    });
 
-  it('short-circuits continue and deny outcomes before deferred execution', async () => {
     await expect(invoke('echo hello')).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
     const denied = await invoke('blocked');
     expect(denied.code).toBe(0);
@@ -328,16 +327,13 @@ describe('preflight artifact graph (#595)', () => {
         permissionDecisionReason: sentinels.preflightLeaf,
       },
     });
-  });
-
-  it('passes computed preflight data to the deferred route', async () => {
     const executed = await invoke('cargo check');
     expect(executed.code).toBe(0);
     expect(executed.stderr).toBe('');
     expect(JSON.parse(executed.stdout)).toMatchObject({
       hookSpecificOutput: {
         permissionDecision: 'deny',
-        permissionDecisionReason: `${sentinels.renderedRoute}:cc-7`,
+        permissionDecisionReason: sentinels.renderedRoute,
       },
     });
   });
