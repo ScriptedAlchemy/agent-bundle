@@ -1356,7 +1356,10 @@ writability separately from the pre-#640 in-tree location. A runtime location
 without matching receipt ownership remains visible but is never deletion
 authority. In particular, a supported legacy receipt with no recorded state
 location cannot turn the current environment or home into purge authority;
-Doctor reports that observed root as unrecorded and retained.
+Doctor reports that observed root as unrecorded and retained. When a
+compatibility receipt does record `stateRoot`, Doctor lists that historical
+root separately if the current environment resolves elsewhere and marks only
+the receipt-recorded derived root purgeable.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |

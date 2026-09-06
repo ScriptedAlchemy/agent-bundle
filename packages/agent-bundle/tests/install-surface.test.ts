@@ -920,6 +920,31 @@ it('emitted install.mjs never derives legacy purge ownership from the current en
     expect(purged.stdout).toContain(`Retained ${currentStateRoot} (unproven)`);
     expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
     expect(await readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).toBe('original\n');
+
+    expect(await run(installer, [], home, originalEnvironment)).toMatchObject({ code: 0, stderr: '' });
+    const currentReceipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
+    const { state: _currentState, ...recordedLegacy } = currentReceipt;
+    await writeFile(receiptPath, JSON.stringify({
+      ...recordedLegacy,
+      stateRoot: { root: originalStateRoot, source: 'derived' },
+    }));
+    const recordedPlan = await run(
+      installer,
+      ['--uninstall', '--purge-data', '--confirm-purge', '--plan'],
+      home,
+      currentEnvironment,
+    );
+    expect(recordedPlan.stdout).toContain('Data (purge): purged');
+    expect(recordedPlan.stdout).toContain(originalStateRoot);
+    expect(recordedPlan.stdout).not.toContain(currentStateRoot);
+    expect(await run(
+      installer,
+      ['--uninstall', '--purge-data', '--confirm-purge'],
+      home,
+      currentEnvironment,
+    )).toMatchObject({ code: 0, stderr: '' });
+    await expect(readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

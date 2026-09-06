@@ -1182,8 +1182,7 @@ const publicHostData = async (
         !paths.includes(observed.root) &&
         await realDirectory(observed.root, host) !== undefined
       ) {
-        if (isRecordedDerivedStateRoot(receipt?.stateRoot, observed.root)) paths.push(observed.root);
-        else retainedState.push({ path: observed.root, reason: 'unproven' });
+        retainedState.push({ path: observed.root, reason: 'unproven' });
       }
     }
   }

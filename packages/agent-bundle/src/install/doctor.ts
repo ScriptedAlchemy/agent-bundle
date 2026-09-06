@@ -667,6 +667,13 @@ const inspectInstalledDurableState = async (
     if (current === undefined) grouped.set(location.root, { servers: [location.server], source: location.source });
     else current.servers.push(location.server);
   }
+  const recordedLegacyRoot = receipt?.state === undefined ? receipt?.stateRoot : undefined;
+  if (recordedLegacyRoot !== undefined && !grouped.has(recordedLegacyRoot.root)) {
+    grouped.set(recordedLegacyRoot.root, {
+      servers: [],
+      source: recordedLegacyRoot.source === 'derived' ? 'derived' : 'declared',
+    });
+  }
   const effectiveAll: DoctorDurableStateReport[] = [];
   for (const [root, current] of grouped) {
     const recorded = receipt?.state?.roots.find((candidate) => candidate.root === root);
@@ -719,8 +726,8 @@ const inspectInstalledDurableState = async (
   const legacyDiagnostic = diagnostic(
     'AB7332',
     `Legacy durable state remains at ${JSON.stringify(legacyRoot)} while this install resolves framework state to ${JSON.stringify(effective.directory)}.`,
-    effective.purgeable
-      ? 'Run `agent-bundle uninstall <host> --purge-data --confirm-purge` for this install to remove both roots, or move required pre-#640 data before deleting the legacy directory.'
+    reportedAll.some((entry) => entry.purgeable)
+      ? 'Run `agent-bundle uninstall <host> --purge-data --confirm-purge` to remove the legacy in-tree root and all receipt-owned effective roots; unrecorded effective roots remain retained. Move required data before deleting any other directory by hand.'
       : `Run \`agent-bundle uninstall <host> --purge-data --confirm-purge\` to remove the legacy in-tree root; it retains the ${effective.ownership} effective root because the receipt does not prove exclusive ownership. Move required data before deleting either directory by hand.`,
     'info',
     host,

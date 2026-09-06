@@ -279,8 +279,10 @@ before format 2 as migrated (`AB7329`). A Cursor directory holding only preserve
 from `uninstall --keep-data` is reported `missing` with an `AB7307` info, not corrupt or foreign.
 For every installed copy Doctor reports every per-server framework state root, its `native` or
 `derived` source, receipt ownership (`derived`, `marker`, `unowned`, or `unrecorded`), whether its
-evidence is currently purgeable, the servers using it, whether it exists, and whether it is writable. A pre-#640
-`<plugin root>/state` is reported separately and flagged with `AB7332`.
+evidence is currently purgeable, the servers using it, whether it exists, and whether it is writable.
+For compatibility receipts with a recorded `stateRoot`, Doctor also lists that historical root when
+the current environment resolves elsewhere. A pre-#640 `<plugin root>/state` is reported separately
+and flagged with `AB7332`.
 
 ## validate
 

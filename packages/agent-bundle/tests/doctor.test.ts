@@ -659,6 +659,37 @@ it('reports a current-environment legacy state root as unrecorded and retained',
       paths: [],
       retained: [{ path: currentStateRoot, reason: 'unproven' }],
     });
+
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'legacy.sqlite'), 'legacy\n');
+    await writeFile(receiptPath, JSON.stringify({
+      ...legacy,
+      format: 'agent-bundle-install-receipt/1',
+      stateRoot: { root: originalStateRoot, source: 'derived' },
+    }));
+    const recordedReport = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      environment: currentEnvironment,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const recordedFinding = hostReport(recordedReport, 'cursor').inventory.findings.find(
+      (entry) => entry.entry === 'doctor-fixture',
+    );
+    expect(recordedFinding?.durableStates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        directory: currentStateRoot,
+        ownership: 'unrecorded',
+        purgeable: false,
+      }),
+      expect.objectContaining({
+        directory: originalStateRoot,
+        ownership: 'derived',
+        purgeable: true,
+      }),
+    ]));
+    expect(recordedReport.diagnostics.find((entry) => entry.code === 'AB7332')?.recovery)
+      .toContain('receipt-owned effective roots');
   } finally {
     await fixture.cleanup();
   }

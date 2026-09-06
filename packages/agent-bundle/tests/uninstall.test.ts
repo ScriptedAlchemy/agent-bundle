@@ -1015,6 +1015,35 @@ it('never derives legacy receipt purge ownership from the current environment', 
     });
     expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
     expect(await readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).toBe('original\n');
+
+    // The #642 compatibility receipt remains authoritative only for the exact derived root it recorded.
+    await installBundle({ ...options, environment: originalEnvironment });
+    const currentReceipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
+    const { state: _currentState, ...recordedLegacy } = currentReceipt;
+    await writeFile(receiptPath, JSON.stringify({
+      ...recordedLegacy,
+      stateRoot: { root: originalStateRoot, source: 'derived' },
+    }));
+    const recordedPlan = await uninstallBundle({
+      ...options,
+      confirmPurge: true,
+      environment: currentEnvironment,
+      plan: true,
+      purgeData: true,
+    });
+    expect(recordedPlan.data).toMatchObject({
+      outcome: 'purged',
+      paths: [originalStateRoot],
+    });
+    expect(recordedPlan.removed.directories).not.toContain(currentStateRoot);
+    await uninstallBundle({
+      ...options,
+      confirmPurge: true,
+      environment: currentEnvironment,
+      purgeData: true,
+    });
+    await expect(readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
