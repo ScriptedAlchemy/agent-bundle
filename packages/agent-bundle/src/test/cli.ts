@@ -20,7 +20,7 @@
 import type * as AgentRuntime from '@agent-bundle/runtime';
 import type { RegisteredRouteId } from '@agent-bundle/runtime';
 
-import { runGeneratedCliEntry } from '../cli-entry.ts';
+import { mapGeneratedCliInput, runGeneratedCliEntry } from '../cli-entry.ts';
 import type { CliRenderedEvent } from '../cli-entry.ts';
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
@@ -31,7 +31,6 @@ import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import {
   loadCliProjectionModule,
-  parseCliCommandInput,
   prepareCliRenderHost,
   type HarnessOptionsArguments,
   type RenderRouteContextInit,
@@ -250,12 +249,7 @@ export const invokeCli = async (
             recovery: 'Export both zod schemas from the command module; the routed CLI validates argv through them.',
           });
         }
-        const parsed = parseCliCommandInput(
-          command,
-          module.inputSchema,
-          await loadCliProjectionModule(manifest, command),
-          input,
-        );
+        const parsed = mapGeneratedCliInput(command, module.inputSchema, await loadCliProjectionModule(manifest, command), input);
         const root = process.cwd();
         const plugin = harnessPluginRoot({ context, manifest, resolvePluginRoot: runtime.resolvePluginRoot });
         // Same provider invocation the generated plain-command path builds (#366).

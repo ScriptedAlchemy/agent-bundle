@@ -9,6 +9,7 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { browserLaunchOptions, browserTrace, buildWorkbench, workbenchUrl } from './support/workbench-e2e.ts';
+import { expectHeading } from './support/workbench-acceptance.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
@@ -252,7 +253,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     });
 
     await page.goto(workbenchUrl(foregroundOrigin, '/advanced/protocol'));
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'MCP playground');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
@@ -540,7 +541,7 @@ e2e('renders a compiler-bundled App that calls the host through createAppClient'
     });
 
     await page.goto(workbenchUrl(foregroundOrigin, '/advanced/protocol'));
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'MCP playground');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByRole('button', { name: 'Open MCP session' }).click();

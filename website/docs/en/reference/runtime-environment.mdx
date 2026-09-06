@@ -106,9 +106,11 @@ it would fragment that state on every rebuild. Pass `--plugin-root <path>` point
 artifact root itself — the composite plugin root, not a host subdirectory — for a byte-faithful
 rehearsal of a copied-artifact launch. The state root then derives from that expanded code root
 (`~/.agent-bundle/state/<project>-<digest>`) unless `AGENT_BUNDLE_STATE_ROOT` names one.
-`agent-bundle dev` and Workbench MCP sessions pin `AGENT_BUNDLE_STATE_ROOT` to `<epoch>/state`
-instead, so a build epoch's state goes with the epoch rather than accumulating one user-data
-directory per rebuild.
+Workbench MCP sessions and Workbench route invocations launched by `agent-bundle dev` pin
+`AGENT_BUNDLE_STATE_ROOT` to `<project>/.agent-bundle/state` instead — one state root per project,
+beside the build epochs rather than inside them, so it survives republishes and epoch retirement
+without accumulating one user-data directory per rebuild. The warm dev runtime itself does not set
+that variable.
 
 A per-server state directory uses the server name when it is a single safe segment; any other
 name becomes a content-addressed `server-<digest>` segment, so a name like `../shared` can never

@@ -1,35 +1,22 @@
 import { resolve } from 'node:path';
 
-import { defineConfig, type RsbuildPlugin } from '@rslib/core';
+import { defineConfig, type LibConfig, type RsbuildPlugin } from '@rslib/core';
 import { pluginPublint } from 'rsbuild-plugin-publint';
 import packageManifest from './package.json' with { type: 'json' };
 
-const esmNodeGlobalsShim = [
-  '// agent-bundle ESM shims for the bundled TypeScript parser',
-  "const __filename = process.getBuiltinModule('node:url').fileURLToPath(import.meta.url);",
-  "const __dirname = process.getBuiltinModule('node:path').dirname(__filename);",
-  '',
-].join('\n');
-
 /**
- * Prepends the `__filename`/`__dirname` shim to every emitted ESM chunk that
- * still references those CommonJS globals (the bundled TypeScript parser's
- * eager `getNodeSystem()`); every other chunk is left untouched. Registered
- * through Rsbuild's `processAssets` hook (the `additions` stage), the way
- * Rsbuild's own `rsbuild:inline-chunk` and `rsbuild:appIcon` plugins hang
- * asset rewrites, so no Rspack plugin class or compiler tap is needed.
+ * The bundled TypeScript 5 parser (a devDependency, #381) reads the CommonJS
+ * `__filename`/`__dirname` globals in its eager `getNodeSystem()`, which the
+ * ESM output does not define. Rslib 1.0's ESM shims rewrite each reference,
+ * inside the module that makes it, to a path derived from the chunk's own
+ * `import.meta.url` (`fileURLToPath` from `node:url`); a module with no such
+ * reference is left untouched, so the runtime lib's chunks — the ones the
+ * compiler re-bundles into consumer artifacts — gain nothing unless they need
+ * it. tests/dist-esm-node-globals.test.ts holds every emitted chunk free of
+ * the bare globals; tests/packed-consumer-typescript.test.ts runs the parser
+ * from the installed tarball.
  */
-const esmNodeGlobalsPlugin: RsbuildPlugin = {
-  name: 'agent-bundle:esm-node-globals',
-  setup(api) {
-    api.processAssets({ stage: 'additions' }, ({ assets, compilation, sources }) => {
-      for (const [name, asset] of Object.entries(assets)) {
-        if (!name.endsWith('.js') || !/\b__(?:filename|dirname)\b/u.test(asset.source().toString())) continue;
-        compilation.updateAsset(name, new sources.ConcatSource(esmNodeGlobalsShim, asset));
-      }
-    });
-  },
-};
+const esmNodeGlobalsShims: LibConfig['shims'] = { esm: { __dirname: true, __filename: true } };
 
 /**
  * Rslib's per-source declaration mode preserves `src/app/index.ts` as
@@ -124,6 +111,7 @@ export default defineConfig({
         ],
       },
       plugins: [appDeclarationEntrypointPlugin],
+      shims: esmNodeGlobalsShims,
       source: {
         entry: publicEntries,
       },
@@ -134,6 +122,7 @@ export default defineConfig({
       bundle: true,
       dts: false,
       format: 'esm',
+      shims: esmNodeGlobalsShims,
       source: {
         entry: runtimeEntries,
       },
@@ -156,13 +145,6 @@ export default defineConfig({
   plugins: [
     // Suggestions stay informational; errors and warnings block publishing.
     pluginPublint({ throwOn: 'warning' }),
-    // The bundled TypeScript 5 parser's eager `getNodeSystem()` reads the
-    // CommonJS `__filename`/`__dirname` globals, which the ESM output does
-    // not define and which Rspack's `node-module` rewrite (disabled below)
-    // leaves untouched inside that module. The chunk that carries them gets
-    // a module-scoped shim derived from its own `import.meta.url`
-    // (`process.getBuiltinModule` is Node >= 22.3).
-    esmNodeGlobalsPlugin,
   ],
   root: import.meta.dirname,
   tools: {
@@ -173,7 +155,6 @@ export default defineConfig({
       // inside a try/catch for the tsc CLI only; the static route-config
       // extractor never reaches it.
       config.ignoreWarnings = [...(config.ignoreWarnings ?? []), /Can't resolve 'source-map-support'/u];
-      config.node = { ...(typeof config.node === 'object' ? config.node : {}), __dirname: false, __filename: false };
       // `externalsType` stays Rslib 1.x's ESM default, `modern-module`, on
       // purpose. The only externals this bundle loads through CommonJS
       // `require()` are the Node builtins the bundled TypeScript parser

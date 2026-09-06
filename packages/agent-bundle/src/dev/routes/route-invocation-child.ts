@@ -1,10 +1,6 @@
-import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-
 import * as AgentRuntime from '@agent-bundle/runtime';
-import { createJiti, type JitiOptions, type TransformOptions } from 'jiti';
-import * as React from 'react';
 
+import { renderedDocumentExitCode } from '../../cli-entry.ts';
 import type { JsonObject } from '../../core/strict-json.ts';
 import {
   AGENT_TEST_REGISTRY_VERSION,
@@ -20,56 +16,11 @@ import type {
   RouteInvocationChildResponse,
   RouteInvocationChildResult,
 } from './route-invocation-service.ts';
+import { ProductionRouteInvocationError } from './route-invocation-production-error.ts';
+import { renderProductionRoute } from './route-invocation-production.ts';
+import { createRouteModuleLoader } from './route-module-loader.ts';
 
-/**
- * Classic JSX runtime, as in the playground's lifecycle render child: the
- * automatic runtime would import `react/jsx-runtime`, which jiti resolves
- * without the child's `--conditions=react-server`, binding the client runtime
- * to the server `react` and throwing inside React (#441). Compiled JSX calls
- * `React.createElement` instead, on the route's own `react` import or on the
- * global below for modules that do not import it.
- */
-(globalThis as typeof globalThis & { React?: typeof React }).React = React;
-
-const jitiOptions: JitiOptions = {
-  fsCache: false,
-  interopDefault: false,
-  jsx: { runtime: 'classic' },
-  moduleCache: false,
-  nativeModules: ['typescript'],
-  virtualModules: {
-    '@agent-bundle/runtime': AgentRuntime,
-    react: React,
-  },
-};
-
-const relativeJsSpecifier = /(['"])(\.\.?\/[^'"\n]*)\.js\1/gu;
-
-/**
- * Project code imports its TypeScript siblings by their emitted `.js` name
- * (`moduleResolution: NodeNext`); the build resolves those through Rspack's
- * `extensionAlias`. jiti only retries `.js` as `.ts`, so a `.js` specifier
- * whose source is a `.tsx` component never resolves. Point it at the file on
- * disk before the transform sees the module.
- */
-const rewriteTsxSpecifiers = ({ filename, source }: TransformOptions): string => {
-  if (filename === undefined) return source;
-  const directory = dirname(filename);
-  return source.replace(relativeJsSpecifier, (match, quote: string, specifier: string) => {
-    const stem = resolve(directory, specifier);
-    if (existsSync(`${stem}.js`) || existsSync(`${stem}.ts`) || !existsSync(`${stem}.tsx`)) return match;
-    return `${quote}${specifier}.tsx${quote}`;
-  });
-};
-
-const baseJiti = createJiti(import.meta.url, jitiOptions);
-const jiti = createJiti(import.meta.url, {
-  ...jitiOptions,
-  transform: (options) => ({ code: baseJiti.transform({ ...options, source: rewriteTsxSpecifiers(options) }) }),
-});
-
-const load = <Module>(source: string): (() => Promise<Module>) =>
-  async () => jiti.import<Module>(source);
+const { load } = createRouteModuleLoader();
 
 const installManifest = (request: RouteInvocationChildRequest): void => {
   const manifest = request.manifest;
@@ -105,12 +56,37 @@ const respond = (response: RouteInvocationChildResponse): Promise<void> => new P
   });
 });
 
-const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
+/**
+ * The exit code a generated executable would set for this unit render. There
+ * is no compiled bin to ask in `unit-render`, so the same `cli-entry.ts`
+ * decision the bin runs is applied to the route's policy: a routed command's
+ * `exitCode` policy, `zero` for rendered scripts; a tool rendered in isolation
+ * has no process surface and reports its document outcome instead.
+ */
+const unitRenderExitCode = (
+  request: RouteInvocationChildRequest,
+  document: RouteInvocationChildResult['document'],
+  result: unknown,
+): number | undefined => {
+  const kind = request.manifest.routes[request.routeId]?.kind;
+  const command = kind === 'cli'
+    ? request.manifest.cliCommands.find((candidate) => candidate.routeId === request.routeId)
+    : undefined;
+  const policy = command?.exitCode ?? (kind === 'script' ? 'zero' : undefined);
+  if (policy === undefined) return undefined;
+  try {
+    return renderedDocumentExitCode(policy, document, result);
+  } catch {
+    // A `result` policy without a valid `exitCode` is a contract failure the bin exits 1 on.
+    return 1;
+  }
+};
+
+const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
   installManifest(request);
   const startedAt = performance.now();
   const input = request.input;
   const rendered = await renderRouteEvents(request.routeId, {
-    ...(request.args === undefined ? {} : { args: request.args }),
     context: {
       actor: request.context.actor,
       host: request.context.host,
@@ -122,9 +98,11 @@ const render = async (request: RouteInvocationChildRequest): Promise<RouteInvoca
     input,
     manifest: request.manifest,
   });
+  const exitCode = unitRenderExitCode(request, rendered.document, rendered.result ?? rendered.document.value);
   return Object.freeze({
     document: rendered.document,
     events: rendered.events,
+    ...(exitCode === undefined ? {} : { exitCode }),
     input,
     ...(request.manifest.routes[request.routeId]?.kind === 'tool'
       ? {
@@ -138,11 +116,19 @@ const render = async (request: RouteInvocationChildRequest): Promise<RouteInvoca
   });
 };
 
+const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> =>
+  request.surface.kind === 'unit-render'
+    ? renderUnitRoute(request)
+    : renderProductionRoute(request);
+
 process.once('message', (request: RouteInvocationChildRequest) => {
   void render(request)
     .then((result) => respond({ result, type: 'result' }))
     .catch((error: unknown) => respond({
       error: {
+        ...(error instanceof ProductionRouteInvocationError
+          ? { code: error.code }
+          : {}),
         message: error instanceof Error ? error.message : String(error),
         name: error instanceof Error ? error.name : 'Error',
       },

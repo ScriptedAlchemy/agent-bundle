@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type {
+  EventTraceEvent,
   RouteInvocation,
   RouteInvocationRequest,
   RouteInvocationSummary,
@@ -48,7 +49,7 @@ const providerSchema = z.strictObject({
   id: textSchema,
   message: z.string().optional(),
   name: textSchema,
-  status: z.enum(['failed', 'mounted', 'skipped']),
+  status: z.enum(['failed', 'mounted', 'skipped', 'unobserved']),
 });
 const cliProjectionSchema = z.strictObject({
   exitCode: z.number().int(),
@@ -71,6 +72,59 @@ const invocationEventSchema = z.strictObject({
   host: z.enum(['claude', 'codex', 'cursor']).optional(),
   native: jsonObjectSchema.optional(),
 });
+const invocationSurfaceSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('mcp') }),
+  z.strictObject({
+    args: z.array(z.string()),
+    command: textSchema,
+    kind: z.literal('cli'),
+  }),
+  z.strictObject({
+    fixtureId: textSchema.optional(),
+    host: z.enum(['claude', 'codex', 'cursor']).optional(),
+    kind: z.literal('event'),
+  }),
+  z.strictObject({ kind: z.literal('script') }),
+  z.strictObject({ kind: z.literal('unit-render') }),
+]);
+const eventTraceWireSchema = z.strictObject({
+  at: z.number().finite().nonnegative(),
+  count: z.number().int().nonnegative().optional(),
+  durationMs: z.number().finite().nonnegative().optional(),
+  error: z.strictObject({
+    code: z.string().optional(),
+    message: z.string(),
+    name: textSchema,
+  }).optional(),
+  execution: z.strictObject({
+    event: textSchema,
+    executionId: textSchema,
+    host: textSchema,
+    nativeEvent: textSchema,
+  }),
+  kind: z.enum([
+    'preflight.start',
+    'preflight.outcome',
+    'execute.start',
+    'providers.start',
+    'providers.finish',
+    'render.start',
+    'render.finish',
+    'failure',
+  ]),
+  outcome: z.enum(['execute', 'continue', 'deny']).optional(),
+  phase: z.enum(['preflight', 'execute', 'providers', 'render']),
+  runtime: z.enum(['shared', 'standalone']).optional(),
+  sequence: z.number().int().nonnegative(),
+});
+const eventTraceSchema = z.custom<EventTraceEvent>(
+  (value) => eventTraceWireSchema.safeParse(value).success,
+);
+const outcomeSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success') }),
+  z.strictObject({ kind: z.literal('represented-error'), summary: z.string() }),
+  z.strictObject({ exitCode: z.number().int(), kind: z.literal('process-exit') }),
+]);
 const invocationSummaryFields = {
   completedAt: textSchema,
   correlationId: textSchema.optional(),
@@ -80,15 +134,21 @@ const invocationSummaryFields = {
   input: z.json(),
   kind: z.enum(['cli', 'event-route', 'prompt', 'resource', 'script', 'tool']),
   manifestDigest: textSchema,
+  outcome: outcomeSchema.optional(),
   routeId: textSchema,
   source: z.string(),
   sourceRevision: textSchema,
   startedAt: textSchema,
   status: z.enum(['failed', 'succeeded']),
+  surface: invocationSurfaceSchema,
   timings: z.array(timingSchema),
 } as const;
+// A completed boundary always says what the run meant; a boundary that never
+// completed has nothing to judge. The wire never gets to imply success by omission.
+const outcomeMatchesStatus = (value: Pick<RouteInvocationSummary, 'outcome' | 'status'>): boolean =>
+  (value.status === 'succeeded') === (value.outcome !== undefined);
 const invocationSummarySchema: z.ZodType<RouteInvocationSummary> =
-  z.strictObject(invocationSummaryFields);
+  z.strictObject(invocationSummaryFields).refine(outcomeMatchesStatus);
 const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   ...invocationSummaryFields,
   context: requestContextProvenanceSchema,
@@ -97,7 +157,8 @@ const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   projection: projectionSchema,
   providers: z.array(providerSchema),
   result: z.json().optional(),
-});
+  trace: z.array(eventTraceSchema).optional(),
+}).refine(outcomeMatchesStatus);
 const invocationResponseSchema = z.strictObject({ invocation: invocationSchema });
 const invocationListResponseSchema = z.strictObject({
   invocations: z.array(invocationSummarySchema),

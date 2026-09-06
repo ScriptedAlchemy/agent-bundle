@@ -1281,7 +1281,7 @@ const validateBin = (loaded: LoadedConfig): Diagnostic[] => {
 };
 
 const outputShapeRecovery =
-  'Declare output.distPath as a non-empty project-root-relative path string or remove the output block.';
+  'Declare output.distPath as a non-empty project-root-relative path string, output.sourceMap as a boolean, or remove the output block.';
 const outputPathRecovery =
   'Use a project-root-contained relative POSIX path; pass the CLI --output flag for per-invocation absolute locations.';
 const outputReservedRecovery =
@@ -1293,39 +1293,51 @@ const validateOutput = (loaded: LoadedConfig): Diagnostic[] => {
   if (!isArtifactOutputConfig(output)) {
     return [sourceDiagnostic(
       'AB4707',
-      'Output configuration must be an object with an optional distPath string.',
+      'Output configuration must be an object with optional distPath and sourceMap fields.',
       loaded.configPath,
       outputShapeRecovery,
     )];
   }
-  if (!Object.hasOwn(output, 'distPath')) return [];
+  const diagnostics: Diagnostic[] = [];
+  if (Object.hasOwn(output, 'sourceMap') && typeof output.sourceMap !== 'boolean') {
+    diagnostics.push(sourceDiagnostic(
+      'AB4707',
+      'Output sourceMap must be a boolean when declared.',
+      loaded.configPath,
+      outputShapeRecovery,
+    ));
+  }
+  if (!Object.hasOwn(output, 'distPath')) return diagnostics;
   const distPath = output.distPath;
   const issue = artifactDistPathIssue(distPath);
   switch (issue) {
     case undefined:
-      return [];
+      return diagnostics;
     case 'shape':
-      return [sourceDiagnostic(
+      diagnostics.push(sourceDiagnostic(
         'AB4707',
         'Output distPath must be a non-empty string when declared.',
         loaded.configPath,
         outputShapeRecovery,
-      )];
+      ));
+      return diagnostics;
     case 'path':
-      return [sourceDiagnostic(
+      diagnostics.push(sourceDiagnostic(
         'AB4708',
         `Output distPath ${JSON.stringify(distPath)} must be a project-root-contained relative POSIX path without backslashes, ".." traversal, or empty segments, and cannot resolve to the project root.`,
         loaded.configPath,
         outputPathRecovery,
-      )];
+      ));
+      return diagnostics;
     case 'reserved': {
       const firstSegment = (distPath as string).split('/')[0]!;
-      return [sourceDiagnostic(
+      diagnostics.push(sourceDiagnostic(
         'AB4709',
         `Output distPath ${JSON.stringify(distPath)} uses reserved first path segment ${JSON.stringify(firstSegment)}.`,
         loaded.configPath,
         outputReservedRecovery,
-      )];
+      ));
+      return diagnostics;
     }
     default: {
       const exhaustive: never = issue;
@@ -1972,6 +1984,79 @@ const validateToolsRspackExternalization = (
   );
 };
 
+const hasOwnPath = (
+  value: Readonly<Record<string, unknown>>,
+  path: readonly string[],
+): boolean => {
+  let current: unknown = value;
+  for (const segment of path) {
+    if (!isRecord(current) || !Object.hasOwn(current, segment)) return false;
+    current = current[segment];
+  }
+  return true;
+};
+
+const deprecatedRsbuildHatchKeys = [
+  { path: ['source', 'alias'], recovery: 'Use tools.rsbuild.resolve.alias instead.' },
+  { path: ['source', 'aliasStrategy'], recovery: 'Use tools.rsbuild.resolve.aliasStrategy instead.' },
+  { path: ['performance', 'bundleAnalyze'], recovery: 'Remove it and use Rsdoctor for bundle analysis.' },
+  { path: ['performance', 'removeMomentLocale'], recovery: 'Remove it; Rspack v2 does not include Moment.js locales by default.' },
+  { path: ['performance', 'profile'], recovery: 'Remove it and use a custom Rsbuild plugin with stats.toJson() if a stats file is needed.' },
+  { path: ['performance', 'chunkSplit'], recovery: 'Use tools.rsbuild.splitChunks instead.' },
+  { path: ['output', 'sourceMap', 'extract', 'js'], recovery: 'Move the value to tools.rsbuild.output.sourceMap.extract.' },
+  { path: ['provider'], recovery: 'Remove it; Rsbuild v2 only supports Rspack.' },
+  { path: ['tools', 'webpack'], recovery: 'Use tools.rsbuild.tools.rspack instead.' },
+  { path: ['tools', 'webpackChain'], recovery: 'Use tools.rsbuild.tools.bundlerChain instead.' },
+  { path: ['dev', 'setupMiddlewares'], recovery: 'Use tools.rsbuild.server.setup instead.' },
+] as const;
+
+const deprecatedProxyKeys = [
+  { key: 'context', replacement: 'pathFilter' },
+  { key: 'onOpen', replacement: 'on.open' },
+  { key: 'onClose', replacement: 'on.close' },
+  { key: 'onError', replacement: 'on.error' },
+  { key: 'onProxyReq', replacement: 'on.proxyReq' },
+  { key: 'onProxyRes', replacement: 'on.proxyRes' },
+] as const;
+
+const rsbuildProxyEntries = (
+  rsbuild: Readonly<Record<string, unknown>>,
+): readonly unknown[] => {
+  const server = rsbuild.server;
+  if (!isRecord(server)) return [];
+  const proxy = server.proxy;
+  if (Array.isArray(proxy)) return proxy;
+  return isRecord(proxy) ? Object.values(proxy) : [];
+};
+
+const validateDeprecatedRsbuildHatchKeys = (
+  rsbuild: Readonly<Record<string, unknown>>,
+  configPath: string,
+): Diagnostic[] => {
+  const diagnostics = deprecatedRsbuildHatchKeys
+    .filter(({ path }) => hasOwnPath(rsbuild, path))
+    .map(({ path, recovery }) => sourceDiagnostic(
+      'AB4726',
+      `Tools rsbuild ${path.join('.')} is a deprecated Rsbuild v2 configuration key.`,
+      configPath,
+      recovery,
+    ));
+  const proxyEntries = rsbuildProxyEntries(rsbuild);
+  for (const { key, replacement } of deprecatedProxyKeys) {
+    const index = proxyEntries.findIndex((entry) => isRecord(entry) && Object.hasOwn(entry, key));
+    if (index === -1) continue;
+    const proxy = isRecord(rsbuild.server) ? rsbuild.server.proxy : undefined;
+    const path = Array.isArray(proxy) ? `server.proxy[].${key}` : `server.proxy.*.${key}`;
+    diagnostics.push(sourceDiagnostic(
+      'AB4726',
+      `Tools rsbuild ${path} is a deprecated Rsbuild v2 configuration key.`,
+      configPath,
+      `Use ${replacement} in the same proxy entry instead.`,
+    ));
+  }
+  return diagnostics;
+};
+
 const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
   const tools = loaded.config.tools;
   if (tools === undefined) return [];
@@ -2006,6 +2091,7 @@ const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
       ));
     }
     diagnostics.push(...validateToolsRsbuildExternalization(rsbuild, loaded.configPath));
+    diagnostics.push(...validateDeprecatedRsbuildHatchKeys(rsbuild, loaded.configPath));
   }
   const rspack = tools.rspack;
   if (

@@ -339,6 +339,7 @@ export const buildPackageOutputs = async (options: {
       logLevel: 'error',
       meta: projectMeta(options.model.metadata),
       outputRoot: stageRoot,
+      ...(options.model.sourceMap === true ? { sourceMap: true } : {}),
       ...(options.tools === undefined ? {} : { tools: options.tools }),
     }, dtsTsconfig === undefined || packageBuild.lib === undefined
       ? undefined

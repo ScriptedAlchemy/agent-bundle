@@ -165,3 +165,23 @@ it('maps runtime history, reads snapshots, and forwards newly completed runs', a
   expect(received).toEqual([expect.objectContaining({ id: 'runtime-run-b', routeId: leaf.routeId })]);
   unsubscribe();
 });
+
+it('keeps the succeeded outcome invariant when a runtime run has no document events', async () => {
+  const setup = fixture();
+  const backend = createRuntimeBackend({
+    ...setup,
+    runtimeClient: {
+      ...setup.runtimeClient,
+      readRunDocument: async () => Object.freeze([]),
+    },
+  });
+
+  const invocation = await backend.invoke(leaf, {
+    input: { title: 'Dune' },
+    routeId: leaf.routeId,
+  });
+
+  expect(invocation.status).toBe('succeeded');
+  expect(invocation.document).toBeUndefined();
+  expect(invocation.outcome).toEqual({ kind: 'success' });
+});

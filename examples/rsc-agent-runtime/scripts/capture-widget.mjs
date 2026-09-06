@@ -150,7 +150,7 @@ const run = async () => {
   let browser;
   try {
     browser = await chromium.launch({ executablePath: chrome, headless: true });
-    const desktop = await browser.newPage({ viewport: { width: 760, height: 500 } });
+    const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await desktop.goto(`${baseUrl}/standalone.html`);
     await waitForState(desktop, 3);
     await desktop.screenshot({ path: output });
@@ -164,7 +164,7 @@ const run = async () => {
     await mobile.screenshot({ path: mobilePath });
 
     const openAiPath = sibling(output, '-openai');
-    const openAi = await browser.newPage({ viewport: { width: 760, height: 500 } });
+    const openAi = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await openAi.goto(`${baseUrl}/openai.html`);
     await waitForState(openAi, 3);
     await openAi.locator('.timeline__event').nth(1).click();

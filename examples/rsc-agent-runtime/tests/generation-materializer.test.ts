@@ -273,6 +273,8 @@ test('resolves the coherent development compiler configuration through Rsbuild',
     expect(environments.rsc?.output.distPath.root).toBe(join(compilerRoot, 'rsc'));
     expect(environments.widget?.output.distPath.root).toBe(join(compilerRoot, 'widget'));
     expect(environments.app?.output.distPath.root).toBe(join(compilerRoot, 'app'));
+    expect(developmentConfig.mode).toBe('production');
+    expect(inspection.origin.rsbuildConfig.mode).toBe('production');
     expect(inspection.origin.rsbuildConfig.dev.writeToDisk).toBe(true);
     expect(inspection.origin.rsbuildConfig.server.host).toBe('127.0.0.1');
     expect(inspection.origin.rsbuildConfig.server.port).toBe(0);
@@ -284,12 +286,14 @@ test('resolves the coherent development compiler configuration through Rsbuild',
       typeof rule === 'object' && rule !== null && 'test' in rule && String(rule.test).includes('request-render'))).toBe(true);
     expect(appBundler?.target).toEqual(expect.arrayContaining(['web']));
     expect(appBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
+    expect(widgetBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
 
     const production = await createRsbuild({
       config: createRscRuntimeRsbuildConfig({ mode: 'production' }),
       cwd: process.cwd(),
     });
     const productionInspection = await production.inspectConfig({ mode: 'production' });
+    expect(productionInspection.origin.rsbuildConfig.mode).toBe('production');
     expect(productionInspection.origin.rsbuildConfig.dev.writeToDisk).not.toBe(true);
     expect(productionInspection.origin.environmentConfigs.rsc?.output.distPath.root).toBe('dist/runtime');
     expect(productionInspection.origin.environmentConfigs.widget?.output.distPath.root).toBe('dist/widget');

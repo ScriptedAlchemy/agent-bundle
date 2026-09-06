@@ -26,10 +26,7 @@ import type {
 } from '@agent-bundle/runtime';
 import type * as React from 'react';
 
-import {
-  CliInputError,
-  cliInputError,
-} from '../cli-entry.ts';
+import { mapGeneratedCliInput } from '../cli-entry.ts';
 import type {
   CliRenderedEvent,
   GeneratedCliRenderContext,
@@ -1088,39 +1085,6 @@ export const loadCliProjectionModule = async (
 };
 
 /**
- * Mirrors the generated bin's explicit defaults, mapping, and canonical
- * validation boundary; confirmation is the shell's (`parseMcpCommandInput`).
- */
-export const parseCliCommandInput = (
-  command: CompiledCliCommand,
-  inputSchema: AgentRouteSchema,
-  projectionModule: Readonly<Record<string, unknown>> | undefined,
-  input: Readonly<Record<string, unknown>>,
-): unknown => {
-  const withDefaults: Record<string, unknown> = { ...input };
-  for (const [key, value] of Object.entries(command.projection?.defaults ?? {})) {
-    if (!Object.hasOwn(withDefaults, key)) withDefaults[key] = value;
-  }
-  let mapped: unknown = withDefaults;
-  if (command.projection?.mapInput === true) {
-    const mapInput = projectionModule?.['mapInput'];
-    if (typeof mapInput !== 'function') {
-      throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);
-    }
-    try {
-      mapped = mapInput(withDefaults);
-    } catch (error) {
-      throw new CliInputError(error instanceof Error ? error.message : String(error));
-    }
-  }
-  try {
-    return inputSchema.parse(mapped);
-  } catch (error) {
-    throw cliInputError(command, mapped, error);
-  }
-};
-
-/**
  * Accepts preloaded route modules and prepares the renderer and manifest
  * state before the synchronous generated-shell render factory is installed.
  */
@@ -1174,12 +1138,7 @@ export const prepareCliRenderHost = async (
           },
         );
       }
-      const parsed = parseCliCommandInput(
-        command,
-        module.inputSchema,
-        projectionModule,
-        input,
-      );
+      const parsed = mapGeneratedCliInput(command, module.inputSchema, projectionModule, input);
       const commandName = command.path.join(' ');
       const invocation: AgentRenderInvocation = {
         kind: 'cli',

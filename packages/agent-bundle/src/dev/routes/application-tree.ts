@@ -29,6 +29,7 @@ export interface ApplicationLeaf {
   readonly inputSchema?: RouteInputSchema;
   readonly key: string;
   readonly label: string;
+  readonly preflight?: string;
   readonly ref: ApplicationNodeRef;
   readonly routeId?: string;
   readonly source?: string;
@@ -174,6 +175,7 @@ const leafForRoute = (
     ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
     key: applicationNodeKey(ref),
     label: routeLabel(ref),
+    ...(route.execution?.preflight === undefined ? {} : { preflight: route.execution.preflight }),
     ref,
     routeId: route.id,
     source: route.source,
@@ -204,9 +206,12 @@ const mcpServers = (
   inspection: ApplicationTreeManifestSources['inspection'],
 ): readonly ApplicationServerGroup[] => {
   const servers = new Map<string, ApplicationServerGroup>();
+  const commands = new Map((manifest?.cli?.commands ?? [])
+    .filter((command) => command.projection !== undefined)
+    .map((command) => [command.routeId, command]));
   for (const server of manifest?.servers ?? []) {
     const subgroups = mcpKinds.flatMap((kind) => {
-      const leaves = leavesForRoutes(server.routes.filter((route) => route.kind === kind));
+      const leaves = leavesForRoutes(server.routes.filter((route) => route.kind === kind), commands);
       return leaves.length === 0
         ? []
         : [Object.freeze({

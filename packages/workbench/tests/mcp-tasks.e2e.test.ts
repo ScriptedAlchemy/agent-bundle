@@ -5,6 +5,7 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { copyExample, createExampleErrorLedger, waitForSettledWorkbench } from './support/example-acceptance.ts';
 import { buildWorkbench, e2e, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
+import { expectHeading } from './support/workbench-acceptance.ts';
 
 const browserTimeout = 15_000 * timeScale;
 
@@ -28,7 +29,7 @@ e2e('runs, polls, collects, and cancels a task-augmented tool call in real Chrom
   try {
     await page.goto(workbenchUrl(server.url, '/advanced/protocol'));
     await waitForSettledWorkbench(page);
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'MCP playground');
     await expect(page.getByTestId('advanced-nav').getByRole('link', { name: 'Protocol' })).toHaveAttribute('aria-current', 'page');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('host-test');

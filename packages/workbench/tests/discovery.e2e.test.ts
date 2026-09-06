@@ -13,6 +13,7 @@ import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
 import { browserLaunchOptions, browserTrace, workbenchUrl } from './support/workbench-e2e.ts';
+import { expectHeading } from './support/workbench-acceptance.ts';
 
 const browserTimeout = 30_000 * timeScale;
 
@@ -126,7 +127,7 @@ ${outputAnchor}`));
       });
       await page.goto(workbenchUrl(fixture.url, '/advanced/hosts'));
       try {
-        await expect(page.getByRole('heading', { name: 'Host diagnostics' })).toBeVisible({ timeout: browserTimeout });
+        await expectHeading(page, 'Host diagnostics', browserTimeout);
       } catch (reason) {
         throw new Error(
           `Host diagnostics did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,
@@ -141,7 +142,7 @@ ${outputAnchor}`));
       await expect(claude.getByText('1.2.3', { exact: true })).toBeVisible();
       const handshake = claude.getByLabel('Claude Code MCP handshake');
       try {
-        await expect(handshake.getByRole('heading', { name: 'MCP handshake' })).toBeVisible();
+        await expectHeading(handshake, 'MCP handshake');
       } catch (reason) {
         throw new Error(`Claude MCP handshake was not populated:\n${await claude.innerText()}`, {
           cause: reason,
@@ -150,7 +151,7 @@ ${outputAnchor}`));
       expect(probeRequests).toEqual([]);
 
       await handshake.getByRole('button', { name: /Probe MCP handshake/u }).click();
-      await expect(handshake.getByRole('heading', { name: 'Consent required' })).toBeVisible();
+      await expectHeading(handshake, 'Consent required');
       await expect(handshake).toContainText('read-only live probe');
       await expect(handshake).toContainText('Nothing is stored');
       await handshake.getByRole('button', { name: 'Cancel' }).click();
@@ -178,7 +179,7 @@ ${outputAnchor}`));
 
       const cursor = page.getByRole('group', { name: 'Cursor' });
       await expect(cursor).toBeVisible();
-      await expect(cursor.getByRole('heading', { name: 'Cursor' })).toBeVisible();
+      await expectHeading(cursor, 'Cursor');
 
       const staleBanner = page.locator('.discovery-stale[role="status"]');
       await expect(staleBanner).toHaveCount(0);

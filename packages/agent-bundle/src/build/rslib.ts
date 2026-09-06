@@ -9,6 +9,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { dependencyManifestPath } from '../core/dependency-manifest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual, posixRelativeWhenInside } from '../core/paths.ts';
+import { parseRuntimeVersion } from '../core/runtime.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
@@ -32,6 +33,16 @@ import {
   virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
+
+export const compilerHostNodeFloor = '22.19.0';
+export const generatedExecutableSyntax = ((): 'es2022' => {
+  const version = parseRuntimeVersion(compilerHostNodeFloor);
+  if (version === undefined || version[0] < 22) {
+    throw new Error(`Generated-executable Node floor ${compilerHostNodeFloor} does not support ES2022.`);
+  }
+  return 'es2022';
+})();
+export const generatedExecutableLegalComments = 'inline' as const;
 
 export interface RslibVirtualModule {
   readonly name: string;
@@ -499,6 +510,7 @@ export const composeEntryLibConfig = (
     /** Receives reserved specifiers that a function-form external resolved at build time. */
     readonly onReservedExternal?: (specifier: string) => void;
     readonly outputRoot: string;
+    readonly sourceMap?: boolean;
     readonly tools?: AgentBundleToolsConfig;
   },
 ): LibConfig => {
@@ -638,7 +650,7 @@ export const composeEntryLibConfig = (
     // documented migration is top-level splitChunks: false, which also
     // guards against the node-target splitting default added in v2.2.
     splitChunks: false,
-    syntax: 'es2022',
+    syntax: generatedExecutableSyntax,
     output: {
       // Nothing is externalized by declaration: an artifact is self-contained,
       // and AB7014/AB7015 judge the consumer's declared dependencies against
@@ -647,9 +659,9 @@ export const composeEntryLibConfig = (
       distPath: { root: options.outputRoot },
       filename: { js: entry.outputRelativePath },
       filenameHash: false,
-      legalComments: 'none',
+      legalComments: generatedExecutableLegalComments,
       minify: false,
-      sourceMap: false,
+      sourceMap: options.sourceMap === true ? { js: 'inline-source-map' } : false,
       target: 'node',
     },
     // `externalsType` stays Rslib's ESM default (`modern-module`): a CommonJS
@@ -708,6 +720,7 @@ export interface RslibRunOptions {
   /** The project identity served to plugin source as `agent-bundle/meta`. */
   readonly meta: AgentBundleMeta;
   readonly outputRoot: string;
+  readonly sourceMap?: boolean;
   /** The consumer escape hatch, merged last-but-bounded into every synthesized entry. */
   readonly tools?: AgentBundleToolsConfig;
 }
@@ -827,6 +840,7 @@ const lowerEntries = async (
         ...(lowering.onCompilationEvidence === undefined ? {} : { onCompilationEvidence: lowering.onCompilationEvidence }),
         ...(lowering.onReservedExternal === undefined ? {} : { onReservedExternal: lowering.onReservedExternal }),
         outputRoot: options.outputRoot,
+        ...(options.sourceMap === true ? { sourceMap: true } : {}),
         ...(options.tools === undefined ? {} : { tools: options.tools }),
       })),
     },
