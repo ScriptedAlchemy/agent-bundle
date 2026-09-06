@@ -396,16 +396,18 @@ export const buildPackageOutputs = async (options: {
         ? [runtimeIgnoredRoot(terminalCapabilityRuntimePath())]
         : []),
     ])]);
+    const publishedPrefix = toPosixRelative(projectRoot, outputRoot);
     const compileResults = entries.length === 0
       ? []
       : [await buildPackageEntries({
         cwd: projectRoot,
-        diagnosticPathPrefix: toPosixRelative(projectRoot, outputRoot),
+        diagnosticPathPrefix: publishedPrefix,
         entries,
         ...(ignoredRuntimeRoots.length === 0 ? {} : { ignoredSourcePaths: ignoredRuntimeRoots }),
         logLevel: 'error',
         meta: projectMeta(options.model.metadata),
         outputRoot: compileRoot,
+        ...(options.model.sourceMap === true ? { sourceMap: true } : {}),
         ...(options.tools === undefined ? {} : { tools: options.tools }),
       }, dtsTsconfig === undefined || packageBuild.lib === undefined
         ? undefined

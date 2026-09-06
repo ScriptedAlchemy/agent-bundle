@@ -20,7 +20,7 @@ description: '可运行的 agent-bundle 示例：从 Skill 起步项目到完整
 | 示例 | 证明什么 |
 | --- | --- |
 | [Worktree Proximity](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/worktree-proximity) | 一个根任务与两个位于关联 worktree 中的子智能体，通过持久通知协调。 |
-| [RSC Agent Runtime](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/rsc-agent-runtime) | 一个可选启用的架构实验：一个 RSC 运行时同时服务钩子、MCP 工具与 MCP App 时间线。不是公开 API。 |
+| [RSC Agent Runtime](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/rsc-agent-runtime) | 一个公开示例：一个 RSC 运行时同时服务钩子、MCP 工具与 MCP App 时间线。开发会话使用开发入口与 HMR 拓扑，同时编译兼容 production 解码器的 Flight 与 App 输出。浏览器表面以 Chromium 144+ 为下限（Claude Desktop、Cursor、Codex）。不是框架公开 API。 |
 | [Host Test](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/host-test) | 一个探针插件，记录宿主投递的每个钩子负载与 MCP 调用，以及各自解析出的 `request.lineage`。它的 `probe:install` / `probe:capture` / `probe:uninstall` 脚本在隔离的 home 中驱动真实宿主；`probe:capture claude --scenario <file.json>` 把一组有序提示作为一个多轮 Claude Code 会话运行（`claude -p --output-format stream-json`，后续轮次以 `--resume` 续接），并把模型自身的工具调用流保存在钩子日志旁；Codex 与 Cursor 驱动只取场景的第一轮，遇到更长的场景会拒绝。插件的 `dump` MCP 工具默认只返回最新的 50 条匹配记录，除非传入 `limit`（`matched` 统计整份日志）。Workbench 导览不需要已登录的宿主；探针生命周期则需要。 |
 
 ## 如何运行

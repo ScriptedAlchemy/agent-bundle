@@ -346,7 +346,7 @@ describe('generated entry templates', () => {
     // the generator without #564 (hash of the same input on this commit's
     // `entry-shell.ts`; #596's projection steps and `kind: 'cli'` request
     // moved the pin from the pre-#564 value, #637's `stateAnchor` moved it
-    // again).
+    // again, #643's `routeInvocationExitCode` export moved it once more).
     const withoutWeb = entryShellModule.generatedCliBinEntrySource({
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
@@ -354,7 +354,7 @@ describe('generated entry templates', () => {
       stateFallback: 'artifact',
     });
     expect(createHash('sha256').update(withoutWeb).digest('hex'))
-      .toBe('ad8c21f371af0043464162750a8ed557d968f6155cdd9521ee63c0275253710a');
+      .toBe('fad5a6fe047fe71e2e061a5f7d1880d39502afaa5e725538e7de364499334580');
     expect(withoutWeb).not.toContain('agent-bundle/web-host');
     expect(withoutWeb).not.toContain('web: Object.freeze({');
   });
@@ -684,8 +684,11 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   );
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(source).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
+  expect(source).toContain('route.module.inputSchema.parse(message.invocation.props.input)');
+  expect(source).toContain('message.validateInput !== true ? { input: message.invocation.props.input');
+  expect(source).toContain("createElement(Agent.Error, { code: 'invalid-input' }");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    '4e2c248b5358b7e13650f2156cf282b03f6f7ede20e2badabafc4b33ae5b4bd5',
+    '9780b027d8d5fef12aa0843ba9eb5ab6bd0336ef137ec1bfa552a2ff19daa217',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
@@ -813,19 +816,11 @@ it('imports explicit CLI projections and maps their input before canonical valid
   expect(source).toContain(
     '"tool:curator/submit": Object.freeze({ module: route0, projection: projection0 })',
   );
-  const defaults = source.indexOf('for (const [key, value] of Object.entries(command.projection.defaults))');
-  const mapping = source.indexOf('mapped = route.projection.mapInput(mapped)');
-  const validation = source.indexOf('return route.module.inputSchema.parse(mapped)');
   expect(source).not.toContain('command.mcp?.confirm');
   expect(source).not.toContain('confirmationRequiredMessage');
   expect(source).not.toContain('delete mapped.yes');
-  expect(defaults).toBeGreaterThan(-1);
-  expect(defaults).toBeLessThan(mapping);
-  expect(mapping).toBeLessThan(validation);
-  expect(source).toContain('if (!Object.hasOwn(mapped, key)) mapped[key] = value;');
-  expect(source).not.toContain("Object.hasOwn(option, 'defaultValue')");
-  expect(source).toContain("throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`)");
-  expect(source).toContain('throw new CliInputError(error instanceof Error ? error.message : String(error));');
+  expect(source).toContain('const parseInput = (command, route, input) => mapGeneratedCliInput(command, route.module.inputSchema, route.projection, input);');
+  expect(source).toContain('return parseInput(command, route, parseGeneratedCliArgv(command, argv).input);');
   expect(source).toContain(
     "invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",
   );
@@ -1401,7 +1396,7 @@ it('composes the root and server layout chain around generated MCP routes and ne
   // throwing route still rejects the Flight root exactly as it does without a layout.
   expect(source).toContain('let composed = await route.module.default(props);');
   expect(source).toContain('if (chain.length === 0) return createElement(route.module.default, props);');
-  expect(source).toContain('renderAgentFlight(composeLayouts(route, props, controller.signal)');
+  expect(source).toContain('validationError === undefined ? composeLayouts(observedRoute, props, controller.signal)');
 });
 
 it('imports only the layouts some route of the worker composes through, never another server\'s layout', () => {
@@ -1515,7 +1510,7 @@ it('hands rendered CLI, projected MCP, and script routes their layout chain and 
   expect(source).toContain('"cli:library/audit": Object.freeze({ id: "cli:library/audit", kind: "cli", name: "library audit", module: route0, layouts: Object.freeze([1]) })');
   expect(source).toContain('"tool:curator/inspect": Object.freeze({ id: "tool:curator/inspect", kind: "tool", name: "inspect", serverId: "mcp:curator", module: route1, layouts: Object.freeze([1,0]) })');
   expect(source).toContain('"script:rebuild-index": Object.freeze({ id: "script:rebuild-index", kind: "script", name: "rebuild-index", module: route2, layouts: Object.freeze([1]) })');
-  expect(source).toContain('renderAgentFlight(composeLayouts(route, { ...message.props, signal: controller.signal }, controller.signal)');
+  expect(source).toContain('renderAgentFlight(composeLayouts(observedRoute, { ...message.props, signal: controller.signal }, controller.signal)');
 });
 
 it('conditionally emits generated state mounting without leaking sqlite into volatile or stateless entries', () => {

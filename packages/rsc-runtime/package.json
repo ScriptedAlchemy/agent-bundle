@@ -77,8 +77,8 @@
   },
   "peerDependencies": {
     "@rspack/core": "^2.2.0-0",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "peerDependenciesMeta": {
     "@rspack/core": {
@@ -90,7 +90,7 @@
     "effect": "4.0.0-rc.112",
     "flare-redact": "1.6.1",
     "react-server-dom-rspack": "0.1.0",
-    "rsc-markdown-stream": "^0.1.0",
+    "rsc-markdown-stream": "workspace:^",
     "zod": "4.5.4"
   },
   "devDependencies": {

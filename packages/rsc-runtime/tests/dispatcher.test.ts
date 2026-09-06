@@ -384,18 +384,17 @@ describe('AgentRenderDispatcher', () => {
 
 
 describe('Flight compatibility pins', () => {
-  it('keeps the runtime and proof compiler on the exact proven package set', () => {
+  // The React peers are caret ranges bounded by this binding's own peers;
+  // manifest-contract.test.ts holds them.
+  it('keeps the Flight binding and proof compiler on the exact proven package set', () => {
     const runtime = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')) as {
       dependencies: Record<string, string>;
-      peerDependencies: Record<string, string>;
     };
     const example = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', '..', 'examples/rsc-agent-runtime/package.json'), 'utf8')) as {
       devDependencies: Record<string, string>;
     };
 
     expect(runtime.dependencies['react-server-dom-rspack']).toBe('0.1.0');
-    expect(runtime.peerDependencies.react).toBe('19.2.8');
-    expect(runtime.peerDependencies['react-dom']).toBe('19.2.8');
     expect(example.devDependencies['rsbuild-plugin-rsc']).toBe('0.1.1');
   });
 });

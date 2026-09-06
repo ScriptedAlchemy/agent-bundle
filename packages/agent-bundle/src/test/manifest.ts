@@ -7,6 +7,7 @@ import { deepFreeze } from '../core/freeze.ts';
 import type { NormalizedMcpApp, NormalizedScript, NormalizedStateDefinition } from '../core/types.ts';
 import { orderedProviders } from '../routes/provider-execution.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
+import type { CanonicalAgentEvent } from '../routes/public.ts';
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
@@ -127,6 +128,8 @@ export const proofLevelLabel = (level: AgentTestProofLevel): string => {
 export interface TestableRouteDescriptor {
   /** The route module's statically extracted `config` export; `{}` when absent. */
   readonly config: Readonly<Record<string, unknown>>;
+  /** Canonical event identity; present only for event routes. */
+  readonly event?: CanonicalAgentEvent;
   readonly id: string;
   readonly kind: CompiledRouteKind;
   /** Project-relative POSIX path of the route module. */
@@ -300,6 +303,7 @@ export interface CompileTestManifestOptions {
 
 const descriptorOf = (route: CompiledAgentRoute): TestableRouteDescriptor => ({
   config: route.config,
+  ...(route.event === undefined ? {} : { event: route.event }),
   id: route.id,
   kind: route.kind,
   relativePath: route.provenance.relativePath,

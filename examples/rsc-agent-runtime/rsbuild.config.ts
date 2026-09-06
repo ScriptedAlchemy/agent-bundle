@@ -15,6 +15,29 @@ import { Layers, pluginRSC } from 'rsbuild-plugin-rsc';
 import { emitRuntimeArtifacts } from './src/build/emit-artifacts.js';
 
 /**
+ * MCP App hosts are Chromium (Electron). Floor is Chrome 144 — the oldest
+ * currently shipped host researched 2026-09-05:
+ * Cursor 3.18.25 About reports Electron 40.10.3 / Chromium 144.0.7559.236
+ * (https://forum.cursor.com/t/electron-run-as-node-issue-is-back-in-ide/170182).
+ * Cursor 3.19.7 is Chromium 148
+ * (https://forum.cursor.com/t/regression-in-3-19-7-on-ubuntu-high-ram-usage-and-renderer-exits-fixed-by-downgrading-to-3-18-25/170546);
+ * Claude Desktop 1.34493.1 ships Electron 42.9.2
+ * (https://desktopinsights.com/apps/claude), the same Electron 42 line Cursor
+ * reports as Chromium 148; ChatGPT/Codex Desktop 26.820.60940 reports
+ * Chromium 151.0.7922.170 (https://github.com/openai/codex/issues/41035).
+ */
+export const rscRuntimeBrowserHost = Object.freeze(['chrome >= 144'] as const);
+
+/**
+ * The compiler App is an opaque srcdoc child (`hmr: false`) and the
+ * runtime-surface outer document owns the one HMR socket. Fast Refresh
+ * would inject a refresh runtime into a self-contained HTML document that
+ * must never receive a browser HMR credential. The Flight widget is client
+ * JS, not a refreshable SPA.
+ */
+export const rscRuntimeReactPluginOptions = Object.freeze({ fastRefresh: false } as const);
+
+/**
  * A completed development cohort that Rspack rejected. The observer receives
  * it through `failAttempt(…, 'source-build')` carrying the cohort's stats
  * JSON — errors, children, module traces — and renders them itself (see
@@ -345,12 +368,9 @@ export const createRscRuntimeRsbuildConfig = (
     development ? join(options.compilerRoot as string, name) : productionRoot;
 
   return {
-    // Pinned, not derived from ambient NODE_ENV: react and react-server-dom
-    // must compile as their production variants so Flight payloads stay
-    // compact model rows without development debug and timing frames, and so
-    // the in-worker dev server serves the production surface layout its
-    // session URLs are built for. `options.mode` still selects the compile
-    // topology (dev entries, compiler roots) independently of this flavor.
+    // Flight must use React's production wire format because production
+    // decoders cannot read development payloads. `options.mode` still selects
+    // the dev entries, output roots, and server topology.
     mode: 'production',
     // Compile errors reach consumers as diagnostics: the dev session's
     // `AB8206` carries every Rspack error, so Rsbuild's own console output —
@@ -368,7 +388,7 @@ export const createRscRuntimeRsbuildConfig = (
       server: { host: '127.0.0.1', port: 0, printUrls: false },
     } : {}),
     plugins: [
-      pluginReact(),
+      pluginReact(rscRuntimeReactPluginOptions),
       pluginRSC({ environments: { server: 'rsc', client: 'widget' } }),
       emitRuntimeManifest(),
       selfContainedAppPlugin(),
@@ -426,6 +446,7 @@ export const createRscRuntimeRsbuildConfig = (
           cleanDistPath: false,
           distPath: { root: root('widget', 'dist/widget') },
           filename: { js: '[name].js' },
+          overrideBrowserslist: [...rscRuntimeBrowserHost],
           target: 'web',
         },
         tools: {
@@ -464,6 +485,7 @@ export const createRscRuntimeRsbuildConfig = (
           inlineScripts: true,
           inlineStyles: true,
           legalComments: 'inline',
+          overrideBrowserslist: [...rscRuntimeBrowserHost],
           target: 'web',
         },
         source: {

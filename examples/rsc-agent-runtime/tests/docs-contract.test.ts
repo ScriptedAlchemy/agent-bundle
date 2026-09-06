@@ -38,6 +38,23 @@ test('documents the ordinary-CI micro-eval spot-check', async () => {
   expect(source).toMatch(/contacts\s+no real host and needs no credentials/u);
 });
 
+test('documents production Flight, Fast Refresh off, and the Chromium 144 browserslist', async () => {
+  const source = await readme();
+
+  expect(source).toContain('production decoders cannot read development');
+  expect(source).toContain('Flight payloads');
+  expect(source).toContain('compiling every');
+  expect(source).toContain('environment in production mode');
+  expect(source).toContain('`pluginReact({ fastRefresh: false })`');
+  expect(source).toContain("`overrideBrowserslist: ['chrome >= 144']`");
+});
+
+test('captures the desktop widget at the 1440×900 product viewport', async () => {
+  const source = await readFile(join(process.cwd(), 'scripts/capture-widget.mjs'), 'utf8');
+
+  expect(source).toContain('viewport: { width: 1440, height: 900 }');
+});
+
 test('declares a shell-independent production build', async () => {
   const manifest = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as {
     readonly scripts?: Readonly<Record<string, string>>;

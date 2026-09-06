@@ -70,7 +70,7 @@ standard only through CLI translation, which is why its dedicated target remains
 | `assets` | Explicit asset entries replacing the root `assets/` convention. |
 | `bin` / `lib` | The npm package build. See [Package entries](./package-entries.mdx). |
 | `routes` | Power-tier route-graph policy: `routes.servers` per-server modes, `routes.cli`, and `routes.mcpCommands` projection. |
-| `output` | `distPath` — where the artifact root lives. |
+| `output` | `distPath` — where the artifact root lives — and `sourceMap`, an opt-in for generated-executable source maps (default off). |
 | `runtime` | `node` — the minimum Node.js version for generated executables. |
 | `payload` | Prebuilt directory trees packaged byte-for-byte (`definePrebuilt`). |
 | `state` | `false` to disable the `src/state.ts` convention. |

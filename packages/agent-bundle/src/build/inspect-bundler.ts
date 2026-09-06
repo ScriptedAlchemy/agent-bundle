@@ -337,6 +337,7 @@ const loweredRslibEntries = async (
     readonly meta: AgentBundleMeta;
     readonly outputRoot: string;
     readonly projectRoot: string;
+    readonly sourceMap?: boolean;
     readonly tokens: PathTokens;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -345,6 +346,7 @@ const loweredRslibEntries = async (
     cwd: run.projectRoot,
     meta: run.meta,
     outputRoot: run.outputRoot,
+    ...(run.sourceMap === true ? { sourceMap: true } : {}),
     ...(run.tools === undefined ? {} : { tools: run.tools }),
   }, planned.map((item) => item.entry));
   return planned.map((item, index) => Object.freeze({
@@ -440,6 +442,7 @@ export const composeBundlerInspection = async (options: {
         meta,
         outputRoot: artifactOutputRoot,
         projectRoot,
+        ...(model.sourceMap === true ? { sourceMap: true } : {}),
         tokens,
         ...(tools === undefined ? {} : { tools }),
       })),
@@ -450,6 +453,7 @@ export const composeBundlerInspection = async (options: {
           meta,
           outputRoot: resolve(projectRoot, model.packageBuild.outputDir),
           projectRoot,
+          ...(model.sourceMap === true ? { sourceMap: true } : {}),
           tokens,
           ...(tools === undefined ? {} : { tools }),
         })),

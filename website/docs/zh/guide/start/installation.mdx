@@ -15,13 +15,13 @@ description: '从 pkg.pr.new 预览通道安装 agent-bundle，以及首个 npm 
 ## 从预览通道安装
 
 目前尚未向 npm 发布任何内容。这是刻意为之：现有的包名只是占位符，而 npm 上的 `agent-bundle` 这个名字
-当前属于一个无关项目。在首个正式版本发布之前，请安装 CI 为每个提交和每个 pull request 发布的预览包：
+当前属于一个无关项目。在首个正式版本发布之前，请安装 CI 为每个 pull request 以及 `main` 最新提交发布的预览包：
 
 ```sh
 npm i -D https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@<sha-or-pr>
 ```
 
-使用 PR 编号，或使用某个 package-preview 运行成功的提交 SHA —— 每个绿色的 `main` 提交都有一个。
+使用 PR 编号，或使用某个 package-preview 运行成功的提交 SHA —— 在其运行完成前就被取代的 `main` 提交没有预览。
 短 SHA 同样可用；对于 lockfile 与可复现的环境，SHA 是正确的形式，而 PR 编号则会跟踪该 pull request
 的最新一次构建。
 

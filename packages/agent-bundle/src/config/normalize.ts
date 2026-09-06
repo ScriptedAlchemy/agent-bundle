@@ -1362,6 +1362,7 @@ export const normalizeProject = async (
     ...(providers.length === 0 ? {} : { providers }),
     ...(rules.length === 0 ? {} : { rules }),
     runtime: normalizeRuntime(loaded),
+    ...(loaded.config.output?.sourceMap === true ? { sourceMap: true as const } : {}),
     scripts,
     skills,
     ...(state === undefined ? {} : { state }),

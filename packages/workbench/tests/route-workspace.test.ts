@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
 import { appResourceUriFor, catalogToolsFor, orderedToolsForApp } from '../src/application/app-route-workspace.tsx';
+import { defaultEventHostSelection } from '../src/application/event-route-workspace.tsx';
 import { ExecutableRouteWorkspace, resultTabFor } from '../src/application/executable-route-workspace.tsx';
 import { idleInvocationState, reduceInvocationState, selectBackend } from '../src/application/invocation-model.ts';
 import { ResultTabs } from '../src/application/result-tabs.tsx';
@@ -37,7 +38,7 @@ const controllerWith = (overrides: Partial<RouteInvocationController> = {}): Rou
 });
 
 const succeeded = controllerWith({
-  request: { correlationId: 'corr-1', input: { title: 'Dune' }, routeId: toolLeaf.routeId! },
+  request: { correlationId: 'corr-1', input: { title: 'Dune' }, routeId: toolLeaf.routeId!, surface: { kind: 'mcp' } },
   state: { durationMs: 432, invocation, phase: 'succeeded' },
 });
 
@@ -100,13 +101,28 @@ describe('RouteWorkspace dispatch', () => {
     expect(markup).not.toContain('role="tabpanel" aria-label="Source"');
     expect(markup).toContain('search_audible');
     expect(markup).toContain('Search Audible regions and return ranked identity evidence.');
+    expect(markup).toContain('aria-label="Invocation surface"');
+    expect(markup).toContain('>MCP</button>');
+    expect(markup).toContain('>CLI <code>audible search</code></button>');
+    expect(markup).toContain('>Unit render</button>');
+    expect(markup).toContain('tool:curator/search_audible · MCP');
     expect(markup).toContain('Title (required)');
     expect(markup).toContain('via dev-server');
     expect(markup).toContain('Not run yet');
     // The fake backend answers the request shape the workspace sends.
-    const answered = await backend.invoke(toolLeaf, { correlationId: 'x', input: { title: 'Dune' }, routeId: toolLeaf.routeId! });
+    const answered = await backend.invoke(toolLeaf, {
+      correlationId: 'x',
+      input: { title: 'Dune' },
+      routeId: toolLeaf.routeId!,
+      surface: { kind: 'mcp' },
+    });
     expect(answered.correlationId).toBe('x');
-    expect(backend.requests).toEqual([{ correlationId: 'x', input: { title: 'Dune' }, routeId: 'tool:curator/search_audible' }]);
+    expect(backend.requests).toEqual([{
+      correlationId: 'x',
+      input: { title: 'Dune' },
+      routeId: 'tool:curator/search_audible',
+      surface: { kind: 'mcp' },
+    }]);
   });
 
   it('says when no backend accepts the leaf', () => {
@@ -145,6 +161,38 @@ describe('RouteWorkspace dispatch', () => {
     expect(markup).not.toContain('Handler threw');
   });
 
+  it('shows the outcome of a completed run beside its execution status, never as plain success', () => {
+    const render = (outcome: NonNullable<typeof invocation.outcome>): string => {
+      const envelope = { ...invocation, outcome };
+      return renderToStaticMarkup(createElement(ExecutableRouteWorkspace, {
+        controller: controllerWith({
+          history: [summaryOf(envelope)],
+          state: { durationMs: 432, invocation: envelope, phase: 'succeeded' },
+        }),
+        leaf: toolLeaf,
+        onNavigate: noop,
+        tab: 'trace',
+      }));
+    };
+
+    const represented = render({ kind: 'represented-error', summary: '[refused] Refused: policy' });
+    expect(represented).toContain('Completed in 432 ms');
+    expect(represented).toContain('route-outcome--represented-error');
+    expect(represented).toContain('Represented error · [refused] Refused: policy');
+    // Once on the status line, once on the Trace entry.
+    expect(represented.split('route-outcome--represented-error')).toHaveLength(3);
+    expect(represented).not.toContain('route-outcome--success');
+
+    const exited = render({ exitCode: 3, kind: 'process-exit' });
+    expect(exited).toContain('route-outcome--process-exit');
+    expect(exited).toContain('Exit code 3');
+    expect(exited).not.toContain('route-outcome--success');
+
+    const success = render({ kind: 'success' });
+    expect(success).toContain('route-outcome--success');
+    expect(success).toContain('>Success<');
+  });
+
   it('mounts the host selector for an event leaf', () => {
     const markup = renderToStaticMarkup(createElement(RouteWorkspace, {
       backends: [fakeBackend()],
@@ -163,6 +211,37 @@ describe('RouteWorkspace dispatch', () => {
     expect(markup).toContain('data-testid="result-tab-native"');
     expect(markup).toContain('data-testid="result-tab-canonical"');
     expect(markup).toContain('data-testid="result-tab-replay"');
+  });
+
+  it('disables canonical submission and defaults preflight routes to the first project target', () => {
+    const preflightLeaf = Object.freeze({
+      ...eventLeaf,
+      preflight: 'src/events/tool/before.preflight.ts',
+    });
+    expect(defaultEventHostSelection(preflightLeaf, {
+      diagnostics: [],
+      event: 'tool/before',
+      routeId: preflightLeaf.routeId!,
+      routePath: preflightLeaf.source!,
+      targets: [{
+        hostContractRevision: 'codex-hooks-v1',
+        nativeEvent: 'PreToolUse',
+        target: 'codex',
+      }],
+    })).toBe('codex');
+
+    const markup = renderToStaticMarkup(createElement(RouteWorkspace, {
+      backends: [fakeBackend()],
+      clients: clients(),
+      leaf: preflightLeaf,
+      onNavigate: noop,
+      status,
+      tree,
+    }));
+
+    expect(markup).toContain('data-testid="event-host-canonical" disabled=""');
+    expect(markup).toContain('data-testid="event-host-claude"');
+    expect(markup).toContain('aria-pressed="true" data-testid="event-host-claude" disabled=""');
   });
 
   it('mounts the App preview workspace for an app leaf', () => {
@@ -310,6 +389,27 @@ describe('RouteInspector', () => {
     const raw = open('raw-protocol');
     expect(raw).toContain('&quot;correlationId&quot;: &quot;corr-1&quot;');
     expect(raw).toContain('&quot;manifestDigest&quot;: &quot;digest-1&quot;');
+  });
+
+  it('renders unobserved providers without a fabricated 0 ms duration', () => {
+    const markup = renderToStaticMarkup(createElement(RouteInspector, {
+      backendKind: 'dev-server',
+      invocation: {
+        ...invocation,
+        providers: [{ id: 'provider:library', name: 'library', status: 'unobserved' }],
+        timings: [{ durationMs: 5, phase: 'render', startedAt: invocation.startedAt }],
+      },
+      leaf: toolLeaf,
+      onTabChange: noop,
+      onToggle: noop,
+      open: true,
+      tab: 'providers',
+    }));
+
+    expect(markup).toContain('inspector-status--unobserved');
+    expect(markup).toContain('unobserved');
+    expect(markup).not.toContain('0 ms');
+    expect(markup).toContain('—');
   });
 
   it('derives one row per request-context axis', () => {

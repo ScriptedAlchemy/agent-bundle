@@ -9,7 +9,6 @@ overrides:
   '@rspress/plugin-twoslash>typescript': npm:typescript@6.0.3
   '@rspress/plugin-typedoc>typescript': npm:typescript@6.0.3
   '@shikijs/twoslash>typescript': npm:typescript@6.0.3
-  rsc-markdown-stream: workspace:*
   twoslash>typescript: npm:typescript@6.0.3
   typedoc>typescript: npm:typescript@6.0.3
 
@@ -391,7 +390,7 @@ importers:
         specifier: 0.1.0
         version: 0.1.0(@rspack/core@2.2.2(@swc/helpers@0.5.23))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       rsc-markdown-stream:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../rsc-markdown-stream
       zod:
         specifier: 4.5.4

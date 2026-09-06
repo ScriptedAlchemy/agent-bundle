@@ -15,17 +15,7 @@ import {
   waitForSettledWorkbench,
   writeExampleReport,
 } from './support/example-acceptance.ts';
-import {
-  applicationLeafItem,
-  editWatchedSource,
-  expectApplicationTree,
-  expectPrimaryNav,
-  expectRenderedDocument,
-  openWorkbench,
-  runSelectedRoute,
-  selectApplicationLeaf,
-  workbenchTestId,
-} from './support/workbench-acceptance.ts';
+import { applicationLeafItem, editWatchedSource, expectApplicationTree, expectHeading, expectPrimaryNav, expectRenderedDocument, openWorkbench, runSelectedRoute, selectApplicationLeaf, workbenchTestId } from './support/workbench-acceptance.ts';
 import { buildWorkbench, e2e, waitForWorkbenchIdle, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 import { inspectWorkbenchSurface, workbenchLeafPath } from '../../agent-bundle/src/test/index.ts';
 import { type ApplicationLeaf, applicationLeaves } from '../src/application/application-tree-model.ts';
@@ -104,7 +94,7 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     await captureExampleState(page, 'skills-starter', 'skills-populated');
 
     await openWorkbench(page, server.url, '/advanced/artifact');
-    await expect(page.getByRole('heading', { name: 'Emitted files' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Emitted files');
     await expect(page.locator('.artifact-table tbody tr').first()).toBeVisible({ timeout: browserTimeout });
     for (const host of ['portable', 'codex', 'claude']) {
       await expect(page.locator(`#artifact-projection option[value="${host}"]`)).toBeAttached({ timeout: browserTimeout });

@@ -7,9 +7,15 @@
  */
 import React from 'react';
 
-import type { RouteInvocation, RouteInvocationSummary } from '../../../agent-bundle/src/contracts/invocations.ts';
+import type {
+  RouteInvocation,
+  RouteInvocationOutcome,
+  RouteInvocationStatus,
+  RouteInvocationSummary,
+} from '../../../agent-bundle/src/contracts/invocations.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
+import { outcomeLabel, statusLabel } from './invocation-model.ts';
 import { agentRenderEventLabel, displayAgentDocumentValue, RenderedAgentDocument } from './rendered-document.tsx';
 import { invocationOf, type RouteInvocationController, type WorkspaceResultTab } from './workspace-contracts.ts';
 import './workspace.css';
@@ -52,6 +58,14 @@ const durationOf = (summary: Pick<RouteInvocationSummary, 'completedAt' | 'start
   const ms = new Date(summary.completedAt).getTime() - new Date(summary.startedAt).getTime();
   return Number.isFinite(ms) && ms >= 0 ? `${String(ms)} ms` : '—';
 };
+
+/** Whether the execution boundary completed — never the run's verdict, which {@link OutcomeBadge} carries. */
+export const StatusBadge = ({ status }: { readonly status: RouteInvocationStatus }): React.ReactNode =>
+  <span className={`result-trace-status result-trace-status--${status}`}>{statusLabel(status)}</span>;
+
+/** The application outcome of a completed run, shown beside — never merged into — its status. */
+export const OutcomeBadge = ({ outcome }: { readonly outcome: RouteInvocationOutcome }): React.ReactNode =>
+  <span className={`route-outcome route-outcome--${outcome.kind}`} data-testid="route-outcome">{outcomeLabel(outcome)}</span>;
 
 const StructuredResult = ({ invocation }: { readonly invocation?: RouteInvocation }): React.ReactNode => {
   if (invocation === undefined) return <p className="result-empty" role="status">Run the route to see its structured result.</p>;
@@ -125,7 +139,8 @@ const TraceList = ({ current, history, leaf, onNavigate, onSelect }: {
         }}
         type="button"
       >
-        <span className={`result-trace-status result-trace-status--${summary.status}`}>{summary.status}</span>
+        <StatusBadge status={summary.status} />
+        {summary.outcome === undefined ? undefined : <OutcomeBadge outcome={summary.outcome} />}
         <span className="result-trace-time">{formatTime(summary.startedAt)}</span>
         <span className="result-trace-duration">{durationOf(summary)}</span>
         {summary.event?.host === undefined ? undefined : <span className="result-trace-host">{summary.event.host}</span>}

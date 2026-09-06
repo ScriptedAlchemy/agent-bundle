@@ -67,7 +67,7 @@ export default defineConfig({
 | `assets` | 显式资源条目，取代根 `assets/` 约定。 |
 | `bin` / `lib` | npm 包构建。见[包入口](./package-entries.mdx)。 |
 | `routes` | 进阶的路由图策略：`routes.servers` 逐服务器模式、`routes.cli`，以及 `routes.mcpCommands` 投影。 |
-| `output` | `distPath` —— 产物根目录的位置。 |
+| `output` | `distPath` —— 产物根目录的位置；以及 `sourceMap`，生成式可执行文件 source map 的选择加入项（默认关闭）。 |
 | `runtime` | `node` —— 生成可执行文件的最低 Node.js 版本。 |
 | `payload` | 按字节打包的预构建目录树（`definePrebuilt`）。 |
 | `state` | 设为 `false` 可禁用 `src/state.ts` 约定。 |
