@@ -13,6 +13,7 @@ export const traceSources = Object.freeze([
   'log',
   /** Build, contract-gate, and host-attach diagnostics. */
   'diagnostic',
+  'session',
 ] as const);
 
 export type TraceSource = (typeof traceSources)[number];

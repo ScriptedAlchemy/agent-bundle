@@ -330,6 +330,13 @@ export class DevHostInstallManager {
     this.#run = platformRunOf(options.platformRuntime);
   }
 
+  attached(host: InstallHost): Readonly<{ readonly destination: string; readonly epochId: string }> | undefined {
+    const installed = this.#installed.get(host);
+    return installed === undefined || installed.epochId.length === 0
+      ? undefined
+      : Object.freeze({ destination: installed.destination, epochId: installed.epochId });
+  }
+
   start(): void {
     if (this.#subscription !== undefined || this.#closed) return;
     this.#subscription = subscribeToEpochAdoption(

@@ -20,6 +20,7 @@ import { attachHookReceipts } from './hooks/hook-receipt-endpoint.ts';
 import { createInspectorLauncher } from './inspector-launcher.ts';
 import { HookPlaygroundService } from './playground/hook-playground-service.ts';
 import { DevHostInstallManager } from './host-install-manager.ts';
+import { HostSessionService } from './sessions/host-session-service.ts';
 import {
   HostDiscoveryService,
   type HostDiscoveryServiceOptions,
@@ -831,6 +832,16 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         projectRoot: root,
         platformRuntime,
       });
+  const hostSessions = new HostSessionService({
+    attached: (host) => hostInstalls?.attached(host),
+    currentEpochId: () => epochAdoption.currentEpochId,
+    environment: () => ({
+      ...process.env,
+      ...(hookReceiptUrl === undefined ? {} : hookReceipts.environment(hookReceiptUrl)),
+    }),
+    projectRoot: root,
+    trace: traceHub,
+  });
   const hostMcp = new HostMcpRoutes({ adoption: epochAdoption, epochStore, eventHub, mcpSessions });
   const hookPlayground = new HookPlaygroundService({
     epochStore,
@@ -1046,6 +1057,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     hookReceipts: hookReceipts.routes,
     hostDiscovery,
     hostMcp,
+    hostSessions,
     inspector,
     lifecycleReplay,
     logs,
