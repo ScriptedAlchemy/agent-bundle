@@ -327,8 +327,9 @@ The route workspace uses one authenticated, origin-guarded foreground API:
 - `POST /api/routes/invocations` accepts a route invocation request and returns its completed
   invocation envelope. With `stream: true`, it returns `202` immediately with the running id.
 - `GET /api/routes/invocations/<id>/stream` streams retained and live `render`, `trace`,
-  `truncated`, and terminal `final` messages as server-sent events. It retains the newest 256
-  render events and signals truncation once.
+  `truncated`, and terminal `final` messages as server-sent events. Retained render events are
+  the render-history window described below, and a replay that starts with `truncated` has lost
+  older events to it.
 - `POST /api/routes/invocations/<id>/cancel` stops a running or queued invocation and returns its
   cancelled final envelope; cancelling an already-final invocation reports `AB8256` (409).
 - `GET /api/routes/invocations?limit=50` returns newest-first summaries for Trace.
@@ -358,7 +359,17 @@ survives a successful republish; `unit-render` still uses a fresh temporary stat
 
 The envelope records the resolved `surface` beside `routeId` and carries canonical input, request
 context, providers, ordered render events, the final Agent Document, structured result,
-projections, diagnostics, and execution timings. When the worker reports observations,
+projections, diagnostics, and execution timings. Render events are retained under one
+render-history window, applied identically to the live stream replay, the completed and
+cancelled envelopes, `GET /api/routes/invocations/<id>`, the `final` stream message, and the
+Workbench's live view: the newest 256 events, at most 2 MiB serialized, with the newest event
+and the newest document-bearing event (`shell`, `replace`, or `complete`) always kept, so
+`events` folds to a coherent latest document even after eviction. Older intermediate events are
+dropped; the child never returns the stream a second time. When anything was evicted the
+envelope carries `retention` — `producedEvents`, `evictedEvents`, `evictedBytes`, and
+`retainedBytes` — and the stream signals `truncated` once. The final `document`, `result`,
+`outcome`, and `correlationId` are never truncated by this window; the runtime's own
+`maxDocumentBytes` bounds the document before it reaches the service. When the worker reports observations,
 `providers` contains only providers it selected and reports each as `mounted` or `failed`;
 unselected catalog providers are absent. A `durationMs` appears only when measured. When the
 child reports no observations — a plain script, a preflight short-circuit, or a failure before
