@@ -379,6 +379,10 @@ it('publishes failed event invocations with native provenance', async () => {
             files: [{ path: 'hooks/hooks-flight.mjs' }],
             routes: {
               digest: 'digest',
+              events: [{
+                execution: { fallback: 'none', runtime: 'shared' },
+                id: route.id,
+              }],
               servers: [
                 { id: 'mcp:alpha', mode: 'generated' },
                 { id: 'mcp:beta', mode: 'generated' },
@@ -456,7 +460,7 @@ it('publishes failed event invocations with native provenance', async () => {
   });
 });
 
-it('keeps hostless canonical events on one manifest-selected executable', async () => {
+it('keeps hostless shared events on their declared standalone fallback', async () => {
   const route = {
     config: [],
     event: 'tool/after',
@@ -490,17 +494,16 @@ it('keeps hostless canonical events on one manifest-selected executable', async 
                 path: 'hooks/event-route-tool-after.claude.mjs',
                 routeId: route.id,
               }],
-              mcpServers: [{
-                hosts: ['claude'],
-                id: 'mcp:fixture',
-                kind: 'compiled',
-                launch: { worker: 'mcp/fixture-flight.mjs' },
-              }],
+              mcpServers: [],
             },
             files: [{ path: 'hooks/hooks-flight.mjs' }],
             routes: {
               digest: 'digest',
-              servers: [{ id: 'mcp:fixture', mode: 'generated' }],
+              events: [{
+                execution: { fallback: 'standalone', runtime: 'shared' },
+                id: route.id,
+              }],
+              servers: [],
             },
           } as never,
           root: '/artifact',
@@ -525,7 +528,7 @@ it('keeps hostless canonical events on one manifest-selected executable', async 
     diagnostics: [{ code: 'AB8236' }],
     status: 'failed',
   });
-  expect(production).toEqual({ executable: 'mcp/fixture-flight.mjs', kind: 'direct' });
+  expect(production).toEqual({ executable: 'hooks/hooks-flight.mjs', kind: 'direct' });
 });
 
 const echoRoute = {
@@ -1016,7 +1019,13 @@ it('rejects a globally supported host absent from the route executable bindings'
                 routeId: route.id,
               }],
             },
-            routes: { digest: 'digest' },
+            routes: {
+              digest: 'digest',
+              events: [{
+                execution: { fallback: 'standalone', preflight: route.execution.preflight, runtime: 'standalone' },
+                id: route.id,
+              }],
+            },
           } as never,
           root: '/artifact',
         },
@@ -1169,7 +1178,7 @@ const tsxSiblingProject = async (): Promise<RouteProject> => routeProject(
   },
 );
 
-it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 60_000 }, async () => {
+it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 30_000 }, async () => {
   const project = await tsxSiblingProject();
   try {
     const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/report', surface: { kind: 'unit-render' } });
@@ -1203,7 +1212,7 @@ const recordedPids = async (project: LeakingRouteProject): Promise<Readonly<{ ch
   return pids;
 };
 
-it('reaps the render child and its descendants after a successful reply', { timeout: 60_000 }, async () => {
+it('reaps the render child and its descendants after a successful reply', { timeout: 30_000 }, async () => {
   const project = await leakingRouteProject('reply');
   try {
     const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/leak', surface: { kind: 'unit-render' } });
@@ -1218,7 +1227,7 @@ it('reaps the render child and its descendants after a successful reply', { time
   }
 });
 
-it('reaps the render child and its descendants when the invocation times out', { timeout: 60_000 }, async () => {
+it('reaps the render child and its descendants when the invocation times out', { timeout: 30_000 }, async () => {
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service({ timeoutMs: 8_000 });
@@ -1238,7 +1247,7 @@ it('reaps the render child and its descendants when the invocation times out', {
   }
 });
 
-it('reaps the render child and its descendants when the invocation is cancelled', { timeout: 60_000 }, async () => {
+it('reaps the render child and its descendants when the invocation is cancelled', { timeout: 30_000 }, async () => {
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service();
@@ -1257,7 +1266,7 @@ it('reaps the render child and its descendants when the invocation is cancelled'
   }
 });
 
-it('reaps the render child and its descendants when the service closes mid-render', { timeout: 60_000 }, async () => {
+it('reaps the render child and its descendants when the service closes mid-render', { timeout: 30_000 }, async () => {
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service();
@@ -1278,7 +1287,7 @@ it('reaps the render child and its descendants when the service closes mid-rende
   }
 });
 
-it('forwards kernel events from tool and event routes rendered in the real child', { timeout: 60_000 }, async () => {
+it('forwards kernel events from tool and event routes rendered in the real child', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-trace-'));
   const toolSource = join(root, 'src/mcp/fixture/tools/traced.tsx');
   const eventSource = join(root, 'src/events/tool/before.tsx');

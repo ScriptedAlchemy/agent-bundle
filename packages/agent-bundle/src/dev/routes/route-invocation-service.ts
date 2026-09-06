@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { AgentDocument, AgentDocumentNode, AgentRenderEvent } from '@agent-bundle/runtime';
 
+import { hooksFlightWorkerPath } from '../../adapters/composite-layout.ts';
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type { TargetHookContract } from '../../adapters/hook-contract.ts';
 import { generatedRouteArtifactEpoch } from '../../build/entry-shell.ts';
@@ -558,6 +559,10 @@ const productionBindingFor = (
 
   if (route.kind === 'event-route') {
     const host = surface.kind === 'event' ? surface.host : undefined;
+    const execution = manifest.routes.events.find((candidate) => candidate.id === route.id)?.execution;
+    if (execution === undefined) {
+      return unavailableBinding(route.id, 'the event route has no execution record in the published artifact.');
+    }
     const wrappers = manifest.executables.hooks.filter((candidate) =>
       candidate.kind === 'event-route' && candidate.routeId === route.id);
     const wrapper = host === undefined
@@ -583,8 +588,10 @@ const productionBindingFor = (
         && candidate.hosts.some((candidateHost) => eligibleHosts.has(candidateHost))
         && candidate.launch?.worker !== undefined))
       .find((candidate) => candidate !== undefined);
-    const executable = shared?.launch?.worker
-      ?? manifest.files.find((file) => file.path === 'hooks/hooks-flight.mjs')?.path;
+    const standalone = manifest.files.find((file) => file.path === hooksFlightWorkerPath)?.path;
+    const executable = execution.runtime === 'standalone'
+      ? standalone
+      : shared?.launch?.worker ?? (execution.fallback === 'standalone' ? standalone : undefined);
     if (executable === undefined) {
       return unavailableBinding(route.id, 'the selected event preparation has no compiled route executable.');
     }

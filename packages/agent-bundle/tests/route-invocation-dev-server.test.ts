@@ -153,8 +153,11 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '',
       ].join('\n'),
       'src/events/session/end.tsx': [
+        "import { writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
+        "writeFileSync(join(process.cwd(), '.agent-bundle', 'session-worker.marker'), 'load\\n');",
         "export const config = { runtime: 'standalone' };",
         'export default async function SessionEnd() {',
         "  return createElement(Agent.Result, { value: { canonical: true } });",
@@ -432,7 +435,14 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const alphaHandlerMarker = join(project.root, '.agent-bundle', 'alpha-handler.marker');
     const importerWorkerMarker = join(project.root, '.agent-bundle', 'importer-worker.marker');
     const omegaWorkerMarker = join(project.root, '.agent-bundle', 'omega-worker.marker');
-    const candidateMarkers = [alphaWorkerMarker, alphaHandlerMarker, importerWorkerMarker, omegaWorkerMarker];
+    const sessionWorkerMarker = join(project.root, '.agent-bundle', 'session-worker.marker');
+    const candidateMarkers = [
+      alphaWorkerMarker,
+      alphaHandlerMarker,
+      importerWorkerMarker,
+      omegaWorkerMarker,
+      sessionWorkerMarker,
+    ];
     await Promise.all(candidateMarkers.map((path) =>
       rm(path, { force: true })));
     const exactSelectionResponse = await fetch(`${server.url}/api/routes/invocations`, {
@@ -501,7 +511,8 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       result: { canonical: true },
       status: 'succeeded',
     });
-    expect(await readFile(alphaWorkerMarker, 'utf8')).toBe('load\n');
+    expect(await readFile(sessionWorkerMarker, 'utf8')).toBe('load\n');
+    expect(existsSync(alphaWorkerMarker)).toBe(false);
     expect(existsSync(importerWorkerMarker)).toBe(false);
     expect(existsSync(omegaWorkerMarker)).toBe(false);
 
@@ -785,6 +796,36 @@ it('invokes compiled tool and event routes through the foreground server', { tim
 
     const artifactManifest = await readArtifactManifest(artifactRoot);
     if (artifactManifest.status !== 'ok') throw new Error('Expected a readable artifact manifest.');
+    const preparation = artifactManifest.manifest.executables.hooks.find((hook) =>
+      hook.kind === 'event-route' && hook.routeId === 'event:tool/before' && hook.host === 'claude');
+    if (preparation === undefined) throw new Error('Expected the compiled Claude event preparation.');
+    const preparationPath = join(artifactRoot, preparation.path);
+    const preparationSource = await readFile(preparationPath);
+    const denyHandlerMarker = join(project.root, '.agent-bundle', 'deny-handler.marker');
+    await writeFile(preparationPath, 'export const unrelated = true;\n');
+    try {
+      await Promise.all([...candidateMarkers, denyHandlerMarker].map((path) => rm(path, { force: true })));
+      const response = await fetch(`${server.url}/api/routes/invocations`, {
+        body: JSON.stringify({
+          input: preflightCases[0][1],
+          routeId: preflightCases[0][0],
+          surface: { host: 'claude', kind: 'event' },
+        }),
+        headers,
+        method: 'POST',
+      });
+      expect(response.status).toBe(200);
+      const missingPreparation = await response.json() as RouteInvocationResponse;
+      expect(missingPreparation.invocation).toMatchObject({
+        diagnostics: [{ code: 'AB8252' }],
+        status: 'failed',
+      });
+      expect(existsSync(denyHandlerMarker)).toBe(false);
+      expect(candidateMarkers.every((path) => !existsSync(path))).toBe(true);
+    } finally {
+      await writeFile(preparationPath, preparationSource);
+    }
+
     const workerlessMcpServers = artifactManifest.manifest.executables.mcpServers.map((executable) => {
       if (executable.id !== 'mcp:omega' || executable.launch === undefined) return executable;
       return {
