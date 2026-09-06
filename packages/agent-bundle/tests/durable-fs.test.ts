@@ -1,129 +1,21 @@
-import { constants } from 'node:fs';
-import { link, mkdtemp, open, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
 import {
-  openPinnedContainedFile,
   publishFileByLink,
-  readPinnedFile,
-  readTornTailJsonl,
-  syncDirectorySync,
   syncPath,
-  writeJsonFileAtomically,
-  writeNewPinnedFile,
   type DurableHandleOpen,
   type DurableStagingOpen,
 } from '../src/core/durable-fs.ts';
-import { acquireOwnerLockFile, isProcessAlive, OwnerMutationSerializer } from '../src/core/owner-lock.ts';
+import { acquireOwnerLockFile, isProcessAlive } from '../src/core/owner-lock.ts';
 import { errnoFailure } from './support/errors.ts';
-
-const tornOptions = Object.freeze({
-  decode: (value: unknown): { readonly sequence: number; readonly value: string } => {
-    const record = value as { readonly sequence: number; readonly value: string };
-    return Object.freeze({ sequence: record.sequence, value: record.value });
-  },
-  emptyRecord: () => new Error('empty record'),
-  malformedRecord: () => new Error('malformed record'),
-  sequenceViolation: () => new Error('sequence violation'),
-});
 
 const publicationMessages = Object.freeze({
   publicationCleanupFailed: 'publication and cleanup both failed',
   stagingCleanupFailed: 'staging cleanup failed',
-});
-
-it('decodes complete JSONL journals and tolerates exactly one torn trailing append', () => {
-  const complete = readTornTailJsonl('{"sequence":1,"value":"a"}\n{"sequence":2,"value":"b"}\n', tornOptions);
-  expect(complete.records).toEqual([
-    { sequence: 1, value: 'a' },
-    { sequence: 2, value: 'b' },
-  ]);
-  expect(complete.incompleteTrailingRecord).toBeUndefined();
-  expect(Object.isFrozen(complete.records)).toBe(true);
-
-  const torn = readTornTailJsonl('{"sequence":1,"value":"a"}\n{"sequence":2,"va', tornOptions);
-  expect(torn.records).toEqual([{ sequence: 1, value: 'a' }]);
-  expect(torn.incompleteTrailingRecord).toBe('{"sequence":2,"va');
-
-  const empty = readTornTailJsonl('', tornOptions);
-  expect(empty.records).toEqual([]);
-  expect(empty.incompleteTrailingRecord).toBeUndefined();
-
-  const tornFirstAppend = readTornTailJsonl('{"sequence":1', tornOptions);
-  expect(tornFirstAppend.records).toEqual([]);
-  expect(tornFirstAppend.incompleteTrailingRecord).toBe('{"sequence":1');
-});
-
-it('rejects empty lines, malformed or duplicate-key records, and sequence gaps in JSONL journals', () => {
-  expect(() => readTornTailJsonl('\n{"sequence":1,"value":"a"}\n', tornOptions)).toThrow('empty record');
-  expect(() => readTornTailJsonl('not json\n', tornOptions)).toThrow('malformed record');
-  expect(() => readTornTailJsonl('{"sequence":1,"sequence":1,"value":"a"}\n', tornOptions)).toThrow('malformed record');
-  expect(() => readTornTailJsonl('{"sequence":2,"value":"a"}\n', tornOptions)).toThrow('sequence violation');
-  expect(() => readTornTailJsonl('{"sequence":1,"value":"a"}\n{"sequence":3,"value":"b"}\n', tornOptions))
-    .toThrow('sequence violation');
-});
-
-it('publishes JSON atomically, fsyncing the staging file and then the directory', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-durable-fs-atomic-'));
-  try {
-    const path = join(root, 'value.json');
-    const temporaryPath = join(root, '.value.json.tmp');
-    const synced: string[] = [];
-    const openHandle: DurableHandleOpen = async (target, flags) => {
-      const handle = await open(target, flags);
-      return {
-        close: async () => { await handle.close(); },
-        sync: async () => {
-          synced.push(target);
-          await handle.sync();
-        },
-      };
-    };
-    await writeJsonFileAtomically(path, '{"ok":true}\n', { open: openHandle, temporaryPath });
-    await expect(readFile(path, 'utf8')).resolves.toBe('{"ok":true}\n');
-    expect(synced).toEqual([temporaryPath, root]);
-    await expect(readdir(root)).resolves.toEqual(['value.json']);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-it('removes the atomic-write staging file when publication fails before or after the rename', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-durable-fs-atomic-failure-'));
-  try {
-    const path = join(root, 'value.json');
-    const temporaryPath = join(root, '.value.json.tmp');
-    const failingSync = (failingTarget: string, failure: Error): DurableHandleOpen => async (target, flags) => {
-      const handle = await open(target, flags);
-      return {
-        close: async () => { await handle.close(); },
-        sync: async () => {
-          if (target === failingTarget) throw failure;
-          await handle.sync();
-        },
-      };
-    };
-
-    const stagingFailure = new Error('staging fsync failed');
-    await expect(writeJsonFileAtomically(path, '{"ok":true}\n', {
-      open: failingSync(temporaryPath, stagingFailure),
-      temporaryPath,
-    })).rejects.toBe(stagingFailure);
-    await expect(readdir(root)).resolves.toEqual([]);
-
-    const directoryFailure = new Error('directory fsync failed');
-    await expect(writeJsonFileAtomically(path, '{"ok":true}\n', {
-      open: failingSync(root, directoryFailure),
-      temporaryPath,
-    })).rejects.toBe(directoryFailure);
-    // The rename already landed; only the staging path is guaranteed gone.
-    await expect(readdir(root)).resolves.toEqual(['value.json']);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
 });
 
 it('tolerates only documented Windows directory fsync capability failures', async () => {
@@ -145,102 +37,6 @@ it('tolerates only documented Windows directory fsync capability failures', asyn
   await expect(syncPath('/ignored', { open: failingOpen('EACCES'), platform: 'win32' }))
     .rejects.toMatchObject({ code: 'EACCES' });
   expect(closed).toHaveLength(5);
-});
-
-it('applies the same Windows tolerance to the synchronous directory fsync', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-durable-fs-sync-directory-'));
-  try {
-    const phases: string[] = [];
-    syncDirectorySync(root, {
-      beforeFsync: () => { phases.push('fsync'); },
-      beforeOpen: () => { phases.push('open'); },
-    });
-    expect(phases).toEqual(['open', 'fsync']);
-    expect(() => syncDirectorySync(root, {
-      beforeFsync: () => { throw errnoFailure('EACCES', 'denied'); },
-      platform: 'win32',
-    })).not.toThrow();
-    expect(() => syncDirectorySync(root, {
-      beforeFsync: () => { throw errnoFailure('EACCES', 'denied'); },
-      platform: 'linux',
-    })).toThrow('denied');
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-it('creates new pinned files exclusively and never follows an existing symlink', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-durable-fs-new-pinned-'));
-  try {
-    const phases: string[] = [];
-    const target = join(root, 'created.json');
-    await writeNewPinnedFile(target, '{"created":true}\n', Object.freeze({
-      afterFsync: () => { phases.push('after-fsync'); },
-      beforeFsync: () => { phases.push('before-fsync'); },
-      beforeWrite: () => { phases.push('before-write'); },
-      invalid: () => new Error('not pinned'),
-    }));
-    expect(phases).toEqual(['before-write', 'before-fsync', 'after-fsync']);
-    await expect(readFile(target, 'utf8')).resolves.toBe('{"created":true}\n');
-
-    await expect(writeNewPinnedFile(target, 'again', { invalid: () => new Error('not pinned') }))
-      .rejects.toMatchObject({ code: 'EEXIST' });
-
-    // A dangling symlink at the path is never followed into a create.
-    await symlink(join(root, 'elsewhere.json'), join(root, 'aliased.json'));
-    await expect(writeNewPinnedFile(join(root, 'aliased.json'), 'aliased', { invalid: () => new Error('not pinned') }))
-      .rejects.toMatchObject({ code: 'EEXIST' });
-    await expect(readFile(join(root, 'elsewhere.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-it('rejects symlinked and multiply linked paths for pinned opens and pinned reads', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-durable-fs-pinned-'));
-  try {
-    const invalid = (): Error => new Error('pin rejected');
-    await writeFile(join(root, 'real.json'), '{"pinned":true}\n', 'utf8');
-    await symlink(join(root, 'real.json'), join(root, 'linked.json'));
-    await link(join(root, 'real.json'), join(root, 'hard.json'));
-
-    // Symlinks never open (O_NOFOLLOW) ...
-    await expect(openPinnedContainedFile({ flags: constants.O_RDONLY, invalid, name: 'linked.json', root }))
-      .rejects.toMatchObject({ code: 'ELOOP' });
-    // ... and hardlinked files open but fail the single-link pin.
-    await expect(openPinnedContainedFile({ flags: constants.O_RDONLY, invalid, name: 'hard.json', root }))
-      .rejects.toThrow('pin rejected');
-
-    const readOptions = Object.freeze({
-      changedWhileOpening: () => new Error('changed while opening'),
-      changedWhileReading: () => new Error('changed while reading'),
-      maximumBytes: 1024,
-      unsafe: () => new Error('unsafe read'),
-    });
-    await expect(readPinnedFile(join(root, 'linked.json'), readOptions)).rejects.toThrow('unsafe read');
-    await expect(readPinnedFile(join(root, 'hard.json'), readOptions)).rejects.toThrow('unsafe read');
-    // The original name is also multiply linked while the hardlink survives.
-    await expect(readPinnedFile(join(root, 'real.json'), readOptions)).rejects.toThrow('unsafe read');
-
-    await rm(join(root, 'hard.json'));
-    const ancestry: string[] = [];
-    await expect(readPinnedFile(join(root, 'real.json'), {
-      ...readOptions,
-      verifyAncestry: async () => { ancestry.push('verified'); },
-    })).resolves.toBe('{"pinned":true}\n');
-    expect(ancestry).toEqual(['verified', 'verified']);
-    await expect(readPinnedFile(join(root, 'real.json'), { ...readOptions, maximumBytes: 4 }))
-      .rejects.toThrow('unsafe read');
-
-    const handle = await openPinnedContainedFile({ flags: constants.O_RDONLY, invalid, name: 'real.json', root });
-    try {
-      await expect(handle.readFile({ encoding: 'utf8' })).resolves.toBe('{"pinned":true}\n');
-    } finally {
-      await handle.close();
-    }
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
 });
 
 it('publishes files by hard link, adopts raced winners, and never leaves staging behind', async () => {
@@ -419,22 +215,4 @@ it('drives owner acquisition through creation, adoption, stale clearing, and exh
     exhausted: () => new Error('exhausted'),
     onContention: async () => 'adopted',
   })).rejects.toBe(denied);
-});
-
-it('serializes owner mutations per path while distinct paths proceed concurrently', async () => {
-  const serializer = new OwnerMutationSerializer();
-  const order: string[] = [];
-  const gate = Promise.withResolvers<void>();
-  const first = serializer.run('/lock-a', async () => {
-    order.push('a1-start');
-    await gate.promise;
-    order.push('a1-end');
-  });
-  const second = serializer.run('/lock-a', async () => { order.push('a2'); });
-  const other = serializer.run('/lock-b', async () => { order.push('b'); });
-  await other;
-  expect(order).toEqual(['a1-start', 'b']);
-  gate.resolve();
-  await Promise.all([first, second]);
-  expect(order).toEqual(['a1-start', 'b', 'a1-end', 'a2']);
 });

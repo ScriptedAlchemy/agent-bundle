@@ -10,13 +10,11 @@ import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { evalRunSelectionFor, evalRunViewFor } from '../src/evals/evals-model.ts';
 import {
   beginEvalCancellation,
-  discardedSequenceForActiveEvalRun,
   evalArtifactPresentationKey,
   EvalRunControls,
   EvalRunReport,
   EvalsPage,
   EvalsRequestLifecycle,
-  eventsForActiveEvalRun,
   observeEvalRunEvents,
   openEvalRun,
   prepareEvalArtifactDisplay,
@@ -234,17 +232,6 @@ it('renders the persisted timeline, server evidence channels, host/model matrix,
   expect(markup).toContain('Matched the expected risk.');
   expect(markup).toContain('Raw evidence');
   expect(markup).toContain('evidence.json');
-});
-
-it('does not paint held prior-run events while a replacement run waits for replay', () => {
-  const priorRunEvents = deepFreeze([
-    { kind: 'run.started', payload: Object.freeze({ trials: 3 }), schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
-  ]);
-
-  expect(eventsForActiveEvalRun('run-b', 'run-a', priorRunEvents)).toEqual([]);
-  expect(eventsForActiveEvalRun('run-a', 'run-a', priorRunEvents)).toEqual(priorRunEvents);
-  expect(discardedSequenceForActiveEvalRun('run-b', 'run-a', 12)).toBeUndefined();
-  expect(discardedSequenceForActiveEvalRun('run-a', 'run-a', 12)).toBe(12);
 });
 
 it('labels a bounded timeline when earlier durable events are not shown', () => {

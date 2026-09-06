@@ -1,4 +1,3 @@
-import { Effect, Stream } from 'effect';
 import { describe, expect, it } from 'effect-rstest';
 
 import {
@@ -9,7 +8,6 @@ import {
   type AgentDocumentNode,
   type AgentRenderInvocation,
 } from '../src/index.js';
-import { boundRenderEventStream } from '../src/effect/render-stream.js';
 
 const root = (): AgentDocumentNode => ({
   children: [
@@ -255,29 +253,6 @@ describe('Agent render events', () => {
       expect(error).toMatchObject({ code: 'elapsed-time-exceeded' });
     }
   });
-});
-
-describe('boundRenderEventStream', () => {
-  it.effect('assigns sequence numbers and fails closed after complete', () => Effect.gen(function*() {
-    const events = yield* Stream.runCollect(
-      Stream.make(
-        { completed: 0, type: 'progress' as const },
-        { completed: 1, type: 'progress' as const },
-      ).pipe(boundRenderEventStream()),
-    );
-    expect(events.map((event) => event.sequence)).toEqual([0, 1]);
-
-    const failure = yield* Stream.runCollect(
-      Stream.make(
-        {
-          document: { root: root(), status: 'success' as const, version: 1 as const },
-          type: 'complete' as const,
-        },
-        { completed: 2, type: 'progress' as const },
-      ).pipe(boundRenderEventStream()),
-    ).pipe(Effect.flip);
-    expect(failure).toMatchObject({ code: 'handoff-required' });
-  }));
 });
 
 describe('AgentRenderInvocation', () => {

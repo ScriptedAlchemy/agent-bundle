@@ -105,7 +105,7 @@ Callers of `runPromise` see the same types they see today.
 - Swallowing interruption as a typed success. Cancellation is `AbortError`.
   `Stream.toReadableStream`'s `Cause.squash` is not that mapping — use the
   boundary helper.
-- `Effect.runPromise` in a test to "see the error" when `runPromiseExit` +
+- `Effect.runPromise` in a test to "see the error" when `Effect.exit` +
   `Cause` is the assertion you want — still only through the boundary.
 - New public error codes without updating the authoring docs and the mapping
   table in `docs/effect-conventions.md`.
