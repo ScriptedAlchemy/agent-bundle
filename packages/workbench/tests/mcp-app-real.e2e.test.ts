@@ -9,6 +9,7 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { browserLaunchOptions, browserTrace, buildWorkbench, workbenchUrl } from './support/workbench-e2e.ts';
+import { expectHeading } from './support/workbench-acceptance.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
@@ -252,7 +253,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     });
 
     await page.goto(workbenchUrl(foregroundOrigin, '/advanced/protocol'));
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'MCP playground');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
@@ -460,13 +461,14 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     // lets Chromium route the pointer to the frame that used to occupy the
     // point (its hit-test regions update asynchronously), so the click is
     // swallowed under load. Settle the scroll first, then confirm the click
-    // landed: run('close') disables the button synchronously and it stays
-    // disabled through the terminal phase.
+    // landed through the phase transition. The terminal render replaces this
+    // button with Reset MCP session, so asserting on the old locator races it.
     const closeSession = page.getByRole('button', { name: 'Close MCP session' });
     await closeSession.scrollIntoViewIfNeeded();
     await expect(closeSession).toBeInViewport({ timeout: browserTimeout });
     await closeSession.click();
-    await expect(closeSession, 'The Close MCP session click did not start the close action.').toBeDisabled({ timeout: browserTimeout });
+    await expect(page.locator('.mcp-page-phase'), 'The Close MCP session click did not start the close action.')
+      .toContainText(/Closing|Session closed/u, { timeout: browserTimeout });
     // The first route call the close makes for this binding decides its path.
     // Observing the DELETE too makes a force-close fail here, in milliseconds,
     // instead of waiting out a /close that will never be sent.
@@ -539,7 +541,7 @@ e2e('renders a compiler-bundled App that calls the host through createAppClient'
     });
 
     await page.goto(workbenchUrl(foregroundOrigin, '/advanced/protocol'));
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'MCP playground');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByRole('button', { name: 'Open MCP session' }).click();

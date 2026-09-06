@@ -39,7 +39,25 @@ const packageRoot = basename(import.meta.dirname) === 'dist'
 
 const defaultRoot = (): string => resolve(packageRoot, 'dist', 'workbench');
 
-const contentTypeFor = (path: string): string => contentTypes[extname(path).toLowerCase()] ?? 'application/octet-stream';
+// The Workbench build copies its attribution files into the asset tree without
+// an extension (`THIRD_PARTY_NOTICES`, `src/mcp/APP-RENDERER-LICENSE`). Those
+// conventional names are plain text a browser should render; every other
+// extensionless file keeps the binary fallback.
+const noticeFileName = /^(?:[a-z0-9]+[-_])*(?:licen[cs]e|notices?|copying)$/iu;
+
+const contentTypeFor = (path: string): string => {
+  const extension = extname(path).toLowerCase();
+  if (extension === '') return noticeFileName.test(basename(path)) ? 'text/plain; charset=utf-8' : 'application/octet-stream';
+  return contentTypes[extension] ?? 'application/octet-stream';
+};
+
+const contentHashedAsset = /(?:^|\/)[^/]+\.[a-f0-9]{8}(?:\.[^./]+)+$/iu;
+
+export const workbenchDocumentCacheControl = 'no-store';
+export const workbenchHashedAssetCacheControl = 'public, max-age=31536000, immutable';
+
+export const workbenchAssetCacheControl = (servedPath: string): string =>
+  contentHashedAsset.test(servedPath) ? workbenchHashedAssetCacheControl : workbenchDocumentCacheControl;
 
 /**
  * Reads only regular files from the fixed prebuilt workbench tree. The HTTP

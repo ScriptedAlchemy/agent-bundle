@@ -39,8 +39,8 @@ export const evalTargetDigests = (manifest: ArtifactManifest): Readonly<Record<s
   const files = manifest.files
     .map((file) => ({ path: file.path, sha256: file.sha256 }))
     .sort((left, right) => left.path.localeCompare(right.path));
-  return Object.freeze(Object.fromEntries(manifest.targets
-    .map((target) => target.name)
+  return Object.freeze(Object.fromEntries(manifest.projections
+    .map((projection) => projection.host)
     .sort((left, right) => left.localeCompare(right))
     .map((target) => [target, digest({ files, runtime: manifest.runtime, target })])));
 };

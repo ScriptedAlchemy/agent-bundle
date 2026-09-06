@@ -1,5 +1,5 @@
 import { DiagnosticError } from '../core/diagnostics.ts';
-import type { AssetIR, CompileResult } from './compile-result.ts';
+import type { CompileResult } from './compile-result.ts';
 import { selfContainmentDiagnostics } from './external-policy.ts';
 import {
   buildRslibSurfaces,
@@ -9,7 +9,7 @@ import {
 } from './rslib.ts';
 
 export interface RslibSurfacePlan<Result> extends RslibSurface {
-  readonly finish: (evidence: readonly AssetIR[]) => Promise<Result>;
+  readonly finish: (result: CompileResult) => Promise<Result>;
 }
 
 export const settledRslibSurface = <Result>(result: Result): RslibSurfacePlan<Result> => ({
@@ -38,14 +38,20 @@ const enforceSelfContainment = (
 export const compileRslibSurfaces = async <const Plans extends readonly RslibSurfacePlan<unknown>[]>(
   options: RslibRunOptions,
   plans: Plans,
-): Promise<{ readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never }> => {
-  const evidence = await buildRslibSurfaces(options, plans);
-  enforceSelfContainment(evidence);
+): Promise<{
+  readonly compileResults: readonly CompileResult[];
+  readonly results: { readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never };
+}> => {
+  const compileResults = await buildRslibSurfaces(options, plans);
+  enforceSelfContainment(compileResults);
   const results: unknown[] = [];
   for (const [index, plan] of plans.entries()) {
-    results.push(await plan.finish(evidence[index]!.assets));
+    results.push(await plan.finish(compileResults[index]!));
   }
-  return results as { readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never };
+  return {
+    compileResults,
+    results: results as { readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never },
+  };
 };
 
 export const buildWithRslib = async (

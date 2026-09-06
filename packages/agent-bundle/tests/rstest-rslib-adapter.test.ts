@@ -4,7 +4,7 @@ import type { RslibConfig } from '@rslib/core';
 import { withRslibConfig } from '@rstest/adapter-rslib';
 import { describe, expect, it, type ExtendConfig } from '@rstest/core';
 
-import agentBundleRslibConfig from '../rslib.config.ts';
+import agentBundleRslibConfig, { agentBundleRuntimeLibId } from '../rslib.config.ts';
 import packageManifest from '../package.json' with { type: 'json' };
 import { agentBundleRslibAdapterOptions, rstestHygiene, withAgentBundleRslibConfig } from '../../../rstest.rslib.ts';
 import { agentBundlePackageRoot } from './helpers/workspace-paths.ts';
@@ -30,9 +30,21 @@ let poolConfig: Promise<ExtendConfig> | undefined;
 const resolvedPoolConfig = (): Promise<ExtendConfig> => (poolConfig ??= Promise.resolve(withAgentBundleRslibConfig()({})));
 
 describe('rstest.rslib.ts', () => {
-  it('passes as libId the id of the single lib entry', () => {
+  it('selects the public lib while the re-bundled runtime has its own profile', () => {
     expect(agentBundleRslibAdapterOptions.cwd).toBe(agentBundlePackageRoot);
-    expect((agentBundleRslibConfig.lib ?? []).map((lib) => lib.id)).toEqual([agentBundleRslibAdapterOptions.libId]);
+    expect((agentBundleRslibConfig.lib ?? []).map((lib) => lib.id)).toEqual([
+      agentBundleRslibAdapterOptions.libId,
+      agentBundleRuntimeLibId,
+    ]);
+    expect(agentBundleRslibConfig.lib?.find((lib) => lib.id === agentBundleRuntimeLibId)).toMatchObject({
+      dts: false,
+      source: {
+        entry: {
+          app: './src/app/index.ts',
+          'mcp-server-runtime': './src/mcp-server-runtime.ts',
+        },
+      },
+    });
   });
 
   it('reads the lib entry through libId only — the adapter falls back to an empty entry without a diagnostic', async () => {

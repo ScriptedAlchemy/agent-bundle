@@ -79,8 +79,8 @@ interface EmittedModuleReport {
  * an emitted module may import; every other specifier must be a relative
  * path (`./` or `../`) to a file inside the same output tree. The author's
  * own `tools` hatch is the only way a non-builtin may remain external, and
- * this fixture declares none. `AB6005` (src/build/validate-artifact-modules.ts)
- * enforces the same rule inside every build; this walk proves it on the
+ * this fixture declares none. `AB6005` (src/build/external-policy.ts, compiler.ts)
+ * enforces the same rule at compile time; this walk proves it on the
  * outputs a real consumer builds from the installed tarball.
  */
 const emittedModuleReport = async (root: string): Promise<EmittedModuleReport> => {
@@ -243,10 +243,8 @@ it('uses only an installed tarball after source deletion', async () => {
     expect(await artifactDigest(artifact)).toEqual(firstArtifactDigest);
 
     const manifest = JSON.parse(await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8')) as {
-      readonly files: readonly (ManifestDigest & {
-        readonly kind: 'bundle' | 'copy' | 'generated' | 'prebuilt';
-        readonly sourceInputs: readonly string[];
-      })[];
+      readonly compiler: { readonly provenance: readonly { readonly path: string; readonly sourceInputs: readonly string[] }[] };
+      readonly files: readonly (ManifestDigest & { readonly kind: 'bundle' | 'copy' | 'generated' | 'prebuilt' })[];
     };
     const files = (await artifactDigest(artifact)).filter((entry) => entry.path !== 'agent-bundle.manifest.json');
     const manifestFiles = await Promise.all(files.map(async (file): Promise<ManifestDigest> => {
@@ -256,12 +254,15 @@ it('uses only an installed tarball after source deletion', async () => {
     }));
     expect(
       manifest.files
-        .map(({ kind: _kind, sourceInputs: _sourceInputs, ...file }) => file)
+        .map(({ kind: _kind, ...file }) => file)
         .sort((left, right) => left.path.localeCompare(right.path)),
     ).toEqual(manifestFiles);
     for (const file of manifest.files) {
       expect(['bundle', 'copy', 'generated', 'prebuilt']).toContain(file.kind);
-      expect(file.sourceInputs).toEqual([...file.sourceInputs].sort((left, right) => left.localeCompare(right)));
+    }
+    expect(manifest.compiler.provenance.map((entry) => entry.path)).toEqual(manifest.files.map((file) => file.path));
+    for (const entry of manifest.compiler.provenance) {
+      expect(entry.sourceInputs).toEqual([...entry.sourceInputs].sort((left, right) => left.localeCompare(right)));
     }
     for (const file of files.filter((entry) => entry.path.endsWith('.mjs'))) {
       await expect(readFile(join(artifact, file.path), 'utf8')).resolves.not.toMatch(

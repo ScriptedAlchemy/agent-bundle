@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { Predicate } from 'effect';
@@ -7,6 +7,7 @@ import { Predicate } from 'effect';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
 import { exists } from '../core/paths.ts';
+import { copyInventoryFiles, type TreeInventory } from './receipt.ts';
 
 /**
  * Marketplace-style Cursor installation (#407).
@@ -154,24 +155,6 @@ const gitIdentity = Object.freeze([
 ]);
 
 /**
- * First `.git` entry (directory or gitlink file) inside a bundle, relative to its root. `git add` records a
- * nested repository as a `160000` gitlink instead of committing its files, so the staged marketplace would
- * import an empty plugin; symlinks are not followed (treeHash refuses them anyway).
- */
-const findNestedGit = async (root: string, relative = ''): Promise<string | undefined> => {
-  for (const name of (await readdir(join(root, relative))).sort((left, right) => left.localeCompare(right))) {
-    const child = relative === '' ? name : join(relative, name);
-    if (name === '.git') return child;
-    const metadata = await lstat(join(root, child));
-    if (!metadata.isSymbolicLink() && metadata.isDirectory()) {
-      const nested = await findNestedGit(root, child);
-      if (nested !== undefined) return nested;
-    }
-  }
-  return undefined;
-};
-
-/**
  * Git attributes (`text`, `eol`, `filter`, `ident`, `working-tree-encoding`) rewrite file contents on the way into
  * the index while leaving the working tree — and therefore `git status` — clean, so Cursor would import different
  * bytes than the ones `treeHash` verified. `$GIT_DIR/info/attributes` has the highest precedence and disables them
@@ -229,6 +212,7 @@ const assertCommittedBytes = async (
 };
 
 export const stageCursorMarketplace = async (options: {
+  readonly artifact: TreeInventory;
   readonly cursorRoot: string;
   readonly identity: CursorMarketplaceIdentity;
   readonly runner: CursorMarketplaceCommandRunner;
@@ -240,7 +224,6 @@ export const stageCursorMarketplace = async (options: {
   const pluginDirectory = cursorMarketplacePluginPath(repoRoot, identity.plugin);
   const marketplace = cursorMarketplaceName(identity.plugin);
   const nextSteps = cursorMarketplaceNextSteps(repoRoot, identity.plugin);
-  await options.treeHash(identity.bundleRoot);
   if (!(await exists(join(identity.bundleRoot, '.cursor-plugin', 'plugin.json')))) {
     throw failure(
       'AB7003',
@@ -248,7 +231,7 @@ export const stageCursorMarketplace = async (options: {
         '`plugins/<name>/.cursor-plugin/plugin.json`. Agent Plugins (root `plugin.json`) packs install with `--mode local`.',
     );
   }
-  const nestedGit = await findNestedGit(identity.bundleRoot);
+  const nestedGit = options.artifact.files.find((path) => path.split('/').includes('.git'));
   if (nestedGit !== undefined) {
     throw failure(
       'AB7003',
@@ -269,7 +252,7 @@ export const stageCursorMarketplace = async (options: {
     if (
       await exists(pluginDirectory) &&
       await exists(join(repoRoot, '.git')) &&
-      await options.treeHash(identity.bundleRoot) === await options.treeHash(pluginDirectory)
+      options.artifact.hash === await options.treeHash(pluginDirectory)
     ) {
       if (!(await stagedManifestMatches(repoRoot, manifest))) {
         throw failure(
@@ -294,12 +277,11 @@ export const stageCursorMarketplace = async (options: {
   const stage = join(stageParent, 'repo');
   try {
     await mkdir(join(stage, '.cursor-plugin'), { recursive: true });
-    await cp(identity.bundleRoot, cursorMarketplacePluginPath(stage, identity.plugin), {
-      errorOnExist: true,
-      force: false,
-      recursive: true,
-      verbatimSymlinks: true,
-    });
+    await copyInventoryFiles(
+      identity.bundleRoot,
+      cursorMarketplacePluginPath(stage, identity.plugin),
+      options.artifact,
+    );
     await writeFile(join(stage, marketplaceManifestPath), manifest);
     await options.treeHash(cursorMarketplacePluginPath(stage, identity.plugin));
     await runGit(runner, stage, ['init', '-q', '--object-format=sha1']);

@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
@@ -16,6 +16,7 @@ import {
 import {
   editWatchedSource,
   expectApplicationTree,
+  expectHeading,
   expectPrimaryNav,
   expectRenderedDocument,
   expectToolInvocationTraceGroup,
@@ -45,6 +46,9 @@ const hmrMarker = 'WB600-HMR-MARKER';
 e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeout: 240_000 * timeScale }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('audiobook-curator');
+  const acceptanceLibrary = join(project.root, 'acceptance-library');
+  await mkdir(acceptanceLibrary);
+  await writeFile(join(acceptanceLibrary, 'invalid.mp3'), 'not an audio stream');
   const conversionSource = join(project.root, 'src', 'conversion.ts');
   const searchSource = join(project.root, 'src', 'mcp', 'curator', 'tools', 'search_audible.tsx');
   const healthyConversion = await readFile(conversionSource, 'utf8');
@@ -66,17 +70,56 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     if (searchLeaf.ref.kind !== 'tool') {
       throw new Error(`search_audible leaf was ${searchLeaf.ref.kind}, expected tool.`);
     }
+    const inventoryLeaf = applicationLeafForRouteId(surface.application, 'tool:curator/inventory_sources');
+    const inventoryCliLeaf = applicationLeaves(surface.application).find((leaf) =>
+      leaf.routeId === 'cli:inventory' && leaf.ref.kind === 'cli');
+    if (inventoryLeaf?.ref.kind !== 'tool' || inventoryCliLeaf?.ref.kind !== 'cli') {
+      throw new Error('inspectWorkbenchSurface did not project the inventory tool and CLI routes.');
+    }
     expect(searchLeaf.ref.server).toBe('curator');
     const searchPath = workbenchLeafPath(searchLeaf);
     expect(searchPath).toBe('/routes/mcp/curator/tool/search_audible');
 
     await openWorkbench(page, server.url, '/');
     await expectPrimaryNav(page);
-    const firstLeaf = applicationLeaves(surface.application).find((leaf) => leaf.routeId === 'tool:curator/inventory_sources')
-      ?? searchLeaf;
-    await selectApplicationLeaf(page, server.url, firstLeaf);
+    await selectApplicationLeaf(page, server.url, inventoryLeaf);
     await expectApplicationTree(page, surface.application);
     await captureExampleState(page, 'audiobook-curator', 'application-populated');
+
+    await fillRouteInput(page, { source: acceptanceLibrary });
+    await workbenchTestId(page, 'routeInputEditor').getByLabel('Strict').selectOption('true');
+    await runSelectedRoute(page, runTimeout);
+    const inventoryStatus = workbenchTestId(page, 'routeStatus');
+    await expect(page.getByText(/Loading/u)).toHaveCount(0, { timeout: browserTimeout });
+    await expect(inventoryStatus).toContainText('Represented error', { timeout: runTimeout });
+    await workbenchTestId(page, 'resultTabRendered').click();
+    const inventoryDocument = workbenchTestId(page, 'renderedDocument');
+    await expect(inventoryDocument).toHaveAttribute('aria-busy', 'false', { timeout: runTimeout });
+    await expect(inventoryDocument.locator('.agent-document-error-node')).toBeVisible({ timeout: runTimeout });
+
+    await selectApplicationLeaf(page, server.url, inventoryCliLeaf);
+    await workbenchTestId(page, 'routeInputEditor').getByRole('button', { name: 'Raw JSON' }).click();
+    const cliArgs = workbenchTestId(page, 'routeInputEditor').locator('textarea');
+    await cliArgs.fill('[]');
+    await workbenchTestId(page, 'routeRun').click();
+    await expect(inventoryStatus).toHaveClass(/route-status--failed/u, { timeout: runTimeout });
+    await expect(page.getByText(/Loading/u)).toHaveCount(0, { timeout: browserTimeout });
+    await expect(page.locator('.route-diagnostic')).toContainText(/required|missing|usage/iu, { timeout: browserTimeout });
+    await workbenchTestId(page, 'inspectorToggle').click();
+    await page.getByRole('tab', { name: 'Providers' }).click();
+    const libraryProvider = page.getByRole('row').filter({ hasText: 'library' });
+    await expect(libraryProvider).toContainText('unobserved', { timeout: browserTimeout });
+    await expect(libraryProvider).toContainText('—');
+
+    await workbenchTestId(page, 'routeInputEditor').getByRole('button', { name: 'Form' }).click();
+    await fillRouteInput(page, {
+      report: join(project.root, 'inventory-report.json'),
+      source: acceptanceLibrary,
+    });
+    await workbenchTestId(page, 'routeInputEditor').getByLabel('Strict').selectOption('true');
+    await runSelectedRoute(page, runTimeout);
+    await expect(page.getByText(/Loading/u)).toHaveCount(0, { timeout: browserTimeout });
+    await expect(inventoryStatus).toContainText('Exit code 1', { timeout: runTimeout });
 
     await selectApplicationLeaf(page, server.url, searchLeaf);
     await fillRouteInput(page, { title: searchTitle });
@@ -217,7 +260,7 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(page.getByRole('table', { name: /finding|bundle|store|probe/iu })).toHaveCount(0);
 
     await openWorkbench(page, server.url, '/advanced/artifact');
-    await expect(page.getByRole('heading', { name: 'Emitted files' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Emitted files');
     const detailsToggle = page.locator('.artifact-table').getByRole('button', { name: 'Details' }).first();
     await expect(detailsToggle).toBeVisible({ timeout: browserTimeout });
     await detailsToggle.click();

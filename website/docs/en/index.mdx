@@ -61,7 +61,7 @@ features:
     span: 4
   - icon: 📦
     title: One root, every host
-    details: The artifact root is the unit you install — every selected host's manifest sits in its own dotfolder over shared Skills, hooks, and MCP entries, beside a generated INSTALL.md and agent-bundle.manifest.json, the SHA-256 record that validation, MCP, hooks, and evals read.
+    details: The artifact root is the unit you install — every selected host's manifest sits in its own dotfolder over shared Skills, hooks, and MCP entries, beside a generated INSTALL.md and agent-bundle.manifest.json, the artifact index that install, doctor, validation, MCP, hooks, and evals read.
     link: /guide/distribution/
     span: 4
 ---
@@ -141,10 +141,9 @@ artifact/
 ├── skills/release-review/
 │   ├── SKILL.md
 │   └── references/policy.md
-├── INSTALL.md
-├── install.mjs
-├── agent-bundle.manifest.json
-└── agent-bundle.hooks.json
+├── INSTALL.md                       # one section per selected host
+├── install.mjs                      # installer for portable and Cursor
+└── agent-bundle.manifest.json       # artifact index: identity, projections, executables
 ```
 
 Every selected host reads this one directory as its plugin root: Claude Code finds

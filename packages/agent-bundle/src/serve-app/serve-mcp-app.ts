@@ -1,10 +1,16 @@
 import { Context, Effect, Layer, type Scope } from 'effect';
+import { join } from 'node:path';
 
-import type { TargetRegistry } from '../adapters/registry.ts';
+import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { resolveManifestHostFromRoot } from '../build/manifest-projection.ts';
 import type { ServedMcpApp, ServeMcpAppPublicOptions } from './types.ts';
 import { makeScopedEffectRuntime } from '../effect/boundary.ts';
 import { liftPromise, liftTry } from '../effect/lift.ts';
-import { resolveMcpLaunchEnvironment, type McpLaunchEnvironmentOptions } from '../services/mcp-run.ts';
+import {
+  mcpServerStateDirectory,
+  resolveMcpLaunchEnvironment,
+  type McpLaunchEnvironmentOptions,
+} from '../services/mcp-run.ts';
 import { startWebHost, validPort, validProfile, type WebHost } from '../web-host/host-server.ts';
 import { readWebHostPageScript } from '../web-host/page-script.ts';
 import { appNameOf, openApp, parseAppSelector } from '../web-host/select-app.ts';
@@ -17,7 +23,10 @@ import { openStdioAppSession } from '../web-host/session.ts';
 
 export type { McpAppConsentCapability, ServedMcpApp, ServeMcpAppPublicOptions } from './types.ts';
 
-export interface ServeMcpAppOptions extends ServeMcpAppPublicOptions, Omit<McpLaunchEnvironmentOptions, 'artifact' | 'registry' | 'server'> {
+export interface ServeMcpAppOptions extends ServeMcpAppPublicOptions, Omit<
+  McpLaunchEnvironmentOptions,
+  'artifact' | 'pluginDataRoot' | 'registry' | 'server' | 'target'
+> {
   /** The MCP App to serve: `<server>/<app>`, or `<server>/ui://...` for an exact resource URI. */
   readonly app: string;
   /**
@@ -25,7 +34,10 @@ export interface ServeMcpAppOptions extends ServeMcpAppPublicOptions, Omit<McpLa
    * App's scope (a throwaway build removed on `close()`).
    */
   readonly artifact: string | Effect.Effect<string, unknown, Scope.Scope>;
+  readonly pluginDataRoot?: string;
   readonly registry?: TargetRegistry;
+  /** The projection whose server to launch; resolved from the manifest when exactly one runs the App's server. */
+  readonly target?: string;
 }
 
 const defaultTimeoutMs = 30_000;
@@ -42,20 +54,28 @@ const serveProgram = (options: ServeMcpAppOptions): Effect.Effect<WebHost, unkno
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
   const pageScript = yield* liftPromise(() => readWebHostPageScript());
   const artifact = typeof options.artifact === 'string' ? options.artifact : yield* options.artifact;
+  const registry = options.registry ?? createDefaultRegistry();
+  const { host } = yield* liftPromise(() => resolveManifestHostFromRoot(artifact, {
+    capability: 'mcp',
+    ...(options.target === undefined ? {} : { requested: options.target }),
+    server: requestedApp.server,
+  }, registry));
+  const pluginDataRoot = options.pluginDataRoot
+    ?? join(options.workspaceRoot, '.agent-bundle', 'mcp-run', host, mcpServerStateDirectory(requestedApp.server));
   const launch = yield* liftPromise(() => resolveMcpLaunchEnvironment({
     artifact,
     ...(options.envFiles === undefined ? {} : { envFiles: options.envFiles }),
     ...(options.envPluginRoot === undefined ? {} : { envPluginRoot: options.envPluginRoot }),
     ...(options.loadEnvFiles === undefined ? {} : { loadEnvFiles: options.loadEnvFiles }),
     ...(options.mode === undefined ? {} : { mode: options.mode }),
-    pluginDataRoot: options.pluginDataRoot,
-    ...(options.registry === undefined ? {} : { registry: options.registry }),
+    pluginDataRoot,
+    registry,
     server: requestedApp.server,
-    target: options.target,
+    target: host,
     workspaceRoot: options.workspaceRoot,
   }));
   const session = yield* Effect.acquireRelease(
-    liftPromise(() => openStdioAppSession(launch, { serverName: requestedApp.server, target: options.target }, timeoutMs)),
+    liftPromise(() => openStdioAppSession(launch, { serverName: requestedApp.server, target: host }, timeoutMs)),
     (opened) => Effect.promise(() => opened.close()),
   );
   const selection = yield* liftPromise(() => openApp(session.selection, {

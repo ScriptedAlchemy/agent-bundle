@@ -679,18 +679,16 @@ const readPluginRoot = (env: Record<string, string | undefined>): string | undef
 
 Inside a route there is no need to read the variable at all. Every generated shell — the MCP
 entry and its Flight worker, the routed CLI executable and its render worker, the hook wrappers —
-resolves the anchor once at startup with `resolvePluginRoot` from `@agent-bundle/runtime`, mounts
-its SQLite state, notice ledger, and lineage journal under `<root>/state`, and publishes the same
-value on every request it opens as `(await agent()).plugin`:
+resolves its code and framework state roots once at startup with `resolvePluginRoot` from
+`@agent-bundle/runtime` and publishes them on every request it opens as
+`(await agent()).plugin`:
 
 ```ts
 const { plugin } = await agent();
 if (plugin.state === 'available') {
-  plugin.value.root;      // the install root: AGENT_BUNDLE_PLUGIN_ROOT,
-                          // or the shell's fallback
-  plugin.value.stateRoot; // `<root>/state`, where defineState / notices / lineage
-                          // already live
-  plugin.source;          // 'native' from the variable, 'derived' from the fallback
+  plugin.value.root;      // the code root: AGENT_BUNDLE_PLUGIN_ROOT or the shell's fallback
+  plugin.value.stateRoot; // the framework state root: AGENT_BUNDLE_STATE_ROOT or the default
+  plugin.source;          // the code root is 'native' from the variable or 'derived'
 }
 ```
 
@@ -698,12 +696,17 @@ if (plugin.state === 'available') {
 means the shell fell back — to the artifact root (the parent of `mcp/`, `bin/`, or `hooks/`) inside
 a built artifact, or to `$PWD/.agent-bundle` for the npm package bin. A value still carrying an
 unexpanded `${…}` token (a host that passed its manifest through literally) is treated as unset,
-reported once on stderr, and never joined into a path. Conventional providers receive the same
-observed value as `plugin` in their factory context, beside `invocation` and `signal`, so a
-provider that keeps files beside the framework's state derives nothing itself. The route-unit and
-`mcp-in-memory` harnesses resolve it the same way (falling back to `<project root>/.agent-bundle`)
-and accept `context.plugin` as an override like every other axis; outside a generated scope the
-axis is `unavailable('not-provided')`.
+reported once on stderr, and never joined into a path. Artifact-hosted shells default
+`plugin.value.stateRoot` to `~/.agent-bundle/state/<plugin>-<digest>` (or
+`$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`), derived from the code root's safe basename and
+the first 16 hexadecimal characters of the SHA-256 digest of its real path.
+`AGENT_BUNDLE_STATE_ROOT` overrides that location; the npm package bin keeps
+`$PWD/.agent-bundle/state`. Conventional providers receive the same observed value as `plugin` in
+their factory context, beside `invocation` and `signal`, so a provider that keeps files beside the
+framework's state derives nothing itself. The route-unit and `mcp-in-memory` harnesses resolve it
+the same way (falling back to `<project root>/.agent-bundle`) and accept `context.plugin` as an
+override like every other axis; outside a generated scope the axis is
+`unavailable('not-provided')`.
 
 ## MCP Apps
 
@@ -1024,8 +1027,9 @@ Invalid `web` is `AB4341` (error); the message shapes are in the
 
 When `web` is configured, the composite artifact's `agent-bundle.manifest.json` gains a `web`
 section and the build emits `bin/<plugin>.mjs` even without `src/cli/**` commands. The host page
-lives inside that bin — there is no `web/` directory in the artifact. `AB6005` walks the bin
-like every other executable.
+lives inside that bin — there is no `web/` directory in the artifact. Its compilation contributes
+the same external-module evidence as every other executable, so `AB6005` rejects any external
+other than a Node built-in, `pnpapi`, or an emitted sibling.
 
 From the built artifact or the installed plugin root:
 
@@ -1036,11 +1040,14 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 
 The default App is the only exposed one; several without a selector is a usage error (exit `2`)
 that lists them. Missing `agent-bundle.manifest.json` beside `bin/` exits `1`. The command
-launches the plugin's own MCP server (`node <root>/mcp/<entry>.mjs`,
-`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded — the
-plugin-data token resolves outside the artifact, under
-`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches),
-calls the opening tool once, serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
+launches the plugin's own MCP server from its `executables.mcpServers[]` `launch` record
+(`node <root>/<launch.entry> <args>` — `artifact` arguments resolve under `<root>`, literals have
+their path tokens expanded — with `AGENT_BUNDLE_PLUGIN_ROOT=<root>` and the declared static env,
+path tokens expanded; the plugin-data token resolves outside the artifact, under
+`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches).
+The spawned server's own durable framework state likewise lives outside the artifact under
+`~/.agent-bundle/state/<plugin>-<digest>` (or `AGENT_BUNDLE_STATE_ROOT`). It calls the opening
+tool once and serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
 second loopback sandbox origin for the App document (the same host stack and consent behavior as
 `agent-bundle serve-app` and the Workbench), prints
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` (or one JSON line with
@@ -1062,7 +1069,12 @@ resolved launch identity; a successful rebuild retires unused sessions of older 
 still leasing one keep it until their last lease releases), and a failed rebuild retires
 nothing. An opening tool annotated
 `readOnlyHint: true` runs on every page load; any other opening tool runs once per session,
-tool, App, and input, and a refresh rebinds that retained result.
+tool, App, and input. Concurrent first loads share the same in-flight call, and refreshes rebind
+its retained result without gaining authority to repeat the operation. Results are bounded and
+may be evicted independently of the execution record; after eviction, after a failed call whose
+side effects are unknown, or when the bounded execution ledger is full, the page receives an
+error result directing the user to run the tool explicitly from the App instead of retrying it
+automatically.
 
 `agent-bundle serve-app` is unchanged: it is the checkout-time form that builds or points at an
 artifact and needs the framework installed. Every option is in the
@@ -1108,10 +1120,12 @@ npx agent-bundle mcp invoke --artifact artifact --target claude --server curator
 npx agent-bundle mcp run --artifact artifact --target claude --server curator
 ```
 
-`mcp run` executes one built stdio server in the foreground: it resolves the generated entry
-(named with a digest of the server name) from the target's MCP manifest, expands path tokens through the target adapter,
-loads the project-root `.env` set, and forwards the child's exit code. Without `--artifact`, a
-temporary artifact is built first.
+`mcp run` executes one built stdio server in the foreground: it resolves the compiled entry
+(named with a digest of the server name) from the artifact manifest's `executables.mcpServers[]`
+row, expands path tokens through the host adapter, loads the project-root `.env` set, and forwards
+the child's exit code. `--target` is optional — omit it and the manifest's `projections[]` must
+name exactly one MCP-capable host; several are an error naming the choices. Without
+`--artifact`, a temporary artifact is built first.
 
 ## Live host MCP proxy
 
@@ -1136,8 +1150,10 @@ The proxy discovers the loopback server through the project's development lock a
 the stable Streamable HTTP endpoint at `/mcp/host/<serverName>`. `--target` defaults to
 `portable`, and `--url` overrides discovery. Successful rebuilds keep the stdio connection open,
 route new calls to the active epoch, let admitted calls finish against their original epoch, and
-forward MCP catalog change notifications. If the epoch or development server disappears, the
-proxy fails closed with an MCP error and an `AB8024` or `AB8025` diagnostic.
+forward MCP catalog change notifications. Dev MCP sessions and Workbench invocations share the
+project's `<project>/.agent-bundle/state` root, outside the retired epoch directories. If the
+epoch or development server disappears, the proxy fails closed with an MCP error and an `AB8024`
+or `AB8025` diagnostic.
 
 The endpoint is intentionally unauthenticated because the development server binds only to
 loopback and is never exposed beyond the local machine.

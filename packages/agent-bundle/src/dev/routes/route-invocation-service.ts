@@ -5,10 +5,11 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { AgentDocument } from '@agent-bundle/runtime';
+import type { AgentDocument, AgentDocumentNode } from '@agent-bundle/runtime';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type { TargetHookContract } from '../../adapters/hook-contract.ts';
+import { generatedRouteArtifactEpoch } from '../../build/entry-shell.ts';
 import { projectCliDocumentToMarkdown } from '../../cli-entry.ts';
 import { sleep } from '../../core/async.ts';
 import type { Diagnostic } from '../../core/diagnostics.ts';
@@ -42,18 +43,23 @@ import type { ScriptPlaygroundResult, ScriptPlaygroundRunRequest } from '../play
 import type { TraceCorrelation, TraceStatus } from '../trace/trace-entry.ts';
 import type { TracePublisher } from '../trace/trace-hub.ts';
 import { applicationNodePath, applicationNodeRefForRouteId } from './application-node.ts';
-import type { RouteInvocation } from './route-invocation-result.ts';
 import {
-  nativeEventRequestContext,
-  type RouteInvocationProjection,
-  type RouteInvocationEventHost,
-  type RouteInvocationKind,
-  type RouteInvocationProvider,
-  type RouteInvocationRequest,
-  type RouteInvocationSummary,
-  type RouteInvocationTiming,
+  isProductionRouteInvocationCode,
+  ProductionRouteInvocationError,
+} from './route-invocation-production-error.ts';
+import type { RouteInvocation } from './route-invocation-result.ts';
+import { nativeEventRequestContext } from './route-invocation.ts';
+import type {
+  RouteInvocationEventHost,
+  RouteInvocationKind,
+  RouteInvocationOutcome,
+  RouteInvocationProvider,
+  RouteInvocationRequest,
+  RouteInvocationSurface,
+  RouteInvocationSummary,
+  RouteInvocationTiming,
 } from './route-invocation.ts';
-import type { RouteManifest, RouteManifestRoute } from './route-manifest.ts';
+import type { RouteManifest, RouteManifestCliCommand, RouteManifestRoute } from './route-manifest.ts';
 import type { RouteManifestRouteService } from './route-manifest-routes.ts';
 
 export const ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE = 'AB8231';
@@ -61,6 +67,12 @@ export const ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE = 'AB8232';
 export const ROUTE_INVOCATION_CHILD_FAILURE_CODE = 'AB8236';
 export const ROUTE_INVOCATION_MALFORMED_REQUEST_CODE = 'AB8237';
 export const ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE = 'AB8238';
+export const ROUTE_INVOCATION_STALE_REVISION_CODE = 'AB8239';
+export const ROUTE_INVOCATION_CLI_COMMAND_MISMATCH_CODE = 'AB8253';
+export const ROUTE_INVOCATION_PROJECTED_CLI_ID_CODE = 'AB8254';
+export const ROUTE_INVOCATION_EVENT_HOST_REQUIRED_CODE = 'AB8255';
+export const ROUTE_INVOCATION_STALE_REVISION_MESSAGE =
+  'The published route manifest changed while this invocation waited to run. Retry against the current revision.';
 
 const defaultHistoryLimit = 200;
 const defaultTimeoutMs = 60_000;
@@ -90,7 +102,14 @@ export interface RouteInvocationPreparedProject {
   readonly artifact?: Readonly<{ epochId: string; target: string }>;
   readonly fixtures?: Readonly<Record<string, readonly RouteInvocationFixture[]>>;
   readonly manifest: AgentBundleTestManifest;
+  /** Writable framework state (`devStateRoot`), shared with dev MCP sessions and never the code root. */
+  readonly stateRoot: string;
   readonly targets: readonly RouteInvocationEventHost[];
+}
+
+export interface RouteInvocationPreparedLease {
+  readonly project: RouteInvocationPreparedProject;
+  readonly release: () => Promise<void> | void;
 }
 
 export interface RouteInvocationScriptRunner {
@@ -102,7 +121,7 @@ export interface RouteInvocationServiceOptions {
   readonly historyLimit?: number;
   readonly manifest: RouteManifestRouteService;
   readonly now?: () => Date;
-  readonly prepared: () => RouteInvocationPreparedProject;
+  readonly prepared: () => Promise<RouteInvocationPreparedLease>;
   readonly registry?: TargetRegistry;
   readonly renderChild?: (
     request: RouteInvocationChildRequest,
@@ -115,38 +134,60 @@ export interface RouteInvocationServiceOptions {
 }
 
 export interface RouteInvocationChildRequest {
-  readonly args?: readonly string[];
+  readonly artifactEpoch?: string;
+  readonly artifactRoot?: string;
   readonly context: RequestContextProvenance;
   readonly input: JsonValue;
   readonly manifest: AgentBundleTestManifest;
   readonly routeId: string;
+  readonly stateRoot: string;
+  readonly surface: RouteInvocationSurface;
 }
 
 export interface RouteInvocationChildResult {
   readonly document: NonNullable<RouteInvocation['document']>;
   readonly events: RouteInvocation['events'];
+  /**
+   * Process surfaces only: the exit code the generated executable sets for
+   * this completed run — a plain script's real exit status, the generated
+   * bin's own decision for CLI surfaces, the rendered-script rule otherwise.
+   */
+  readonly exitCode?: number;
   /** The input handed to the route after hosted-event canonicalization. */
   readonly input: JsonValue;
   /** Runtime-owned MCP projection, computed inside the runtime-bound child. */
   readonly mcp?: JsonObject;
-  readonly renderDurationMs: number;
+  /**
+   * What the child actually measured. Absent for plain scripts and for
+   * failures before the child reported measurements.
+   */
+  readonly observed?: {
+    readonly providers: readonly RouteInvocationProvider[];
+    readonly timings: readonly RouteInvocationTiming[];
+  };
+  readonly renderDurationMs?: number;
   readonly result?: JsonValue;
+  readonly trace?: readonly EventTraceEvent[];
 }
 
 export type RouteInvocationChildResponse =
   | Readonly<{ readonly result: RouteInvocationChildResult; readonly type: 'result' }>
   | Readonly<{ readonly event: EventTraceEvent; readonly type: 'trace' }>
   | Readonly<{
-    readonly error: Readonly<{ readonly message: string; readonly name: string }>;
+    readonly error: Readonly<{ readonly code?: string; readonly message: string; readonly name: string }>;
     readonly type: 'error';
   }>;
 
 export class RouteInvocationRequestError extends Error {
   readonly code:
     | typeof ROUTE_INVOCATION_MALFORMED_REQUEST_CODE
+    | typeof ROUTE_INVOCATION_CLI_COMMAND_MISMATCH_CODE
+    | typeof ROUTE_INVOCATION_EVENT_HOST_REQUIRED_CODE
+    | typeof ROUTE_INVOCATION_PROJECTED_CLI_ID_CODE
     | typeof ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE
     | typeof ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE
-    | typeof ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE;
+    | typeof ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE
+    | typeof ROUTE_INVOCATION_STALE_REVISION_CODE;
   readonly status: 400 | 404 | 409;
 
   constructor(
@@ -172,35 +213,52 @@ const malformed = (): never => {
 const boundedString = (value: unknown, maxLength = 4_096): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= maxLength && value.trim() === value && !value.includes('\0');
 
-const eventOptions = (value: unknown): RouteInvocationRequest['event'] => {
-  if (!isRecord(value) || !hasOnlyOwnKeys(value, ['fixtureId', 'host'])) return malformed();
-  const fixtureId = value.fixtureId;
-  const host = value.host;
-  if (fixtureId !== undefined && !boundedString(fixtureId)) return malformed();
-  if (host !== undefined && (typeof host !== 'string' || !concreteHosts.has(host as RouteInvocationEventHost))) {
-    return malformed();
+const surfaceOptions = (value: unknown): RouteInvocationSurface => {
+  if (!isRecord(value) || !boundedString(value.kind, 32)) return malformed();
+  switch (value.kind) {
+    case 'mcp':
+    case 'script':
+    case 'unit-render':
+      if (!hasOnlyOwnKeys(value, ['kind'])) return malformed();
+      return Object.freeze({ kind: value.kind });
+    case 'cli': {
+      if (!hasOnlyOwnKeys(value, ['args', 'command', 'kind'])) return malformed();
+      if (!boundedString(value.command)) return malformed();
+      if (
+        !Array.isArray(value.args)
+        || value.args.length > 1_024
+        || value.args.some((argument) => !boundedString(argument, 16_384))
+      ) return malformed();
+      return Object.freeze({ args: [...value.args] as readonly string[], command: value.command, kind: 'cli' });
+    }
+    case 'event': {
+      if (!hasOnlyOwnKeys(value, ['fixtureId', 'host', 'kind'])) return malformed();
+      const fixtureId = value.fixtureId;
+      const host = value.host;
+      if (fixtureId !== undefined && !boundedString(fixtureId)) return malformed();
+      if (host !== undefined && (typeof host !== 'string' || !concreteHosts.has(host as RouteInvocationEventHost))) {
+        return malformed();
+      }
+      return Object.freeze({
+        ...(fixtureId === undefined ? {} : { fixtureId }),
+        ...(host === undefined ? {} : { host: host as RouteInvocationEventHost }),
+        kind: 'event',
+      });
+    }
+    default:
+      return malformed();
   }
-  return Object.freeze({
-    ...(fixtureId === undefined ? {} : { fixtureId }),
-    ...(host === undefined ? {} : { host: host as RouteInvocationEventHost }),
-  });
 };
 
 /** Strict wire decoder used by both the HTTP boundary and unit callers. */
 export const parseRouteInvocationRequest = (
   value: Readonly<Record<string, unknown>>,
 ): RouteInvocationRequest => {
-  if (!hasOnlyOwnKeys(value, ['args', 'correlationId', 'event', 'input', 'requestId', 'routeId'])) return malformed();
+  if (!hasOnlyOwnKeys(value, ['correlationId', 'input', 'routeId', 'surface'])) return malformed();
   const routeId = value.routeId;
   const correlationId = value.correlationId;
-  const requestId = value.requestId;
-  const args = value.args;
   if (!boundedString(routeId)) return malformed();
   if (correlationId !== undefined && !boundedString(correlationId, 256)) return malformed();
-  if (requestId !== undefined && !boundedString(requestId, 256)) return malformed();
-  if (args !== undefined && (!Array.isArray(args) || args.length > 1_024 || args.some((argument) => !boundedString(argument, 16_384)))) {
-    return malformed();
-  }
   let input: JsonValue | undefined;
   if (Object.hasOwn(value, 'input')) {
     try {
@@ -209,14 +267,12 @@ export const parseRouteInvocationRequest = (
       return malformed();
     }
   }
-  const event = value.event === undefined ? undefined : eventOptions(value.event);
+  const surface = value.surface === undefined ? undefined : surfaceOptions(value.surface);
   return deepFreeze({
-    ...(args === undefined ? {} : { args: [...args] as readonly string[] }),
     ...(correlationId === undefined ? {} : { correlationId }),
-    ...(event === undefined ? {} : { event }),
     ...(input === undefined ? {} : { input }),
-    ...(requestId === undefined ? {} : { requestId }),
     routeId,
+    ...(surface === undefined ? {} : { surface }),
   });
 };
 
@@ -229,6 +285,7 @@ export const invocationSummary = (invocation: RouteInvocation): RouteInvocationS
     projection: _projection,
     providers: _providers,
     result: _result,
+    trace: _trace,
     ...summary
   } = invocation;
   return deepFreeze(summary);
@@ -268,10 +325,7 @@ class InvocationSemaphore {
     this.#limit = limit;
   }
 
-  async run<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.#active >= this.#limit) {
-      await new Promise<void>((resolvePromise) => this.#waiting.push(resolvePromise));
-    }
+  async #execute<T>(operation: () => Promise<T>): Promise<T> {
     this.#active += 1;
     try {
       return await operation();
@@ -279,6 +333,24 @@ class InvocationSemaphore {
       this.#active -= 1;
       this.#waiting.shift()?.();
     }
+  }
+
+  async run<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    if (this.#active < this.#limit) return this.#execute(operation);
+    return new Promise<T>((resolvePromise, rejectPromise) => {
+      const start = (): void => {
+        signal?.removeEventListener('abort', abort);
+        void this.#execute(operation).then(resolvePromise, rejectPromise);
+      };
+      const abort = (): void => {
+        const index = this.#waiting.indexOf(start);
+        if (index !== -1) this.#waiting.splice(index, 1);
+        rejectPromise(signal?.reason);
+      };
+      this.#waiting.push(start);
+      signal?.addEventListener('abort', abort, { once: true });
+    });
   }
 }
 
@@ -288,6 +360,95 @@ const allManifestRoutes = (manifest: RouteManifest): readonly RouteManifestRoute
   ...manifest.events,
   ...manifest.scripts,
 ]);
+
+const commandName = (command: RouteManifestCliCommand): string => command.path.join(' ');
+
+const projectedCommandForCliId = (
+  manifest: RouteManifest,
+  routeId: string,
+): RouteManifestCliCommand | undefined => {
+  if (!routeId.startsWith('cli:')) return undefined;
+  const path = routeId.slice('cli:'.length);
+  return manifest.cli?.commands?.find((command) =>
+    command.projection !== undefined
+    && command.routeId.startsWith('tool:')
+    && command.path.join('/') === path);
+};
+
+const defaultSurface = (
+  route: RouteManifestRoute,
+  manifest: RouteManifest,
+): RouteInvocationSurface => {
+  switch (route.kind) {
+    case 'tool':
+    case 'resource':
+    case 'prompt':
+      return Object.freeze({ kind: 'mcp' });
+    case 'event-route':
+      return Object.freeze({ kind: 'event' });
+    case 'script':
+      return Object.freeze({ kind: 'script' });
+    case 'cli': {
+      const command = manifest.cli?.commands?.find((candidate) => candidate.routeId === route.id);
+      if (command === undefined) return malformed();
+      return Object.freeze({ args: Object.freeze([]), command: commandName(command), kind: 'cli' });
+    }
+    case 'app':
+      return malformed();
+    default: {
+      const exhaustive: never = route.kind;
+      return exhaustive;
+    }
+  }
+};
+
+const resolvedSurface = (
+  route: RouteManifestRoute,
+  requested: RouteInvocationSurface | undefined,
+  manifest: RouteManifest,
+): RouteInvocationSurface => {
+  const surface = requested ?? defaultSurface(route, manifest);
+  switch (surface.kind) {
+    case 'mcp':
+      if (route.kind !== 'tool' && route.kind !== 'resource' && route.kind !== 'prompt') return malformed();
+      return surface;
+    case 'event':
+      if (route.kind !== 'event-route') return malformed();
+      if (route.execution?.preflight !== undefined && surface.host === undefined) {
+        throw new RouteInvocationRequestError(
+          ROUTE_INVOCATION_EVENT_HOST_REQUIRED_CODE,
+          `Event route ${JSON.stringify(route.id)} has compiled preflight; select an event host surface with a concrete host.`,
+          400,
+        );
+      }
+      return surface;
+    case 'script':
+      if (route.kind !== 'script') return malformed();
+      return surface;
+    case 'unit-render':
+      if (route.kind === 'script') return malformed();
+      return surface;
+    case 'cli': {
+      if (route.kind !== 'cli' && route.kind !== 'tool') return malformed();
+      const command = manifest.cli?.commands?.find((candidate) =>
+        candidate.routeId === route.id
+        && commandName(candidate) === surface.command
+        && (route.kind === 'cli' || candidate.projection !== undefined));
+      if (command === undefined) {
+        throw new RouteInvocationRequestError(
+          ROUTE_INVOCATION_CLI_COMMAND_MISMATCH_CODE,
+          `CLI command ${JSON.stringify(surface.command)} does not project onto canonical operation ${JSON.stringify(route.id)}.`,
+          400,
+        );
+      }
+      return surface;
+    }
+    default: {
+      const exhaustive: never = surface;
+      return exhaustive;
+    }
+  }
+};
 
 const diagnostic = (code: string, message: string): Diagnostic =>
   Object.freeze({ code, message, severity: 'error' });
@@ -300,18 +461,26 @@ const unavailable = <Value>(
 const contextFor = (
   route: RouteManifestRoute,
   root: string,
-  host: RouteInvocationEventHost | undefined,
+  surface: RouteInvocationSurface,
 ): RequestContextProvenance => deepFreeze({
   actor: unavailable('not-provided'),
-  host: host === undefined
+  host: surface.kind !== 'event' || surface.host === undefined
     ? unavailable('host-omitted')
-    : { source: 'derived', state: 'available', value: { name: host } },
+    : { source: 'derived', state: 'available', value: { name: surface.host } },
   invocation: {
     kind: route.kind === 'event-route'
       ? 'event'
-      : route.kind === 'cli' ? 'cli' : route.kind === 'script' ? 'script' : 'tool',
+      : route.kind === 'cli'
+        ? 'cli'
+        : route.kind === 'script'
+          ? 'script'
+          : 'tool',
     operationId: route.id,
-    surface: route.event ?? route.id.slice(route.id.lastIndexOf('/') + 1),
+    surface: surface.kind === 'cli'
+      ? surface.command
+      : surface.kind === 'event'
+        ? route.event
+        : surface.kind,
   },
   lineage: unavailable('no-shared-runtime'),
   session: unavailable('not-provided'),
@@ -369,6 +538,7 @@ const runPlainScript = async (
   return deepFreeze({
     document,
     events: [{ document, sequence: 1, type: 'complete' }],
+    exitCode: run.exitCode,
     input,
     renderDurationMs: performance.now() - startedAt,
     result: { exitCode: run.exitCode, stderr: run.stderr, stdout: run.stdout },
@@ -397,9 +567,7 @@ const isEventTraceEvent = (value: unknown): value is EventTraceEvent => {
     || typeof execution.host !== 'string'
     || typeof execution.nativeEvent !== 'string'
     || !hasOnlyOwnKeys(execution, ['event', 'executionId', 'host', 'nativeEvent'])
-  ) {
-    return false;
-  }
+  ) return false;
   const durationValid = value.durationMs === undefined || finiteNonnegative(value.durationMs);
   switch (value.kind) {
     case 'preflight.start':
@@ -532,8 +700,9 @@ const renderInChild = async (
         return;
       }
       if (message.type === 'error') {
-        const error = new Error(message.error.message);
-        error.name = message.error.name;
+        const error = isProductionRouteInvocationCode(message.error.code)
+          ? new ProductionRouteInvocationError(message.error.code, message.error.message)
+          : Object.assign(new Error(message.error.message), { name: message.error.name });
         return settle(() => rejectPromise(error));
       }
       settle(() => resolvePromise(message.result));
@@ -570,16 +739,16 @@ const eventContract = (
 const contextForRequest = (
   route: RouteManifestRoute,
   root: string,
-  request: RouteInvocationRequest,
+  surface: RouteInvocationSurface,
   nativeInput: JsonValue,
   registry: TargetRegistry,
 ): RequestContextProvenance => {
-  const host = request.event?.host;
+  const host = surface.kind === 'event' ? surface.host : undefined;
   if (route.kind !== 'event-route' || host === undefined || !isJsonRecord(nativeInput)) {
-    return contextFor(route, root, host);
+    return contextFor(route, root, surface);
   }
   const mapped = eventContract(registry, host, route.event as CanonicalAgentEvent);
-  if (mapped === undefined) return contextFor(route, root, host);
+  if (mapped === undefined) return contextFor(route, root, surface);
   return nativeEventRequestContext({
     event: route.event!,
     hostContractRevision: mapped.hostContractRevision,
@@ -630,20 +799,15 @@ const traceCorrelation = (
   epochId: string | undefined,
 ): TraceCorrelation => ({
   ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
-  ...(context.lineage.state === 'available'
-    ? { conversationId: context.lineage.value.conversation }
-    : {}),
+  ...(context.lineage.state === 'available' ? { conversationId: context.lineage.value.conversation } : {}),
   ...(epochId === undefined ? {} : { epochId }),
   ...(context.host.state === 'available' ? { host: context.host.value.name } : {}),
   invocationId,
-  ...(request.requestId === undefined ? {} : { requestId: request.requestId }),
   routeId: request.routeId,
-  ...(context.session.state === 'available'
-    ? { sessionId: context.session.value.sessionId }
-    : {}),
+  ...(context.session.state === 'available' ? { sessionId: context.session.value.sessionId } : {}),
 });
 
-const projectionKind = (projection: RouteInvocationProjection): 'cli' | 'hosts' | 'mcp' | 'none' => {
+const projectionKind = (projection: RouteInvocation['projection']): 'cli' | 'hosts' | 'mcp' | 'none' => {
   if (projection.mcp !== undefined) return 'mcp';
   if (projection.cli !== undefined) return 'cli';
   if (projection.hosts !== undefined) return 'hosts';
@@ -773,19 +937,29 @@ const eventInput = (
   });
 };
 
-const providerProjection = (
-  manifest: RouteManifest,
-  durationMs: number,
-  status: RouteInvocationProvider['status'],
-): readonly RouteInvocationProvider[] => Object.freeze(manifest.providers.map((provider) => Object.freeze({
-  durationMs,
-  id: provider.id,
-  name: provider.name,
-  status,
-})));
-
 const timing = (phase: string, startedAt: Date, durationMs: number): RouteInvocationTiming =>
   Object.freeze({ durationMs, phase, startedAt: startedAt.toISOString() });
+
+const isChildObservedTiming = (phase: string): boolean =>
+  phase === 'handler' || phase === 'providers' || phase.startsWith('provider:');
+
+const unobservedProviders = (manifest: RouteManifest): readonly RouteInvocationProvider[] =>
+  Object.freeze(manifest.providers.map((provider) => Object.freeze({
+    id: provider.id,
+    name: provider.name,
+    status: 'unobserved' as const,
+  })));
+
+const invocationTimings = (
+  child: RouteInvocationChildResult,
+  startedAt: Date,
+  projectionStartedAt: Date,
+  completedAt: Date,
+): readonly RouteInvocationTiming[] => Object.freeze([
+  ...(child.observed?.timings.filter((entry) => isChildObservedTiming(entry.phase)) ?? []),
+  ...(child.renderDurationMs === undefined ? [] : [timing('render', startedAt, child.renderDurationMs)]),
+  timing('projection', projectionStartedAt, completedAt.getTime() - projectionStartedAt.getTime()),
+]);
 
 const jsonObject = (value: unknown): JsonObject | undefined => {
   if (value === undefined) return undefined;
@@ -793,80 +967,150 @@ const jsonObject = (value: unknown): JsonObject | undefined => {
   return isJsonRecord(snapshot) ? snapshot : undefined;
 };
 
-const resultExitCode = (policy: 'result' | 'zero', result: JsonValue | undefined): number => {
-  if (policy === 'zero') return 0;
-  if (result === undefined || !isJsonRecord(result)) return 1;
-  const value = result.exitCode;
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 255 ? value : 1;
+const appendErrorSummaries = (node: AgentDocumentNode, summaries: string[]): void => {
+  switch (node.kind) {
+    case 'result':
+      for (const child of node.children) appendErrorSummaries(child, summaries);
+      break;
+    case 'error':
+      summaries.push(`[${node.code}] ${node.message}`);
+      break;
+    case 'audio':
+    case 'context':
+    case 'image':
+    case 'json':
+    case 'markdown':
+    case 'progress':
+    case 'resource':
+    case 'text':
+      break;
+    default: {
+      const exhaustive: never = node;
+      throw new Error(`Unsupported Agent Document node ${String((exhaustive as { kind?: unknown }).kind)}.`);
+    }
+  }
+};
+
+/** The `Agent.Error` nodes of a represented-error document, as the MCP projection prints them. */
+const documentErrorSummary = (document: AgentDocument): string => {
+  const summaries: string[] = [];
+  appendErrorSummaries(document.root, summaries);
+  return summaries.length === 0 ? `The document reports status ${document.status}.` : summaries.join('; ');
+};
+
+/**
+ * What the completed run meant, judged by the surface it ran through. A
+ * process surface reports the exit code its executable decided (`exitCode` is
+ * only ever set by one); an MCP surface reports a projected `isError`; an
+ * event surface reports an error document or a `deny` decision.
+ */
+const invocationOutcome = (
+  route: RouteManifestRoute,
+  child: RouteInvocationChildResult,
+): RouteInvocationOutcome => {
+  if (child.exitCode !== undefined) {
+    return child.exitCode === 0 ? { kind: 'success' } : { exitCode: child.exitCode, kind: 'process-exit' };
+  }
+  if (child.mcp?.isError === true || child.document.status !== 'success') {
+    return { kind: 'represented-error', summary: documentErrorSummary(child.document) };
+  }
+  const decision: unknown = child.result ?? child.document.value;
+  if (route.kind === 'event-route' && isRecord(decision) && decision.outcome === 'deny') {
+    return {
+      kind: 'represented-error',
+      summary: typeof decision.reason === 'string' ? `deny: ${decision.reason}` : 'deny',
+    };
+  }
+  return { kind: 'success' };
+};
+
+const unitRenderProjectionKind = (route: RouteManifestRoute): RouteInvocationSurface['kind'] => {
+  switch (route.kind) {
+    case 'tool':
+    case 'resource':
+    case 'prompt':
+      return 'mcp';
+    case 'event-route':
+      return 'event';
+    case 'cli':
+      return 'cli';
+    case 'script':
+      return 'script';
+    case 'app':
+      return 'unit-render';
+    default: {
+      const exhaustive: never = route.kind;
+      return exhaustive;
+    }
+  }
 };
 
 const invocationProjection = (
   route: RouteManifestRoute,
-  request: RouteInvocationRequest,
+  requested: RouteInvocationSurface,
   input: JsonValue,
-  result: JsonValue | undefined,
-  mcp: JsonObject | undefined,
-  document: NonNullable<RouteInvocation['document']>,
-  manifest: RouteManifest,
+  child: RouteInvocationChildResult,
   prepared: RouteInvocationPreparedProject,
   registry: TargetRegistry,
 ): RouteInvocation['projection'] => {
-  if (route.kind === 'tool') {
-    if (mcp === undefined) throw new Error('Route invocation child omitted the tool MCP projection.');
-    return deepFreeze({ mcp });
-  }
-  if (route.kind === 'resource' || route.kind === 'prompt') {
+  const { document, mcp, result } = child;
+  // An isolated render is projected the way the route's default surface would be.
+  const kind = requested.kind === 'unit-render' ? unitRenderProjectionKind(route) : requested.kind;
+  const host = requested.kind === 'event' ? requested.host : undefined;
+  if (kind === 'mcp') {
+    if (route.kind === 'tool') {
+      if (mcp === undefined) throw new Error('Route invocation child omitted the tool MCP projection.');
+      return deepFreeze({ mcp });
+    }
     return deepFreeze({ ...(jsonObject(result) === undefined ? {} : { mcp: jsonObject(result) }) });
   }
-  if (route.kind === 'cli' || route.kind === 'script') {
-    const command = manifest.cli?.commands?.find((candidate) => candidate.routeId === route.id);
-    // A plain script's exit code is its process status, carried in `result`;
-    // a rendered script exits zero like a rendered CLI command.
-    const policy = route.kind === 'script'
-      ? (plainScriptFor(prepared, route) === undefined ? 'zero' : 'result')
-      : command?.exitCode ?? 'zero';
+  if (kind === 'cli' || kind === 'script') {
+    // The exit code is the executable's own: a plain script's process status,
+    // the generated bin's decision, or the rendered-script rule the child applied.
+    if (child.exitCode === undefined) throw new Error('Route invocation child omitted the process exit code.');
     return deepFreeze({
       cli: {
-        exitCode: resultExitCode(policy, result),
+        exitCode: child.exitCode,
         ...(result === undefined ? {} : { json: result }),
         text: projectCliDocumentToMarkdown(document),
       },
     });
   }
-  if (route.kind === 'event-route') {
-    const selected = request.event?.host === undefined ? prepared.targets : [request.event.host];
-    const hosts = selected.map((host) => {
-      const mapped = eventContract(registry, host, route.event as CanonicalAgentEvent);
+  if (kind === 'event') {
+    const selected = host === undefined ? prepared.targets : [host];
+    const hosts = selected.map((target) => {
+      const mapped = eventContract(registry, target, route.event as CanonicalAgentEvent);
       if (mapped === undefined) {
         return {
           diagnostics: [diagnostic(
             'route.invocation.projection.unsupported',
-            `Event ${JSON.stringify(route.event)} cannot be projected to ${host}.`,
+            `Event ${JSON.stringify(route.event)} cannot be projected to ${target}.`,
           )],
-          host,
+          host: target,
         };
       }
       try {
         const native = projectEventDocument(
           document,
           route.event as CanonicalAgentEvent,
-          host,
+          target,
           mapped.nativeEvent,
-          request.event?.host === host && isJsonRecord(input) ? input : undefined,
+          host === target && isJsonRecord(input) ? input : undefined,
         );
-        return { diagnostics: [], host, ...(native === undefined ? {} : { native: jsonObject(native) }) };
+        return { diagnostics: [], host: target, ...(native === undefined ? {} : { native: jsonObject(native) }) };
       } catch (error) {
         return {
           diagnostics: [diagnostic(
             'route.invocation.projection.failed',
             error instanceof Error ? error.message : String(error),
           )],
-          host,
+          host: target,
         };
       }
     });
     return deepFreeze({ hosts });
   }
+  // An `app` route rendered in isolation has no host projection.
   return {};
 };
 
@@ -880,6 +1124,7 @@ const failedInvocation = (input: {
   readonly request: RouteInvocationRequest;
   readonly route: RouteManifestRoute;
   readonly startedAt: Date;
+  readonly surface: RouteInvocationSurface;
 }): RouteInvocation => {
   const renderedInput = input.request.input;
   const canonical = input.route.kind === 'event-route' && renderedInput !== undefined && isJsonRecord(renderedInput)
@@ -896,14 +1141,14 @@ const failedInvocation = (input: {
     kind: input.route.kind as RouteInvocationKind,
     manifestDigest: input.manifest.digest,
     projection: {},
-    providers: providerProjection(input.manifest, 0, 'failed'),
-    ...(input.request.requestId === undefined ? {} : { requestId: input.request.requestId }),
+    providers: unobservedProviders(input.manifest),
     routeId: input.route.id,
     source: input.route.source,
     sourceRevision: input.manifest.sourceRevision,
     startedAt: input.startedAt.toISOString(),
     status: 'failed',
-    timings: [timing('render', input.startedAt, input.completedAt.getTime() - input.startedAt.getTime())],
+    surface: input.surface,
+    timings: [timing('elapsed', input.startedAt, input.completedAt.getTime() - input.startedAt.getTime())],
   });
 };
 
@@ -913,14 +1158,14 @@ export class RouteInvocationService {
   readonly #manifest: RouteManifestRouteService;
   readonly #now: () => Date;
   readonly #pending = new Set<Promise<RouteInvocation>>();
-  readonly #prepared: () => RouteInvocationPreparedProject;
+  readonly #prepared: RouteInvocationServiceOptions['prepared'];
   readonly #registry: TargetRegistry;
   readonly #renderChild: NonNullable<RouteInvocationServiceOptions['renderChild']>;
   readonly #scripts: RouteInvocationScriptRunner | undefined;
   readonly #semaphore: InvocationSemaphore;
   readonly #timeoutMs: number;
   readonly #trace: TracePublisher | undefined;
-  #closed = false;
+  readonly #closeController = new AbortController();
 
   constructor(options: RouteInvocationServiceOptions) {
     this.#history = new InvocationRingBuffer(options.historyLimit);
@@ -945,19 +1190,20 @@ export class RouteInvocationService {
   }
 
   async close(): Promise<void> {
-    this.#closed = true;
+    this.#closeController.abort(new DOMException('Route invocation service closed.', 'AbortError'));
     for (const controller of this.#controllers) {
       controller.abort(new DOMException('Route invocation service closed.', 'AbortError'));
     }
     await Promise.allSettled([...this.#pending]);
   }
 
-  async invoke(request: RouteInvocationRequest): Promise<RouteInvocation> {
-    let manifest: RouteManifest;
-    let prepared: RouteInvocationPreparedProject;
+  async invoke(
+    request: RouteInvocationRequest,
+    options: Readonly<{ readonly signal?: AbortSignal }> = {},
+  ): Promise<RouteInvocation> {
+    let queued: RouteManifest;
     try {
-      manifest = this.#manifest.manifest();
-      prepared = this.#prepared();
+      queued = this.#manifest.manifest();
     } catch (error) {
       if (error instanceof RouteInvocationRequestError) throw error;
       throw new RouteInvocationRequestError(
@@ -966,171 +1212,219 @@ export class RouteInvocationService {
         409,
       );
     }
-    const route = allManifestRoutes(manifest).find((candidate) => candidate.id === request.routeId);
+    const route = allManifestRoutes(queued).find((candidate) => candidate.id === request.routeId);
     if (route === undefined || !invocationKinds.has(route.kind as RouteInvocationKind)) {
+      const projected = projectedCommandForCliId(queued, request.routeId);
+      if (projected !== undefined) {
+        const command = commandName(projected);
+        throw new RouteInvocationRequestError(
+          ROUTE_INVOCATION_PROJECTED_CLI_ID_CODE,
+          `CLI operation ${JSON.stringify(request.routeId)} is a projection of canonical operation ${JSON.stringify(projected.routeId)}; invoke that route with surface ${JSON.stringify({ kind: 'cli', command, args: [] })}.`,
+          400,
+        );
+      }
       throw new RouteInvocationRequestError(
         ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE,
         `Route ${JSON.stringify(request.routeId)} is not available for invocation.`,
         404,
       );
     }
-    if (
-      (request.event !== undefined && route.kind !== 'event-route')
-      || (request.args !== undefined && route.kind !== 'cli')
-    ) {
-      return malformed();
-    }
-    const fixtureId = request.event?.fixtureId;
-    const fixture = fixtureId === undefined
-      ? undefined
-      : prepared.fixtures?.[route.id]?.find((candidate) => candidate.id === fixtureId);
-    if (fixtureId !== undefined && fixture === undefined) {
-      throw new RouteInvocationRequestError(
-        ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE,
-        `Fixture ${JSON.stringify(fixtureId)} is not available for route ${JSON.stringify(route.id)}.`,
-        400,
-      );
-    }
-    const rawInput = request.input ?? fixture?.input ?? {};
-    const input = route.kind === 'event-route'
-      ? eventInput(route, rawInput, request.event?.host, this.#registry)
-      : rawInput;
+    const surface = resolvedSurface(route, request.surface, queued);
     const id = `inv_${this.#now().getTime().toString(36)}${randomBytes(8).toString('hex')}`;
     const startedAt = this.#now();
-    const context = contextForRequest(route, prepared.manifest.projectRoot, request, rawInput, this.#registry);
-    const correlation = traceCorrelation(request, context, id, prepared.artifact?.epochId);
-    const href = routeHref(route.id, id);
-    const label = routeLabel(route.kind as RouteInvocationKind, route.id, route.event, request.event?.host);
-    this.#trace?.publish({
-      correlation,
-      details: { status: 'running' },
-      ...(href === undefined ? {} : { href }),
-      kind: 'invocation.started',
-      occurredAt: startedAt.toISOString(),
-      source: 'invocation',
-      status: 'running',
-      summary: `${label} · running`,
-    });
-    let eventOutcome: EventTracePreflightOutcome | undefined;
-    let providersDurationMs = 0;
+    let traceMeta: Readonly<{
+      readonly correlation: TraceCorrelation;
+      readonly eventOutcome: () => EventTracePreflightOutcome | undefined;
+      readonly href?: string;
+      readonly label: string;
+    }> | undefined;
+    const admissionSignal = options.signal === undefined
+      ? this.#closeController.signal
+      : AbortSignal.any([this.#closeController.signal, options.signal]);
     const running = this.#semaphore.run<RouteInvocation>(async () => {
-      const controller = new AbortController();
-      this.#controllers.add(controller);
-      if (this.#closed) {
-        controller.abort(new DOMException('Route invocation service closed.', 'AbortError'));
-      }
-      const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
-      let child: RouteInvocationChildResult;
-      const plainScript = plainScriptFor(prepared, route);
-      const publishKernelEvent = (event: EventTraceEvent): void => {
-        if (event.kind === 'preflight.outcome') eventOutcome = event.outcome;
-        if (event.kind === 'providers.finish' && event.durationMs !== undefined) {
-          providersDurationMs = event.durationMs;
-        }
-        this.#trace?.publish({
-          correlation: {
-            ...correlation,
-            executionId: event.execution.executionId,
-            host: event.execution.host,
-          },
-          details: kernelDetails(event),
-          ...('durationMs' in event && event.durationMs !== undefined
-            ? { durationMs: event.durationMs }
-            : {}),
-          ...(href === undefined ? {} : { href }),
-          kind: `kernel.${event.kind}`,
-          source: 'kernel',
-          status: kernelStatus(event),
-          summary: kernelSummary(event),
-        });
-      };
+      admissionSignal.throwIfAborted();
+      let release: RouteInvocationPreparedLease['release'] | undefined;
       try {
-        child = plainScript === undefined
-          ? await this.#renderChild({
-            ...(request.args === undefined ? {} : { args: request.args }),
+        let manifest: RouteManifest;
+        let prepared: RouteInvocationPreparedProject;
+        try {
+          const leased = await this.#prepared();
+          release = leased.release;
+          prepared = leased.project;
+          manifest = this.#manifest.manifest();
+        } catch (error) {
+          if (error instanceof RouteInvocationRequestError) throw error;
+          throw new RouteInvocationRequestError(
+            ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE,
+            'No published build and route manifest are available.',
+            409,
+          );
+        }
+        if (manifest.digest !== queued.digest || manifest.sourceRevision !== queued.sourceRevision) {
+          throw new RouteInvocationRequestError(
+            ROUTE_INVOCATION_STALE_REVISION_CODE,
+            ROUTE_INVOCATION_STALE_REVISION_MESSAGE,
+            409,
+          );
+        }
+        const fixtureId = surface.kind === 'event' ? surface.fixtureId : undefined;
+        const fixture = fixtureId === undefined
+          ? undefined
+          : prepared.fixtures?.[route.id]?.find((candidate) => candidate.id === fixtureId);
+        if (fixtureId !== undefined && fixture === undefined) {
+          throw new RouteInvocationRequestError(
+            ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE,
+            `Fixture ${JSON.stringify(fixtureId)} is not available for route ${JSON.stringify(route.id)}.`,
+            400,
+          );
+        }
+        const rawInput = request.input ?? fixture?.input ?? {};
+        const input = route.kind === 'event-route'
+          ? eventInput(route, rawInput, surface.kind === 'event' ? surface.host : undefined, this.#registry)
+          : rawInput;
+        const context = contextForRequest(route, prepared.manifest.projectRoot, surface, rawInput, this.#registry);
+        const correlation = traceCorrelation(request, context, id, prepared.artifact?.epochId);
+        const href = routeHref(route.id, id);
+        const label = routeLabel(
+          route.kind as RouteInvocationKind,
+          route.id,
+          route.event,
+          surface.kind === 'event' ? surface.host : undefined,
+        );
+        let eventOutcome: EventTracePreflightOutcome | undefined;
+        traceMeta = {
+          correlation,
+          eventOutcome: () => eventOutcome,
+          ...(href === undefined ? {} : { href }),
+          label,
+        };
+        this.#trace?.publish({
+          correlation,
+          details: { status: 'running' },
+          ...(href === undefined ? {} : { href }),
+          kind: 'invocation.started',
+          occurredAt: startedAt.toISOString(),
+          source: 'invocation',
+          status: 'running',
+          summary: `${label} · running`,
+        });
+        const publishKernelEvent = (event: EventTraceEvent): void => {
+          if (event.kind === 'preflight.outcome') eventOutcome = event.outcome;
+          this.#trace?.publish({
+            correlation: {
+              ...correlation,
+              executionId: event.execution.executionId,
+              host: event.execution.host,
+            },
+            details: kernelDetails(event),
+            ...('durationMs' in event && event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+            ...(href === undefined ? {} : { href }),
+            kind: `kernel.${event.kind}`,
+            source: 'kernel',
+            status: kernelStatus(event),
+            summary: kernelSummary(event),
+          });
+        };
+        admissionSignal.throwIfAborted();
+        const controller = new AbortController();
+        const abort = (): void => controller.abort(admissionSignal.reason);
+        this.#controllers.add(controller);
+        admissionSignal.addEventListener('abort', abort, { once: true });
+        const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
+        let child: RouteInvocationChildResult;
+        const plainScript = plainScriptFor(prepared, route);
+        try {
+          child = plainScript === undefined
+            ? await this.#renderChild({
+              ...(prepared.artifact === undefined
+                ? {}
+                : {
+                    artifactEpoch: generatedRouteArtifactEpoch(prepared.manifest.plugin),
+                    artifactRoot: join(prepared.manifest.projectRoot, '.agent-bundle', 'epochs', prepared.artifact.epochId),
+                  }),
+              context,
+              input,
+              manifest: prepared.manifest,
+              routeId: route.id,
+              stateRoot: prepared.stateRoot,
+              surface,
+            }, controller.signal, publishKernelEvent)
+            : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
+        } catch (error) {
+          const completedAt = this.#now();
+          const childCode = error instanceof ProductionRouteInvocationError
+            ? error.code
+            : ROUTE_INVOCATION_CHILD_FAILURE_CODE;
+          return failedInvocation({
+            code: childCode,
+            completedAt,
             context,
-            input,
-            manifest: prepared.manifest,
-            routeId: route.id,
-          }, controller.signal, publishKernelEvent)
-          : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
-      } catch (error) {
+            id,
+            manifest,
+            message: controller.signal.reason instanceof DOMException && controller.signal.reason.name === 'TimeoutError'
+              ? 'Route invocation child timed out.'
+              : options.signal?.aborted === true
+                ? 'Route invocation child stopped because the request was cancelled.'
+              : controller.signal.aborted
+                ? 'Route invocation child stopped because the service closed.'
+              : `${plainScript === undefined ? 'Route invocation child' : 'Script run'} failed: ${error instanceof Error ? error.message : String(error)}`,
+            request: { ...request, input },
+            route,
+            startedAt,
+            surface,
+          });
+        } finally {
+          clearTimeout(timeout);
+          admissionSignal.removeEventListener('abort', abort);
+          this.#controllers.delete(controller);
+        }
+        const projectionStartedAt = this.#now();
+        const projection = invocationProjection(route, surface, rawInput, child, prepared, this.#registry);
         const completedAt = this.#now();
-        return failedInvocation({
-          code: ROUTE_INVOCATION_CHILD_FAILURE_CODE,
-          completedAt,
+        const canonical = route.kind === 'event-route'
+          ? (child.input as JsonObject).canonical
+          : undefined;
+        return deepFreeze<RouteInvocation>({
+          completedAt: completedAt.toISOString(),
           context,
+          ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
+          diagnostics: [],
+          document: child.document,
+          ...(canonical !== undefined && isJsonRecord(canonical)
+            ? {
+                event: {
+                  // Project events reject repeated object references. Keep the
+                  // event detail detached from the identical public `input`.
+                  canonical: jsonObject(canonical)!,
+                  event: route.event!,
+                  ...(surface.kind !== 'event' || surface.host === undefined
+                    ? {}
+                    : { host: surface.host, native: rawInput as JsonObject }),
+                },
+              }
+            : {}),
+          events: child.events,
           id,
-          manifest,
-          message: controller.signal.reason instanceof DOMException && controller.signal.reason.name === 'TimeoutError'
-            ? 'Route invocation child timed out.'
-            : controller.signal.aborted
-              ? 'Route invocation child stopped because the service closed.'
-            : `${plainScript === undefined ? 'Route invocation child' : 'Script run'} failed: ${error instanceof Error ? error.message : String(error)}`,
-          request: { ...request, input },
-          route,
-          startedAt,
+          input: canonical ?? child.input,
+          kind: route.kind as RouteInvocationKind,
+          manifestDigest: manifest.digest,
+          outcome: invocationOutcome(route, child),
+          projection,
+          providers: child.observed?.providers ?? unobservedProviders(manifest),
+          ...(child.result === undefined ? {} : { result: child.result }),
+          routeId: route.id,
+          source: route.source,
+          sourceRevision: manifest.sourceRevision,
+          startedAt: startedAt.toISOString(),
+          status: 'succeeded',
+          surface,
+          ...(child.trace === undefined ? {} : { trace: child.trace }),
+          timings: invocationTimings(child, startedAt, projectionStartedAt, completedAt),
         });
       } finally {
-        clearTimeout(timeout);
-        this.#controllers.delete(controller);
+        await release?.();
       }
-      const projectionStartedAt = this.#now();
-      const projection = invocationProjection(
-        route,
-        request,
-        rawInput,
-        child.result,
-        child.mcp,
-        child.document,
-        manifest,
-        prepared,
-        this.#registry,
-      );
-      const completedAt = this.#now();
-      const canonical = route.kind === 'event-route'
-        ? (child.input as JsonObject).canonical
-        : undefined;
-      return deepFreeze<RouteInvocation>({
-        completedAt: completedAt.toISOString(),
-        context,
-        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
-        diagnostics: [],
-        document: child.document,
-        ...(canonical !== undefined && isJsonRecord(canonical)
-          ? {
-              event: {
-                // Project events reject repeated object references. Keep the
-                // event detail detached from the identical public `input`.
-                canonical: jsonObject(canonical)!,
-                event: route.event!,
-                ...(request.event?.host === undefined ? {} : { host: request.event.host, native: rawInput as JsonObject }),
-              },
-            }
-          : {}),
-        events: child.events,
-        id,
-        input: canonical ?? child.input,
-        kind: route.kind as RouteInvocationKind,
-        manifestDigest: manifest.digest,
-        projection,
-        providers: providerProjection(manifest, 0, 'mounted'),
-        ...(request.requestId === undefined ? {} : { requestId: request.requestId }),
-        ...(child.result === undefined ? {} : { result: child.result }),
-        routeId: route.id,
-        source: route.source,
-        sourceRevision: manifest.sourceRevision,
-        startedAt: startedAt.toISOString(),
-        status: 'succeeded',
-        timings: [
-          timing('providers', startedAt, providersDurationMs),
-          ...manifest.providers.map((provider) => timing(`provider:${provider.name}`, startedAt, 0)),
-          timing('handler', startedAt, 0),
-          timing('render', startedAt, child.renderDurationMs),
-          timing('projection', projectionStartedAt, completedAt.getTime() - projectionStartedAt.getTime()),
-        ],
-      });
-    });
+    }, admissionSignal);
     this.#pending.add(running);
     let invocation: RouteInvocation;
     try {
@@ -1139,20 +1433,24 @@ export class RouteInvocationService {
       this.#pending.delete(running);
     }
     this.#history.push(invocation);
-    const durationMs = new Date(invocation.completedAt).getTime() - new Date(invocation.startedAt).getTime();
-    this.#trace?.publish({
-      correlation,
-      details: invocationTraceDetails(invocation),
-      durationMs,
-      ...(href === undefined ? {} : { href }),
-      kind: invocation.status === 'succeeded' ? 'invocation.completed' : 'invocation.failed',
-      occurredAt: invocation.completedAt,
-      source: 'invocation',
-      status: invocation.status === 'succeeded' ? 'ok' : 'error',
-      summary: invocation.status === 'succeeded'
-        ? `${label} · ${route.kind === 'event-route' && eventOutcome !== undefined ? eventOutcome : durationText(durationMs)}`
-        : `${label} · failed`,
-    });
+    if (traceMeta !== undefined) {
+      const durationMs = new Date(invocation.completedAt).getTime() - new Date(invocation.startedAt).getTime();
+      this.#trace?.publish({
+        correlation: traceMeta.correlation,
+        details: invocationTraceDetails(invocation),
+        durationMs,
+        ...(traceMeta.href === undefined ? {} : { href: traceMeta.href }),
+        kind: invocation.status === 'succeeded' ? 'invocation.completed' : 'invocation.failed',
+        occurredAt: invocation.completedAt,
+        source: 'invocation',
+        status: invocation.status === 'succeeded' ? 'ok' : 'error',
+        summary: invocation.status === 'succeeded'
+          ? `${traceMeta.label} · ${route.kind === 'event-route' && traceMeta.eventOutcome() !== undefined
+            ? traceMeta.eventOutcome()
+            : durationText(durationMs)}`
+          : `${traceMeta.label} · failed`,
+      });
+    }
     return invocation;
   }
 }

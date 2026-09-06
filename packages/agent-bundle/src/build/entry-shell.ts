@@ -189,11 +189,14 @@ export const generatedInstallBinEntrySource = (options: {
 ].join('\n');
 
 /**
- * Where workspace-durable state anchors when the host supplies no
- * `AGENT_BUNDLE_PLUGIN_ROOT`: `cwd` (the caller's `.agent-bundle/state`, the
- * npm package bin's contract) or `artifact` (the parent of the executable's
- * own directory — the target root — which the artifact-hosted routed CLI
- * shares with the generated MCP worker beside it).
+ * The code root a generated module falls back to when the host supplies no
+ * `AGENT_BUNDLE_PLUGIN_ROOT`, and with it where its state root derives absent
+ * `AGENT_BUNDLE_STATE_ROOT`: `cwd` (the caller's `.agent-bundle`, the npm
+ * package bin's contract; state stays under `<root>/state`) or `artifact`
+ * (the parent of the executable's own directory — the target root — shared by
+ * the artifact-hosted CLI, its render worker, the MCP entry and the Flight
+ * worker; state goes to the user state directory keyed by that root, never
+ * into the installed, possibly read-only artifact).
  */
 export type GeneratedStateFallback = 'artifact' | 'cwd';
 
@@ -208,7 +211,7 @@ export interface GeneratedCliBinEntryOptions {
   /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
   readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
-  /** Durable-state anchor fallback; defaults to `cwd` (the npm package bin). */
+  /** Code-root fallback; defaults to `cwd` (the npm package bin). */
   readonly stateFallback?: GeneratedStateFallback;
   readonly web?: {
     readonly manifestRelativeUrl: string;
@@ -243,16 +246,22 @@ const pluginRootFallbackExpression = (
       : "join(process.cwd(), '.agent-bundle')";
 
 /**
- * The one plugin-root resolution of a generated module (#468): the SQLite
+ * The one plugin-root resolution of a generated module (#468, #637): the code
+ * root (`AGENT_BUNDLE_PLUGIN_ROOT`, else the fallback) and the state root
+ * (`AGENT_BUNDLE_STATE_ROOT`, else derived from the code root). The SQLite
  * kernel, the notice ledger, the lineage journal, and every request scope the
  * module opens read `pluginRoot`, so `(await agent()).plugin.stateRoot` is the
- * directory they mount by construction.
+ * directory they mount by construction. An artifact-anchored module derives
+ * its state root in the user state directory keyed by the code root; the npm
+ * bin keeps `<root>/state`.
  */
 const pluginRootDeclaration = (
   fallback: GeneratedStateFallback,
   relativeUrl?: string,
 ): string =>
-  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback, relativeUrl)} });`;
+  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback, relativeUrl)}${
+    fallback === 'artifact' ? ", stateAnchor: 'user-data'" : ''
+  } });`;
 
 const generatedStateImports = (
   state: NormalizedStateDefinition | undefined,
@@ -419,7 +428,11 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     // module-level `process.env` read sees the composed environment. The
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
-    `import { CliInputError, cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    "import { realpathSync } from 'node:fs';",
+    ...(stateFallback === 'artifact' || options.web?.pluginRootRelativeUrl !== undefined
+      ? []
+      : ["import { fileURLToPath } from 'node:url';"]),
+    `import { mapGeneratedCliInput, parseGeneratedCliArgv, renderedDocumentExitCode, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     ...(options.web === undefined
       ? []
       : [
@@ -456,25 +469,27 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     '',
     `const commands = Object.freeze(${stableJson(options.commands)});`,
     '',
-    'const parseInput = (command, route, input) => {',
-    '  let mapped = { ...input };',
-    '  if (command.projection?.defaults !== undefined) {',
-    '    for (const [key, value] of Object.entries(command.projection.defaults)) {',
-    '      if (!Object.hasOwn(mapped, key)) mapped[key] = value;',
-    '    }',
-    '  }',
-    '  if (command.projection?.mapInput === true) {',
-    "    if (typeof route.projection?.mapInput !== 'function') throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);",
-    '    try {',
-    '      mapped = route.projection.mapInput(mapped);',
-    '    } catch (error) {',
-    '      throw new CliInputError(error instanceof Error ? error.message : String(error));',
-    '    }',
-    '  }',
+    'const parseInput = (command, route, input) => mapGeneratedCliInput(command, route.module.inputSchema, route.projection, input);',
+    'const invocationRoute = (routeId) => {',
+    '  const command = commands.find((candidate) => candidate.routeId === routeId);',
+    "  if (command === undefined) throw new TypeError(`Generated CLI route ${JSON.stringify(routeId)} is not available.`);",
+    '  const route = routes[routeId];',
+    "  if (route === undefined) throw new TypeError(`Generated CLI route ${JSON.stringify(routeId)} has no compiled module.`);",
+    '  return { command, route };',
+    '};',
+    'export const prepareRouteInvocation = (routeId, argv) => {',
+    '  const { command, route } = invocationRoute(routeId);',
+    '  return parseInput(command, route, parseGeneratedCliArgv(command, argv).input);',
+    '};',
+    // The exit code this bin sets for a completed rendered document: the
+    // same validate → status → policy decision `runRenderedInvocation` makes,
+    // with the failures that shell reports and exits 1 on folded to 1.
+    'export const routeInvocationExitCode = (routeId, document) => {',
+    '  const { command, route } = invocationRoute(routeId);',
     '  try {',
-    '    return route.module.inputSchema.parse(mapped);',
-    '  } catch (error) {',
-    '    throw cliInputError(command, mapped, error);',
+    '    return renderedDocumentExitCode(command.exitCode, document, route.module.resultSchema.parse(document.value));',
+    '  } catch {',
+    '    return 1;',
     '  }',
     '};',
     '',
@@ -543,6 +558,7 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
         '',
       ]
       : []),
+    'if (import.meta.main ?? (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))) {',
     ...(options.state === undefined ? [] : ['try {']),
     `${options.state === undefined ? '' : '  '}await runGeneratedCliProcess({`,
     '  commands,',
@@ -568,6 +584,7 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     ...(options.state === undefined
       ? []
       : ['} finally {', '  await runtimeState.close();', '}']),
+    '}',
     '',
   ].join('\n');
 };
@@ -579,7 +596,7 @@ export interface GeneratedRenderedRouteWorkerOptions {
   /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
   readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
-  /** Durable-state anchor fallback; defaults to `cwd` and must match the owning executable. */
+  /** Code-root fallback; defaults to `cwd` and must match the owning executable. */
   readonly stateFallback?: GeneratedStateFallback;
 }
 
@@ -695,6 +712,10 @@ export const generatedRenderedRouteWorkerSource = (
     'const render = async (message) => {',
     '  const route = routes[message.routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export an async function component.');",
+    '  const observedRoute = message.observe !== true ? route : { ...route, module: { ...route.module, default: async (props) => {',
+    '    const handlerStartedAt = performance.now();',
+    "    try { return await route.module.default(props); } finally { parentPort.postMessage({ durationMs: performance.now() - handlerStartedAt, id: message.id, type: 'observed-handler' }); }",
+    '  } } };',
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
     ...processHitSource('  '),
@@ -717,7 +738,7 @@ export const generatedRenderedRouteWorkerSource = (
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '      plugin: pluginRoot.identity,',
     "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
-    ...providersFieldSource(providers, { indent: '      ', invocation: 'message.invocation' }),
+    ...providersFieldSource(providers, { indent: '      ', invocation: 'message.invocation', observe: 'message.observe === true' }),
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
     // The executable probed its terminal once and forwards the value; a worker
@@ -725,7 +746,9 @@ export const generatedRenderedRouteWorkerSource = (
     "      terminal: message.terminal === undefined ? unavailable('not-provided') : available(message.terminal, 'native'),",
     "      workspace: available({ root: cwd }, 'derived'),",
     '    }, async () => {',
-    '      const flight = renderAgentFlight(composeLayouts(route, { ...message.props, signal: controller.signal }, controller.signal), { signal: controller.signal });',
+    "      if (message.observe === true) parentPort.postMessage({ id: message.id, type: 'observed-render-start' });",
+    '      const renderStartedAt = performance.now();',
+    '      const flight = renderAgentFlight(composeLayouts(observedRoute, { ...message.props, signal: controller.signal }, controller.signal), { signal: controller.signal });',
     '      const reader = flight.getReader();',
     '      while (true) {',
     '        const next = await reader.read();',
@@ -733,6 +756,7 @@ export const generatedRenderedRouteWorkerSource = (
     '        const bytes = next.value;',
     "        parentPort.postMessage({ bytes, id: message.id, type: 'chunk' }, [bytes.buffer]);",
     '      }',
+    "      if (message.observe === true) parentPort.postMessage({ durationMs: performance.now() - renderStartedAt, id: message.id, type: 'observed-render-finish' });",
     '    });',
     ...(options.state === undefined
       ? []
@@ -911,8 +935,8 @@ const wiresResourceUpdatedRoute = (options: NoticeRouteSelection): boolean =>
   options.noticeDelivery?.['mcp-resource-updated'].state === 'supported';
 
 /**
- * The server process's own handle on the durable notice store. The anchor
- * resolution matches the worker's so both open the same files.
+ * The server process's own handle on the durable notice store. Both roots
+ * resolve as in the worker, so both open the same files.
  */
 const noticeDeliveryImports = (wired: boolean): readonly string[] =>
   wired
@@ -1010,24 +1034,51 @@ const providersFieldSource = (
   expressions: {
     readonly indent: string;
     readonly invocation: string;
+    readonly observe?: string;
     readonly providers?: string;
   },
 ): readonly string[] => {
-  const { indent, invocation, providers: providerExpression = 'providers' } = expressions;
-  if (providers.length === 0) return [`${indent}providers: { processLifetime: ${processLifetimeValueSource} },`];
+  const { indent, invocation, observe, providers: providerExpression = 'providers' } = expressions;
+  if (providers.length === 0) {
+    if (observe === undefined) return [`${indent}providers: { processLifetime: ${processLifetimeValueSource} },`];
+    return [
+      `${indent}providers: async () => {`,
+      `${indent}  const providersStartedAt = performance.now();`,
+      `${indent}  if (${observe}) parentPort.postMessage({ id: message.id, type: 'observed-providers-start' });`,
+      `${indent}  if (${observe}) parentPort.postMessage({ count: 0, durationMs: performance.now() - providersStartedAt, id: message.id, type: 'observed-providers-finish' });`,
+      `${indent}  return { processLifetime: ${processLifetimeValueSource} };`,
+      `${indent}},`,
+    ];
+  }
   return [
     `${indent}providers: async (request) => {`,
     `${indent}  const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
+    ...(observe === undefined
+      ? []
+      : [
+          `${indent}  const providersStartedAt = performance.now();`,
+          `${indent}  if (${observe}) parentPort.postMessage({ id: message.id, type: 'observed-providers-start' });`,
+        ]),
     `${indent}  for (const provider of ${providerExpression}) {`,
+    ...(observe === undefined ? [] : [`${indent}    const providerStartedAt = performance.now();`]),
     `${indent}    if (typeof provider.module.default !== 'function') {`,
     `${indent}      throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
     `${indent}    }`,
     `${indent}    try {`,
     `${indent}      providerValues[provider.key] = await provider.module.default({ ...request, invocation: ${invocation} });`,
+    ...(observe === undefined
+      ? []
+      : [`${indent}      if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, source: provider.source, status: 'mounted', type: 'observed-provider' });`]),
     `${indent}    } catch (error) {`,
+    ...(observe === undefined
+      ? []
+      : [`${indent}      if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, message: error instanceof Error ? error.message : String(error), source: provider.source, status: 'failed', type: 'observed-provider' });`]),
     `${indent}      throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
     `${indent}    }`,
     `${indent}  }`,
+    ...(observe === undefined
+      ? []
+      : [`${indent}  if (${observe}) parentPort.postMessage({ count: Object.keys(providerValues).length - 1, durationMs: performance.now() - providersStartedAt, id: message.id, type: 'observed-providers-finish' });`]),
     `${indent}  return providerValues;`,
     `${indent}},`,
   ];
@@ -1063,7 +1114,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
-    "import { resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    "import { Agent, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
     ...pluginRootImports('artifact'),
     ...generatedStateImports(options.state),
     ...noticeInboxImport(wiresInbox),
@@ -1078,9 +1129,9 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'process.stdout.write = process.stderr.write.bind(process.stderr);',
     `const ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch)};`,
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
-    // The worker resolves the same anchor as the server process beside it
-    // (same environment, same artifact layout); the server's observed value
-    // rides each render message and wins when present.
+    // The worker resolves the same code and state roots as the server process
+    // beside it (same environment, same artifact layout); the server's
+    // observed value rides each render message and wins when present.
     pluginRootDeclaration('artifact'),
     ...generatedStateOwner(options.state, options),
     ...providerRegistrySource(providers),
@@ -1100,6 +1151,10 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "  const routeId = message.invocation.kind === 'event' ? `hook:event-route:${message.invocation.props.event.replace('/', '-')}` : message.invocation.props.operationId;",
     '  const route = routes[routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated route must default-export an async Server Component.');",
+    '  const observedRoute = message.observe !== true ? route : { ...route, module: { ...route.module, default: async (props) => {',
+    '    const handlerStartedAt = performance.now();',
+    "    try { return await route.module.default(props); } finally { parentPort.postMessage({ durationMs: performance.now() - handlerStartedAt, id: message.id, type: 'observed-handler' }); }",
+    '  } } };',
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
     ...processHitSource('  '),
@@ -1119,6 +1174,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...providersFieldSource(providers, {
       indent: '      ',
       invocation: 'message.invocation',
+      observe: 'message.observe === true',
       ...(hasProviderSelections ? { providers: 'route.providers ?? providers' } : {}),
     }),
     '      ...(message.session === undefined ? {} : { session: message.session }),',
@@ -1129,11 +1185,20 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "      terminal: message.terminal ?? unavailable('not-provided'),",
     '      ...(message.workspace === undefined ? {} : { workspace: message.workspace }),',
     '    }, async () => {',
+    '      let validationError;',
     "      const props = message.invocation.kind === 'event'",
     '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
-    '        : { input: message.invocation.props.input, signal: controller.signal };',
-    '      const flight = renderAgentFlight(composeLayouts(route, props, controller.signal), { signal: controller.signal });',
-    '      return new Uint8Array(await new Response(flight).arrayBuffer());',
+    '        : (() => {',
+    '            try { return { input: route.module.inputSchema.parse(message.invocation.props.input), signal: controller.signal }; }',
+    "            catch (error) { validationError = error; return { input: message.invocation.props.input, signal: controller.signal }; }",
+    '          })();',
+    "      if (message.observe === true) parentPort.postMessage({ id: message.id, type: 'observed-render-start' });",
+    '      const renderStartedAt = performance.now();',
+    "      const element = validationError === undefined ? composeLayouts(observedRoute, props, controller.signal) : createElement(Agent.Result, null, createElement(Agent.Error, { code: 'invalid-input' }, `Input validation error: ${validationError instanceof Error ? validationError.message : String(validationError)}`));",
+    '      const flight = renderAgentFlight(element, { signal: controller.signal });',
+    '      const renderedBytes = new Uint8Array(await new Response(flight).arrayBuffer());',
+    "      if (message.observe === true) parentPort.postMessage({ durationMs: performance.now() - renderStartedAt, id: message.id, type: 'observed-render-finish' });",
+    '      return renderedBytes;',
     '    });',
     '    parentPort.postMessage({ bytes, id: message.id, type: \'complete\' }, [bytes.buffer]);',
     ...(options.state === undefined
@@ -1220,10 +1285,10 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   const wiresInbox = wiresInboxRoute(options);
   const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
   // The lineage registry journals durably only where the project already
-  // accepted the sqlite kernel and its durable anchor (a workspace-durable
+  // accepted the sqlite kernel and its state root (a workspace-durable
   // `src/state.ts`); stateless and volatile projects keep a process-lifetime
-  // registry so `node:sqlite` never loads for them and no `state/` directory
-  // appears inside an artifact that declared none.
+  // registry so `node:sqlite` never loads for them and no state directory
+  // is created for an artifact that declared none.
   const durableLineage = options.state?.lifetime === 'workspace-durable';
   return [
     ...(hasEvents ? ["import { dirname, resolve } from 'node:path';"] : []),
@@ -1244,12 +1309,12 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     ...routeImports(routes),
     '',
     `const ARTIFACT_EPOCH = ${JSON.stringify(artifactEpoch)};`,
-    // The server process's one anchor (#468): the lineage journal, the notice
-    // store, and every request identity it publishes read `pluginRoot`.
+    // The server process's one root resolution (#468): the lineage journal,
+    // the notice store, and every request identity it publishes read `pluginRoot`.
     pluginRootDeclaration('artifact'),
     ...(durableLineage
       ? [
-          // Beside the project's own durable state, so a restarted MCP process
+          // In the project's own state root, so a restarted MCP process
           // still knows which subagents are alive. A store that cannot open
           // degrades to memory rather than failing the server: lineage is an
           // observed axis, never a precondition.

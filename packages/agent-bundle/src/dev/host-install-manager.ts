@@ -13,8 +13,8 @@ import { basename, join, relative, resolve } from 'node:path';
 
 import { Effect, FileSystem } from 'effect';
 
-import { codexArtifactPaths } from '../adapters/codex.ts';
-import { cursorArtifactPaths } from '../adapters/cursor.ts';
+import { readArtifactManifest } from '../build/manifest-file.ts';
+import { reindexArtifactManifest } from '../build/manifest-reindex.ts';
 import { stableJson } from '../core/digest.ts';
 import { isPlatformErrno, readFileString, type PlatformRun } from '../effect/platform.ts';
 import { platformRunOf } from './platform-run.ts';
@@ -66,31 +66,17 @@ interface DevInstallMarker {
   readonly schemaVersion: 1;
 }
 
-const mcpDocumentPath = (host: InstallHost): string => {
-  switch (host) {
-    case 'claude':
-      return '.mcp.json';
-    case 'codex':
-      return codexArtifactPaths.mcp;
-    case 'cursor':
-      return cursorArtifactPaths.mcp;
-    default: {
-      const exhaustive: never = host;
-      throw new TypeError(`Unsupported development install host ${String(exhaustive)}.`);
-    }
-  }
-};
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const rewriteMcpDocument = async (
   bundleRoot: string,
+  documentPath: string,
   host: InstallHost,
   projectRoot: string,
   run: PlatformRun,
 ): Promise<void> => {
-  const path = join(bundleRoot, mcpDocumentPath(host));
+  const path = join(bundleRoot, documentPath);
   let document: unknown;
   try {
     document = JSON.parse(await run(readFileString(path))) as unknown;
@@ -142,11 +128,24 @@ const prepareDevBundle = async (
   const root = join(parent, 'bundle');
   try {
     await cp(source, root, { errorOnExist: true, force: false, recursive: true, verbatimSymlinks: true });
-    await rewriteMcpDocument(root, host, projectRoot, run);
+    const manifestRead = await readArtifactManifest(root);
+    if (manifestRead.status !== 'ok') {
+      throw new Error(`Development install requires a valid artifact manifest at ${manifestRead.path}.`);
+    }
+    const mcpDocument = manifestRead.manifest.projections.find(
+      (projection) => projection.builtInHost === host,
+    )?.documents.mcp;
+    if (mcpDocument !== undefined) {
+      await rewriteMcpDocument(root, mcpDocument, host, projectRoot, run);
+    }
     await run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.writeFileString(
       join(root, DEV_INSTALL_MARKER),
       `${stableJson(marker(epochId, host, projectRoot))}\n`,
     )));
+    await reindexArtifactManifest(root, {
+      added: [{ kind: 'generated', path: DEV_INSTALL_MARKER }],
+      ...(mcpDocument === undefined ? {} : { changed: [mcpDocument] }),
+    });
     return Object.freeze({
       cleanup: () => rm(parent, { force: true, recursive: true }),
       root,
@@ -410,6 +409,7 @@ export class DevHostInstallManager {
       let installed = this.#installed.get(host);
       if (installed === undefined) {
         const result = await this.#installBundle({
+          environment: this.#environment,
           from: prepared.root,
           ...(this.#home === undefined ? {} : { home: this.#home }),
           host,

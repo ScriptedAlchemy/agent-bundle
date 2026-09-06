@@ -26,6 +26,7 @@ import {
   featureCapabilityName,
   type AgentComponentKind,
 } from './core/components.ts';
+import { errorMessage } from './core/errors.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import {
   stateDefinitionProjection,
@@ -145,9 +146,44 @@ export type {
   ArtifactManifestProject,
   ArtifactManifestRuntime,
   ArtifactManifestSourceInput,
-  ArtifactManifestTarget,
-  ArtifactManifestTargetSchema,
-  ArtifactManifestTargetValidation,
+  ArtifactManifestApplication,
+  ArtifactManifestBin,
+  ArtifactManifestBuiltInHost,
+  ArtifactManifestCli,
+  ArtifactManifestCliCommand,
+  ArtifactManifestCliCommandMcp,
+  ArtifactManifestCliOption,
+  ArtifactManifestCliProjection,
+  ArtifactManifestCompiler,
+  ArtifactManifestCompilerAdapter,
+  ArtifactManifestDistribution,
+  ArtifactManifestDistributionChannel,
+  ArtifactManifestDistributionInstall,
+  ArtifactManifestEventExecution,
+  ArtifactManifestExecutables,
+  ArtifactManifestHook,
+  ArtifactManifestLaunch,
+  ArtifactManifestLaunchArgument,
+  ArtifactManifestLayout,
+  ArtifactManifestMcpApp,
+  ArtifactManifestMcpServer,
+  ArtifactManifestPayload,
+  ArtifactManifestProjection,
+  ArtifactManifestProjectionDocuments,
+  ArtifactManifestProjectionMarketplace,
+  ArtifactManifestProjectionSchema,
+  ArtifactManifestProjectionValidation,
+  ArtifactManifestProvenance,
+  ArtifactManifestProvider,
+  ArtifactManifestRoute,
+  ArtifactManifestRouteContract,
+  ArtifactManifestRouteContractOrigin,
+  ArtifactManifestRouteKind,
+  ArtifactManifestRouteProvenance,
+  ArtifactManifestRoutes,
+  ArtifactManifestScript,
+  ArtifactManifestScriptRendered,
+  ArtifactManifestServer,
   ArtifactManifest,
   ArtifactManifestValidation,
   ArtifactManifestValidationRecord,
@@ -155,12 +191,33 @@ export type {
   AssembledArtifactManifest,
 } from './build/manifest.ts';
 export {
+  artifactCompilerRecordVersion,
+  artifactManifestName,
+  artifactManifestVersion,
   assembleArtifactManifest,
   parseArtifactManifest,
   serializeArtifactManifest,
 } from './build/manifest.ts';
+import { readArtifactManifest, type ArtifactManifestReadResult } from './build/manifest-file.ts';
+export { readArtifactManifest, type ArtifactManifestReadResult } from './build/manifest-file.ts';
+export {
+  inspectManifestOutput,
+  inspectManifestSummary,
+  resolveManifestHost,
+  resolveManifestHostFromRoot,
+  type InspectManifestInvalid,
+  type InspectManifestOutput,
+  type InspectManifestSummary,
+  type ResolveManifestHostOptions,
+} from './build/manifest-projection.ts';
+import {
+  inspectManifestOutput,
+  resolveManifestHostFromRoot,
+  type InspectManifestOutput,
+} from './build/manifest-projection.ts';
+export { artifactManifestSchema, validateArtifactManifestSchema } from './build/manifest-schema.ts';
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
-import { defaultPackageArtifactDistPath } from './config/normalize.ts';
+import { defaultArtifactDistPath, defaultPackageArtifactDistPath } from './config/normalize.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
 export { describeRspackStatsError, formatRspackStatsError, rspackStatsErrors } from './build/rspack-stats-errors.ts';
 export type { RspackStatsErrorDetail, RspackStatsErrorLocation } from './build/rspack-stats-errors.ts';
@@ -221,9 +278,7 @@ import {
 } from './services/hook-service.ts';
 import {
   McpService,
-  type McpInvokeOptions,
   type McpInvokeResult,
-  type McpListOptions,
   type McpListResult,
 } from './services/mcp-service.ts';
 // Imported after the service modules on purpose: the position of
@@ -266,6 +321,7 @@ export type {
 
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
+export { inspectArtifactRoot as inspectArtifact, type InspectArtifactResult } from './services/inspect-artifact.ts';
 export { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 export { CapabilityStateError, capabilityStateNames, isCapabilityState } from './core/capabilities.ts';
 export type {
@@ -563,6 +619,7 @@ export interface ReadyInspectResult {
   readonly model: NormalizedPlugin;
   readonly output: {
     readonly distPath: string;
+    readonly manifest?: InspectManifestOutput;
   };
   readonly plans: readonly InspectionPlan[];
   readonly projectContext: ProjectContext;
@@ -642,7 +699,7 @@ export interface ArtifactOperationOptions extends ProjectOptions {
 
 export interface ListMcpOptions extends ArtifactOperationOptions {
   readonly server: string;
-  readonly target: string;
+  readonly target?: string;
   readonly timeoutMs?: number;
 }
 
@@ -672,17 +729,17 @@ export interface RunMcpOptions extends ArtifactOperationOptions {
   /** Set false to launch the server without any `.env` layer. */
   readonly loadEnvFiles?: boolean;
   /**
-   * Root the env-declared plugin-root anchors (for example
-   * `AGENT_BUNDLE_PLUGIN_ROOT`) expand to. Defaults to the project root so
-   * durable server state survives artifact rebuilds; point it at the
-   * artifact target root for a byte-faithful rehearsal of a copied-artifact
-   * launch.
+   * Root the env-declared `AGENT_BUNDLE_PLUGIN_ROOT` expands to. Defaults to
+   * the project root so the derived state root (keyed by that root) survives
+   * artifact rebuilds; `AGENT_BUNDLE_STATE_ROOT` in the operator environment
+   * overrides the state location. Point it at the artifact target root for a
+   * byte-faithful rehearsal of a copied-artifact launch.
    */
   readonly pluginRoot?: string;
   readonly server: string;
   /** Injectable only to make foreground process behavior deterministic in tests. */
   readonly spawnProcess?: Parameters<typeof runMcpForeground>[0]['spawnProcess'];
-  readonly target: string;
+  readonly target?: string;
 }
 
 export interface ServeAppOptions extends ArtifactOperationOptions, ServeMcpAppPublicOptions {
@@ -694,7 +751,7 @@ export interface ServeAppOptions extends ArtifactOperationOptions, ServeMcpAppPu
   readonly loadEnvFiles?: boolean;
   /** Root the env-declared plugin-root anchors expand to; see {@link RunMcpOptions.pluginRoot}. */
   readonly pluginRoot?: string;
-  /** The artifact target whose generated server to bind; defaults to `portable`. */
+  /** The artifact projection whose MCP server to bind; the only MCP projection that runs it when omitted. */
   readonly target?: string;
 }
 
@@ -804,7 +861,7 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
       // adapter identity: a custom adapter named like a built-in host is not
       // held to that host's contract (#592).
       const reports = await Promise.all(
-        registryFor(options).builtInHosts(validated.snapshot.manifest.targets.map((target) => target.name))
+        registryFor(options).builtInHosts(validated.snapshot.manifest.projections.map((projection) => projection.host))
           .map((target) => hostValidationReport(target, artifact, options.strict)),
       );
       return Object.freeze({
@@ -1086,6 +1143,18 @@ const inspectState = (model: NormalizedPlugin): StateInspection => {
   });
 };
 
+/**
+ * The built manifest `inspect` summarizes: the configured artifact output, or —
+ * when nothing was built there and the output is the library default — the
+ * package-output root the CLI `build` writes to (`artifact/`).
+ */
+const readBuiltManifest = async (root: string, artifactDistPath: string): Promise<ArtifactManifestReadResult> => {
+  const configured = await readArtifactManifest(resolve(root, artifactDistPath));
+  if (configured.status !== 'missing' || artifactDistPath !== defaultArtifactDistPath) return configured;
+  const packaged = await readArtifactManifest(resolve(root, defaultPackageArtifactDistPath));
+  return packaged.status === 'missing' ? configured : packaged;
+};
+
 export const inspect = async (options: InspectOptions): Promise<InspectResult> => {
   const prepared = await prepareProject(options, 'inspect');
   if (
@@ -1152,12 +1221,12 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
         projectRoot: prepared.root,
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
-    } catch {
+    } catch (error) {
       return invalidInspection(freezeDiagnostics([
         ...prepared.diagnostics,
         projectDiagnostic(
           'AB7001',
-          'Unable to compose the bundler inspection.',
+          `Unable to compose the bundler inspection: ${errorMessage(error)}`,
           { sourcePath: prepared.configPath },
         ),
       ]));
@@ -1187,10 +1256,14 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
         : {}),
       ...(options.focus === 'state' ? { state: inspectState(model) } : {}),
     });
+  const manifest = inspectManifestOutput(await readBuiltManifest(prepared.root, prepared.artifactDistPath));
   return Object.freeze({
     diagnostics: prepared.diagnostics,
     model,
-    output: Object.freeze({ distPath: prepared.artifactDistPath }),
+    output: Object.freeze({
+      distPath: prepared.artifactDistPath,
+      ...(manifest === undefined ? {} : { manifest }),
+    }),
     plans,
     projectContext,
     ...(selected === undefined ? {} : { selected }),
@@ -1244,6 +1317,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     projectContext,
     projectRoot: prepared.root,
     registry: prepared.registry,
+    routeGraph: prepared.routeGraph ?? emptyCompiledRouteGraph,
     ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
   });
   let packageBuild: PackageBuildResult | undefined;
@@ -1257,7 +1331,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     if (packageBuild !== undefined) assertPackageOutputSources(packageBuild, projectContext);
   }
   const hostValidation = options.hostValidation === true
-    ? await buildHostValidation(prepared.registry.builtInHosts(result.manifest.targets.map((target) => target.name)), output, options)
+    ? await buildHostValidation(prepared.registry.builtInHosts(result.manifest.projections.map((projection) => projection.host)), output, options)
     : undefined;
   return Object.freeze({
     build: result,
@@ -1453,54 +1527,76 @@ export const compareEvals = async (options: CompareEvalsOptions): Promise<EvalCo
 
 export const listMcp = async (options: ListMcpOptions): Promise<McpListResult> => {
   const registry = registryFor(options);
-  return temporaryArtifact({ ...options, registry }, async (artifact) => new McpService({ registry }).list({
-    artifact,
-    server: options.server,
-    target: options.target,
-    timeoutMs: options.timeoutMs,
-    workspaceRoot: resolve(options.root),
-  } satisfies McpListOptions));
+  return temporaryArtifact({ ...options, registry }, async (artifact) => {
+    const { host } = await resolveManifestHostFromRoot(artifact, {
+      capability: 'mcp',
+      ...(options.target === undefined ? {} : { requested: options.target }),
+      server: options.server,
+    }, registry);
+    return new McpService({ registry }).list({
+      artifact,
+      server: options.server,
+      target: host,
+      timeoutMs: options.timeoutMs,
+      workspaceRoot: resolve(options.root),
+    });
+  });
 };
 
 export const invokeMcp = async (options: InvokeMcpOptions): Promise<McpInvokeResult> => {
   const registry = registryFor(options);
-  return temporaryArtifact({ ...options, registry }, async (artifact) => new McpService({ registry }).invoke({
-    artifact,
-    input: options.input,
-    server: options.server,
-    target: options.target,
-    timeoutMs: options.timeoutMs,
-    tool: options.tool,
-    workspaceRoot: resolve(options.root),
-  } satisfies McpInvokeOptions));
+  return temporaryArtifact({ ...options, registry }, async (artifact) => {
+    const { host } = await resolveManifestHostFromRoot(artifact, {
+      capability: 'mcp',
+      ...(options.target === undefined ? {} : { requested: options.target }),
+      server: options.server,
+    }, registry);
+    return new McpService({ registry }).invoke({
+      artifact,
+      input: options.input,
+      server: options.server,
+      target: host,
+      timeoutMs: options.timeoutMs,
+      tool: options.tool,
+      workspaceRoot: resolve(options.root),
+    });
+  });
 };
 
 /**
  * Runs one built stdio MCP server in the foreground with inherited stdio,
  * resolving its content-hashed generated entry from the target manifest.
- * Both durable-state anchors point at the project root: plugin-data state
- * persists under `.agent-bundle/mcp-run/<target>/<server>`, and env-declared
- * plugin-root anchors expand to the project root itself (override with
- * `pluginRoot`). The launch environment layers, lowest to highest: manifest
- * env, the project-root `.env` set (or `envFiles`), the operator's real
- * `process.env`.
+ * Env-declared `AGENT_BUNDLE_PLUGIN_ROOT` expands to the project root by
+ * default so the derived state root (keyed by that root) survives artifact
+ * rebuilds; `AGENT_BUNDLE_STATE_ROOT` in the operator environment overrides
+ * the state location (override the plugin-root expansion with `pluginRoot`).
+ * Plugin-data state persists under `.agent-bundle/mcp-run/<target>/<server>`.
+ * The launch environment layers, lowest to highest: manifest env, the
+ * project-root `.env` set (or `envFiles`), the operator's real `process.env`.
  */
 export const runMcp = async (options: RunMcpOptions): Promise<number> => {
   const registry = registryFor(options);
   const workspaceRoot = resolve(options.root);
-  return temporaryArtifact({ ...options, registry }, async (artifact) => runMcpForeground({
-    artifact,
-    ...(options.envFiles === undefined ? {} : { envFiles: options.envFiles }),
-    ...(options.pluginRoot === undefined ? {} : { envPluginRoot: resolve(options.pluginRoot) }),
-    ...(options.loadEnvFiles === undefined ? {} : { loadEnvFiles: options.loadEnvFiles }),
-    ...(options.mode === undefined ? {} : { mode: options.mode }),
-    pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', options.target, mcpServerStateDirectory(options.server)),
-    registry,
-    server: options.server,
-    ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }),
-    target: options.target,
-    workspaceRoot,
-  }));
+  return temporaryArtifact({ ...options, registry }, async (artifact) => {
+    const { host } = await resolveManifestHostFromRoot(artifact, {
+      capability: 'mcp',
+      ...(options.target === undefined ? {} : { requested: options.target }),
+      server: options.server,
+    }, registry);
+    return runMcpForeground({
+      artifact,
+      ...(options.envFiles === undefined ? {} : { envFiles: options.envFiles }),
+      ...(options.pluginRoot === undefined ? {} : { envPluginRoot: resolve(options.pluginRoot) }),
+      ...(options.loadEnvFiles === undefined ? {} : { loadEnvFiles: options.loadEnvFiles }),
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+      pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', host, mcpServerStateDirectory(options.server)),
+      registry,
+      server: options.server,
+      ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }),
+      target: host,
+      workspaceRoot,
+    });
+  });
 };
 
 /**
@@ -1544,8 +1640,7 @@ const scopedThrowawayArtifact = (
 export const serveApp = async (options: ServeAppOptions): Promise<ServedMcpApp> => {
   const registry = registryFor(options);
   const workspaceRoot = resolve(options.root);
-  const target = options.target ?? 'portable';
-  const { server } = parseAppSelector(options.app);
+  parseAppSelector(options.app);
   return serveMcpApp({
     app: options.app,
     artifact: options.artifact === undefined ? scopedThrowawayArtifact({ ...options, registry }) : resolve(options.artifact),
@@ -1557,11 +1652,10 @@ export const serveApp = async (options: ServeAppOptions): Promise<ServedMcpApp> 
     ...(options.mode === undefined ? {} : { mode: options.mode }),
     ...(options.open === undefined ? {} : { open: options.open }),
     ...(options.openBrowser === undefined ? {} : { openBrowser: options.openBrowser }),
-    pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', target, mcpServerStateDirectory(server)),
     ...(options.port === undefined ? {} : { port: options.port }),
     ...(options.profile === undefined ? {} : { profile: options.profile }),
     registry,
-    target,
+    ...(options.target === undefined ? {} : { target: options.target }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.tool === undefined ? {} : { tool: options.tool }),
     workspaceRoot,

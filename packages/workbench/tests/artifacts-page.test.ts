@@ -38,6 +38,44 @@ const agents: ArtifactInspectionFile = {
 };
 
 const inspection: ArtifactInspection = {
+  application: {
+    cli: {
+      bins: [{ hosts: ['claude'], name: 'fixture', path: 'bin/fixture.mjs' }],
+      commands: [{ path: ['review'], routeId: 'cli:review' }],
+      mode: 'generated',
+    },
+    distribution: { channels: ['local'], payloads: [] },
+    events: [{
+      event: 'sessionStart',
+      hooks: [{ host: 'claude', kind: 'event-route', path: 'hooks/session-start.mjs', timeout: 30 }],
+      id: 'event:session-start',
+    }],
+    hooks: [],
+    hosts: [{
+      builtIn: true,
+      documents: [{ kind: 'plugin', path: '.claude-plugin/plugin.json' }],
+      host: 'claude',
+    }],
+    identity: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
+    scripts: [{ hosts: ['claude'], id: 'script:lint', mode: 'bundle', name: 'lint', path: 'scripts/lint.mjs' }],
+    servers: [{
+      apps: [{
+        id: 'app:review/dashboard',
+        name: 'Dashboard',
+        path: 'apps/dashboard.html',
+        resourceUri: 'ui://review/dashboard',
+      }],
+      entry: 'mcp/review/server.mjs',
+      hosts: ['claude'],
+      id: 'mcp:review',
+      kind: 'compiled',
+      name: 'review',
+      prompts: [{ id: 'prompt:review/check', name: 'prompt:review/check' }],
+      resources: [{ id: 'resource:review/summary', name: 'resource:review/summary' }],
+      tools: [{ id: 'tool:review/run', name: 'tool:review/run' }],
+      transport: 'stdio',
+    }],
+  },
   epochId: 'epoch-2',
   files: [agents, wrapper],
   project: {
@@ -51,28 +89,9 @@ const inspection: ArtifactInspection = {
     outputPath: 'hooks/session-start.mjs',
     sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
   }],
-  runtime: {
-    executables: [wrapper],
-    hooks: [{
-      event: 'sessionStart',
-      file: wrapper,
-      id: 'hook:session-start',
-      name: 'session-start',
-      path: 'hooks/session-start.mjs',
-      target: 'claude',
-      timeout: 30,
-    }],
-    mcpServers: [{
-      entryPaths: ['mcp/review/server.mjs'],
-      kind: 'stdio',
-      manifestPath: '.mcp.json',
-      name: 'review',
-      target: 'claude',
-    }],
-    scripts: [],
-  },
-  targets: [{
-    name: 'claude',
+  projections: [{
+    documents: { plugin: '.claude-plugin/plugin.json' },
+    host: 'claude',
     tree: {
       children: [
         { file: agents, kind: 'file', name: 'AGENTS.md', path: 'AGENTS.md' },
@@ -88,6 +107,30 @@ const inspection: ArtifactInspection = {
       path: '.',
     },
   }],
+  runtime: {
+    bins: [{ file: wrapper, hosts: ['claude'], name: 'fixture' }],
+    executables: [wrapper],
+    hooks: [{
+      event: 'sessionStart',
+      file: wrapper,
+      id: 'hook:session-start',
+      kind: 'event-route',
+      name: 'session-start',
+      path: 'hooks/session-start.mjs',
+      target: 'claude',
+      timeout: 30,
+    }],
+    mcpServers: [{
+      apps: [],
+      entryPaths: ['mcp/review/server.mjs'],
+      kind: 'compiled',
+      manifestPath: '.mcp.json',
+      name: 'review',
+      target: 'claude',
+      transport: 'stdio',
+    }],
+    scripts: [],
+  },
 };
 
 const diff: ArtifactEpochDiff = {
@@ -129,7 +172,7 @@ const readyView = artifactViewFor({
   diff: undefined,
   epochId: 'epoch-2',
   inspection,
-  selectedTarget: 'claude',
+  selectedProjection: 'claude',
 });
 
 it('renders the emitted file tree without runtime hook or MCP tables', () => {
@@ -152,7 +195,7 @@ it('renders artifact validation diagnostics as a visible alert', () => {
       diff: undefined,
       epochId: 'epoch-2',
       inspection: undefined,
-      selectedTarget: undefined,
+      selectedProjection: undefined,
     }),
   }));
 
@@ -164,7 +207,7 @@ it('renders artifact validation diagnostics as a visible alert', () => {
 
 it('renders each diff group with its count and both epoch digests', () => {
   const markup = renderToStaticMarkup(createElement(ArtifactEpochDiffView, {
-    view: artifactViewFor({ diagnostics: [], diff, epochId: 'epoch-2', inspection, selectedTarget: undefined }),
+    view: artifactViewFor({ diagnostics: [], diff, epochId: 'epoch-2', inspection, selectedProjection: undefined }),
   }));
 
   expect(markup).toContain('Added');
@@ -189,15 +232,15 @@ it('renders no inspection controls when no build is available', () => {
   const markup = renderToStaticMarkup(createElement(ArtifactsPage, { client, epochId: undefined }));
 
   expect(markup).toContain('No successful build is available');
-  expect(markup).not.toContain('id="artifact-target"');
+  expect(markup).not.toContain('id="artifact-projection"');
   expect(markup).not.toContain('id="artifact-diff-base"');
 });
 
-it('renders the target and epoch comparison controls for an active epoch', () => {
+it('renders the projection and epoch comparison controls for an active epoch', () => {
   const client = new ArtifactClient({ foreground: foreground(sessionFetch(() => response({ inspection }))) });
   const markup = renderToStaticMarkup(createElement(ArtifactsPage, { client, epochId: 'epoch-2' }));
 
-  expect(markup).toContain('id="artifact-target"');
+  expect(markup).toContain('id="artifact-projection"');
   expect(markup).toContain('id="artifact-diff-base"');
   expect(markup).toContain('Compare builds');
 });

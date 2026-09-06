@@ -346,9 +346,9 @@ id。只要路由从生成的 CLI 可执行文件运行，无论命令由哪种�
 `bin/<plugin-name>-flight.mjs`），由所有选中宿主共享。每个内置 target 都发布了准入它的 `cli` 能力。产物 bin 是一个
 自包含的 ESM 模块，没有 shebang 也没有可执行位——像 `scripts/*.mjs` 一样以
 `node <plugin-root>/bin/<plugin-name>.mjs <command>` 运行。帮助、argv 解析、输出模式、退出码与信号都与
-包 bin 一致；唯一的区别是，在宿主未提供 `AGENT_BUNDLE_PLUGIN_ROOT` 时，工作区级持久状态锚定在产物根目录
-（`bin/` 的父目录，与生成的 MCP worker 使用同一个回退），而不是 `$PWD/.agent-bundle/state`，这样一起安装
-的 CLI 与服务器观察到的是同一份存储。
+包 bin 一致；唯一的区别是，产物宿主的 CLI 与 MCP 服务器从同一个代码根目录推导出同一个框架状态根目录——
+`~/.agent-bundle/state/<plugin>-<digest>`，或已设置的 `AGENT_BUNDLE_STATE_ROOT`——因此共享同一份存储。
+npm 包 bin 仍使用 `$PWD/.agent-bundle/state`。
 
 从其他表面引用它时使用插件根 token——Claude Skill Markdown 与 hook 命令中写
 `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`，Codex hook 中写 `${PLUGIN_ROOT}/…`，Cursor hook 中写
@@ -448,7 +448,10 @@ export default defineConfig({
 悄悄覆盖契约。保留的模块 specifier 也以同样方式受到保护：把 `agent-bundle/mcp-entry`、
 `agent-bundle/meta` 或 `agent-bundle/mcp-apps` 外部化的逃生舱会让构建失败。外部化整体上也受到同样的
 边界约束：`AB4725` 会拒绝静态可见、点名某个包的 `externals`，相对路径、函数形式以及 mutator 添加的
-externals 则由编译过程自身的证据判断（`AB6005`）。运行时路径引用也以同样方式得到保留：你的代码或
+externals 则由编译过程自身的证据判断（`AB6005`）。逃生舱还运行在编译器判定模块图之后，可以改写输出
+字节，因此该构建的编译证据记录会标记 `coverage.rewritable`，产物校验会完整解析每个已输出模块并解析
+其导入，而不是信任记录；没有逃生舱时，编译产物只做词法分析，其字面量导入对照记录在案的外部依赖核对
+（`rspackIgnore` 导入会以 `AB6005` 失败）。运行时路径引用也以同样方式得到保留：你的代码或
 生成入口中的 `new URL(…, import.meta.url)` 或 `new Worker(new URL(…))` 指向的是产物旁的一个文件，因此
 不变量层会在逃生舱之后关闭打包器对 URL 与 worker 的静态资源处理，让该表达式原样进入产物。逃生舱定制的是
 *代码如何编译*，绝不是*产物承诺了什么*。
@@ -480,8 +483,13 @@ npx agent-bundle inspect --bundler --root .
 npx agent-bundle inspect --bundler --root . --target claude --json
 ```
 
-它会把构建所组合的每个输出的合成配置，按构建实际降级的样子原样导出；由于用的就是构建所用的同一批
-函数，这份导出不可能与真实编译结果发生漂移。被框架包装的入口还会附带生成的包装模块源码。
+它会导出构建所编译的每个输出降级后的 Rspack 配置——每个编译器一条记录，由构建自己的 Rslib（可执行
+文件）或 Rsbuild（MCP App 视图）降级流程产出，并在构建即将开始编译的位置停下——因此这份导出不可能与
+真实编译结果发生漂移。你能看到解析后的 `resolve.alias` 映射（框架运行时模块与你自己的别名并列）、
+`externals` 列表、以 `[object <ClassName>]` 渲染的插件、以 `[function <name>]` 渲染的函数，以及
+`output.path`：产物根目录显示为 `<output>`，包构建显示为 `<项目根>/dist`。被构建不变量拒绝的逃生舱值
+——例如给保留的 `agent-bundle/*` 说明符设置别名——会让检查变为无效，并以 `AB7001` 指出被拒绝的原因。
+被框架包装的入口还会附带生成的包装模块源码。
 
 本页所有内容的完整契约见
 [Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md)。

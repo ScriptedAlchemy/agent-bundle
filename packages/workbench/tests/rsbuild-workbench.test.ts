@@ -21,15 +21,51 @@ it('pins production mode for builds so ambient NODE_ENV cannot select mode none'
   expect(resolveConfig('dev')).toMatchObject({ mode: 'development' });
 });
 
-it('builds workbench assets with stable unhashed names', () => {
+it('targets the desktop Chromium floor in production and development', () => {
+  for (const command of ['build', 'dev'] as const) {
+    expect(resolveConfig(command)).toMatchObject({
+      output: {
+        overrideBrowserslist: ['chrome >= 120'],
+      },
+    });
+  }
+});
+
+it('hashes production JS, CSS, and assets so the foreground can cache them immutably', () => {
   expect(resolveConfig('build')).toMatchObject({
+    mode: 'production',
     output: {
       copy: [
         { from: join(workbenchRoot, 'THIRD_PARTY_NOTICES'), to: 'THIRD_PARTY_NOTICES', toType: 'file' },
         { from: join(workbenchRoot, 'src/mcp/APP-RENDERER-LICENSE'), to: 'src/mcp/APP-RENDERER-LICENSE', toType: 'file' },
       ],
+      filenameHash: true,
+      filename: {
+        assets: '[name].[contenthash:8][ext]',
+        css: '[name].[contenthash:8].css',
+        js: '[name].[contenthash:8].js',
+      },
+    },
+  });
+});
+
+it('keeps contributor HMR filenames unhashed', () => {
+  expect(resolveConfig('dev')).toMatchObject({
+    mode: 'development',
+    output: {
       filenameHash: false,
       filename: {
+        assets: '[name][ext]',
+        css: '[name].css',
+        js: '[name].js',
+      },
+    },
+  });
+  expect(createWorkbenchConfig(undefined, 'development')).toMatchObject({
+    output: {
+      filenameHash: false,
+      filename: {
+        assets: '[name][ext]',
         css: '[name].css',
         js: '[name].js',
       },
@@ -63,13 +99,20 @@ it('configures no dev server block when no foreground target is supplied', () =>
   }
 });
 
+const hashedBundleName = (kind: 'css' | 'js'): RegExp =>
+  kind === 'css' ? /^index\.[a-f0-9]{8}\.css$/u : /^index\.[a-f0-9]{8}\.js$/u;
+
 it('publishes the workbench application at the foreground server index asset', async () => {
+  const jsRoot = join(workbenchRoot, 'dist', 'static', 'js');
   await expect(access(join(workbenchRoot, 'dist', 'index.html'))).resolves.toBeUndefined();
-  await expect(access(join(workbenchRoot, 'dist', 'static', 'js', 'index.js'))).resolves.toBeUndefined();
+  const js = (await readdir(jsRoot)).filter((name) => name.endsWith('.js'));
+  expect(js.some((name) => hashedBundleName('js').test(name))).toBe(true);
+  expect(js).not.toContain('index.js');
 });
 
-it('emits browser-safe JS from the prepared production build', async () => {
+it('emits browser-safe content-hashed JS that index.html references', async () => {
   const jsRoot = join(workbenchRoot, 'dist', 'static', 'js');
+  const cssRoot = join(workbenchRoot, 'dist', 'static', 'css');
   const files = await readdir(jsRoot);
   const contents = await Promise.all(
     files.filter((name) => name.endsWith('.js')).map(async (name) => ({
@@ -84,5 +127,11 @@ it('emits browser-safe JS from the prepared production build', async () => {
 
   const indexHtml = await readFile(join(workbenchRoot, 'dist', 'index.html'), 'utf8');
   expect(indexHtml).toContain('id="root"');
-  expect(indexHtml).toContain('/static/js/index.js');
+  const referencedJs = files.filter((name) => indexHtml.includes(`/static/js/${name}`));
+  expect(referencedJs.length).toBeGreaterThan(0);
+  expect(referencedJs.every((name) => /\.[a-f0-9]{8}\.js$/u.test(name))).toBe(true);
+  expect(referencedJs.some((name) => hashedBundleName('js').test(name))).toBe(true);
+  const css = (await readdir(cssRoot)).filter((name) => name.endsWith('.css'));
+  const referencedCss = css.filter((name) => indexHtml.includes(`/static/css/${name}`));
+  expect(referencedCss).toEqual(expect.arrayContaining([expect.stringMatching(hashedBundleName('css'))]));
 });

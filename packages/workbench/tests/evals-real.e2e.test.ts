@@ -15,6 +15,7 @@ import { closeServer } from './support/http.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { buildWorkbench, e2e, workbenchAssets, workspaceRoot, workbenchUrl } from './support/workbench-e2e.ts';
+import { expectHeading } from './support/workbench-acceptance.ts';
 
 const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
 const browserTimeout = 12_000 * timeScale;
@@ -164,7 +165,7 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
       if (request.method() === 'GET' && request.url().includes('/api/evals/runs/')) durableReads.push(request.url());
     });
     await page.goto(workbenchUrl(server.url, '/advanced/evals'));
-    await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Evals');
     await expect(page.getByRole('tab', { name: 'Runs' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('tab', { name: 'Compare' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('button', { name: 'Run deterministic suite' })).toBeEnabled({ timeout: browserTimeout });
@@ -182,11 +183,11 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
     await expect(page.locator('.eval-summary')).toContainText(`Run ${runId} finished:`, { timeout: runCompletionTimeout });
     expect(durableReads).toContain(`${server.url}/api/evals/runs/${encodeURIComponent(runId)}`);
     await expect(page.getByRole('button', { name: 'Cancel run' })).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: 'Durable event timeline' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Durable event timeline');
     const sequences = await page.locator('.eval-timeline .eval-event-sequence').allTextContents();
     expect(sequences.map((value) => Number(value.slice(1)))).toEqual(sequences.map((_, index) => index + 1));
     expect(sequences.length).toBeGreaterThanOrEqual(3);
-    await expect(page.getByRole('heading', { name: 'Host / model matrix' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Host / model matrix');
     await expect(page.getByText('unavailable evidence').first()).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('observed evidence').first()).toBeVisible({ timeout: browserTimeout });
 
@@ -262,7 +263,7 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
       await route.continue();
     });
     await page.goto(workbenchUrl(server.url, '/advanced/evals'));
-    await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Evals');
     await page.getByLabel('Suite').selectOption('gated-cancel');
     const admitted = page.waitForResponse((response) =>
       response.url() === `${server.url}/api/evals/runs` && response.request().method() === 'POST' && response.status() === 202);
@@ -317,7 +318,7 @@ e2e('does not cancel a gated run when a newer admission replaces it or the Eval 
       if (request.method() === 'POST' && request.url().includes('/cancel')) cancellations += 1;
     });
     await page.goto(workbenchUrl(server.url, '/advanced/evals'));
-    await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Evals');
     await page.getByLabel('Suite').selectOption('gated-cancel');
     const firstAdmission = page.waitForResponse((response) =>
       response.url() === `${server.url}/api/evals/runs` && response.request().method() === 'POST' && response.status() === 202);

@@ -671,7 +671,7 @@ const eventRouteHookWrapperSource = (
   // holds this execution's tracer and receipt; it traces into a disabled
   // tracer so one host invocation yields one receipt (#600).
   const projectBindings = [
-    ...(standalone ? ['createCanonicalEventProps'] : []),
+    'createCanonicalEventProps',
     'createEventTracer',
     'eventTraceExecution',
     ...(deferredExecution ? [] : ['openEventTraceReceipt']),
@@ -713,11 +713,18 @@ const eventRouteHookWrapperSource = (
     "const endpointId = `${artifactEpoch}:${dirname(dirname(resolve(process.argv[1])))}`;",
     '',
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
+    'export const prepareRouteInvocation = (nativeInput, signal) => {',
+    '  const native = validateNativeEventEnvelope(nativeInput, { canonicalEvent, nativeEvent, target });',
+    '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+    '  return Object.freeze({ gate: "execute", native, props, runtime: runtimeMode });',
+    '};',
     ...(standalone
       ? [
-          // The wrapper lives in `hooks/`, so its artifact root is the parent
-          // directory — the same anchor the generated MCP entry resolves (#468).
-          "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });",
+          // The wrapper lives in `hooks/`, so its code root is the parent
+          // directory; the state root derives from it in the user state
+          // directory — the same two roots the generated MCP entry resolves
+          // (#468, #637), so the lineage journal it retires is the server's.
+          "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)), stateAnchor: 'user-data' });",
           'const renderStandalone = async (invocation, signal) => {',
           '  const worker = new Worker(new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url), { stderr: true, stdout: true });',
           "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
@@ -928,6 +935,19 @@ const eventRoutePreflightWrapperSource = (
     `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
     `const executor = fileURLToPath(new URL(/* webpackIgnore: true */ ${JSON.stringify(`./${executorFile}`)}, import.meta.url));`,
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
+    'export const prepareRouteInvocation = async (nativeInput, signal, observer) => {',
+    '  const native = validateNativeEventEnvelope(nativeInput, { canonicalEvent, nativeEvent, target });',
+    '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+    '  const trace = createEventTracer({ execution: eventTraceExecution({ event: canonicalEvent, host: target, nativeEvent }), ...(observer === undefined ? {} : { observer }) });',
+    '  const gate = await executeEventPreflight(preflight, {',
+    '    canonical: props.canonical,',
+    '    host: { name: target, nativeEvent },',
+    '    signal,',
+    '    terminal: { hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } },',
+    '  }, trace);',
+    '  const projected = gate === "execute" ? undefined : projectEventPreflightResult(gate, canonicalEvent, target, nativeEvent, native);',
+    '  return Object.freeze({ gate, native, projected, props, runtime: runtimeMode, trace });',
+    '};',
     'const runExecutor = (input, signal) => new Promise((resolve, reject) => {',
     '  const child = spawn(process.execPath, [executor], { signal, stdio: ["pipe", "pipe", "pipe"] });',
     '  const stdout = [];',
@@ -955,23 +975,14 @@ const eventRoutePreflightWrapperSource = (
     '  const input = Buffer.concat(chunks);',
     '  let parsed;',
     '  try { parsed = JSON.parse(input.toString("utf8")); } catch { fail("stdin must contain exactly one JSON value"); }',
-    '  const native = validateNativeEventEnvelope(parsed, { canonicalEvent, nativeEvent, target });',
     '  const controller = new AbortController();',
     '  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]);',
-    '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
     '  const execution = eventTraceExecution({ event: canonicalEvent, host: target, nativeEvent });',
     '  const receipt = await openEventTraceReceipt({ anchor: import.meta.url, env: process.env, execution });',
-    '  const trace = createEventTracer({ execution, ...(receipt === undefined ? {} : { observer: receipt.observer }) });',
-    '  receipt?.identity(native);',
     '  try {',
-    '    const gate = await executeEventPreflight(preflight, {',
-    '      canonical: props.canonical,',
-    '      host: { name: target, nativeEvent },',
-    '      signal,',
-    '      terminal: { hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } },',
-    '    }, trace);',
+    '    const { gate, native, projected, props, trace } = await prepareRouteInvocation(parsed, signal, receipt?.observer);',
+    '    receipt?.identity(native);',
     '    if (gate !== "execute") {',
-    '      const projected = projectEventPreflightResult(gate, canonicalEvent, target, nativeEvent, native);',
     '      if (projected !== undefined) process.stdout.write(JSON.stringify(projected));',
     '      return;',
     '    }',

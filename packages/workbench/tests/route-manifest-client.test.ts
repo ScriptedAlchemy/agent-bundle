@@ -48,6 +48,12 @@ const manifest = {
   events: [{
     config: [],
     event: 'afterTool',
+    execution: {
+      fallback: 'none',
+      preflight: 'src/events/tool/after.preflight.ts',
+      providers: ['library'],
+      runtime: 'shared',
+    },
     id: 'event:tool/after',
     kind: 'event-route',
     provenance: { kind: 'conventional' },
@@ -97,7 +103,7 @@ const manifest = {
       source: 'defaults',
     },
     driver: 'sqlite',
-    durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)',
+    durableLocation: '$AGENT_BUNDLE_STATE_ROOT, else ~/.agent-bundle/state/<plugin>-<digest> ($XDG_STATE_HOME/agent-bundle/<plugin>-<digest>) for an installed artifact, or ./.agent-bundle/state for the npm package bin',
     id: 'library/catalog',
     lifetime: 'workspace-durable',
     // The dev server's manifest carries the resolved notice retention policy
@@ -136,6 +142,12 @@ it('reads the compiled manifest over the shared foreground session', async () =>
   expect(decoded.servers[0]?.routes[0]?.contract).toBe(
     'contract:src/lib/protocol-schemas.ts#statusInputSchema',
   );
+  expect(decoded.events[0]?.execution).toEqual({
+    fallback: 'none',
+    preflight: 'src/events/tool/after.preflight.ts',
+    providers: ['library'],
+    runtime: 'shared',
+  });
   expect(decoded.state).toEqual(manifest.state);
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/routes/manifest' }]);
 });

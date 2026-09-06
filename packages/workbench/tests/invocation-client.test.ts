@@ -42,6 +42,7 @@ const invocation = Object.freeze({
   input: Object.freeze({ title: 'Dune' }),
   kind: 'tool' as const,
   manifestDigest: 'manifest-a',
+  outcome: Object.freeze({ kind: 'success' as const }),
   projection: Object.freeze({ mcp: Object.freeze({ content: Object.freeze([]) }) }),
   providers: Object.freeze([{
     durationMs: 1,
@@ -55,10 +56,23 @@ const invocation = Object.freeze({
   sourceRevision: 'source-a',
   startedAt: '2026-09-05T07:00:00.000Z',
   status: 'succeeded' as const,
+  surface: Object.freeze({ kind: 'mcp' as const }),
   timings: Object.freeze([{
     durationMs: 1,
     phase: 'render',
     startedAt: '2026-09-05T07:00:00.000Z',
+  }]),
+  trace: Object.freeze([{
+    at: 1,
+    execution: Object.freeze({
+      event: 'tool/after' as const,
+      executionId: 'event-execution-a',
+      host: 'claude',
+      nativeEvent: 'PostToolUse',
+    }),
+    kind: 'preflight.start' as const,
+    phase: 'preflight' as const,
+    sequence: 0,
   }]),
 }) satisfies RouteInvocation;
 
@@ -71,7 +85,7 @@ it('strictly decodes invoke, list, and read responses', async () => {
   const client = new InvocationClient({ foreground: foreground((path, init) => {
     requests.push([path, init]);
     return Response.json(path.includes('?limit=')
-      ? { invocations: [{ ...invocation, context: undefined, document: undefined, events: undefined, projection: undefined, providers: undefined, result: undefined }] }
+      ? { invocations: [{ ...invocation, context: undefined, document: undefined, events: undefined, projection: undefined, providers: undefined, result: undefined, trace: undefined }] }
       : { invocation });
   }) });
 
@@ -83,11 +97,13 @@ it('strictly decodes invoke, list, and read responses', async () => {
     input: { title: 'Dune' },
     kind: 'tool',
     manifestDigest: 'manifest-a',
+    outcome: { kind: 'success' },
     routeId: invocation.routeId,
     source: invocation.source,
     sourceRevision: 'source-a',
     startedAt: invocation.startedAt,
     status: 'succeeded',
+    surface: { kind: 'mcp' },
     timings: invocation.timings,
   }]);
   await expect(client.read('invocation a')).resolves.toEqual(invocation);
@@ -103,9 +119,9 @@ it('strictly decodes invoke, list, and read responses', async () => {
   });
 });
 
-it('sends and decodes the optional correlationId and requestId on invocations and summaries', async () => {
+it('sends and decodes the optional correlationId on invocations and summaries', async () => {
   const requests: Array<readonly [string, RequestInit]> = [];
-  const correlated = { ...invocation, correlationId: 'corr-1', requestId: 'req-1' } satisfies RouteInvocation;
+  const correlated = { ...invocation, correlationId: 'corr-1' } satisfies RouteInvocation;
   const client = new InvocationClient({ foreground: foreground((path, init) => {
     requests.push([path, init]);
     return Response.json(path.includes('?limit=')
@@ -113,9 +129,9 @@ it('sends and decodes the optional correlationId and requestId on invocations an
       : { invocation: correlated });
   }) });
 
-  await expect(client.invoke({ correlationId: 'corr-1', input: { title: 'Dune' }, requestId: 'req-1', routeId: invocation.routeId })).resolves.toEqual(correlated);
-  await expect(client.list(1)).resolves.toEqual([expect.objectContaining({ correlationId: 'corr-1', id: invocation.id, requestId: 'req-1' })]);
-  expect(JSON.parse(String(requests[0]?.[1].body))).toEqual({ correlationId: 'corr-1', input: { title: 'Dune' }, requestId: 'req-1', routeId: invocation.routeId });
+  await expect(client.invoke({ correlationId: 'corr-1', input: { title: 'Dune' }, routeId: invocation.routeId })).resolves.toEqual(correlated);
+  await expect(client.list(1)).resolves.toEqual([expect.objectContaining({ correlationId: 'corr-1', id: invocation.id })]);
+  expect(JSON.parse(String(requests[0]?.[1].body))).toEqual({ correlationId: 'corr-1', input: { title: 'Dune' }, routeId: invocation.routeId });
 
   const rejecting = new InvocationClient({ foreground: foreground(() => Response.json({ invocation: { ...invocation, requestId: 7 } })) });
   await expect(rejecting.invoke({ routeId: invocation.routeId })).rejects.toMatchObject({ code: 'AB8230' });
@@ -131,6 +147,62 @@ it('preserves coded HTTP diagnostics', async () => {
     message: 'No published build.',
     status: 409,
   });
+});
+
+it('decodes unobserved providers without a duration', async () => {
+  const unobserved = {
+    ...invocation,
+    providers: Object.freeze([{
+      id: 'catalog',
+      name: 'Catalog',
+      status: 'unobserved' as const,
+    }]),
+  } satisfies RouteInvocation;
+  const client = new InvocationClient({ foreground: foreground(() => Response.json({ invocation: unobserved })) });
+
+  await expect(client.invoke({ routeId: invocation.routeId })).resolves.toEqual(unobserved);
+});
+
+it('decodes represented-error and process-exit outcomes on completed runs', async () => {
+  const represented = {
+    ...invocation,
+    document: { ...invocation.document, status: 'represented-error' as const },
+    outcome: Object.freeze({ kind: 'represented-error' as const, summary: '[refused] Refused: policy' }),
+    projection: Object.freeze({ mcp: Object.freeze({ content: Object.freeze([]), isError: true }) }),
+  } satisfies RouteInvocation;
+  const exited = {
+    ...invocation,
+    kind: 'cli' as const,
+    outcome: Object.freeze({ exitCode: 3 as const, kind: 'process-exit' as const }),
+    projection: Object.freeze({ cli: Object.freeze({ exitCode: 3, text: 'Exiting 3.' }) }),
+  } satisfies RouteInvocation;
+  for (const expected of [represented, exited]) {
+    const client = new InvocationClient({ foreground: foreground(() => Response.json({ invocation: expected })) });
+    await expect(client.invoke({ routeId: invocation.routeId })).resolves.toEqual(expected);
+    const summaries = new InvocationClient({ foreground: foreground(() => Response.json({
+      invocations: [{ ...expected, context: undefined, document: undefined, events: undefined, projection: undefined, providers: undefined, result: undefined, trace: undefined }],
+    })) });
+    await expect(summaries.list(1)).resolves.toMatchObject([{ outcome: expected.outcome, status: 'succeeded' }]);
+  }
+});
+
+it('rejects a completed run without an outcome, a failed run with one, and unknown outcome kinds', async () => {
+  const { outcome: _omitted, ...withoutOutcome } = invocation;
+  const failedWithOutcome = {
+    ...invocation,
+    diagnostics: [{ code: 'AB8250', message: 'Render worker exited.' }],
+    outcome: { kind: 'success' },
+    status: 'failed',
+  };
+  const unknownKind = { ...invocation, outcome: { kind: 'partial' } };
+  for (const payload of [withoutOutcome, failedWithOutcome, unknownKind]) {
+    const client = new InvocationClient({ foreground: foreground(() => Response.json({ invocation: payload })) });
+    await expect(client.invoke({ routeId: invocation.routeId })).rejects.toMatchObject({ code: 'AB8230' });
+    const summaries = new InvocationClient({ foreground: foreground(() => Response.json({
+      invocations: [{ ...payload, context: undefined, document: undefined, events: undefined, projection: undefined, providers: undefined, result: undefined, trace: undefined }],
+    })) });
+    await expect(summaries.list(1)).rejects.toMatchObject({ code: 'AB8230' });
+  }
 });
 
 it('rejects malformed success payloads and unsafe invocation ids', async () => {

@@ -7,7 +7,11 @@
  */
 import React, { useEffect, useState } from 'react';
 
-import type { RouteInvocation } from '../../../agent-bundle/src/contracts/invocations.ts';
+import type {
+  RouteInvocation,
+  RouteInvocationOutcome,
+  RouteInvocationStatus,
+} from '../../../agent-bundle/src/contracts/invocations.ts';
 import {
   isTraceReplayGap,
   type TraceEntry,
@@ -16,6 +20,7 @@ import { ShellLink } from '../shell/shell-link.tsx';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 import type { TraceClient } from '../trace/trace-client.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
+import { outcomeLabel, statusLabel } from './invocation-model.ts';
 import { agentRenderEventLabel, displayAgentDocumentValue, RenderedAgentDocument } from './rendered-document.tsx';
 import { invocationOf, type RouteInvocationController, type WorkspaceResultTab } from './workspace-contracts.ts';
 import './workspace.css';
@@ -56,6 +61,14 @@ const formatTime = (iso: string): string => {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleTimeString();
 };
+
+/** Whether the execution boundary completed — never the run's verdict, which {@link OutcomeBadge} carries. */
+export const StatusBadge = ({ status }: { readonly status: RouteInvocationStatus }): React.ReactNode =>
+  <span className={`result-trace-status result-trace-status--${status}`}>{statusLabel(status)}</span>;
+
+/** The application outcome of a completed run, shown beside — never merged into — its status. */
+export const OutcomeBadge = ({ outcome }: { readonly outcome: RouteInvocationOutcome }): React.ReactNode =>
+  <span className={`route-outcome route-outcome--${outcome.kind}`} data-testid="route-outcome">{outcomeLabel(outcome)}</span>;
 
 const StructuredResult = ({ invocation }: { readonly invocation?: RouteInvocation }): React.ReactNode => {
   if (invocation === undefined) return <p className="result-empty" role="status">Run the route to see its structured result.</p>;
@@ -208,9 +221,15 @@ export const ResultTabs = ({ controller, extraTabs = [], leaf, onNavigate, onTab
     ...extraTabs,
     { id: 'trace', label: coreTabLabels.trace, render: () => invocation === undefined
       ? <p className="result-empty" role="status">Run the route to see its correlated trace.</p>
-      : traceState.state === 'loading'
-        ? <p className="result-empty" role="status">Loading correlated trace…</p>
-        : <TraceTimeline correlationId={invocation.correlationId} entries={traceState.entries} invocationId={invocation.id} onNavigate={onNavigate} /> },
+      : <>
+        <div className="result-trace-verdict">
+          <StatusBadge status={invocation.status} />
+          {invocation.outcome === undefined ? undefined : <OutcomeBadge outcome={invocation.outcome} />}
+        </div>
+        {traceState.state === 'loading'
+          ? <p className="result-empty" role="status">Loading correlated trace…</p>
+          : <TraceTimeline correlationId={invocation.correlationId} entries={traceState.entries} invocationId={invocation.id} onNavigate={onNavigate} />}
+      </> },
   ];
   const active = definitions.find((definition) => definition.id === tab) ?? definitions[0]!;
   const panel = panelId(leaf.key);

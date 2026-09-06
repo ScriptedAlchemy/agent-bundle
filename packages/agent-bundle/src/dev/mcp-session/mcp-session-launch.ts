@@ -1,8 +1,10 @@
 import { isAbsolute, resolve } from 'node:path';
 
 import { assertInside } from '../../core/paths.ts';
+import { pluginStateRootEnvAnchor } from '../../core/types.ts';
 import { resolveMcpPathTokens } from '../../services/mcp-path-tokens.ts';
 import type { ModernMcpServer, TargetMcpRuntimeContract } from '../../services/mcp-runtime.ts';
+import { devStateRoot } from '../state-paths.ts';
 import type { McpSessionInspectorConfig } from './mcp-session-protocol.ts';
 
 export interface ResolvedMcpSessionServer {
@@ -110,11 +112,12 @@ export const resolveMcpSessionLaunch = (options: ResolveMcpSessionLaunchOptions)
     const inheritedEnv = Object.fromEntries(
       Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
     );
+    const stateRoot = devStateRoot(options.workspaceRoot);
     return Object.freeze({
       args: Object.freeze([...resolved.args]),
       command: resolved.command,
       cwd,
-      env: Object.freeze({ ...inheritedEnv, ...(resolved.env ?? {}) }),
+      env: Object.freeze({ ...inheritedEnv, [pluginStateRootEnvAnchor]: stateRoot, ...(resolved.env ?? {}) }),
       inspectorEnv: inspectorEnvironment(resolved.env),
       kind: 'stdio',
     });

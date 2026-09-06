@@ -11,6 +11,7 @@ import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build } from './support/build.ts';
 import { loadedProject } from './support/loaded-project.ts';
 import { runNodeScript } from './support/run-node-script.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 
@@ -168,7 +169,13 @@ const publishHookEpoch = async (
     { skills: [] },
     registry,
   );
-  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+  await build({
+    model,
+    outputRoot: artifact,
+    projectRoot: root,
+    registry: createDefaultRegistry(),
+    routeGraph: emptyCompiledRouteGraph,
+  });
 
   const targetDigests = await projectionDigests(artifact, ['claude', 'codex']);
   const store = epochStore;
@@ -232,10 +239,11 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
   const manifestPath = 'registrations/hook-events.json';
   const hook = Object.freeze({
     event: 'beforeTool',
+    host: 'synthetic',
     id: 'hook:synthetic',
+    kind: 'config' as const,
     name: 'synthetic',
     path: 'runtime/synthetic.mjs',
-    target: 'synthetic',
   });
   const contract = Object.freeze({
     commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
@@ -589,6 +597,24 @@ it('isolates malicious relative writes from the referenced epoch and rejects coo
     manifestEntry.bytes = Buffer.byteLength(tamperedWrapper);
     manifestEntry.sha256 = sha256Hex(tamperedWrapper);
     await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    // The compile evidence record still describes the compiler's bytes, so the
+    // artifact validator catches the coordinated file + manifest rewrite first.
+    await expect(service.simulate(request)).rejects.toThrow(/AB6039.*describes different bytes/u);
+
+    const evidencePath = join(epochRoot, 'agent-bundle.compile-evidence.json');
+    const evidence = JSON.parse(await readFile(evidencePath, 'utf8')) as {
+      readonly assets: Array<{ path: string; sha256: string }>;
+    };
+    const evidenceEntry = evidence.assets.find((entry) => entry.path === wrapperPath);
+    if (evidenceEntry === undefined) throw new Error('Expected wrapper compile evidence entry.');
+    evidenceEntry.sha256 = sha256Hex(tamperedWrapper);
+    const tamperedEvidence = `${JSON.stringify(evidence)}\n`;
+    await writeFile(evidencePath, tamperedEvidence);
+    const evidenceManifestEntry = manifest.files.find((entry) => entry.path === 'agent-bundle.compile-evidence.json');
+    if (evidenceManifestEntry === undefined) throw new Error('Expected compile evidence manifest entry.');
+    evidenceManifestEntry.bytes = Buffer.byteLength(tamperedEvidence);
+    evidenceManifestEntry.sha256 = sha256Hex(tamperedEvidence);
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
     await expect(service.simulate(request)).rejects.toThrow(/stored digest/i);
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -681,10 +707,11 @@ it('distinguishes an unsupported canonical event from an unsupported target', as
       hookService: {
         list: async () => [{
           event: 'futureEvent',
+          host: 'codex',
           id: 'hook:future',
+          kind: 'config' as const,
           name: 'future',
           path: 'hooks/future.codex.mjs',
-          target: 'codex',
         }],
         simulate: async () => {
           throw new Error('Unsupported event must not execute a wrapper.');

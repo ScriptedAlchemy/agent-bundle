@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { digest } from '../core/digest.ts';
 import { CodedError } from '../core/errors.ts';
-import { assertInside, joinArtifact } from '../core/paths.ts';
+import { assertInside, isInsideOrEqual, joinArtifact } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import {
@@ -64,6 +64,15 @@ interface LaunchCandidate {
   readonly target: string;
 }
 
+const normalizedStdioEntry = (
+  value: string,
+  artifactRoot: string,
+  cwd: string,
+): string => {
+  const resolved = resolve(cwd, value);
+  return isInsideOrEqual(artifactRoot, resolved) ? resolved : value;
+};
+
 /**
  * The normalized-launch runtime view of one projection: env values pass
  * through the target's stdio-argument rule after token resolution, exactly
@@ -121,10 +130,12 @@ const launchIdentityOf = async (
       const cwd = resolved.cwd === undefined
         ? artifactRoot
         : assertInside(artifactRoot, resolve(artifactRoot, resolved.cwd));
+      const [entry, ...args] = resolved.args;
       return digest({
-        args: resolved.args,
+        args,
         command: resolved.command,
         cwd,
+        entry: entry === undefined ? null : normalizedStdioEntry(entry, artifactRoot, cwd),
         env: resolved.env ?? {},
         kind: 'stdio',
       });

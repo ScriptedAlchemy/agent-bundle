@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -8,6 +9,7 @@ import { definePrebuilt as definePrebuiltFromConfig } from '../src/config/index.
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { definePrebuilt as definePrebuiltFromIndex } from '../src/index.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
+import { resolveWebLaunch, webPluginDataDirectory } from '../src/web-host/launch.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 
 const configSource = (options: { readonly payload?: string; readonly hooks?: string; readonly mcp?: string }): string => [
@@ -91,6 +93,10 @@ it('validates declared payload runtime dependencies and normalizes them sorted a
     expect(built.model.payloads).toMatchObject([
       { name: 'runtime', runtimeDependencies: ['sharp', 'zod'] },
     ]);
+    const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.distribution.payloads).toEqual([
+      { hosts: ['claude', 'codex', 'portable'], name: 'runtime', runtimeDependencies: ['sharp', 'zod'] },
+    ]);
   } finally {
     await removeProjectFixture(root);
   }
@@ -158,6 +164,24 @@ it.each([
       code: 'AB4740',
       message: 'Payload "runtime" runtimeDependencies must be an array of package names.',
     }));
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
+it('records a payload only for the selected hosts it targets and omits payloads no selected host packages', async () => {
+  const root = await createProject({
+    payload: "  payload: { app: { source: './built/app', targets: ['codex'] }, runtime: { source: './built/runtime', targets: ['claude'] } },",
+  });
+  try {
+    await build({ output: join(root, 'out'), root, targets: ['claude', 'portable'] });
+    const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'portable']);
+    expect(manifest.distribution.payloads).toEqual([{ hosts: ['claude'], name: 'runtime', runtimeDependencies: [] }]);
+    expect(manifest.files.filter((file) => file.path.startsWith('app/'))).toEqual([]);
+    expect(manifest.files.filter((file) => file.path.startsWith('runtime/')).map((file) => file.kind)).toEqual(
+      expect.arrayContaining(['prebuilt']),
+    );
   } finally {
     await removeProjectFixture(root);
   }
@@ -241,20 +265,93 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
       command: 'node "${PLUGIN_ROOT}/runtime/hook.js" --host codex',
     });
     expect(result.build.compiledHooks).toEqual([]);
-    expect(await readJson<{ hooks: unknown[] }>(join(root, 'out', 'agent-bundle.hooks.json'))).toEqual({ hooks: [] });
 
     // Manifest provenance: payload files carry the prebuilt kind and their
     // own bytes as source inputs; the revision hashes the payload files.
+    // Prebuilt hooks are Projection IR, not compiler wrappers, so they are
+    // absent from executables.hooks.
     const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.executables.hooks).toEqual([]);
     const chunk = manifest.files.find((file) => file.path === 'runtime/chunks/417.js');
-    expect(chunk).toMatchObject({ kind: 'prebuilt', sourceInputs: ['agent-bundle.config.ts', 'built/runtime/chunks/417.js'] });
-    expect(manifest.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
+    expect(chunk).toMatchObject({ kind: 'prebuilt' });
+    expect(manifest.compiler.provenance).toContainEqual({
+      path: 'runtime/chunks/417.js',
+      sourceInputs: ['agent-bundle.config.ts', 'built/runtime/chunks/417.js'],
+    });
+    expect(manifest.compiler.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
+    expect(manifest.distribution.payloads.map((payload) => payload.name)).toEqual(['app', 'runtime']);
+    expect(manifest.executables.mcpServers.find((server) => server.name === 'timeline')).toMatchObject({
+      kind: 'prebuilt',
+      launch: { args: [], entry: 'runtime/mcp/server.js', env: {} },
+    });
 
     // The published artifact revalidates cleanly from disk alone.
     const revalidated = await validate({ artifact: join(root, 'out'), root });
     expect(revalidated.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
   } finally {
     await removeProjectFixture(root);
+  }
+});
+
+it('carries prebuilt args and env through the launch record and the web launcher', async () => {
+  const root = await createProject({
+    files: { 'built/runtime/config.json': '{}\n' },
+    mcp: [
+      '  mcp: { servers: { timeline: {',
+      "    args: ['--config', 'agent-bundle:path:plugin-root/runtime/config.json', '--verbose'],",
+      "    entry: { prebuilt: './built/runtime/mcp/server.js' },",
+      "    env: { TIMELINE_MODE: 'prebuilt', TIMELINE_STATE: 'agent-bundle:path:plugin-data/state' },",
+      "    targets: ['claude', 'portable'],",
+      "    transport: 'stdio',",
+      '  } } },',
+    ].join('\n'),
+    payload: standardPayloadBlock,
+  });
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-prebuilt-home-'));
+  try {
+    const artifact = join(root, 'out');
+    const result = await build({ output: artifact, root });
+    expect(result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+
+    const manifest = parseArtifactManifest(await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'));
+    const timeline = manifest.executables.mcpServers.find((server) => server.name === 'timeline');
+    expect(timeline).toMatchObject({
+      kind: 'prebuilt',
+      launch: {
+        args: [
+          { kind: 'literal', value: '--config' },
+          { kind: 'artifact', path: 'runtime/config.json' },
+          { kind: 'literal', value: '--verbose' },
+        ],
+        entry: 'runtime/mcp/server.js',
+        env: { TIMELINE_MODE: 'prebuilt', TIMELINE_STATE: 'agent-bundle:path:plugin-data/state' },
+      },
+    });
+    if (timeline?.launch === undefined) throw new Error('timeline launch record missing');
+
+    const launch = await resolveWebLaunch({
+      app: { allow: [], app: 'timeline/status', name: 'status', resourceUri: 'ui://timeline/status', server: 'timeline' },
+      env: {},
+      home,
+      launch: timeline.launch,
+      pluginRoot: artifact,
+    });
+    expect(launch.args).toEqual([
+      join(artifact, 'runtime', 'mcp', 'server.js'),
+      '--config',
+      join(artifact, 'runtime', 'config.json'),
+      '--verbose',
+    ]);
+    const pluginData = webPluginDataDirectory(artifact, 'timeline', home);
+    expect(launch.env).toMatchObject({
+      AGENT_BUNDLE_PLUGIN_ROOT: artifact,
+      TIMELINE_MODE: 'prebuilt',
+      TIMELINE_STATE: join(pluginData, 'state'),
+    });
+    expect(pluginData.startsWith(home)).toBe(true);
+    expect(pluginData.startsWith(artifact)).toBe(false);
+  } finally {
+    await Promise.all([removeProjectFixture(root), rm(home, { force: true, recursive: true })]);
   }
 });
 
@@ -307,6 +404,7 @@ it('reports the prebuilt payload source diagnostics', async () => {
       "    bin: './built/app',",
       "    'mcp-apps': './built/app',",
       "    'output-styles': './built/app',",
+      "    State: './built/app',",
       "    workflows: './built/app',",
       "    absent: './built/never-built',",
       "    runtime: { source: './built/runtime', targets: ['claude'] },",
@@ -317,8 +415,7 @@ it('reports the prebuilt payload source diagnostics', async () => {
   try {
     const result = await validate({ root });
     const codes = result.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity] as const);
-    // The reserved destination name.
-    expect(codes.filter(([code]) => code === 'AB4741')).toHaveLength(4);
+    expect(codes.filter(([code]) => code === 'AB4741')).toHaveLength(5);
     expect(result.diagnostics.find((diagnostic) =>
       diagnostic.code === 'AB4741' && diagnostic.message.includes('"bin"'))?.recovery).toContain('claude.bin');
     // The not-yet-built payload directory warns instead of failing validation.

@@ -46,10 +46,15 @@
 /* Status line and diagnostics */
 .route-status { align-items: center; color: #596372; display: flex; flex-wrap: wrap; font-size: 12px; gap: 12px; margin: 0; }
 .route-status-phase { font-weight: 750; }
-.route-status--succeeded .route-status-phase { color: #14682f; }
+.route-status--succeeded .route-status-phase { color: #35445a; }
 .route-status--failed .route-status-phase { color: #b31b23; }
 .route-status--running .route-status-phase { color: #8a5300; }
-.route-status-id, .route-status-correlation, .route-status-request { font: 11px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; }
+.route-status-id, .route-status-correlation { font: 11px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; }
+/* Outcome: what a completed run meant, distinct from the execution status beside it */
+.route-outcome { border: 1px solid; border-radius: 999px; font-size: 11px; font-weight: 750; max-width: 100%; overflow: hidden; padding: 1px 8px; text-overflow: ellipsis; white-space: nowrap; }
+.route-outcome--success { background: #eaf6ee; border-color: #9fd3b0; color: #14682f; }
+.route-outcome--represented-error { background: #fff1f1; border-color: #efb1b5; color: #b31b23; }
+.route-outcome--process-exit { background: #fff6e8; border-color: #efcf9a; color: #8a5300; }
 .route-diagnostics { background: #fff7f7; border-left: 3px solid #c01d26; color: #78242a; display: grid; gap: 6px; padding: 9px 14px; }
 .route-diagnostic { align-items: baseline; display: flex; flex-wrap: wrap; font-size: 13px; gap: 8px; margin: 0; }
 .route-diagnostic strong { font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-weight: 700; }
@@ -76,6 +81,7 @@
 .result-cli { display: grid; gap: 8px; }
 .result-cli h3 { color: #35445a; font-size: 12px; margin: 6px 0 0; text-transform: uppercase; }
 .result-cli-exit { font-size: 13px; margin: 0; }
+.result-trace-verdict { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .result-trace { display: grid; gap: 2px; list-style: none; margin: 0; padding: 0; }
 .result-trace-row a { align-items: baseline; border-left: 3px solid transparent; color: #1e2938; display: grid; gap: 12px; grid-template-columns: 90px 180px minmax(0, 1fr) 70px; padding: 7px 10px; text-decoration: none; }
 .result-trace-row a:hover { background: #e8effb; }
@@ -84,13 +90,14 @@
 .result-trace-summary { overflow-wrap: anywhere; }
 .result-trace-kernel { border-left: 1px solid #c9d4e4; margin: 0 0 4px 26px; padding-left: 10px; }
 .result-trace-kernel ol { display: grid; gap: 2px; list-style: none; margin: 0; padding: 0; }
-.result-trace-entry button { align-items: center; background: transparent; border: 0; border-left: 3px solid transparent; color: #1e2938; cursor: pointer; display: grid; font-size: 12px; gap: 12px; grid-template-columns: 88px 90px 70px auto minmax(0, 1fr); padding: 8px 10px; text-align: left; width: 100%; }
+.result-trace-entry button { align-items: center; background: transparent; border: 0; border-left: 3px solid transparent; color: #1e2938; cursor: pointer; display: flex; flex-wrap: wrap; font-size: 12px; gap: 12px; padding: 8px 10px; text-align: left; width: 100%; }
 .result-trace-entry button:hover { background: #e8effb; }
 .result-trace-entry--current button { background: #e6effd; border-left-color: #0b5bd3; }
-.result-trace-status { font-weight: 750; text-transform: capitalize; }
-.result-trace-status--succeeded { color: #14682f; }
+.result-trace-status { font-weight: 750; min-width: 76px; }
+.result-trace-status--succeeded { color: #35445a; }
 .result-trace-status--failed { color: #b31b23; }
 .result-trace-time, .result-trace-duration, .result-trace-id { color: #596372; font: 11px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-trace-id { flex: 1 1 120px; min-width: 0; }
 .result-trace-host { border: 1px solid #c9d4e4; border-radius: 999px; color: #375271; font-size: 11px; font-weight: 750; padding: 1px 7px; text-transform: capitalize; }
 .result-missing-invocation { background: #f7f9fc; border: 1px solid #d9dee7; border-radius: 6px; padding: 18px; }
 .result-missing-invocation h2 { font-size: 16px; margin: 0 0 6px; }
@@ -155,6 +162,7 @@
 .inspector-status--mounted { color: #14682f; }
 .inspector-status--failed { color: #b31b23; }
 .inspector-status--skipped { color: #8a5300; }
+.inspector-status--unobserved { color: #596372; }
 .inspector-diagnostics { color: #78242a; font-size: 12px; margin: 0; padding-left: 18px; }
 .inspector-timings { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
 .inspector-timings li { align-items: center; display: grid; gap: 10px; grid-template-columns: 120px minmax(0, 1fr) 64px; font-size: 12px; }
@@ -163,11 +171,12 @@
 .inspector-timing-bar span { background: #0b5bd3; display: block; height: 100%; }
 .inspector-timing-duration { color: #596372; text-align: right; }
 
-/* Event route */
-.event-host-selector { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; }
-.event-host-selector button { background: #fff; border: 1px solid #aeb8c6; border-radius: 999px; color: #26364b; cursor: pointer; font-size: 12px; font-weight: 700; padding: 5px 12px; }
-.event-host-selector button[aria-pressed="true"] { background: #e6effd; border-color: #0b5bd3; color: #0b3f8f; }
+/* Invocation surfaces and event hosts */
+.route-surface-selector, .event-host-selector { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; }
+.route-surface-selector button, .event-host-selector button { background: #fff; border: 1px solid #aeb8c6; border-radius: 999px; color: #26364b; cursor: pointer; font-size: 12px; font-weight: 700; padding: 5px 12px; }
+.route-surface-selector button[aria-pressed="true"], .event-host-selector button[aria-pressed="true"] { background: #e6effd; border-color: #0b5bd3; color: #0b3f8f; }
 .event-host-selector button:disabled { cursor: not-allowed; opacity: .45; }
+.route-surface-selector code { font-size: 11px; }
 .event-host-note { color: #596372; font-size: 12px; margin-left: 6px; }
 .event-mapping, .event-native, .event-canonical, .event-replay { display: grid; gap: 12px; }
 .event-mapping h3, .event-native h3, .event-replay h3 { color: #35445a; font-size: 12px; letter-spacing: .03em; margin: 0; text-transform: uppercase; }

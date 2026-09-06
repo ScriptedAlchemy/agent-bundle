@@ -12,10 +12,14 @@ import addFormats from 'ajv-formats';
 import cursorMarketplaceSchema from '../src/adapters/schemas/cursor/marketplace.schema.json' with { type: 'json' };
 import { stageCursorMarketplace } from '../src/install/cursor-marketplace.ts';
 import { formatInstallResult } from '../src/install/format.ts';
+import { stableJson } from '../src/core/digest.ts';
+import { readBundleIdentity } from '../src/install/identity.ts';
 import { installBundle, type InstallCommandRunner } from '../src/install/install.ts';
 import {
+  copyInventoryFiles,
   installReceiptFile,
   installReceiptFormat,
+  manifestInventory,
   readInstallReceipt,
   readInstallReceiptFile,
   treeInventory,
@@ -23,6 +27,7 @@ import {
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { runCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 
 interface CommandCall {
   readonly args: readonly string[];
@@ -147,8 +152,23 @@ const createHostBundle = async (
       version: '1.2.3',
     });
   }
+  await writeInstallFixtureManifest(
+    bundleRoot,
+    { name: 'install-fixture', version: '1.2.3' },
+    [{
+      host,
+      ...(host === 'cursor' ? {} : { marketplace: 'install-fixture-marketplace' }),
+    }],
+  );
   return { bundleRoot, cleanupRoot, from };
 };
+
+const refreshCursorBundle = async (fixture: { readonly bundleRoot: string }): Promise<void> =>
+  writeInstallFixtureManifest(
+    fixture.bundleRoot,
+    { name: 'install-fixture', version: '1.2.3' },
+    [{ host: 'cursor' }],
+  );
 
 /**
  * Host-CLI installs now write a store receipt under the host root (#101), so every Claude/Codex
@@ -586,7 +606,8 @@ it.each(['claude', 'codex', 'cursor'] as const)(
       })).rejects.toMatchObject({
         diagnostics: [expect.objectContaining({
           code: 'AB7001',
-          message: `No ${host} bundle manifest was found in ${JSON.stringify(fixture.from)}.`,
+          message: `No agent-bundle.manifest.json in ${fixture.from}: build the composite root first (agent-bundle build), ` +
+            'then point --from at its root.',
           target: host,
         })],
       });
@@ -596,6 +617,119 @@ it.each(['claude', 'codex', 'cursor'] as const)(
     }
   },
 );
+
+it('reads application identity from the manifest instead of the host plugin document', async () => {
+  const fixture = await createHostBundle('claude');
+  try {
+    await writeJson(join(fixture.bundleRoot, '.claude-plugin/plugin.json'), {
+      name: 'tampered',
+      version: '9.9.9',
+    });
+    await expect(readBundleIdentity(fixture.bundleRoot, 'claude')).resolves.toMatchObject({
+      marketplace: 'install-fixture-marketplace',
+      plugin: 'install-fixture',
+      version: '1.2.3',
+    });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('reports a non-canonical artifact manifest as AB7001', async () => {
+  const fixture = await createHostBundle('cursor');
+  try {
+    const path = join(fixture.bundleRoot, 'agent-bundle.manifest.json');
+    await writeFile(path, `${await readFile(path, 'utf8')} `);
+    const error = await readBundleIdentity(fixture.bundleRoot, 'cursor').catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7001',
+      message: expect.stringContaining(
+        `agent-bundle.manifest.json in ${fixture.bundleRoot} is not a valid canonical artifact manifest:`,
+      ),
+      target: 'cursor',
+    }]);
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('reports a host absent from manifest projections as AB7001', async () => {
+  const fixture = await createHostBundle('cursor');
+  try {
+    await writeInstallFixtureManifest(
+      fixture.bundleRoot,
+      { name: 'install-fixture', version: '1.2.3' },
+      [],
+    );
+    await expect(readBundleIdentity(fixture.bundleRoot, 'cursor')).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: `The artifact at ${fixture.bundleRoot} was built for projections []; none is the shipped cursor adapter. ` +
+          'Rebuild with --target cursor (or add it to targets in agent-bundle.config.ts).',
+        target: 'cursor',
+      })],
+    });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('selects the host projection by adapter identity, not by the selected name', async () => {
+  const fixture = await createHostBundle('cursor');
+  try {
+    const path = join(fixture.bundleRoot, 'agent-bundle.manifest.json');
+    const manifest = JSON.parse(await readFile(path, 'utf8')) as {
+      projections: { builtInHost?: string; host: string }[];
+    };
+    // A projection selected under the name `cursor` but planned by an advanced-registry
+    // adapter records no identity: the Cursor CLI has nothing to install.
+    for (const projection of manifest.projections) delete projection.builtInHost;
+    await writeFile(path, `${stableJson(manifest)}\n`);
+    await expect(readBundleIdentity(fixture.bundleRoot, 'cursor')).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: expect.stringContaining('was built for projections [cursor]; none is the shipped cursor adapter.'),
+      })],
+    });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('reports a manifest marketplace pointer at a missing document as AB7001', async () => {
+  const fixture = await createHostBundle('claude');
+  try {
+    await rm(join(fixture.bundleRoot, '.claude-plugin/marketplace.json'), { force: true });
+    await expect(readBundleIdentity(fixture.bundleRoot, 'claude')).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: `agent-bundle.manifest.json points claude at .claude-plugin/marketplace.json, which is missing from ${fixture.bundleRoot}.`,
+        target: 'claude',
+      })],
+    });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('distinguishes an unreadable manifest from an absent one: a directory in its place is AB7001 invalid, not missing', async () => {
+  const fixture = await createHostBundle('cursor');
+  try {
+    const path = join(fixture.bundleRoot, 'agent-bundle.manifest.json');
+    await rm(path, { force: true });
+    await mkdir(path);
+    const error = await readBundleIdentity(fixture.bundleRoot, 'cursor').catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7001',
+      message: expect.stringMatching(/is not a valid canonical artifact manifest: .*EISDIR/u),
+      target: 'cursor',
+    }]);
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
 
 it('fails with a typed diagnostic when the public host CLI is missing', async () => {
   const fixture = await createHostBundle('codex');
@@ -660,12 +794,17 @@ it('copies a Cursor bundle into a fake home and is idempotent', async () => {
     expect(first).toMatchObject({ contentHash: artifact.hash, destination, host: 'cursor', state: 'installed' });
     expect(second).toMatchObject({ contentHash: artifact.hash, destination, host: 'cursor', state: 'already-installed' });
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
-    expect((await readdir(destination)).sort()).toEqual([installReceiptFile, '.cursor-plugin', 'payload.txt']);
+    expect((await readdir(destination)).sort()).toEqual([
+      installReceiptFile,
+      '.cursor-plugin',
+      'agent-bundle.manifest.json',
+      'payload.txt',
+    ]);
     expect(await readInstallReceipt(destination)).toMatchObject({
       contentHash: artifact.hash,
       // A fresh install created every directory, so it owns them all.
       directories: ['.cursor-plugin'],
-      files: ['.cursor-plugin/plugin.json', 'payload.txt'],
+      files: ['.cursor-plugin/plugin.json', 'agent-bundle.manifest.json', 'payload.txt'],
       format: installReceiptFormat,
       host: 'cursor',
       // A fresh install into a home without plugins/local created both host directories (#101).
@@ -676,7 +815,132 @@ it('copies a Cursor bundle into a fake home and is idempotent', async () => {
       scope: 'user',
       version: '1.2.3',
     });
-    expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
+    expect(await listFiles(destination)).toEqual([
+      installReceiptFile,
+      '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
+      'payload.txt',
+    ]);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('matches manifest inventory to the walk inventory for a built root', async () => {
+  const fixture = await createHostBundle('cursor');
+  try {
+    const identity = await readBundleIdentity(fixture.bundleRoot, 'cursor');
+    const walked = await treeInventory(fixture.bundleRoot);
+    const indexed = await manifestInventory(fixture.bundleRoot, identity.manifest);
+    expect(indexed).toEqual(walked);
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('refuses a copy whose landed bytes are not the verified inventory', async () => {
+  const fixture = await createHostBundle('cursor');
+  const staging = await mkdtemp(join(tmpdir(), 'agent-bundle-copy-'));
+  try {
+    const identity = await readBundleIdentity(fixture.bundleRoot, 'cursor');
+    const verified = await manifestInventory(fixture.bundleRoot, identity.manifest);
+    const same = await copyInventoryFiles(fixture.bundleRoot, join(staging, 'same'), verified);
+    expect(same).toEqual(verified);
+
+    // The source changes between verification and copy: the copy is refused, not installed beside a stale receipt.
+    await writeFile(join(fixture.bundleRoot, '.cursor-plugin', 'plugin.json'), '{"name":"install-fixture","version":"9.9.9"}\n');
+    await expect(copyInventoryFiles(fixture.bundleRoot, join(staging, 'changed'), verified))
+      .rejects.toThrow(/^--from root changed while it was being copied: copied content [0-9a-f]{12} differs from verified content [0-9a-f]{12}\.$/u);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(staging, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('installs only manifest-indexed files and records the installed-copy hash', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  try {
+    await writeFile(join(fixture.bundleRoot, 'stray.txt'), 'not indexed\n');
+    const installed = await installBundle({ from: fixture.from, home, host: 'cursor' });
+    const receipt = await readInstallReceipt(destination);
+
+    await expect(access(join(destination, 'stray.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(receipt?.contentHash).toBe((await treeInventory(destination)).hash);
+    expect(installed.contentHash).toBe(receipt?.contentHash);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('reports manifest-indexed byte drift as AB7001 with the path', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  try {
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'tampered\n');
+    const error = await installBundle({ from: fixture.from, home, host: 'cursor' })
+      .catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7001',
+      message: expect.stringContaining('--from root does not match its manifest: payload.txt'),
+      target: 'cursor',
+    }]);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('reports manifest-indexed mode drift as AB7001', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  try {
+    await chmod(join(fixture.bundleRoot, 'payload.txt'), 0o755);
+    const error = await installBundle({ from: fixture.from, home, host: 'cursor' })
+      .catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7001',
+      message: expect.stringContaining('--from root does not match its manifest: payload.txt differs from its files[] row in bytes, mode, or digest.'),
+      target: 'cursor',
+    }]);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('copies and hashes an operator .env beside the artifact', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  try {
+    await writeFile(join(fixture.bundleRoot, '.env'), 'TOKEN=operator\n');
+    const installed = await installBundle({ from: fixture.from, home, host: 'cursor' });
+
+    expect(await readFile(join(destination, '.env'), 'utf8')).toBe('TOKEN=operator\n');
+    expect(installed.contentHash).toBe((await treeInventory(destination)).hash);
+    expect((await readInstallReceipt(destination))?.files).toContain('.env');
   } finally {
     await Promise.all([
       rm(fixture.cleanupRoot, { force: true, recursive: true }),
@@ -692,6 +956,7 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
   const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
   try {
     await writeFile(join(fixture.bundleRoot, 'removed-later.txt'), 'old\n');
+    await refreshCursorBundle(fixture);
     const first = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     const previousHash = first.contentHash;
     // Runtime state beside the plugin is unowned and must survive replacement.
@@ -704,6 +969,7 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     await rm(join(fixture.bundleRoot, 'removed-later.txt'));
     await mkdir(join(fixture.bundleRoot, 'skills', 'new'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'skills', 'new', 'SKILL.md'), '# new\n');
+    await refreshCursorBundle(fixture);
     const artifact = await treeInventory(fixture.bundleRoot);
 
     const replaced = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
@@ -716,6 +982,7 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     expect(await listFiles(destination)).toEqual([
       installReceiptFile,
       '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
       'operator-note.txt',
       'payload.txt',
       'skills/new/SKILL.md',
@@ -726,7 +993,7 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     expect(await readInstallReceipt(destination)).toMatchObject({
       contentHash: artifact.hash,
       directories: ['.cursor-plugin', 'skills', 'skills/new'],
-      files: ['.cursor-plugin/plugin.json', 'payload.txt', 'skills/new/SKILL.md'],
+      files: ['.cursor-plugin/plugin.json', 'agent-bundle.manifest.json', 'payload.txt', 'skills/new/SKILL.md'],
     });
 
     const again = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
@@ -738,10 +1005,12 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     await mkdir(join(destination, 'operator-dir'));
     await mkdir(join(fixture.bundleRoot, 'operator-dir'));
     await writeFile(join(fixture.bundleRoot, 'operator-dir', 'shipped.md'), '# shipped\n');
+    await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect((await readInstallReceipt(destination))?.directories).toEqual(['.cursor-plugin', 'skills', 'skills/new']);
     await rm(join(fixture.bundleRoot, 'operator-dir'), { recursive: true });
     await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+    await refreshCursorBundle(fixture);
     expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })).toMatchObject({ state: 'replaced' });
     expect((await stat(join(destination, 'operator-dir'))).isDirectory()).toBe(true);
     expect(await readdir(join(destination, 'operator-dir'))).toEqual([]);
@@ -750,11 +1019,13 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     await rm(join(destination, 'operator-dir'), { recursive: true });
     await mkdir(join(fixture.bundleRoot, 'skills', 'new'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'skills', 'new', 'SKILL.md'), '# new\n');
+    await refreshCursorBundle(fixture);
     expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })).toMatchObject({ state: 'replaced' });
     expect((await readInstallReceipt(destination))?.directories).toEqual(['.cursor-plugin', 'skills', 'skills/new']);
 
     // An incoming file that would land on an existing unowned file aborts before any change.
     await writeFile(join(fixture.bundleRoot, 'operator-note.txt'), 'from the artifact\n');
+    await refreshCursorBundle(fixture);
     const collision = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect(collision).toBeInstanceOf(DiagnosticError);
@@ -780,6 +1051,7 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
   try {
     await writeFile(join(fixture.bundleRoot, 'INSTALL.md'), '# install\n');
     await writeFile(join(fixture.bundleRoot, 'install.mjs'), '// installer\n');
+    await refreshCursorBundle(fixture);
     await cp(fixture.bundleRoot, destination, { recursive: true });
 
     // Byte-identical legacy copy: a plain rerun is a no-op; --replace adopts it by writing the receipt.
@@ -820,6 +1092,7 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
     expect(receipt?.files).toEqual(artifact.files);
     // From now on the leftovers are unowned: a later same-version replace leaves them alone.
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
+    await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(await readFile(join(destination, 'dropped-by-rebuild.txt'), 'utf8')).toBe('old artifact file\n');
   } finally {
@@ -901,6 +1174,7 @@ it('removes the staging parent after a failed replacement and re-raises the refu
     // the swap is staged in full and then refused by replaceInstalledTree.
     await mkdir(join(fixture.bundleRoot, 'skills', 'new'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'skills', 'new', 'SKILL.md'), '# new\n');
+    await refreshCursorBundle(fixture);
     await mkdir(join(destination, 'skills', 'new'), { recursive: true });
     await writeFile(join(destination, 'skills', 'new', 'SKILL.md'), '# operator-owned\n');
     const error = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' })
@@ -930,17 +1204,24 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
   const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
   try {
     await writeFile(join(fixture.bundleRoot, 'removed-later.txt'), 'old\n');
+    await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
 
     // The owned file vanished and the rebuild dropped it too: bytes hash equal, inventory does not.
     await rm(join(destination, 'removed-later.txt'));
     await rm(join(fixture.bundleRoot, 'removed-later.txt'));
+    await refreshCursorBundle(fixture);
     const refreshed = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(refreshed).toMatchObject({ state: 'replaced' });
-    expect((await readInstallReceipt(destination))?.files).toEqual(['.cursor-plugin/plugin.json', 'payload.txt']);
+    expect((await readInstallReceipt(destination))?.files).toEqual([
+      '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
+      'payload.txt',
+    ]);
     // A later unowned file at that path is never mistaken for stale owned content.
     await writeFile(join(destination, 'removed-later.txt'), 'operator\n');
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
+    await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(await readFile(join(destination, 'removed-later.txt'), 'utf8')).toBe('operator\n');
     await rm(join(destination, 'removed-later.txt'));
@@ -949,14 +1230,26 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     await rm(join(fixture.bundleRoot, 'payload.txt'));
     await mkdir(join(fixture.bundleRoot, 'payload.txt'));
     await writeFile(join(fixture.bundleRoot, 'payload.txt', 'nested.md'), '# nested\n');
+    await refreshCursorBundle(fixture);
     const toDirectory = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(toDirectory).toMatchObject({ state: 'replaced' });
-    expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt/nested.md']);
+    expect(await listFiles(destination)).toEqual([
+      installReceiptFile,
+      '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
+      'payload.txt/nested.md',
+    ]);
     await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat again\n');
+    await refreshCursorBundle(fixture);
     const toFile = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(toFile).toMatchObject({ state: 'replaced' });
-    expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
+    expect(await listFiles(destination)).toEqual([
+      installReceiptFile,
+      '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
+      'payload.txt',
+    ]);
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('flat again\n');
 
     // An artifact that was run in place may carry state/: it is never installed, hashed, or owned.
@@ -968,6 +1261,7 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     expect(withState).toMatchObject({ state: 'already-installed' });
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt with state beside\n');
+    await refreshCursorBundle(fixture);
     const replacedBesideState = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(replacedBesideState).toMatchObject({ state: 'replaced' });
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
@@ -976,6 +1270,7 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
 
     // Flipping only the executable bit is a content change: the installed copy must receive it.
     await chmod(join(fixture.bundleRoot, 'payload.txt'), 0o755);
+    await refreshCursorBundle(fixture);
     const executable = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(executable).toMatchObject({ state: 'replaced' });
     expect((await stat(join(destination, 'payload.txt'))).mode & 0o111).not.toBe(0);
@@ -985,6 +1280,7 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     // An operator hard link to an owned file under an unrelated name is not ours: incoming path → collision.
     await link(join(destination, 'payload.txt'), join(destination, 'hard-linked.txt'));
     await writeFile(join(fixture.bundleRoot, 'hard-linked.txt'), 'from the artifact\n');
+    await refreshCursorBundle(fixture);
     const hardLink = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect((hardLink as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
@@ -995,9 +1291,11 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     // An empty unowned directory at an incoming file path is a collision too (no ownership evidence).
     await rm(join(fixture.bundleRoot, 'payload.txt'));
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat again\n');
+    await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     await mkdir(join(destination, 'empty-dir'));
     await writeFile(join(fixture.bundleRoot, 'empty-dir'), 'now a file\n');
+    await refreshCursorBundle(fixture);
     const emptyCollision = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect((emptyCollision as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
@@ -1009,10 +1307,12 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     await rm(join(fixture.bundleRoot, 'payload.txt'));
     await mkdir(join(fixture.bundleRoot, 'payload.txt'));
     await writeFile(join(fixture.bundleRoot, 'payload.txt', 'nested.md'), '# nested\n');
+    await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     await mkdir(join(destination, 'payload.txt', 'scratch'));
     await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat\n');
+    await refreshCursorBundle(fixture);
     const emptyNested = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect((emptyNested as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
@@ -1024,10 +1324,12 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     await rm(join(fixture.bundleRoot, 'payload.txt'));
     await mkdir(join(fixture.bundleRoot, 'payload.txt'));
     await writeFile(join(fixture.bundleRoot, 'payload.txt', 'nested.md'), '# nested\n');
+    await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     await writeFile(join(destination, 'payload.txt', 'operator.md'), 'mine\n');
     await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat\n');
+    await refreshCursorBundle(fixture);
     const collision = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect((collision as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
@@ -1054,6 +1356,7 @@ it('refuses to hash or write through a symlinked directory inside a receipt-mana
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
     await mkdir(join(fixture.bundleRoot, 'skills', 'new'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'skills', 'new', 'SKILL.md'), '# new\n');
+    await refreshCursorBundle(fixture);
     const incoming = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect(incoming).toBeInstanceOf(DiagnosticError);
@@ -1064,6 +1367,7 @@ it('refuses to hash or write through a symlinked directory inside a receipt-mana
 
     await rm(join(destination, 'skills'));
     await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+    await refreshCursorBundle(fixture);
 
     // A symlinked receipt is never deletion authority.
     const receiptPath = join(destination, installReceiptFile);
@@ -1202,7 +1506,7 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
   }
 });
 
-it('refuses artifact paths that could not round-trip through a receipt', async () => {
+it('tree inventory refuses paths that could not round-trip through a receipt', async () => {
   if (process.platform === 'win32') return;
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
@@ -1215,10 +1519,6 @@ it('refuses artifact paths that could not round-trip through a receipt', async (
       await expect(treeInventory(fixture.bundleRoot), name).rejects.toThrow(
         `Refusing unsupported filesystem entry ${JSON.stringify(name)}`,
       );
-      const refused = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
-        .catch((failure: unknown) => failure);
-      expect(refused, name).toBeInstanceOf(DiagnosticError);
-      expect((refused as DiagnosticError).diagnostics[0], name).toMatchObject({ code: 'AB7004', target: 'cursor' });
       await expect(access(destination), name).rejects.toMatchObject({ code: 'ENOENT' });
       await rm(join(fixture.bundleRoot, name));
     }
@@ -1252,6 +1552,7 @@ it('never lets a receipt claim runtime state: a receipt owning state/ reads as l
     // Emitted bundles carry the install surface; without a trusted receipt that is what marks a copy as legacy.
     await writeFile(join(fixture.bundleRoot, 'INSTALL.md'), '# install\n');
     await writeFile(join(fixture.bundleRoot, 'install.mjs'), '// installer\n');
+    await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
@@ -1263,6 +1564,7 @@ it('never lets a receipt claim runtime state: a receipt owning state/ reads as l
 
     // Same-version drift is no longer automatic: the copy is treated as legacy, nothing is touched.
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
+    await refreshCursorBundle(fixture);
     const refused = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect(refused).toBeInstanceOf(DiagnosticError);
@@ -1388,6 +1690,9 @@ it('refuses symlinks in a Cursor source bundle', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
+  await writeFile(join(fixture.bundleRoot, 'unsafe-link'), 'indexed\n');
+  await refreshCursorBundle(fixture);
+  await rm(join(fixture.bundleRoot, 'unsafe-link'));
   await symlink('/tmp', join(fixture.bundleRoot, 'unsafe-link'));
   try {
     const error = await installBundle({
@@ -1398,7 +1703,11 @@ it('refuses symlinks in a Cursor source bundle', async () => {
     }).catch((failure: unknown) => failure);
 
     expect(error).toBeInstanceOf(DiagnosticError);
-    expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7004', target: 'cursor' }]);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7001',
+      message: expect.stringContaining('unsafe-link'),
+      target: 'cursor',
+    }]);
   } finally {
     await Promise.all([
       rm(fixture.cleanupRoot, { force: true, recursive: true }),
@@ -1438,10 +1747,11 @@ it('refuses a symlinked Cursor install destination even when its content matches
 it('rejects a Cursor plugin name that could escape the local install root', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
-  await writeJson(join(fixture.bundleRoot, '.cursor-plugin/plugin.json'), {
-    name: '../escape',
-    version: '1.2.3',
-  });
+  await writeInstallFixtureManifest(
+    fixture.bundleRoot,
+    { name: '../escape', version: '1.2.3' },
+    [{ host: 'cursor' }],
+  );
   try {
     const error = await installBundle({
       from: fixture.from,
@@ -1572,6 +1882,7 @@ it('re-runs marketplace mode idempotently with real git and refuses collisions',
     // Attributes that would normalise bytes into the index must not change what Cursor imports.
     await writeFile(join(fixture.bundleRoot, '.gitattributes'), '*.txt text eol=lf\n* ident\n');
     await writeFile(join(fixture.bundleRoot, 'crlf.txt'), 'line one\r\nline two $Id$\r\n');
+    await refreshCursorBundle(fixture);
     const first = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' });
     const second = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' });
 
@@ -1615,14 +1926,13 @@ it('re-runs marketplace mode idempotently with real git and refuses collisions',
     expect(await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })).toMatchObject({ commit: first.commit, state: 'already-installed' });
 
     // An ignored, uncommitted file in the staged tree also means HEAD is not what was verified.
-    await writeFile(join(repo, 'plugins', 'install-fixture', 'stray.log'), 'not committed\n');
-    await writeFile(join(fixture.bundleRoot, 'stray.log'), 'not committed\n');
+    await writeFile(join(repo, '.git', 'info', 'exclude'), 'stray.log\n');
+    await writeFile(join(repo, 'stray.log'), 'not committed\n');
     const ignoredError = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })
       .catch((failure: unknown) => failure);
     expect((ignoredError as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7005' }]);
     expect((ignoredError as DiagnosticError).diagnostics[0]?.message).toContain('committed HEAD');
-    await rm(join(repo, 'plugins', 'install-fixture', 'stray.log'));
-    await rm(join(fixture.bundleRoot, 'stray.log'));
+    await rm(join(repo, 'stray.log'));
 
     await writeFile(join(repo, 'plugins', 'install-fixture', 'payload.txt'), 'changed\n');
     const contentError = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })
@@ -1672,7 +1982,7 @@ it('fails closed without git in marketplace mode and leaves no staged repository
   }
 });
 
-it('refuses marketplace mode for an Agent Plugins bundle without .cursor-plugin/plugin.json', async () => {
+it('refuses marketplace mode when the manifest points at a missing Cursor plugin document', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
@@ -1688,14 +1998,17 @@ it('refuses marketplace mode for an Agent Plugins bundle without .cursor-plugin/
       mode: 'marketplace',
     }).catch((failure: unknown) => failure);
 
-    // The public install path already fails closed on the missing Cursor manifest (AB7001);
+    // The public install path already fails closed on the missing pointed document (AB7001);
     // stageCursorMarketplace repeats the check (AB7003) for direct callers.
     expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7001', target: 'cursor' }]);
-    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('No cursor bundle manifest');
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain(
+      'agent-bundle.manifest.json points cursor at .cursor-plugin/plugin.json',
+    );
     expect(calls).toEqual([]);
     await expect(access(join(home, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
 
     const direct = await stageCursorMarketplace({
+      artifact: await treeInventory(fixture.bundleRoot),
       cursorRoot: join(home, '.cursor'),
       identity: { bundleRoot: fixture.bundleRoot, plugin: 'install-fixture', version: '1.2.3' },
       runner,
@@ -1721,6 +2034,7 @@ it('refuses marketplace mode for a bundle that contains nested Git metadata', as
     // A `.git` anywhere in the bundle would be committed as an empty gitlink (mode 160000), not as files.
     await mkdir(join(fixture.bundleRoot, 'vendor', 'tool', '.git'), { recursive: true });
     await writeJson(join(fixture.bundleRoot, 'vendor', 'tool', '.git', 'config'), {});
+    await refreshCursorBundle(fixture);
     const error = await installBundle({
       commandRunner: runner,
       from: fixture.from,

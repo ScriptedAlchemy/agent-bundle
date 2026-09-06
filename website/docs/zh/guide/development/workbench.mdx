@@ -19,7 +19,8 @@ npx agent-bundle dev --root . --port 3100 --no-open
 - **仅 loopback。** 服务器只绑定 loopback，绝不会暴露到本机之外。
 - **前台开发会话，而不是托管服务。** 关闭进程即结束会话。
 - **按 epoch 固定的读取。** 没有任何东西会隐式跟随一次新构建；读取产物的表面会指明自己读取的 epoch。
-- **只做可信本地操作。** 浏览器绝不提供命令、工作目录、原生模型或凭据。见[安全](../../reference/security.mdx)。
+- **只做可信本地操作。** 浏览器只能选择一项已编译的命令投影；它绝不提供任意可执行文件、工作目录、
+  原生模型或凭据。见[安全](../../reference/security.mdx)。
 
 ## Workbench 导航
 
@@ -66,16 +67,23 @@ schema 生成，并提供适用的夹具以及为该叶子保留的上次输入�
 结果首先打开 **Rendered**，即生产 Agent Document 及其流式进度或 Suspense 替换的浏览器渲染。次要结果
 标签是 **Structured result**、**Raw AgentDocument**、**MCP projection**、可用时的 **CLI projection**，
 以及 **Trace**。检查器仅在请求时打开，其中包含 **Source**、**Schema**、**Context**、**Providers**、
-**Execution timings**、**Projection** 与 **Raw protocol**。
+**Execution timings**、**Projection** 与 **Raw protocol**。本次运行未测量的 provider 显示
+**unobserved** 且不带时长，计时只列出已测量的阶段；`0 ms` 是测得的零，不是占位。
 
 浏览器不会导入或执行任意路由模块。服务器运行生成式可执行文件所用的同一条 RSC 路由路径，并把其语义
 渲染事件流与最终的 Agent Document 发送给 Workbench。
+
+带有同目录 CLI 投影的工具在树中仍只有一个叶子和一个规范 `tool:<server>/<tool>` 操作。其表面选择器提供
+**MCP**、**CLI `<command>`** 与 **Unit render**。CLI 选项会显示投影后的 argv，并运行生成 CLI bin 的
+确认、默认值、`mapInput` 与规范校验；它不会创建第二个 `cli:` 操作。
 
 ### 事件路由
 
 事件叶子的夹具选项是 **Canonical**、**Claude**、**Codex** 与 **Cursor**。运行一份宿主夹具会像该宿主
 包装层一样解码原生信封，然后展示规范输入、请求上下文、providers、返回的决策或文档，以及投影后的宿主
 结果。规范到宿主的映射与原生输入/输出是次要的投影细节。
+当路由带有已编译 preflight 时，Canonical 会被禁用，选择器默认使用项目的第一个已生成宿主目标；不指定
+具体宿主提交该路由会报告 `AB8255`。
 
 观察到的事件收据出现在该叶子的 **Replay** 标签与 Trace 中。在那里选中一份收据即可重跑其绑定到该
 epoch 的输入；没有单独的生命周期目的地。
@@ -88,7 +96,9 @@ App 叶子把沙箱化的 MCP App 预览放在工作区中央，并绑定到它�
 `GET /web/<server>/<app>`——同样的页面、中继、路由、沙箱代理与同意行为，绑定到当前 epoch 的服务器会话。
 未列在 `web.apps` 中的 App 返回 404。启动方式从产物声明的 projection 解析（`?target=` 会被校验，
 实质不同的启动方式以 409 应答并列出可选项）；Web 会话按 epoch、服务器与启动身份缓存，只在重建发布
-新 epoch 时退役；非只读的开场工具在每个会话、工具、App 与输入组合下只运行一次。见
+新 epoch 时退役；非只读的开场工具在每个会话、工具、App 与输入组合下只运行一次。即使保留的结果被淘汰
+或调用失败，其有界执行记录仍然有效，因此刷新不会静默重复可能的变更；页面会改为要求用户从 App
+显式运行该工具。见
 [在浏览器中暴露 App](../authoring/mcp.mdx#在浏览器中暴露-app)。
 
 Skill 叶子默认渲染输出的 Skill 文档。源码/生成差异、frontmatter、资源与 eval 覆盖位于检查器中。Skill
@@ -233,11 +243,51 @@ Workbench 外壳，因此路由、trace、Problems 与 Advanced 的深度链接�
 - `GET /api/trace/stream?after=<sequence>` 以 NDJSON 流式传输 Trace 条目与重放 gap。
 - `POST /api/trace/receipts` 接受来自开发包装器的一份有界且经过 bearer 认证的钩子收据；它不是浏览器路由。
 
-该信封在可用时携带规范输入、请求上下文、providers、有序渲染事件、最终的 Agent Document、结构化结果、
-投影、诊断与执行计时。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或 invocation id（`AB8231`）、
-不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求（`AB8237`）与未知 fixture id
-（`AB8238`）会作为诊断报告。
+请求以 `routeId` 标识一个规范操作，并可选择一种有固定形状的 `surface`：
+`{ kind: "mcp" }`、`{ kind: "cli", command, args }`、
+`{ kind: "event", host?, fixtureId? }`、`{ kind: "script" }` 或
+`{ kind: "unit-render" }`。省略时，表面由路由种类决定：tool/resource/prompt 使用 MCP，
+event 使用 event，script 使用 script，独立 CLI 路由使用其已编译命令和空 argv。
+`unit-render` 绝不会成为默认值。
+
+生产表面从最近发布的编译器 epoch 执行所选路由，因此编译器 alias 与 define、生成入口的请求作用域、
+providers、持久状态、CLI `mapInput` 与确认、事件 preflight 以及渲染语义都与已安装制品一致。
+显式的 `unit-render` 表面是组件预览后备模式：它通过 route-unit 测试工具加载实时源码并挂载一次性状态，
+不能作为制品一致性的证明。投影后的 CLI 命令保留规范 `tool:` 路由 id；命令不匹配报告 `AB8253`，
+使用看似重复的 `cli:` id 则报告 `AB8254`，并给出应使用的规范 id 与表面。
+生产状态位于 `<project>/.agent-bundle/state`，在 retirement 会移除的已发布 epoch 之外。它通过
+`AGENT_BUNDLE_STATE_ROOT` 与开发期 MCP 会话共享，因此能跨一次成功的重新发布保留；`unit-render`
+仍为每次运行使用新的临时状态根。
+
+该信封在 `routeId` 旁记录解析后的 `surface`，并携带规范输入、请求上下文、providers、有序渲染事件、
+最终的 Agent Document、结构化结果、投影、诊断与执行计时。worker 报告观测值时，`providers` 只包含
+它实际选择的 provider，并将状态报告为 `mounted` 或 `failed`；未选择的目录 provider 不会出现。只有
+实际测到时长时才带 `durationMs`。子进程未报告观测值时（普通脚本、preflight 短路，或在观测开始之前
+失败），每个目录 provider 为 `unobserved` 且省略 `durationMs`；`0` 是测得的零，不是「未知」。
+`timings` 只列出已测量的阶段：`render`（子进程的渲染或普通脚本运行时长）、`projection`（服务端的
+宿主投影时间），以及观测到时的 `handler`、`providers` 与 `provider:<name>`。失败的调用记录
+`elapsed`（失败前的墙钟时间），
+不会伪造 `failed` 的 provider 行。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或
+invocation id（`AB8231`）、不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求
+（`AB8237`）、未知 fixture id（`AB8238`）、在获得并发槽位前发布修订已变更的排队调用（`AB8239`）、不可用的编译制品
+（`AB8250`）、缺失的已编译路由可执行项（`AB8251`）、已编译投影或 preflight 失败（`AB8252`）、
+CLI 命令/操作不匹配（`AB8253`）、投影形成的重复 CLI id（`AB8254`），以及未指定具体宿主的 preflight
+路由（`AB8255`）会作为诊断报告。
 各条触发条件与恢复指引见[诊断参考](../../reference/diagnostics.md)。
+
+信封、`route.invocation` 事件载荷与路由工作区报告两个彼此独立的事实。`status` 表示执行边界是否完成；
+`outcome` 表示一次已完成的运行意味着什么，由该路由所经过的表面来判定。失败的边界不带 `outcome`，
+已完成的运行总是带有一个，因此被表示的错误或非零退出码永远不会被报告为普通成功。
+
+| 字段 | 值 | 含义 |
+| --- | --- | --- |
+| `status` | `succeeded` | 子进程完成了最终文档（或普通脚本已退出）。 |
+| `status` | `failed` | 边界从未完成：崩溃、超时、中止，或 `AB825x` 诊断。 |
+| `outcome` | `{ kind: "success" }` | 按该路由的表面判定，投影结果为成功。 |
+| `outcome` | `{ kind: "represented-error", summary }` | MCP 投影带有 `isError: true`（非 `success` 的 Agent Document，例如 `Agent.Error`），或事件路由的决策为 `deny`。`summary` 列出 `Agent.Error` 的代码与消息，或 deny 的原因。 |
+| `outcome` | `{ kind: "process-exit", exitCode }` | CLI 或脚本路由已完成，且其生成的可执行文件设置了非零退出码——即该 bin 自己的 `exitCode` 策略作用于已校验结果，或非 `success` 文档对应的 `1`。零退出码报告为 `success`。 |
+
+Workbench 状态行在执行状态（`Completed` / `Failed`）旁展示 outcome 徽章，Trace 为每个条目同时列出两者。
 
 完整的浏览器侧 HTTP 形状（包括 Trace 条目与重放契约）见
 [开发服务器 HTTP 参考](../../reference/dev-server-http.mdx)。

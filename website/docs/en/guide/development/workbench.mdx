@@ -22,8 +22,9 @@ These are contracts, not defaults:
   session.
 - **Epoch-pinned reads.** Nothing follows a new build implicitly; a surface that reads an
   artifact names the epoch it read.
-- **Trusted-local operations only.** The browser never supplies a command, a working directory, a
-  native model, or a credential. See [Security](../../reference/security.mdx).
+- **Trusted-local operations only.** The browser can select only a compiled command projection;
+  it never supplies an arbitrary executable, working directory, native model, or credential.
+  See [Security](../../reference/security.mdx).
 
 ## Workbench navigation
 
@@ -79,11 +80,18 @@ Results open on **Rendered**, the browser rendering of the production Agent Docu
 streamed progress or Suspense replacements. Secondary result tabs are **Structured result**,
 **Raw AgentDocument**, **MCP projection**, **CLI projection** when available, and **Trace**.
 The inspector opens only when requested and contains **Source**, **Schema**, **Context**,
-**Providers**, **Execution timings**, **Projection**, and **Raw protocol**.
+**Providers**, **Execution timings**, **Projection**, and **Raw protocol**. A provider the run
+did not measure shows **unobserved** with no duration, and timings list only measured phases;
+`0 ms` is a measured zero, not a placeholder.
 
 The browser does not import or execute arbitrary route modules. The server runs the same RSC
 route path used by generated executables and sends its semantic render-event stream and final
 Agent Document to the Workbench.
+
+A tool with a colocated CLI projection has one tree leaf and one canonical `tool:<server>/<tool>`
+operation. Its surface selector offers **MCP**, **CLI `<command>`**, and **Unit render**. The CLI
+choice shows the projected argv and runs the generated CLI bin's confirmation, defaults,
+`mapInput`, and canonical validation; it does not create a second `cli:` operation.
 
 ### Event routes
 
@@ -91,6 +99,8 @@ An event leaf has fixture choices **Canonical**, **Claude**, **Codex**, and **Cu
 host fixture decodes the native envelope exactly as that host wrapper would, then shows canonical
 input, request context, providers, the returned decision or document, and projected host results.
 Canonical-to-host mapping and native input/output are secondary projection details.
+When the route has compiled preflight, Canonical is disabled and the selector defaults to the
+project's first generated host target; submitting that route without a concrete host is `AB8255`.
 
 Observed event receipts appear in the leaf's **Replay** tab and in Trace. Select a receipt there
 to rerun its epoch-bound input; there is no separate lifecycle destination.
@@ -106,7 +116,10 @@ and consent behavior, bound to the current epoch's server session. Apps not list
 are 404. The launch resolves from the artifact's declared projections (`?target=` is validated,
 and materially different launches answer 409 naming the choices), web sessions are keyed by
 epoch, server, and launch identity and retire only when a rebuild publishes a new epoch, and a
-non-read-only opening tool runs once per session, tool, App, and input. See
+non-read-only opening tool runs once per session, tool, App, and input. Its bounded execution
+record remains authoritative if the retained result is evicted or the call fails, so refresh
+never silently repeats a possible mutation; the page instead directs the user to run the tool
+explicitly from the App. See
 [Exposing an App in the browser](../authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 A Skill leaf renders the emitted Skill document by default. Source/generated differences,
@@ -274,13 +287,60 @@ The route workspace uses one authenticated, origin-guarded foreground API:
 - `POST /api/trace/receipts` accepts one bounded, bearer-authenticated hook receipt from a
   development wrapper; it is not a browser route.
 
-The envelope carries canonical input, request context, providers, ordered render events, the
-final Agent Document, structured result, projections, diagnostics, and execution timings when
-available. A represented `Agent.Error` remains a rendered result; unknown routes or invocation
-ids (`AB8231`), unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed
-requests (`AB8237`), and unknown fixture ids (`AB8238`) are reported as diagnostics.
+Requests identify one canonical operation with `routeId` and may select one shaped `surface`:
+`{ kind: "mcp" }`, `{ kind: "cli", command, args }`, `{ kind: "event", host?, fixtureId? }`,
+`{ kind: "script" }`, or `{ kind: "unit-render" }`. When omitted, the surface follows the route
+kind: tools/resources/prompts use MCP, events use event, scripts use script, and standalone CLI
+routes use their compiled command with empty argv. `unit-render` is never selected by default.
+
+Production surfaces execute the selected route from the last published compiler epoch, so
+compiler aliases and defines, generated-entry request scope, providers, persistent state, CLI
+`mapInput` and confirmation, event preflight, and render semantics match the installed artifact.
+The explicit `unit-render` surface is a component-preview fallback: it loads live source with the
+route-unit harness and mounts disposable state. It is not an artifact-parity receipt. A projected
+CLI command keeps the canonical `tool:` route id; a mismatched command is `AB8253`, while using
+its duplicate-looking `cli:` id is `AB8254` with the canonical id and surface to use.
+Production state lives at `<project>/.agent-bundle/state`, outside the published epochs that
+retirement removes. It is shared with dev MCP sessions through `AGENT_BUNDLE_STATE_ROOT`, so it
+survives a successful republish; `unit-render` still uses a fresh temporary state root per run.
+
+The envelope records the resolved `surface` beside `routeId` and carries canonical input, request
+context, providers, ordered render events, the final Agent Document, structured result,
+projections, diagnostics, and execution timings. When the worker reports observations,
+`providers` contains only providers it selected and reports each as `mounted` or `failed`;
+unselected catalog providers are absent. A `durationMs` appears only when measured. When the
+child reports no observations — a plain script, a preflight short-circuit, or a failure before
+observations began — every catalog provider is `unobserved` and `durationMs` is omitted; `0` is
+a measured zero, not "unknown". `timings` lists only measured phases: `render` (the child's
+render or script-run duration), `projection` (host-projection time in the service), and, when
+observed, `handler`, `providers`, and `provider:<name>`. A failed invocation records an
+`elapsed` timing for the wall time until failure and does not invent `failed` provider rows.
+A represented `Agent.Error` remains a rendered result; unknown routes or invocation ids (`AB8231`),
+unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed requests
+(`AB8237`), unknown fixture ids (`AB8238`), a queued invocation whose published revision
+moved before it acquired a slot (`AB8239`), unavailable compiled artifacts (`AB8250`), missing
+compiled route executables (`AB8251`), compiled projection or preflight failures (`AB8252`),
+CLI command/operation mismatches (`AB8253`), projected duplicate CLI ids (`AB8254`), and
+preflight routes submitted without a concrete host (`AB8255`) are reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
+
+The envelope, the `route.invocation` event payload, and the route workspace report two separate
+facts. `status` says whether the execution boundary completed; `outcome` says what a completed
+run meant, judged by the surface the route runs through. A failed boundary carries no `outcome`,
+and a completed run always carries one, so a represented error or a non-zero exit is never
+reported as plain success.
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `status` | `succeeded` | The child completed a final document (or a plain script exited). |
+| `status` | `failed` | The boundary never completed: crash, timeout, abort, or an `AB825x` diagnostic. |
+| `outcome` | `{ kind: "success" }` | The projected result is a success by the route's surface. |
+| `outcome` | `{ kind: "represented-error", summary }` | The MCP projection carries `isError: true` (a non-`success` Agent Document, such as `Agent.Error`), or an event route's decision is `deny`. `summary` lists the `Agent.Error` codes and messages, or the deny reason. |
+| `outcome` | `{ kind: "process-exit", exitCode }` | A CLI or script route completed and its generated executable set a non-zero exit code — the bin's own `exitCode` policy applied to the validated result, or `1` for a non-`success` document. A zero exit reports `success`. |
+
+The Workbench status line shows the execution status (`Completed` / `Failed`) beside an outcome
+badge, and Trace lists both for every entry.
 
 The complete browser-facing HTTP shapes, including the trace entry and replay contracts, are in
 the [development-server HTTP reference](../../reference/dev-server-http.mdx).

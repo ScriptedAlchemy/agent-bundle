@@ -65,8 +65,16 @@ export type {
   Observed,
   ObservedSource,
 } from './agent-request.js';
-export { PLUGIN_ROOT_ENV_ANCHOR, PLUGIN_STATE_DIRECTORY, resolvePluginRoot } from './plugin-root.js';
-export type { ResolvePluginRootOptions, ResolvedPluginRoot } from './plugin-root.js';
+export {
+  PLUGIN_ROOT_ENV_ANCHOR,
+  PLUGIN_STATE_DIRECTORY,
+  PLUGIN_STATE_ROOT_ENV_ANCHOR,
+  pluginStateSegment,
+  resolvePluginRoot,
+  userDataStateRoot,
+  userStateHome,
+} from './plugin-root.js';
+export type { PluginStateAnchor, ResolvePluginRootOptions, ResolvedPluginRoot } from './plugin-root.js';
 // Type-only: the optional ledger implementation stays behind './notices'.
 export type {
   AgentNoticeLedger,

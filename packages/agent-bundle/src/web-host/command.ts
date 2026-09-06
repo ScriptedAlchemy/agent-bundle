@@ -12,7 +12,13 @@ import {
 } from '../serve-app/command-contract.ts';
 import { startWebHost, type WebHost } from './host-server.ts';
 import { resolveWebLaunch } from './launch.ts';
-import { readWebManifest, type WebManifest, type WebManifestApp } from './manifest.ts';
+import {
+  readWebManifestDocument,
+  type ArtifactManifestLaunch,
+  type WebManifest,
+  type WebManifestApp,
+  type WebManifestDocument,
+} from './manifest.ts';
 import { openApp, parseAppSelector, requireJsonObject, type AppSelector } from './select-app.ts';
 import { openStdioAppSession, type StdioAppSession } from './session.ts';
 
@@ -31,7 +37,7 @@ export interface WebCommandOptions {
 export interface WebCommandRuntime {
   readonly openApp: typeof openApp;
   readonly openStdioAppSession: typeof openStdioAppSession;
-  readonly readWebManifest: typeof readWebManifest;
+  readonly readWebManifestDocument: typeof readWebManifestDocument;
   readonly resolveWebLaunch: typeof resolveWebLaunch;
   readonly startWebHost: typeof startWebHost;
 }
@@ -39,7 +45,7 @@ export interface WebCommandRuntime {
 const webCommandRuntime: WebCommandRuntime = Object.freeze({
   openApp,
   openStdioAppSession,
-  readWebManifest,
+  readWebManifestDocument,
   resolveWebLaunch,
   startWebHost,
 });
@@ -264,33 +270,51 @@ export const parseWebArgv = (argv: readonly string[]): WebArgv => {
 const manifestRequirement = (name: string | undefined): string =>
   `agent-bundle.manifest.json with a web section is required beside bin/; run ${commandName(name)} from the built artifact or the installed plugin root.`;
 
+interface ExposedApps {
+  readonly launches: WebManifestDocument['launches'];
+  readonly manifestPath: string;
+  readonly web: WebManifest;
+}
+
 const readExposedApps = async (
   runtime: WebCommandRuntime,
   manifestPath: string,
   name: string | undefined,
-): Promise<WebManifest> => {
+): Promise<ExposedApps> => {
   if (!(await exists(manifestPath))) {
     throw new WebCommandError('manifest-missing', `${manifestRequirement(name)} (No manifest at ${manifestPath}.)`);
   }
-  let manifest: WebManifest | undefined;
+  let document: WebManifestDocument;
   try {
-    manifest = await runtime.readWebManifest(manifestPath);
+    document = await runtime.readWebManifestDocument(manifestPath);
   } catch (error) {
     throw new WebCommandError('manifest-invalid', `Cannot read the web section of ${manifestPath}: ${errorMessage(error)}`, { cause: error });
   }
-  if (manifest === undefined) {
+  if (document.web === undefined) {
     throw new WebCommandError(
       'web-missing',
       `${manifestRequirement(name)} (${manifestPath} has no web section: configure web.apps and rebuild.)`,
     );
   }
-  if (manifest.apps.length === 0) {
+  if (document.web.apps.length === 0) {
     throw new WebCommandError(
       'web-missing',
       `${manifestRequirement(name)} (The web section of ${manifestPath} exposes no App: configure web.apps and rebuild.)`,
     );
   }
-  return manifest;
+  return { launches: document.launches, manifestPath, web: document.web };
+};
+
+/** The App's server launch: the manifest's one record of what `<plugin> web` starts. */
+const launchOf = (exposed: ExposedApps, app: WebManifestApp): ArtifactManifestLaunch => {
+  const launch = exposed.launches.get(app.server);
+  if (launch === undefined) {
+    throw new WebCommandError(
+      'manifest-invalid',
+      `${exposed.manifestPath} exposes ${app.app}, but executables.mcpServers has no launch record for server ${JSON.stringify(app.server)}; rebuild the plugin.`,
+    );
+  }
+  return launch;
 };
 
 const exposedList = (apps: readonly WebManifestApp[]): string => apps.map((app: WebManifestApp) => app.app).join(', ');
@@ -386,15 +410,20 @@ const reportReady = (options: WebCommandOptions, json: boolean, hosted: HostedAp
 const hostApp = async (
   options: WebCommandOptions,
   runtime: WebCommandRuntime,
-  manifest: WebManifest,
+  exposed: ExposedApps,
   app: WebManifestApp,
   argv: WebArgv,
 ): Promise<number> => {
   const tool = argv.tool ?? app.tool;
   const input = argv.input ?? app.input;
   const allow: readonly McpAppConsentCapability[] = argv.allow.length > 0 ? argv.allow : app.allow;
-  const open = argv.open ?? manifest.open === 'browser';
-  const launch = await runtime.resolveWebLaunch({ app, env: process.env, pluginRoot: options.pluginRoot });
+  const open = argv.open ?? exposed.web.open === 'browser';
+  const launch = await runtime.resolveWebLaunch({
+    app,
+    env: process.env,
+    launch: launchOf(exposed, app),
+    pluginRoot: options.pluginRoot,
+  });
   if (options.signal.aborted) return 0;
   const session = await runtime.openStdioAppSession(launch, { serverName: app.server, target: 'web' }, sessionTimeoutMs);
   let host: WebHost | undefined;
@@ -442,9 +471,9 @@ export const runWebCommand = async (options: WebCommandOptions, runtime: WebComm
       return 0;
     }
     if (options.signal.aborted) return 0;
-    const manifest = await readExposedApps(runtime, options.manifestPath, options.name);
-    const app = pickApp(manifest, argv.selector);
-    return await hostApp(options, runtime, manifest, app, argv);
+    const exposed = await readExposedApps(runtime, options.manifestPath, options.name);
+    const app = pickApp(exposed.web, argv.selector);
+    return await hostApp(options, runtime, exposed, app, argv);
   } catch (error) {
     if (error instanceof WebCommandError) {
       const exitCode = exitCodeOf(error.code);
