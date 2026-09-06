@@ -16,27 +16,10 @@ import { canonicalAgentEvents } from '../../routes/events.ts';
 import { applicationNodePath } from '../routes/application-node.ts';
 import type { TraceCorrelation, TraceEntryInput } from '../trace/trace-entry.ts';
 
-/**
- * Server side of the hook receipt (#600 PR 2, lane T7): the strict decoder for
- * what a generated hook wrapper posts to `POST /api/trace/receipts`, and the
- * lowering of one receipt onto the unified trace.
- *
- * One receipt becomes `hook.received` and then `hook.completed` or
- * `hook.failed`; a `session/start` receipt adds `session.started`, a
- * `session/end` receipt `session.ended`. The kernel's phase events ride along
- * as slim `details` on the terminal entry rather than as entries of their own,
- * so a host turn that fires five hooks reads as five things on the trace, not
- * thirty. `href` opens the event route page; there is no `RouteInvocation` for
- * a host-invoked hook, so there is no `?invocation=` — the workspace can offer
- * "Replay in workspace" through the event fixture instead.
- */
-
-/** Diagnostic codes this lane owns in the Workbench trace range (`AB8240`–`AB8249`). */
 export const HOOK_RECEIPT_UNAUTHORIZED_CODE = 'AB8247';
 export const HOOK_RECEIPT_MALFORMED_CODE = 'AB8248';
 export const HOOK_RECEIPT_TOO_LARGE_CODE = 'AB8249';
 
-/** Most kernel events a receipt may carry: one execution emits at most nine. */
 export const HOOK_RECEIPT_MAX_EVENTS = 32;
 const MAX_ID_LENGTH = 256;
 const MAX_ERROR_MESSAGE_LENGTH = 512;

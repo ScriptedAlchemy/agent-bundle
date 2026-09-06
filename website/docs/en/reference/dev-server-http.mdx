@@ -14,16 +14,19 @@ responses are JSON.
 
 | Method | Path | Response |
 | --- | --- | --- |
-| `POST` | `/api/routes/invocations` | `{ invocation: RouteInvocation }` |
+| `POST` | `/api/routes/invocations` | `{ invocation: RouteInvocation }`; with `stream: true`, `202` and `{ invocation: RunningRouteInvocation }` |
 | `GET` | `/api/routes/invocations?limit=<1..200>` | `{ invocations: RouteInvocationSummary[] }`, newest first |
 | `GET` | `/api/routes/invocations/<id>` | `{ invocation: RouteInvocation }` |
+| `GET` | `/api/routes/invocations/<id>/stream` | Server-sent `render`, `trace`, `truncated`, and terminal `final` events |
+| `POST` | `/api/routes/invocations/<id>/cancel` | `202` and the final `{ invocation: RouteInvocation }` |
 
 The POST body is a `RouteInvocationRequest`: `routeId` plus optional `input`, `args`,
 `correlationId`, caller `requestId`, and event fixture options. The foreground echoes the two
 identifiers on the invocation so the route workspace and trace can join the run. The completed
 envelope holds the input, provenance context, providers, render events, Agent Document, result,
 projections, diagnostics, and timings. Trace entries link to that full snapshot instead of
-duplicating it.
+duplicating it. A cancelled invocation has `status: "cancelled"` and no `outcome`; cancelling an
+already-final invocation returns `AB8256` (409).
 
 ## Development runtime runs
 

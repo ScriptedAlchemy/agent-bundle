@@ -12,14 +12,17 @@ description: 'Workbench 调用、统一 Trace、Raw logs 与宿主钩子收据�
 
 | 方法 | 路径 | 响应 |
 | --- | --- | --- |
-| `POST` | `/api/routes/invocations` | `{ invocation: RouteInvocation }` |
+| `POST` | `/api/routes/invocations` | `{ invocation: RouteInvocation }`；传入 `stream: true` 时返回 `202` 与 `{ invocation: RunningRouteInvocation }` |
 | `GET` | `/api/routes/invocations?limit=<1..200>` | `{ invocations: RouteInvocationSummary[] }`，最新优先 |
 | `GET` | `/api/routes/invocations/<id>` | `{ invocation: RouteInvocation }` |
+| `GET` | `/api/routes/invocations/<id>/stream` | 服务器发送的 `render`、`trace`、`truncated` 与终止 `final` 事件 |
+| `POST` | `/api/routes/invocations/<id>/cancel` | `202` 与最终 `{ invocation: RouteInvocation }` |
 
 POST 正文是一份 `RouteInvocationRequest`：包含 `routeId`，以及可选的 `input`、`args`、
 `correlationId`、调用方 `requestId` 与事件夹具选项。前台会把这两个标识回显到调用上，使路由工作区与
 Trace 可以关联此次运行。完成后的信封包含输入、provenance 上下文、providers、渲染事件、Agent
-Document、结果、投影、诊断与计时。Trace 条目链接到这份完整快照，而不会复制它。
+Document、结果、投影、诊断与计时。Trace 条目链接到这份完整快照，而不会复制它。取消后的调用带有
+`status: "cancelled"` 且不含 `outcome`；取消已终止的调用会返回 `AB8256`（409）。
 
 ## 开发运行时运行
 

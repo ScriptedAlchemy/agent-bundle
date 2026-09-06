@@ -309,9 +309,6 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const stream = await fetch(`${server.url}/api/project/events`, {
       headers: { cookie, origin: server.url },
     });
-    const activeEpoch = server.status().artifact;
-    if (activeEpoch.state !== 'active') throw new Error('Expected an active compiled epoch.');
-    const artifactRoot = join(project.root, '.agent-bundle', 'epochs', activeEpoch.activeEpoch.id);
     const stateRoot = join(project.root, '.agent-bundle', 'state');
     const startLive = async () => {
       const response = await fetch(`${server!.url}/api/routes/invocations`, {
@@ -357,6 +354,9 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const unknownStream = await fetch(`${server.url}/api/routes/invocations/inv_missing/stream`, { headers });
     expect(unknownStream.status).toBe(404);
 
+    const activeEpoch = server.status().artifact;
+    if (activeEpoch.state !== 'active') throw new Error('Expected an active compiled epoch.');
+    const artifactRoot = join(project.root, '.agent-bundle', 'epochs', activeEpoch.activeEpoch.id);
     const toolResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 'catalog', source: 'api' }, routeId: 'tool:status/report' }),
       headers,
@@ -976,9 +976,6 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
       async () => fetch(`${server!.url}/api/routes/manifest`, { headers }).then((response) => response.status),
       { timeout: 10_000 },
     ).toBe(200);
-    const artifact = server.status().artifact;
-    if (artifact.state !== 'active') throw new Error('Expected an active compiled epoch.');
-    await writeFile(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id, '.env'), 'OPERATOR_VALUE=layered\n');
 
     const invalidResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 1 }, routeId: 'tool:status/report' }),
@@ -996,6 +993,9 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
     });
     expect(await readdir(join(project.root, '.agent-bundle'))).not.toContain('handler-ran');
 
+    const artifact = server.status().artifact;
+    if (artifact.state !== 'active') throw new Error('Expected an active compiled epoch.');
+    await writeFile(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id, '.env'), 'OPERATOR_VALUE=layered\n');
     const invoke = async (surface: { readonly args: readonly string[]; readonly command: string; readonly kind: 'cli' } | { readonly kind: 'mcp' }) => {
       const response = await fetch(`${server!.url}/api/routes/invocations`, {
         body: JSON.stringify({

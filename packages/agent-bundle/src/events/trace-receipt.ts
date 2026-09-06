@@ -9,33 +9,16 @@ import { isLoopbackHttpOrigin } from '../core/loopback-origin.ts';
 import type { EventTraceEvent, EventTraceExecution, EventTraceObserver } from './trace.ts';
 
 /**
- * The receipt a host-invoked hook execution posts to the developer's dev
- * server (#600 PR 2, lane T7). A hook wrapper runs in the host's own process
- * tree, so the kernel {@link EventTraceEvent}s it emits are invisible to the
- * Workbench unless the wrapper carries them out: this module is that carrier.
- *
- * The wire shape is deliberately slim — the execution identity, the kernel's
- * events without their repeated `execution`, the host/session/request ids the
- * native payload names, and the lineage axis the runtime resolved. Never the
- * payload body, tool input or output, the environment, or a filesystem path.
- *
- * Resolution is developer-local by construction: the wrapper reports only
- * when it can find a receipt endpoint — the `AGENT_BUNDLE_DEV_TRACE_URL` /
- * `AGENT_BUNDLE_DEV_TRACE_TOKEN` pair a dev-server-spawned simulation sets,
- * or, for a host's own invocation, the dev install marker beside the wrapper
- * (`.agent-bundle-dev.json`, written by the dev host installer) pointing at
- * the project whose dev server published `<project>/.agent-bundle/hook-receipts.json`.
- * A production install has neither and pays one failed `stat`.
+ * Carries a host hook's kernel events to an attached development server.
+ * Receipts contain execution and correlation metadata, never payloads,
+ * environment values, or filesystem paths.
  */
 
 export const EVENT_TRACE_RECEIPT_VERSION = 1 as const;
-/** The authenticated foreground route the receipt is posted to. */
 export const EVENT_TRACE_RECEIPT_PATH = '/api/trace/receipts';
-/** Largest receipt body the dev server accepts. */
 export const EVENT_TRACE_RECEIPT_MAX_BYTES = 16 * 1024;
 export const EVENT_TRACE_RECEIPT_URL_ENV = 'AGENT_BUNDLE_DEV_TRACE_URL';
 export const EVENT_TRACE_RECEIPT_TOKEN_ENV = 'AGENT_BUNDLE_DEV_TRACE_TOKEN';
-/** `<projectRoot>/.agent-bundle/<file>`: the endpoint record the dev server publishes for its attached hosts. */
 export const EVENT_TRACE_RECEIPT_ENDPOINT_FILE = 'hook-receipts.json';
 /**
  * The dev host installer's marker at the installed bundle root
@@ -44,28 +27,21 @@ export const EVENT_TRACE_RECEIPT_ENDPOINT_FILE = 'hook-receipts.json';
  * pins the two equal).
  */
 export const DEV_INSTALL_MARKER_FILE = '.agent-bundle-dev.json';
-/** How long a wrapper waits on the receipt post before letting the host go. */
 export const EVENT_TRACE_RECEIPT_TIMEOUT_MS = 750;
 
 export interface EventTraceReceiptEndpoint {
   readonly token: string;
-  /** A loopback HTTP origin (`http://127.0.0.1:<port>`). */
   readonly url: string;
 }
 
-/** The ids the native payload names, per `docs/entry-conventions.md`; never the payload itself. */
 export interface EventTraceReceiptIdentity {
-  /** Claude/Codex `agent_id` else `session_id`; Cursor `conversation_id`. */
   readonly conversationId?: string;
-  /** The host's tool-call id (`tool_use_id` / `tool_call_id`) when the event carries one. */
   readonly requestId?: string;
-  /** `session_id`, else Cursor's `conversation_id`. */
   readonly sessionId?: string;
 }
 
 type DistributiveOmit<Value, Key extends PropertyKey> = Value extends unknown ? Omit<Value, Key> : never;
 
-/** A kernel event on the wire: the execution identity travels once, on the receipt. */
 export type EventTraceReceiptEvent = DistributiveOmit<EventTraceEvent, 'execution'>;
 
 export interface EventTraceReceipt {

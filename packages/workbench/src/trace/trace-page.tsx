@@ -1,9 +1,3 @@
-/**
- * The Trace page (#600 PR 2): one correlated, live timeline of everything the
- * dev server observed the application doing. Entries arrive from `/api/trace`
- * already lowered; this page groups them and opens the full record behind each
- * entry's `href`.
- */
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { type TraceEntry, type TraceStatus } from '../../../agent-bundle/src/contracts/trace.ts';
@@ -25,11 +19,8 @@ import './trace-page.css';
 
 export interface TracePageProps {
   readonly client: TraceClient;
-  /** `?correlation=<id>`: show only the group holding an entry that carries this id. */
   readonly correlation?: string;
-  /** A supplied snapshot keeps server/static rendering deterministic; the live feed is not opened. */
   readonly entries?: readonly TraceEntry[];
-  /** `/trace/<id>`: the selected entry (a trace entry id, or a PR 1 invocation id). */
   readonly entryId?: string;
   readonly onNavigate: (location: WorkbenchLocation) => void;
   /** Row timestamps' zone; the browser's when absent. Tests pass `UTC`. */
@@ -75,7 +66,6 @@ const splitHref = (href: string): readonly [string, string] => {
 const initialFeedState = (entries: readonly TraceEntry[] | undefined): TraceFeedState =>
   Object.freeze({ connected: false, entries: entries ?? [], loaded: entries !== undefined });
 
-/** Opens the live feed once per client; a supplied snapshot short-circuits it. */
 const useTraceFeed = (client: TraceClient, supplied: readonly TraceEntry[] | undefined): TraceFeedState => {
   const [state, setState] = useState<TraceFeedState>(() => initialFeedState(supplied));
   useEffect(() => {

@@ -1,10 +1,3 @@
-/**
- * Same-origin client for the unified trace (#600 PR 2): `GET /api/trace?after=`
- * replays the retained window, `GET /api/trace/stream?after=` follows it as
- * NDJSON. Every wire shape is decoded strictly before the page sees it — an
- * unknown `source`, a stray key, a non-contiguous sequence, or path-like text
- * is a `TraceClientError`, never a crash and never a rendered row.
- */
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
 import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
 import {
@@ -24,7 +17,6 @@ import { readNdjsonResponseFrames } from '../ndjson.ts';
 import { hasControlCharacters, pathLikeText } from '../shell/wire-text.ts';
 import { mergeTraceEntries } from './trace-model.ts';
 
-/** What the Trace page and the route workspace (T6) code against; `ForegroundTraceClient` is the production implementation. */
 export interface TraceClient {
   replay(after?: number): Promise<TraceReplay>;
   /** Resolves when the stream ends or `signal` aborts; rejects on a malformed frame or a refused request. */
@@ -122,7 +114,6 @@ const isGap = (value: unknown): value is TraceReplayGap =>
 const contiguous = (entries: readonly TraceEntry[], afterSequence: number): boolean =>
   entries.every((entry, index) => entry.sequence === afterSequence + index + 1);
 
-/** Decodes one already-snapshotted JSON value as a `TraceEntry`; exported so fixtures and T6 can share the rule. */
 export const decodeTraceEntry = (value: unknown): TraceEntry => {
   const detached = strictJsonSnapshot(value, invalid);
   if (!isEntry(detached)) throw invalid();

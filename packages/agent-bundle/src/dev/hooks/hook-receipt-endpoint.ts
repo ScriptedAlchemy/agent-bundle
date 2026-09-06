@@ -25,19 +25,9 @@ import {
 } from './hook-receipts.ts';
 
 /**
- * `POST /api/trace/receipts` on the authenticated foreground dev server
- * (#600 PR 2, lane T7), and the endpoint record that tells the dev plugin's
- * hook wrappers where it is.
- *
- * The caller is a generated hook wrapper running inside a host's process
- * tree, not the Workbench browser, so the route has its own credential: a
- * per-dev-server bearer token minted here, published only to
- * `<projectRoot>/.agent-bundle/hook-receipts.json` (owner-only mode) and to
- * the environment of a dev-server-spawned hook simulation. The browser
- * session cookie and same-session header never authorize this route, a
- * request carrying an `Origin` header is refused outright, and the peer must
- * be loopback — the foreground server only listens there, and this route
- * checks again.
+ * Host hook receipts use a per-server bearer token published in the
+ * owner-only endpoint record. Browser origins and non-loopback peers are
+ * refused independently of the Workbench session guard.
  */
 
 const loopbackAddresses: ReadonlySet<string> = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -78,7 +68,6 @@ export class HookReceiptRoutes {
     this.#closed = true;
   }
 
-  /** True when the request was this route's; the foreground server tries the next handler otherwise. */
   async handle(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
     if (rawPathname(request.url) !== EVENT_TRACE_RECEIPT_PATH) return false;
     this.#authorize(request);
@@ -147,13 +136,6 @@ export interface HookReceiptAttachment {
   readonly token: string;
 }
 
-/**
- * Builds the receipt route and the endpoint publication for one dev server.
- * Wiring (T1, `workbench-server.ts` → `ForegroundServer` dispatch): construct
- * with the server's `TraceHub`, dispatch `routes.handle` before the
- * session-authorized API routes, publish the endpoint after the server URL,
- * close with the server.
- */
 export const attachHookReceipts = (options: AttachHookReceiptsOptions): HookReceiptAttachment => {
   const token = options.token ?? randomBytes(32).toString('base64url');
   const routes = new HookReceiptRoutes({ token, trace: options.trace });

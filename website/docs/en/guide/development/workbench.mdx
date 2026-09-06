@@ -184,8 +184,7 @@ or `mcpSessionId`.
 Trace replay loads from `GET /api/trace?after=<sequence>` and the live view continues from
 `GET /api/trace/stream?after=<sequence>`. A dropped replay window is represented explicitly as a
 gap; the browser does not silently imply that the remaining rows are complete. Trace belongs to
-the current foreground development session: it is not durable across server restarts and is not
-the embedded host-session UI planned for a later release.
+the current foreground development session and is not durable across server restarts.
 
 ### Host hook receipts
 

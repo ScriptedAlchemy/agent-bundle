@@ -1,9 +1,3 @@
-/**
- * Pure model behind the Trace page (#600 PR 2): the ordered entry list, the
- * correlated groups it folds into, and the selection rules the URL drives. No
- * transport, no React; the page calls these with whatever the feed has
- * delivered so far.
- */
 import type {
   TraceCorrelation,
   TraceEntry,
@@ -35,7 +29,6 @@ export type TraceJoinKey = (typeof traceJoinKeys)[number];
 export type TraceGroupKeyKind = TraceJoinKey | 'entry';
 
 export interface TraceRow {
-  /** 0 for an invocation-level row, 1 for a row nested under its invocation. */
   readonly depth: 0 | 1;
   readonly entry: TraceEntry;
 }
@@ -43,14 +36,11 @@ export interface TraceRow {
 export interface TraceGroup {
   readonly endedAt: string;
   readonly firstSequence: number;
-  /** The entry that names the group in the timeline header. */
   readonly headline: TraceEntry;
-  /** Stable identity: the highest-priority join key the group shares, else the lone entry id. */
   readonly key: string;
   readonly keyKind: TraceGroupKeyKind;
   readonly lastSequence: number;
   readonly rows: readonly TraceRow[];
-  /** First to last `occurredAt` in milliseconds; a lone entry reports its own `durationMs`. */
   readonly spanMs: number;
   readonly startedAt: string;
   readonly status: TraceStatus;
@@ -227,10 +217,7 @@ export const traceEntryCorrelationValues = (entry: TraceEntry): readonly string[
 export const selectTraceGroup = (groups: readonly TraceGroup[], id: string): TraceGroup | undefined =>
   groups.find((group) => group.rows.some((row) => traceEntryCorrelationValues(row.entry).includes(id)));
 
-/**
- * `/trace/<id>`: the entry with that id. A PR 1 deep link named an invocation
- * id, so an `inv_…` id still resolves — to the latest entry of that invocation.
- */
+/** Accepts both trace-entry ids and invocation/run ids used by existing deep links. */
 export const selectTraceEntry = (entries: readonly TraceEntry[], id: string): TraceEntry | undefined =>
   entries.find((entry) => entry.id === id) ??
   entries.findLast((entry) => entry.correlation.invocationId === id || entry.correlation.runId === id);

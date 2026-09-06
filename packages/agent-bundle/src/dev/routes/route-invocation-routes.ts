@@ -6,8 +6,10 @@ import {
   writeKeepAliveStreamHead,
 } from '../route-streams.ts';
 import {
+  badRequest,
   decodedOpaqueSegment,
   diagnostic,
+  noQuery,
   rawPathname,
   readJsonBody,
   requestError,
@@ -35,6 +37,10 @@ import {
 
 const streamQueueByteLimit = 256 * 1024;
 const streamQueueEntryLimit = 128;
+const invalidShape = badRequest(
+  ROUTE_INVOCATION_MALFORMED_REQUEST_CODE,
+  'Route invocation request has an invalid shape.',
+);
 
 export interface RouteInvocationRouteService {
   close?(): Promise<void> | void;
@@ -115,16 +121,6 @@ const listLimit = (requestTarget: string | undefined): number => {
   return limit;
 };
 
-const noQuery = (requestTarget: string | undefined): void => {
-  if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) {
-    throw requestError(diagnostic(
-      ROUTE_INVOCATION_MALFORMED_REQUEST_CODE,
-      'Route invocation request has an invalid shape.',
-      400,
-    ));
-  }
-};
-
 const unavailable = (): never => {
   throw requestError(diagnostic('AB8232', 'Route invocation service is not available.', 409));
 };
@@ -163,15 +159,9 @@ export class RouteInvocationRoutes {
     if (service === undefined) return unavailable();
     const method = request.method ?? 'GET';
     if (path.kind === 'collection' && method === 'POST') {
-      noQuery(request.url);
+      noQuery(request.url, invalidShape);
       const body = await readJsonBody(request, {
-        invalidShape: () => {
-          throw requestError(diagnostic(
-            ROUTE_INVOCATION_MALFORMED_REQUEST_CODE,
-            'Route invocation request has an invalid shape.',
-            400,
-          ));
-        },
+        invalidShape,
         read: {
           code: ROUTE_INVOCATION_MALFORMED_REQUEST_CODE,
           limit: 64 * 1024,
@@ -238,7 +228,7 @@ export class RouteInvocationRoutes {
       return true;
     }
     if (path.kind === 'stream' && method === 'GET') {
-      noQuery(request.url);
+      noQuery(request.url, invalidShape);
       if (!service.has(path.id)) {
         throw requestError(diagnostic('AB8231', `Route invocation ${JSON.stringify(path.id)} was not found.`, 404));
       }
@@ -246,7 +236,7 @@ export class RouteInvocationRoutes {
       return true;
     }
     if (path.kind === 'cancel' && method === 'POST') {
-      noQuery(request.url);
+      noQuery(request.url, invalidShape);
       try {
         const invocation = await service.cancel(path.id);
         responseJson(response, { invocation } satisfies RouteInvocationResponse, { status: 202 });
@@ -256,7 +246,7 @@ export class RouteInvocationRoutes {
       return true;
     }
     if (path.kind === 'item' && method === 'GET') {
-      noQuery(request.url);
+      noQuery(request.url, invalidShape);
       const invocation = service.read(path.id);
       if (invocation === undefined) {
         throw requestError(diagnostic('AB8231', `Route invocation ${JSON.stringify(path.id)} was not found.`, 404));
