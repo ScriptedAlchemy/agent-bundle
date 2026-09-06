@@ -30,7 +30,8 @@
     "@types/react": "19.2.18",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
+    "typescript-6": "npm:typescript@6.0.3",
     "zod": "4.5.4"
   }
 }
