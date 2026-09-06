@@ -280,6 +280,9 @@ export class RouteInvocationRoutes {
     };
     const replay: RouteInvocationStreamMessage[] = [];
     let replaying = true;
+    let subscribed = false;
+    // Live messages that arrive while the replay is still draining are bounded
+    // like the live queue; the replay itself is bounded by retention.
     let liveWhileReplaying = 0;
     const pump = (): void => {
       while (replaying && writer.idle && !response.destroyed) {
@@ -304,10 +307,11 @@ export class RouteInvocationRoutes {
     stream.unsubscribe = service.subscribe(id, (message) => {
       if (!replaying) return deliver(message);
       replay.push(message);
+      if (!subscribed) return;
       liveWhileReplaying += 1;
       if (liveWhileReplaying > streamQueueEntryLimit) response.destroy();
     });
-    liveWhileReplaying = 0;
+    subscribed = true;
     writeKeepAliveStreamHead(response, {
       cacheControl: 'no-cache',
       contentType: 'text/event-stream; charset=utf-8',

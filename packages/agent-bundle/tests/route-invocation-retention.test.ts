@@ -1,7 +1,11 @@
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+
 import { expect, it } from '@rstest/core';
 
 import type { AgentDocument, AgentRenderEvent } from '@agent-bundle/runtime';
 
+import { RouteInvocationRoutes, type RouteInvocationRouteService } from '../src/dev/routes/route-invocation-routes.ts';
 import {
   RENDER_EVENT_RETENTION,
   renderEventBytes,
@@ -137,6 +141,50 @@ it('never evicts the newest event, however large', () => {
   const retained = retainRenderEvents(oversized);
   expect(retained.events).toEqual([oversized[2]]);
   expect(retained.evicted).toBe(2);
+});
+
+it('keeps the retained history on a failed run and omits eviction from summaries', async () => {
+  const events = stream(RENDER_EVENT_RETENTION.maxEvents + 5).slice(0, -1);
+  const invocations = service(async (_request, _signal, _kernel, publishRender) => {
+    for (const event of events) publishRender(event);
+    throw new Error('render exploded');
+  });
+  const failed = await invocations.invoke({ correlationId: 'browser-3', input: {}, routeId: echoRoute.id });
+  expect(failed).toMatchObject({ correlationId: 'browser-3', evictedEvents: 4, status: 'failed' });
+  expect(failed.events).toHaveLength(RENDER_EVENT_RETENTION.maxEvents);
+  expect(failed.document).toEqual(documentOf(`${String(events.length - 1)}:`));
+  expect(invocations.list()[0]).not.toHaveProperty('evictedEvents');
+  expect(collect(invocations, failed.id).at(-1)).toMatchObject({ invocation: { evictedEvents: 4 }, type: 'final' });
+});
+
+it('serves a full count-bounded replay over the stream route without tripping the live-consumer queue', async () => {
+  const events = stream(RENDER_EVENT_RETENTION.maxEvents * 2);
+  const invocations = service(async (request, _signal, _kernel, publishRender) => {
+    for (const event of events) publishRender(event);
+    return childResult(request, events);
+  });
+  const invocation = await invocations.invoke({ input: {}, routeId: echoRoute.id });
+  const routes = new RouteInvocationRoutes({
+    authorize: () => undefined,
+    eventHub: { publish: () => undefined } as never,
+    service: invocations as RouteInvocationRouteService,
+  });
+  const server = createServer((request, response) => void routes.handle(request, response));
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('The test server did not bind a port.');
+  try {
+    const response = await fetch(`http://127.0.0.1:${String(address.port)}/api/routes/invocations/${invocation.id}/stream`);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    const types = body.split('\n\n').filter((frame) => frame.startsWith('event: ')).map((frame) => frame.slice('event: '.length, frame.indexOf('\n')));
+    expect(types[0]).toBe('truncated');
+    expect(types.filter((type) => type === 'render')).toHaveLength(RENDER_EVENT_RETENTION.maxEvents);
+    expect(types.at(-1)).toBe('final');
+  } finally {
+    server.close();
+  }
 });
 
 it('reconnects with an explicit replay limitation and cancels with the latest document after the shell was evicted', async () => {
