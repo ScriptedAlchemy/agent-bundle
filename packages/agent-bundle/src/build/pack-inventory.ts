@@ -287,6 +287,7 @@ export const packInventoryDiagnostics = async (options: {
       new Map(options.packageBuild.files
         .filter((file) => file.kind === 'bundle' && !artifactPaths.has(file.path))
         .map((file) => [file.path, { kind: file.kind, sha256: file.sha256 }])),
+      packageCompileEvidenceFileName,
     ));
   } catch (error) {
     diagnostics.push(diagnostic(
