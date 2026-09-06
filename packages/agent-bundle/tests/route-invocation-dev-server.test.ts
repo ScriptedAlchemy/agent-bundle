@@ -780,7 +780,7 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
         "export const resultSchema = z.object({ operator: z.string(), service: z.string() }).strict();",
         '',
         'export default async function Report({ input }) {',
-        "  writeFileSync('handler-ran', 'yes');",
+        "  writeFileSync('.agent-bundle/handler-ran', 'yes');",
         "  return createElement(Agent.Result, { value: { operator: process.env.OPERATOR_VALUE ?? 'missing', service: input.service } });",
         '}',
         '',
@@ -833,7 +833,7 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
       projection: { mcp: { isError: true } },
       status: 'succeeded',
     });
-    expect(await readdir(project.root)).not.toContain('handler-ran');
+    expect(await readdir(join(project.root, '.agent-bundle'))).not.toContain('handler-ran');
 
     const invoke = async (surface: { readonly args: readonly string[]; readonly command: string; readonly kind: 'cli' } | { readonly kind: 'mcp' }) => {
       const response = await fetch(`${server!.url}/api/routes/invocations`, {
@@ -880,6 +880,7 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
       method: 'POST',
     });
     const denied = await deniedResponse.json() as RouteInvocationResponse;
+    expect(deniedResponse.status, JSON.stringify(denied)).toBe(200);
     expect(denied.invocation.timings.map((entry) => entry.phase)).toEqual(['projection']);
     expect(denied.invocation.providers).toEqual([]);
   } finally {
