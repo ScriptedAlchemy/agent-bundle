@@ -71,6 +71,10 @@ it('debounces only relevant source paths into one ordered invalidation and close
   // renaming it into place; that staging tree is output, not source.
   fake.emit('addDir', '/project with spaces/.dist.stage-W3rHAr');
   fake.emit('add', '/project with spaces/.dist.stage-W3rHAr/bin/plugin.js');
+  // ... and compiles into a `.dist.compile-XXXXXX` sibling first (#656).
+  fake.emit('addDir', '/project with spaces/.dist.compile-Qm2xLp');
+  fake.emit('add', '/project with spaces/.dist.compile-Qm2xLp/bin/plugin.js');
+  fake.emit('unlinkDir', '/project with spaces/.dist.compile-Qm2xLp');
   fake.emit('add', '/project with spaces/.distinct-source.ts');
   await watcher.flush();
 
