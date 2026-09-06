@@ -29,6 +29,7 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
       },
       state: 'ready',
     });
+    expect(inspection.diagnostics).toEqual([]);
     if (inspection.state !== 'ready') throw new Error('unreachable');
     // Identity stages 1-2 (#94): no package.json version, so the release
     // axis is absent and displays fall back to the labeled dev form.
