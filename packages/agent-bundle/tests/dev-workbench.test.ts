@@ -7,6 +7,7 @@ import { expect, it } from '@rstest/core';
 
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
+import { parseArtifactManifest } from '../src/build/manifest.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { runCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
@@ -501,6 +502,114 @@ it('normalizes a relative project root once before constructing every dev servic
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
   }
 }, 30_000);
+
+it('publishes routes created and deleted below source roots absent at startup', async () => {
+  const project = await createProjectFixture({
+    config: [
+      "import { defineConfig } from 'agent-bundle/config';",
+      '',
+      'export default defineConfig({',
+      "  plugin: { name: 'watcher-route-roots', version: '1.0.0' },",
+      "  targets: ['claude', 'codex'],",
+      '});',
+      '',
+    ].join('\n'),
+    files: {
+      'package.json': JSON.stringify({
+        dependencies: {
+          '@agent-bundle/runtime': 'workspace:*',
+          '@modelcontextprotocol/server': '2.0.0',
+        },
+        name: 'watcher-route-roots',
+        type: 'module',
+        version: '1.0.0',
+      }),
+    },
+  });
+  const publications = Array.from({ length: 5 }, () => Promise.withResolvers<string>());
+  const publication = (index: number): Promise<string> =>
+    within(publications[index]!.promise, 20_000 * timeScale);
+  let publicationCount = 0;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(project.root, 'node_modules'), 'dir');
+  try {
+    server = await startDevServer({
+      open: false,
+      port: 0,
+      root: project.root,
+      testing: {
+        startForegroundServer: async (options) => {
+          const subscription = options.eventHub.subscribe((event) => {
+            if (event.type !== 'artifact.available') return;
+            publications[publicationCount]?.resolve(event.epochId);
+            publicationCount += 1;
+          });
+          await options.coordinator.start();
+          return {
+            close: async () => {
+              subscription.unsubscribe();
+              await options.coordinator.close();
+            },
+            url: 'http://127.0.0.1:49124',
+          };
+        },
+      },
+    });
+    const activeManifest = async () => {
+      const artifact = server!.status().artifact;
+      if (artifact.state !== 'active') throw new Error('Expected an active development artifact.');
+      return parseArtifactManifest(await readFile(artifact.activeEpoch.manifestPath, 'utf8'));
+    };
+    await publication(0);
+    expect((await activeManifest()).routes).toMatchObject({ events: [], servers: [] });
+
+    const eventPath = join(project.root, 'src', 'events', 'session', 'start.ts');
+    await mkdir(join(project.root, 'src', 'events', 'session'), { recursive: true });
+    await writeFile(eventPath, [
+      "export const config = { runtime: 'standalone' };",
+      "export default async function SessionStart() { return { outcome: 'continue' }; }",
+      '',
+    ].join('\n'));
+    await publication(1);
+    const withEvent = await activeManifest();
+    expect(withEvent.routes.events.map(({ id }) => id)).toEqual(['event:session/start']);
+    expect(withEvent.executables.hooks.map(({ event, host, kind }) => ({ event, host, kind }))).toEqual([
+      { event: 'sessionStart', host: 'claude', kind: 'event-route' },
+      { event: 'sessionStart', host: 'codex', kind: 'event-route' },
+    ]);
+
+    await rm(eventPath);
+    await publication(2);
+    const withoutEvent = await activeManifest();
+    expect(withoutEvent.routes.events).toEqual([]);
+    expect(withoutEvent.executables.hooks).toEqual([]);
+
+    const toolPath = join(project.root, 'src', 'mcp', 'probe', 'tools', 'status.ts');
+    await mkdir(join(project.root, 'src', 'mcp', 'probe', 'tools'), { recursive: true });
+    await writeFile(
+      toolPath,
+      'export const inputSchema = {}; export const resultSchema = {}; export default async () => undefined;\n',
+    );
+    await publication(3);
+    const withTool = await activeManifest();
+    expect(withTool.routes.servers.map(({ id, routes }) => ({ id, routes: routes.map(({ id }) => id) }))).toEqual([
+      { id: 'mcp:probe', routes: ['tool:probe/status'] },
+    ]);
+    expect(withTool.executables.mcpServers).toEqual([
+      expect.objectContaining({ hosts: ['claude', 'codex'], name: 'probe' }),
+    ]);
+
+    await rm(toolPath);
+    await publication(4);
+    const withoutTool = await activeManifest();
+    expect(withoutTool.routes.servers).toEqual([]);
+    expect(withoutTool.executables.mcpServers).toEqual([]);
+  } finally {
+    await server?.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+  expect(publicationCount).toBe(5);
+}, 120_000);
 
 it('latches a runtime declaration added to an ordinary Workbench session as restart-required', async () => {
   const project = await createProjectFixture();
