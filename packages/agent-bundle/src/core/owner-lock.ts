@@ -68,32 +68,3 @@ export const acquireOwnerLockFile = async <Result>(options: AcquireOwnerLockOpti
   }
   throw options.exhausted();
 };
-
-/**
- * Process-wide serializer for owner-lock mutations, keyed by lock path.
- *
- * Sharing across store instances is intentional: two services recovering or
- * releasing the same on-disk lock must serialize their read-verify-unlink
- * windows even though each service holds its own instance. Entries are
- * removed as soon as the last queued mutation for a path settles, so the
- * registry never grows past the set of locks currently being mutated.
- */
-export class OwnerMutationSerializer {
-  readonly #tails = new Map<string, Promise<void>>();
-
-  async run<T>(path: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.#tails.get(path) ?? Promise.resolve();
-    const boundary = Promise.withResolvers<void>();
-    this.#tails.set(path, boundary.promise);
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      boundary.resolve();
-      if (this.#tails.get(path) === boundary.promise) this.#tails.delete(path);
-    }
-  }
-}
-
-/** The one process-wide owner-mutation serializer every store instance shares. */
-export const sharedOwnerMutationSerializer = new OwnerMutationSerializer();

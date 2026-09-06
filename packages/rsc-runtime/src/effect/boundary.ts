@@ -88,19 +88,6 @@ export const runPromise = async <A, E>(
   options?: RunPromiseOptions,
 ): Promise<A> => throwExitFailure(await Effect.runPromiseExit(effect, runOptions(options)));
 
-/** Promise edge that preserves the Effect `Exit` for callers that branch on cause. */
-export const runPromiseExit = async <A, E>(
-  effect: Effect.Effect<A, E>,
-  options?: RunPromiseOptions,
-): Promise<Exit.Exit<A, E>> => Effect.runPromiseExit(effect, runOptions(options));
-
-/**
- * Sync edge for effects that cannot suspend. Do not use for I/O, streams,
- * or anything that waits on a fiber.
- */
-export const runSync = <A, E>(effect: Effect.Effect<A, E>): A =>
-  throwExitFailure(Effect.runSyncExit(effect));
-
 /**
  * Internal long-lived Effect runtime. Its Layer owns one Scope, which stays
  * live across Promise API calls and is finalized exactly once by close().

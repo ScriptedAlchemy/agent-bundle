@@ -72,22 +72,6 @@ const evalClientScopeKeyFor = (client: EvalClient): number => {
 
 const errorMessage = (reason: unknown): string => messageFrom(reason, 'The eval request could not be completed.');
 
-const noEvalEvents: readonly EvalRunEvent[] = Object.freeze([]);
-
-/** A held replay may only paint for the run identity that opened it. */
-export const eventsForActiveEvalRun = (
-  activeRunId: string | undefined,
-  sourceRunId: string | undefined,
-  events: readonly EvalRunEvent[],
-): readonly EvalRunEvent[] => activeRunId === sourceRunId ? events : noEvalEvents;
-
-/** A bounded-history notice belongs to the same run identity as its events. */
-export const discardedSequenceForActiveEvalRun = (
-  activeRunId: string | undefined,
-  sourceRunId: string | undefined,
-  discardedThroughSequence: number | undefined,
-): number | undefined => activeRunId === sourceRunId ? discardedThroughSequence : undefined;
-
 /** Starts one authored run over the selection the browser is allowed to make. */
 export const startEvalRun = async (
   client: EvalClient,

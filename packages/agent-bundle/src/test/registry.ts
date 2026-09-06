@@ -169,5 +169,3 @@ export const registeredManifestIdentity = (): { readonly digest: string; readonl
     ? undefined
     : { digest: registry.manifest.digest, projectRoot: registry.manifest.projectRoot };
 };
-
-export const hasRegisteredRoutes = (): boolean => registered() !== undefined;
