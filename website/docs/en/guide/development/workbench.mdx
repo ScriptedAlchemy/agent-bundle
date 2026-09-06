@@ -362,7 +362,7 @@ context, providers, ordered render events, the final Agent Document, structured 
 projections, diagnostics, and execution timings. Render events are retained under one
 render-history window, applied identically to the live stream replay, the completed and
 cancelled envelopes, `GET /api/routes/invocations/<id>`, the `final` stream message, and the
-Workbench's live view: the newest 256 events and at most 2 MiB serialized, with the newest event
+Workbench's live view: at most 256 events and 2 MiB serialized, with the newest event
 and the newest document-bearing event (`shell`, `replace`, or `complete`) always kept — those two
 alone may carry the window past 2 MiB — so `events` folds to a coherent latest document even
 after eviction. Older intermediate events are dropped; the child never returns the stream a

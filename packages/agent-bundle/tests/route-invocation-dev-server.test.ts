@@ -7,8 +7,6 @@ import { expect, it } from '@rstest/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
-import type { AgentRenderEvent } from '@agent-bundle/runtime';
-
 import {
   renderEventBytes,
   routeInvocationRenderHistoryLimits,
