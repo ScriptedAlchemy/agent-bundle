@@ -572,9 +572,9 @@ export const createFlightWorkerHost = (
       // A report the session no longer accepts (it completed or failed first)
       // settles a still-pending render once instead of rejecting unhandled.
       Promise.resolve(request.progress?.report(message.update as never)).catch((error: unknown) => {
-        if (pending.get(message.id) === request) {
-          settle(message.id, request, error instanceof Error ? error : new Error(String(error)));
-        }
+        if (pending.get(message.id) !== request) return;
+        worker.postMessage({ id: message.id, type: 'cancel' });
+        settle(message.id, request, error instanceof Error ? error : new Error(String(error)));
       });
       return;
     }
