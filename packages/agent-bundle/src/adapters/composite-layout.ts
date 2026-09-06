@@ -16,9 +16,8 @@
  *   beside their manifests (`.codex-plugin/hooks.json`, `.cursor-plugin/mcp.json`,
  *   …). Each adapter owns its constants. Both hosts also fall back to folder
  *   discovery of the conventional paths when the pointer is absent, so a
- *   projection with no document of its own still points at an empty one
- *   whenever a selected host claims the conventional path
- *   (`folderDiscoveryShadowed`).
+ *   projection with no document of its own still points at an empty one when
+ *   another selected host actually emits the conventional document.
  * - **Hook wrappers** bake the host they were planned for (its codec, its
  *   `target`, its host contract revision), so a hook that reaches several
  *   selected hosts compiles one wrapper per host, `hooks/<name>.<host>.mjs`;
@@ -62,29 +61,4 @@ export const hookWrapperPath = (
   const selection = new Set(selected);
   const reached = hookTargets.filter((target) => selection.has(target));
   return reached.length > 1 ? `hooks/${hookName}.${host}.mjs` : `hooks/${hookName}.mjs`;
-};
-
-/**
- * The plugin-root documents Codex and Cursor load by folder discovery when
- * their manifest carries no pointer, and the selected hosts whose projection
- * writes one there. `hooks/hooks.json` and `.mcp.json` are Claude Code's;
- * `mcp.json` is the portable format's. Cursor documents the fallback for both
- * of its defaults and Codex for `hooks/hooks.json`; Codex's behaviour without
- * an `mcpServers` pointer is not pinned, and an explicit empty pointer costs
- * nothing, so it is shielded the same way.
- */
-const folderDiscoveryClaimants: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  '.mcp.json': Object.freeze(['claude']),
-  'hooks/hooks.json': Object.freeze(['claude']),
-  'mcp.json': Object.freeze(['portable']),
-});
-
-/**
- * True when a selected host writes the conventional document at
- * `defaultPath`, so a host that would otherwise fall back to folder
- * discovery there must point its manifest at a document of its own.
- */
-export const folderDiscoveryShadowed = (defaultPath: string, selected: Iterable<string>): boolean => {
-  const selection = new Set(selected);
-  return (folderDiscoveryClaimants[defaultPath] ?? []).some((host) => selection.has(host));
 };

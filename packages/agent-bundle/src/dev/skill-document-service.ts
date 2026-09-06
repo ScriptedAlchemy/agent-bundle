@@ -1,12 +1,21 @@
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 
+import type { TargetRegistry } from '../adapters/registry.ts';
+import type { TargetArtifactPlan } from '../adapters/types.ts';
 import { projectMeta } from '../build/meta.ts';
 import { parseSkill, type SkillDocument, type SkillResource } from '../config/skill.ts';
+import type { CapabilityState } from '../core/capabilities.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
-import type { NormalizedPlugin, NormalizedSkill, SourceProvenance } from '../core/types.ts';
+import type {
+  NormalizedCommand,
+  NormalizedPlugin,
+  NormalizedRule,
+  NormalizedSkill,
+  SourceProvenance,
+} from '../core/types.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectService } from './project-service.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
@@ -75,6 +84,27 @@ export interface ServedSkillResource {
 export interface SkillDocumentTree {
   readonly diagnostics: readonly Diagnostic[];
   readonly skills: readonly ServedSkillDocument[];
+  readonly staticDocuments: readonly ServedStaticDocument[];
+}
+
+export type StaticDocumentKind = 'command' | 'rule';
+
+export interface StaticDocumentProjection {
+  readonly capability: CapabilityState;
+  readonly markdown?: string;
+  readonly path?: string;
+  readonly target: string;
+}
+
+export interface ServedStaticDocument {
+  readonly body: string;
+  readonly frontmatter: Readonly<Record<string, unknown>>;
+  readonly id: string;
+  readonly kind: StaticDocumentKind;
+  readonly markdown: string;
+  readonly name: string;
+  readonly projections: readonly StaticDocumentProjection[];
+  readonly provenance: SourceProvenance;
 }
 
 export interface SkillDocumentServiceOptions {
@@ -119,6 +149,49 @@ const sourceResource = (resource: SkillResource): SkillDocumentResource => Objec
 
 const documentResources = (resources: readonly SkillResource[]): readonly SkillDocumentResource[] =>
   Object.freeze(resources.map(sourceResource));
+
+const staticDocument = (
+  document: NormalizedCommand | NormalizedRule,
+  kind: StaticDocumentKind,
+  model: NormalizedPlugin,
+  plans: ReadonlyMap<string, TargetArtifactPlan>,
+  registry: TargetRegistry,
+): ServedStaticDocument => {
+  const capabilityName = kind === 'command' ? 'commands' : 'rules';
+  const expectedPath = `${capabilityName}/${document.name}.${kind === 'command' ? 'md' : 'mdc'}`;
+  const projections = model.targets.map(({ name: target }): StaticDocumentProjection => {
+    const adapter = registry.get(target);
+    const capability = kind === 'command' ? adapter.capabilities.commands : adapter.capabilities.rules;
+    const entry = plans.get(target)!.entries.find((candidate) =>
+      candidate.relativePath === expectedPath && candidate.sourceInputs.includes(document.source));
+    return Object.freeze({
+      capability: Object.freeze({ ...capability }),
+      ...(entry?.kind === 'write' ? { markdown: entry.content, path: entry.relativePath } : {}),
+      target,
+    });
+  });
+  return Object.freeze({
+    body: document.body,
+    frontmatter: Object.freeze(structuredClone(document.frontmatter)),
+    id: document.id,
+    kind,
+    markdown: document.markdown,
+    name: document.name,
+    projections: Object.freeze(projections),
+    provenance: Object.freeze({ ...document.provenance }),
+  });
+};
+
+export const staticDocumentsFor = (
+  model: NormalizedPlugin,
+  registry: TargetRegistry,
+): readonly ServedStaticDocument[] => {
+  const plans = new Map(model.targets.map(({ name }) => [name, registry.get(name).plan(model)]));
+  return Object.freeze([
+    ...(model.commands ?? []).map((command) => staticDocument(command, 'command', model, plans, registry)),
+    ...(model.rules ?? []).map((rule) => staticDocument(rule, 'rule', model, plans, registry)),
+  ]);
+};
 
 const contentTypeFor = (path: string): string =>
   contentTypes[extname(path).toLowerCase()] ?? 'application/octet-stream';
@@ -256,6 +329,7 @@ export class SkillDocumentService {
     const model = prepared.model;
     return Object.freeze({
       diagnostics: freezeDiagnostics(prepared.diagnostics),
+      staticDocuments: model === undefined ? [] : staticDocumentsFor(model, prepared.registry),
       skills: Object.freeze(model === undefined
         ? []
         : await Promise.all(model.skills.map((skill) => this.#sourceDocument(skill, model)))),
@@ -289,7 +363,7 @@ export class SkillDocumentService {
         .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && safeSegment(entry.name))
         .sort((left, right) => left.name.localeCompare(right.name))
         .map(async (entry) => this.#generatedDocument(epochId, target, `skill:${entry.name}`, targetRoot)));
-      return deepFreeze({ diagnostics: [], skills: documents });
+      return deepFreeze({ diagnostics: [], skills: documents, staticDocuments: [] });
     });
   }
 

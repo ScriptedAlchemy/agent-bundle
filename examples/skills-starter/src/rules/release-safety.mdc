@@ -1,0 +1,7 @@
+---
+description: Keep release reviews evidence-based
+alwaysApply: true
+---
+Use the release checklist before approving a package.
+
+State unresolved blockers explicitly and never infer missing evidence.

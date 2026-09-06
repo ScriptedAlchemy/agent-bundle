@@ -1,5 +1,6 @@
 import type { Diagnostic } from '../../core/diagnostics.ts';
 import type { RouteInputSchema } from '../../routes/types.ts';
+import type { ServedStaticDocument } from '../skill-document-service.ts';
 import type {
   RouteManifest,
   RouteManifestCliCommand,
@@ -22,6 +23,7 @@ export interface ApplicationLeaf {
   readonly command?: RouteManifestCliCommand;
   readonly config: readonly RouteManifestConfigEntry[];
   readonly description?: string;
+  readonly document?: ServedStaticDocument;
   readonly event?: string;
   readonly execution: ApplicationLeafExecution;
   readonly inputSchema?: RouteInputSchema;
@@ -106,6 +108,7 @@ export interface ApplicationTreeManifestSources {
   readonly manifest?: RouteManifest;
   readonly message?: string;
   readonly skills?: readonly ApplicationTreeSkill[];
+  readonly staticDocuments?: readonly ServedStaticDocument[];
   readonly state: ApplicationTreeState;
 }
 
@@ -299,6 +302,21 @@ const skillLeaves = (skills: readonly ApplicationTreeSkill[]): readonly Applicat
     });
   }));
 
+const staticDocumentLeaves = (
+  documents: readonly ServedStaticDocument[],
+): readonly ApplicationLeaf[] => Object.freeze(documents.map((document) => {
+  const ref = Object.freeze({ id: document.id, kind: document.kind });
+  return Object.freeze({
+    config: Object.freeze([]),
+    document,
+    execution: 'document' as const,
+    key: applicationNodeKey(ref),
+    label: document.name,
+    ref,
+    source: document.provenance.sourcePath,
+  });
+}));
+
 export const applicationLeaves = (tree: ApplicationTree): readonly ApplicationLeaf[] => Object.freeze(
   tree.groups.flatMap((group) => group.kind === 'mcp'
     ? group.servers.flatMap((server) => server.subgroups.flatMap((subgroup) => subgroup.leaves))
@@ -326,6 +344,7 @@ export const applicationTreeForManifest = (
     projectGroup('cli', 'CLI', routeCli),
     projectGroup('scripts', 'Scripts', [...routeScripts, ...configuredScriptLeaves(sources.inspection, existing)]),
     projectGroup('skills', 'Skills', skillLeaves(sources.skills ?? [])),
+    projectGroup('rules', 'Rules / Commands', staticDocumentLeaves(sources.staticDocuments ?? [])),
   ].filter((group): group is ApplicationGroup => group !== undefined);
   const provisional: ApplicationTree = Object.freeze({
     diagnostics: Object.freeze([...(manifest?.diagnostics ?? [])]),

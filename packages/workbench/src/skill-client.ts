@@ -3,9 +3,11 @@ import type { JsonValue } from '../../agent-bundle/src/contracts/strict-json.ts'
 import type { SourceProvenance } from '../../agent-bundle/src/contracts/project.ts';
 import type {
   ServedSkillDocument,
+  ServedStaticDocument,
   SkillDocumentBase,
   SkillDocumentResource,
   SkillDocumentTree,
+  StaticDocumentProjection,
 } from '../../agent-bundle/src/contracts/skills.ts';
 
 import {
@@ -90,6 +92,64 @@ const strings = (value: unknown): readonly string[] => {
   return Object.freeze([...value]);
 };
 
+const capabilityEvidence = (value: unknown): { readonly observedVersion: string; readonly target: string } => {
+  if (!hasAllowedKeys(value, ['observedVersion', 'target'])) throw invalidResponse();
+  return Object.freeze({
+    observedVersion: readString(value, 'observedVersion'),
+    target: readString(value, 'target'),
+  });
+};
+
+const capability = (value: unknown): StaticDocumentProjection['capability'] => {
+  if (!isRecord(value)) throw invalidResponse();
+  switch (value.state) {
+    case 'supported':
+      if (!hasAllowedKeys(value, ['evidence', 'state'])) throw invalidResponse();
+      return Object.freeze({ evidence: capabilityEvidence(value.evidence), state: value.state });
+    case 'degraded':
+      if (!hasAllowedKeys(value, ['reason', 'state'], ['evidence'])) throw invalidResponse();
+      return Object.freeze({
+        ...(value.evidence === undefined ? {} : { evidence: capabilityEvidence(value.evidence) }),
+        reason: readString(value, 'reason'),
+        state: value.state,
+      });
+    case 'prohibited':
+    case 'unavailable':
+      if (!hasAllowedKeys(value, ['reason', 'state'])) throw invalidResponse();
+      return Object.freeze({ reason: readString(value, 'reason'), state: value.state });
+    default:
+      throw invalidResponse();
+  }
+};
+
+const staticProjection = (value: unknown): StaticDocumentProjection => {
+  if (!hasAllowedKeys(value, ['capability', 'target'], ['markdown', 'path'])) throw invalidResponse();
+  return Object.freeze({
+    capability: capability(value.capability),
+    ...(readOptionalString(value, 'markdown') === undefined ? {} : { markdown: readString(value, 'markdown') }),
+    ...(readOptionalString(value, 'path') === undefined ? {} : { path: readString(value, 'path') }),
+    target: readString(value, 'target'),
+  });
+};
+
+const staticDocument = (value: unknown): ServedStaticDocument => {
+  if (!hasAllowedKeys(value, ['body', 'frontmatter', 'id', 'kind', 'markdown', 'name', 'projections', 'provenance']) ||
+    !isRecord(value.frontmatter) || !Array.isArray(value.projections) ||
+    (value.kind !== 'command' && value.kind !== 'rule')) {
+    throw invalidResponse();
+  }
+  return Object.freeze({
+    body: readString(value, 'body'),
+    frontmatter: value.frontmatter,
+    id: readString(value, 'id'),
+    kind: value.kind,
+    markdown: readString(value, 'markdown'),
+    name: readString(value, 'name'),
+    projections: Object.freeze(value.projections.map(staticProjection)),
+    provenance: provenance(value.provenance),
+  });
+};
+
 /** Decodes the only unversioned Skill DTO contract emitted by the foreground server. */
 const skillDocument = (value: unknown): ServedSkillDocument => {
   if (!isRecord(value)) throw invalidResponse();
@@ -121,10 +181,17 @@ const skillDocument = (value: unknown): ServedSkillDocument => {
 };
 
 const skillTree = (value: unknown, kind: SkillDocumentBase['kind']): SkillDocumentTree => {
-  if (!hasAllowedKeys(value, ['diagnostics', 'skills']) || !Array.isArray(value.skills)) throw invalidResponse();
+  if (!hasAllowedKeys(value, ['diagnostics', 'skills', 'staticDocuments']) ||
+    !Array.isArray(value.skills) || !Array.isArray(value.staticDocuments)) {
+    throw invalidResponse();
+  }
   const skills = value.skills.map(skillDocument);
   if (skills.some((skill) => skill.base.kind !== kind)) throw invalidResponse();
-  return Object.freeze({ diagnostics: diagnostics(value.diagnostics), skills: Object.freeze(skills) });
+  return Object.freeze({
+    diagnostics: diagnostics(value.diagnostics),
+    skills: Object.freeze(skills),
+    staticDocuments: Object.freeze(value.staticDocuments.map(staticDocument)),
+  });
 };
 
 const documentResponse = (value: unknown, kind: SkillDocumentBase['kind']): ServedSkillDocument => {

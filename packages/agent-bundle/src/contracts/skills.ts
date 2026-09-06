@@ -4,7 +4,10 @@
  */
 export type {
   ServedSkillDocument,
+  ServedStaticDocument,
   SkillDocumentBase,
   SkillDocumentResource,
   SkillDocumentTree,
+  StaticDocumentKind,
+  StaticDocumentProjection,
 } from '../dev/skill-document-service.ts';

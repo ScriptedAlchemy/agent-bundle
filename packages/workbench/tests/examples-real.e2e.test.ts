@@ -22,6 +22,7 @@ import {
   expectPrimaryNav,
   expectRenderedDocument,
   openWorkbench,
+  removeWatchedSource,
   runSelectedRoute,
   selectApplicationLeaf,
   workbenchTestId,
@@ -87,6 +88,15 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     root: exampleRoot('skills-starter'),
   });
   const ledger = createExampleErrorLedger(page, server.url);
+  const pluginRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && (
+      request.url().includes('/api/routes/invocations') ||
+      request.url().includes('/api/mcp/sessions')
+    )) {
+      pluginRequests.push(request.url());
+    }
+  });
   try {
     const surface = await inspectWorkbenchSurface({ root: exampleRoot('skills-starter') });
     await openWorkbench(page, server.url, '/');
@@ -101,6 +111,15 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
       await expect(page.getByRole('heading', { level: 1, name: leaf.label, exact: true })).toBeVisible({ timeout: browserTimeout });
       await expect(workbenchTestId(page, 'renderedDocument')).toBeVisible({ timeout: browserTimeout });
     }
+    for (const kind of ['command', 'rule'] as const) {
+      const leaf = applicationLeaves(surface.application).find((entry) => entry.ref.kind === kind);
+      if (leaf === undefined) throw new Error(`Skills Starter surface is missing its ${kind} leaf.`);
+      await selectApplicationLeaf(page, server.url, leaf);
+      await expect(workbenchTestId(page, 'routeRun')).toHaveCount(0);
+      await expect(workbenchTestId(page, 'staticAuthoredDocument')).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Host projections' })).toBeVisible({ timeout: browserTimeout });
+    }
+    expect(pluginRequests).toEqual([]);
     await captureExampleState(page, 'skills-starter', 'skills-populated');
 
     await openWorkbench(page, server.url, '/advanced/artifact');
@@ -122,6 +141,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
   const project = await copyExample('skills-starter');
   const configPath = join(project.root, 'agent-bundle.config.ts');
   const hookSource = join(project.root, 'src', 'hooks', 'session-start.ts');
+  const ruleSource = join(project.root, 'src', 'rules', 'release-safety.mdc');
   const originalConfig = await readFile(configPath, 'utf8');
   const healthyHook = `export default () => ({\n  additionalContext: 'Review the current operational evidence before changing production.',\n  outcome: 'continue' as const,\n});\n`;
   const hookConfig = originalConfig.replace(
@@ -142,6 +162,17 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await expectPrimaryNav(page);
     const before = await inspectWorkbenchSurface({ root: project.root });
     expect(applicationLeaves(before.application).some((leaf) => leaf.ref.kind === 'event')).toBe(false);
+    const ruleLeaf = applicationLeaves(before.application).find((leaf) => leaf.ref.kind === 'rule');
+    if (ruleLeaf === undefined) throw new Error('Skills Starter surface is missing its release rule.');
+
+    await selectApplicationLeaf(page, server.url, ruleLeaf);
+    const editedRule = `${await readFile(ruleSource, 'utf8')}\nVerify generated projections after every edit.\n`;
+    await editWatchedSource(server, project.root, ruleSource, editedRule, 'succeeded');
+    await waitForWorkbenchIdle(page);
+    await expect(workbenchTestId(page, 'staticAuthoredDocument')).toContainText('Verify generated projections after every edit.');
+    await removeWatchedSource(server, ruleSource);
+    await openWorkbench(page, server.url, '/');
+    await expect(applicationLeafItem(page, ruleLeaf)).toHaveCount(0, { timeout: browserTimeout });
 
     await editWatchedSource(server, project.root, configPath, hookConfig, 'succeeded');
     await waitForWorkbenchIdle(page);

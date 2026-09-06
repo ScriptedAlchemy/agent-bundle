@@ -12,9 +12,9 @@ required. Both eval suites are deterministic and read only checked-in fixtures.
 
 ## What is authored
 
-- `agent-bundle.config.ts` declares the plugin and its portable, Codex, and
-  Claude targets. The Skills are not listed there: every `src/skills/*/SKILL.md`
-  directory is discovered automatically by convention, the model described in
+- `agent-bundle.config.ts` declares the plugin and its portable, Codex, Claude,
+  and Cursor targets. Skills, commands, and rules under `src/` are discovered
+  automatically by convention, the model described in
   [`docs/framework-mode.md`](../../docs/framework-mode.md).
 - `src/skills/incident-triage/SKILL.md` guides a production incident from first
   signal through containment, evidence collection, and a handoff-ready update.
@@ -24,6 +24,8 @@ required. Both eval suites are deterministic and read only checked-in fixtures.
   and final-report requirements for an explicit release review.
 - Each Skill links its own `references/` checklist or runbook and reusable
   `assets/` handoff or planning template.
+- `src/commands/review-release.md` and `src/rules/release-safety.mdc` provide
+  host-native static content without an MCP server or executable renderer.
 - `evals/release-readiness.eval.ts` defines the deterministic
   `release-artifact-is-ready` case and its checked-in evidence fixture.
 - `evals/engineering-operations.eval.ts` directly exercises the incident and
@@ -39,12 +41,13 @@ required. Both eval suites are deterministic and read only checked-in fixtures.
    Skill shows its deterministic outcome-eval coverage;
    it is labeled indirect because the deterministic harness cannot observe host
    Skill activation.
-3. **Advanced → Artifact** defaults to the Claude target. Change the target to compare
-   the portable, Codex, and Claude output trees and their provenance.
-4. **Advanced → Evals → Runs** defaults to the `release-readiness` suite. Run its deterministic
+3. Under **Application → Rules / Commands**, open authored and generated
+   content directly. Unsupported hosts show their capability reason; nothing runs.
+4. **Advanced → Artifact** shows each target's output tree and provenance.
+5. **Advanced → Evals → Runs** defaults to the `release-readiness` suite. Run its deterministic
    `release-artifact-is-ready` case and inspect the passing trial. It consumes
    only the checked-in evidence fixture, so no model login or API key is needed.
-5. To practice repair, make a reversible policy edit, press **Rebuild**, and
+6. To practice repair, make a reversible policy edit, press **Rebuild**, and
    wait for the failed or idle result rather than a Building state. Restore the
    checked-in policy and rebuild. The prior eval becomes stale for the changed
    build; rerun `release-readiness` to record current, repaired evidence.

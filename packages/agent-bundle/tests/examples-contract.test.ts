@@ -25,7 +25,7 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
       model: {
         metadata: { name: 'skills-starter' },
         scripts: [],
-        targets: [{ name: 'claude' }, { name: 'codex' }, { name: 'portable' }],
+        targets: [{ name: 'claude' }, { name: 'codex' }, { name: 'cursor' }, { name: 'portable' }],
       },
       state: 'ready',
     });
@@ -35,8 +35,29 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     expect(inspection.projectContext.packageName).toBe('@agent-bundle-example/skills-starter');
     expect(inspection.projectContext.packageVersion).toBeUndefined();
     expect(projectVersionLabel(inspection.projectContext)).toContain('development fallback');
-    await build({ output, root });
-    await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
+    const built = await build({ output, root });
+    const validation = await validate({ artifact: output, root });
+    expect(validation.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+    expect(validation.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'AB6020',
+      target: 'claude',
+    }));
+    expect(built.build.manifest.executables).toEqual({
+      bins: [],
+      hooks: [],
+      mcpServers: [],
+      scripts: [],
+    });
+    expect(built.build.manifest).not.toHaveProperty('web');
+    expect(built.model).toMatchObject({
+      mcpApps: [],
+      mcpServers: [],
+    });
+    expect(built.model).not.toHaveProperty('state');
+    await expect(readFile(join(output, 'commands', 'review-release.md'), 'utf8'))
+      .resolves.toContain('Review the current release evidence');
+    await expect(readFile(join(output, 'rules', 'release-safety.mdc'), 'utf8'))
+      .resolves.toContain('Keep release reviews evidence-based');
     await expect(readFile(join(output, 'skills', 'release-review', 'SKILL.md'), 'utf8'))
       .resolves.toContain('# Release review');
     await expect(readFile(join(output, 'skills', 'release-review', 'SKILL.md'), 'utf8'))

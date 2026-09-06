@@ -4,24 +4,26 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 
 # Skills 起步项目
 
-一个只有 Skill 的插件。它证明：一个值得安装的捆绑包，除了自身标识与 target 之外可以什么都不声明——
-而 Skill 的质量仍然可以由记录下来的证据支撑，而不只是一句声称。
+一个由 Skill、资源、一条命令和一条规则组成的静态插件。它证明：有用的宿主内容不需要 MCP
+服务器、App 路由、状态所有者或可执行渲染器。
 
 - **在仓库根目录运行：** `pnpm example:skills`
 - **包名：** `@agent-bundle-example/skills-starter`
 - **公开依赖：** `agent-bundle`（`workspace:*`）
-- **Target：** `portable`、`codex`、`claude`
+- **Target：** `portable`、`codex`、`claude`、`cursor`
 - **凭据：** 不需要——两个 eval 套件都是确定性的，只读取签入的夹具
 - **源码：** [`examples/skills-starter`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/skills-starter)
 
 ## 它证明什么
 
-- **约定发现。** `agent-bundle.config.ts` 只声明插件与它的三个 target，别的什么都没有。每个
-  `src/skills/*/SKILL.md` 目录都按约定被发现，因此配置从不列出任何 Skill。这正是
+- **约定发现。** `agent-bundle.config.ts` 声明插件与四个 target。`src/` 下的 Skill、命令和规则
+  都按约定发现。这正是
   [Skills](../guide/authoring/skills.mdx) 中描述的编写模型。
-- **一份源码，三种宿主投影。** 同一批编写好的文档为同一个复合插件根目录中的 portable、Codex 与 Claude
+- **一份源码，四种宿主投影。** 同一批文档为复合插件根目录中的 portable、Codex、Claude 与 Cursor
   投影分别降级——`skills/` 只输出一份，由所有选中宿主共同读取。Workbench 的 Source 与 Generated 视图
   会显示某个宿主究竟是复制还是改写了一份文档。
+- **不虚构运行时。** 构建产物没有 MCP 可执行文件、App 运行时、Flight worker、状态所有者或 notice
+  kernel。Workbench 直接打开静态叶子，并如实说明不支持的宿主投影，而不是伪造调用。
 - **确定性的 eval 证据。** eval 套件通过确定性 harness 针对签入夹具运行，因此某个 Skill 的覆盖是一次
   记录下来的运行，而不是一句断言。覆盖被标记为*间接*，因为确定性 harness 无法观察宿主端的 Skill 激活。
 
@@ -32,6 +34,8 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 | `src/skills/incident-triage/` | 一次生产事故，从最初信号到止损、证据收集，直到可直接交接的进展更新。 |
 | `src/skills/dependency-upgrade/` | 依赖升级规划，包含 API、运行时、灰度与回滚检查。 |
 | `src/skills/release-review/` | 一次显式发布评审所需的证据、严重级别、流程与最终报告要求。 |
+| `src/commands/review-release.md` | 启动发布评审的 Claude 与 Cursor 命令。 |
+| `src/rules/release-safety.mdc` | 让发布决策保持证据导向的 Cursor 规则。 |
 | `evals/release-readiness.eval.ts` | `release-readiness` 套件及其确定性用例 `release-artifact-is-ready`。 |
 | `evals/engineering-operations.eval.ts` | `engineering-operations` 套件：`incident-handoff-is-actionable` 与 `upgrade-plan-has-rollback`。 |
 
@@ -42,13 +46,13 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 
 1. **Application → Skills** 列出 `dependency-upgrade`、`incident-triage` 与 `release-review`。
    选中其中一个以渲染其文档，然后用检查器浏览链接的清单与报告模板，或对比 Source 与 Generated 输出。
-2. **Advanced → Artifact** 显示复合插件根目录。在 portable、Codex 与 Claude 之间切换 target 只是改变
-   聚焦的投影，每种选择看到的都是同一棵树——三个宿主共同读取的那一个目录；为每个文件启用详情以查看
-   provenance。
-3. **Advanced → Evals → Runs** 默认选中 `release-readiness` 套件。运行
+2. **Application → Rules / Commands** 直接打开编写内容和每个宿主投影。不支持的宿主显示能力原因，
+   且没有 Run 操作或插件进程。
+3. **Advanced → Artifact** 显示复合插件根目录和每个文件的 provenance。
+4. **Advanced → Evals → Runs** 默认选中 `release-readiness` 套件。运行
    `release-artifact-is-ready` 并查看通过的试次；
    它只消费签入的证据夹具。
-4. 想演练修复，就对发布策略做一处可逆修改，按 **Rebuild**，并等待 Failed 或 Idle 结果，而不是 Building
+5. 想演练修复，就对发布策略做一处可逆修改，按 **Rebuild**，并等待 Failed 或 Idle 结果，而不是 Building
    状态。失败时从页眉计数打开 **Problems**，同时 Application 保留上一个可用的树。恢复签入的策略
    并重建。此时先前那次 eval 对改动后的构建已经过期——重新运行 `release-readiness`，记录当前已修复
    状态下的证据。

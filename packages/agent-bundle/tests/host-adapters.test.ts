@@ -1207,6 +1207,19 @@ it('admits documented Codex component path and inline manifest forms', async () 
   }
 });
 
+it('does not manufacture Codex MCP or hook documents from a static Claude selection', () => {
+  const model: NormalizedPlugin = { ...plugin, hooks: [], mcpServers: [] };
+  const documents = writeContents(model, 'codex');
+  expect(documents).not.toHaveProperty(codexArtifactPaths.hooksManifest);
+  expect(documents).not.toHaveProperty(codexArtifactPaths.mcp);
+  const manifest = JSON.parse(documents[codexArtifactPaths.plugin]!) as Record<string, unknown>;
+  expect(manifest).toMatchObject({
+    interface: { capabilities: ['skills'] },
+  });
+  expect(manifest).not.toHaveProperty('hooks');
+  expect(manifest).not.toHaveProperty('mcpServers');
+});
+
 it('plans byte-stable native Codex and Claude plugin trees from the same frozen model', async () => {
   const registry = createDefaultRegistry();
   expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor']);

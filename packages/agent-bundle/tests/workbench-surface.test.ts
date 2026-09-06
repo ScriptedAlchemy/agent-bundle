@@ -220,17 +220,32 @@ describe('the Workbench surface of the configured-only examples', () => {
     expect(surface.counts.scripts).toBeGreaterThan(0);
   });
 
-  it('shows only Skill leaves for the Skills Starter', async () => {
+  it('shows the Skills Starter static content without executable groups', async () => {
     const surface = await inspectWorkbenchSurface({ root: exampleRoot('skills-starter') });
 
-    expect(surface.application.groups.map((group) => group.kind)).toEqual(['skills']);
+    expect(surface.application.groups.map((group) => group.kind)).toEqual(['skills', 'rules']);
     expect(applicationGroup(surface, 'skills')).toMatchObject({ leaves: expect.arrayContaining([
       expect.objectContaining({ label: 'dependency-upgrade' }),
       expect.objectContaining({ label: 'incident-triage' }),
       expect.objectContaining({ label: 'release-review' }),
     ]) });
+    expect(applicationGroup(surface, 'rules')).toMatchObject({
+      label: 'Rules / Commands',
+      leaves: [
+        expect.objectContaining({
+          execution: 'document',
+          label: 'release-safety',
+          ref: { id: 'rule:release-safety', kind: 'rule' },
+        }),
+        expect.objectContaining({
+          execution: 'document',
+          label: 'review-release',
+          ref: { id: 'command:review-release', kind: 'command' },
+        }),
+      ],
+    });
     expect(surface.advanced).toEqual(['evals', 'artifact', 'hosts', 'logs']);
-    expect(surface.counts).toMatchObject({ hooks: 0, mcpServers: 0, scripts: 0, skills: 3, targets: 3 });
+    expect(surface.counts).toMatchObject({ hooks: 0, mcpServers: 0, scripts: 0, skills: 3, targets: 4 });
   });
 });
 
