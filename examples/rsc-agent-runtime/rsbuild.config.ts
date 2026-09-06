@@ -486,7 +486,6 @@ export const createRscRuntimeRsbuildConfig = (
           inlineStyles: true,
           legalComments: 'inline',
           overrideBrowserslist: [...rscRuntimeBrowserHost],
-          sourceMap: false,
           target: 'web',
         },
         source: {

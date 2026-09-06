@@ -9,6 +9,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { dependencyManifestPath } from '../core/dependency-manifest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual, posixRelativeWhenInside } from '../core/paths.ts';
+import { parseRuntimeVersion } from '../core/runtime.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
@@ -19,11 +20,6 @@ import type {
   ExternalIR,
   ModuleIR,
 } from './compile-result.ts';
-import {
-  generatedExecutableLegalComments,
-  generatedExecutableSourceMap,
-  generatedExecutableSyntax,
-} from './compiler-profile.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { ArtifactDependencyAuditPlugin } from './dependency-audit-plugin.ts';
 import { mcpEntryRuntimeSpecifier } from './entry-shell.ts';
@@ -37,6 +33,16 @@ import {
   virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
+
+export const compilerHostNodeFloor = '22.19.0';
+export const generatedExecutableSyntax = ((): 'es2022' => {
+  const version = parseRuntimeVersion(compilerHostNodeFloor);
+  if (version === undefined || version[0] < 22) {
+    throw new Error(`Generated-executable Node floor ${compilerHostNodeFloor} does not support ES2022.`);
+  }
+  return 'es2022';
+})();
+export const generatedExecutableLegalComments = 'inline' as const;
 
 export interface RslibVirtualModule {
   readonly name: string;
@@ -655,7 +661,7 @@ export const composeEntryLibConfig = (
       filenameHash: false,
       legalComments: generatedExecutableLegalComments,
       minify: false,
-      sourceMap: generatedExecutableSourceMap(options.sourceMap === true),
+      sourceMap: options.sourceMap === true ? { js: 'inline-source-map' } : false,
       target: 'node',
     },
     // `externalsType` stays Rslib's ESM default (`modern-module`): a CommonJS

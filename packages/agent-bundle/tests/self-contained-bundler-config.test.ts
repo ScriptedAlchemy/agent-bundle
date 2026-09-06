@@ -7,15 +7,17 @@ import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-  compilerHostNodeFloor,
-  generatedExecutableLegalComments,
-  generatedExecutableSyntax,
-} from '../src/build/compiler-profile.ts';
 import { composeMcpAppsRsbuildConfig } from '../src/build/mcp-apps.ts';
 import { buildWithRslib } from '../src/build/compiler.ts';
 import { ArtifactDependencyAuditPlugin } from '../src/build/dependency-audit-plugin.ts';
-import { composeEntryLibConfig, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
+import {
+  compilerHostNodeFloor,
+  composeEntryLibConfig,
+  entryLibId,
+  generatedExecutableLegalComments,
+  generatedExecutableSyntax,
+  type RslibEntry,
+} from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 

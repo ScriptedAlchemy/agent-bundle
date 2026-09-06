@@ -53,7 +53,6 @@ test('resolved development topology keeps every React environment in production 
     expect(inspection.origin.environmentConfigs.rsc?.mode).toBe('production');
     expect(inspection.origin.environmentConfigs.widget?.mode).toBe('production');
     expect(inspection.origin.environmentConfigs.app?.output.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
-    expect(inspection.origin.environmentConfigs.app?.output.sourceMap).toBe(false);
     expect(inspection.origin.environmentConfigs.widget?.output.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
     expect(appBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
     expect(widgetBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
