@@ -1,4 +1,5 @@
 import { isRecord } from '../../core/strict-json.ts';
+import { requireMcpAppJson } from './mcp-app-json.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../mcp-app-profile-descriptors.ts';
 
 export type McpAppJsonValue =
@@ -121,24 +122,8 @@ interface BindingEntry {
 const defaultTeardownTimeoutMs = 1_000;
 const maximumTeardownTimeoutMs = 30_000;
 
-const isJsonValue = (value: unknown): value is McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  if (!isRecord(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
-  return Object.values(value).every(isJsonValue);
-};
-
-const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
-  if (Array.isArray(value)) return Object.freeze(value.map(cloneJson));
-  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneJson(child)])));
-};
-
-const requireJson = (value: unknown, label: string): McpAppJsonValue => {
-  if (!isJsonValue(value)) throw new TypeError(`${label} must be a finite JSON value.`);
-  return cloneJson(value);
-};
+const requireJson = (value: unknown, label: string): McpAppJsonValue =>
+  requireMcpAppJson(value, `${label} must be a finite JSON value.`);
 
 const requireNonempty = (value: string, label: string): string => {
   if (value.trim().length === 0) throw new Error(`${label} must be nonempty.`);
@@ -156,11 +141,6 @@ const requireTeardownTimeout = (value: number | undefined): number => {
     throw new RangeError(`MCP App teardown timeout must be an integer from 1 to ${maximumTeardownTimeoutMs} ms.`);
   }
   return timeout;
-};
-
-const throwIfAborted = (signal: AbortSignal | undefined, label: string): void => {
-  if (signal === undefined || !signal.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new Error(label);
 };
 
 export const selectMcpAppResourceUri = (tool: McpAppToolDefinition): string | undefined => {
@@ -265,17 +245,17 @@ export class McpAppBindingService {
   }
 
   async callTool(bindingId: string, request: McpAppToolCall, signal?: AbortSignal): Promise<McpAppJsonValue> {
-    throwIfAborted(signal, 'MCP App bridge tool call was aborted.');
+    signal?.throwIfAborted();
     const entry = this.#entry(bindingId);
     const name = requireNonempty(request.name, 'MCP App bridge tool name');
     const tools = await entry.lease.session.listBridgeTools();
-    throwIfAborted(signal, 'MCP App bridge tool call was aborted.');
+    signal?.throwIfAborted();
     this.#assertActive(entry);
     if (!tools.some((tool) => tool.name === name && tool.appVisible)) {
       throw new Error(`MCP App bridge tool ${JSON.stringify(name)} is not app-visible for this binding.`);
     }
     const argumentsValue = request.arguments === undefined ? undefined : requireJson(request.arguments, 'MCP App bridge tool arguments');
-    throwIfAborted(signal, 'MCP App bridge tool call was aborted.');
+    signal?.throwIfAborted();
     return requireJson(
       await entry.lease.session.callTool({
         arguments: argumentsValue,
@@ -287,16 +267,16 @@ export class McpAppBindingService {
   }
 
   async readResource(bindingId: string, request: McpAppResourceRead, signal?: AbortSignal): Promise<McpAppJsonValue> {
-    throwIfAborted(signal, 'MCP App bridge resource read was aborted.');
+    signal?.throwIfAborted();
     const entry = this.#entry(bindingId);
     const uri = requireNonempty(request.uri, 'MCP App bridge resource URI');
     const resources = await entry.lease.session.listBridgeResources();
-    throwIfAborted(signal, 'MCP App bridge resource read was aborted.');
+    signal?.throwIfAborted();
     this.#assertActive(entry);
     if (!resources.some((resource) => resource.uri === uri && resource.appVisible)) {
       throw new Error(`MCP App bridge resource ${JSON.stringify(uri)} is not app-visible for this binding.`);
     }
-    throwIfAborted(signal, 'MCP App bridge resource read was aborted.');
+    signal?.throwIfAborted();
     return requireJson(
       await entry.lease.session.readResource({
         uri,

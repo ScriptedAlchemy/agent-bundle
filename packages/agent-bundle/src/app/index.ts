@@ -203,8 +203,6 @@ const allowedErrorKeys = Object.freeze(['code', 'data', 'message']);
 const defaultTimeoutMs = 15_000;
 const maximumTimeoutMs = 2_147_483_647;
 
-const hasOwn = (value: object, key: string): boolean => Object.hasOwn(value, key);
-
 const nonempty = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
@@ -255,17 +253,17 @@ const rpcMessage = (value: unknown): RpcMessage | undefined => {
   if (!isPlainDataRecord(snapshot) || snapshot.jsonrpc !== '2.0') return undefined;
   const keys = Object.keys(snapshot);
   if (keys.some((key) => !allowedMessageKeys.includes(key))) return undefined;
-  const hasMethod = hasOwn(snapshot, 'method');
-  const hasResult = hasOwn(snapshot, 'result');
-  const hasError = hasOwn(snapshot, 'error');
+  const hasMethod = Object.hasOwn(snapshot, 'method');
+  const hasResult = Object.hasOwn(snapshot, 'result');
+  const hasError = Object.hasOwn(snapshot, 'error');
   if (Number(hasMethod) + Number(hasResult) + Number(hasError) !== 1) return undefined;
-  if (hasOwn(snapshot, 'id') && !requestId(snapshot.id)) return undefined;
+  if (Object.hasOwn(snapshot, 'id') && !requestId(snapshot.id)) return undefined;
   if (hasMethod) {
     if (!nonempty(snapshot.method) || hasResult || hasError) return undefined;
-    if (hasOwn(snapshot, 'params') && !isPlainDataRecord(snapshot.params)) return undefined;
+    if (Object.hasOwn(snapshot, 'params') && !isPlainDataRecord(snapshot.params)) return undefined;
     return snapshot as unknown as RpcMessage;
   }
-  if (!hasOwn(snapshot, 'id') || hasOwn(snapshot, 'params')) return undefined;
+  if (!Object.hasOwn(snapshot, 'id') || Object.hasOwn(snapshot, 'params')) return undefined;
   if (hasError) {
     if (!isPlainDataRecord(snapshot.error)) return undefined;
     if (
@@ -702,7 +700,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     },
     async rebind(rebindOptions: AppConnectOptions = {}): Promise<AppInitializeResult> {
       if (isDisposed) throw new AppClientError('disposed', 'The App client was disposed.');
-      const nextOrigin = hasOwn(rebindOptions, 'targetOrigin')
+      const nextOrigin = Object.hasOwn(rebindOptions, 'targetOrigin')
         ? trustedOrigin(rebindOptions.targetOrigin)
         : configuredOrigin;
       connectionGeneration += 1;

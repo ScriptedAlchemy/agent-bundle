@@ -1,14 +1,16 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
+  badRequest,
   diagnostic,
   hasOnly,
   isRequestDiagnostic,
+  noQuery,
   rawPathname,
   readJsonBody,
   requestError,
   responseDiagnostic,
-  responseJson as writeJsonResponse,
+  responseJsonOrDestroy,
 } from './http.ts';
 import type { InspectorLauncherStatus } from './inspector-launcher.ts';
 
@@ -26,16 +28,9 @@ export interface InspectorRoutesOptions {
   readonly service?: InspectorRouteService;
 }
 
-const responseJson = (response: ServerResponse, body: unknown): void =>
-  writeJsonResponse(response, body, { destroyIfEnded: true });
+const pathError = badRequest('AB8110', 'Inspector route path is not valid.');
 
-const pathError = (): never => {
-  throw requestError(diagnostic('AB8110', 'Inspector route path is not valid.', 400));
-};
-
-const invalidShape = (): never => {
-  throw requestError(diagnostic('AB8111', 'Inspector request has an invalid shape.', 400));
-};
+const invalidShape = badRequest('AB8111', 'Inspector request has an invalid shape.');
 
 const route = (requestTarget: string | undefined): Route | undefined => {
   const pathname = rawPathname(requestTarget);
@@ -46,10 +41,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   const kind = parts[3];
   if (kind === 'launch' || kind === 'status') return kind;
   return pathError();
-};
-
-const noQuery = (requestTarget: string | undefined): void => {
-  if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) invalidShape();
 };
 
 /**
@@ -93,15 +84,15 @@ export class InspectorRoutes {
     service: InspectorRouteService,
   ): Promise<void> {
     const method = request.method ?? 'GET';
-    noQuery(request.url);
+    noQuery(request.url, invalidShape);
     switch (parsed) {
       case 'status':
         if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-        return responseJson(response, { status: service.status() });
+        return responseJsonOrDestroy(response, { status: service.status() });
       case 'launch':
         if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
         if (!hasOnly(await readJsonBody(request, { invalidShape }), [])) invalidShape();
-        return responseJson(response, { url: (await service.launch()).url });
+        return responseJsonOrDestroy(response, { url: (await service.launch()).url });
       default: {
         const exhaustive: never = parsed;
         throw new Error(`Unexpected inspector route: ${String(exhaustive)}`);

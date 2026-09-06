@@ -7,14 +7,16 @@ import {
 } from './artifact-inspection-service.ts';
 import { EpochStoreError, type EpochStoreErrorCode } from '../epoch-store.ts';
 import {
+  badRequest,
   decodedOpaqueSegment,
   diagnostic,
   isRequestDiagnostic,
+  noQuery,
   nonemptyString,
   rawPathname,
   requestError,
   responseDiagnostic,
-  responseJson as writeJsonResponse,
+  responseJsonOrDestroy,
   type RequestDiagnostic,
 } from '../http.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from '../types.ts';
@@ -53,13 +55,9 @@ const epochDiagnostics: Readonly<Partial<Record<EpochStoreErrorCode, RequestDiag
   EPOCH_NOT_FOUND: diagnostic('AB8067', 'Artifact epoch was not found.', 404),
 });
 
-const pathError = (): never => {
-  throw artifactRequestError(diagnostic('AB8060', 'Artifact route path is not valid.', 400));
-};
+const pathError = badRequest('AB8060', 'Artifact route path is not valid.');
 
-const invalidShape = (): never => {
-  throw artifactRequestError(diagnostic('AB8062', 'Artifact request has an invalid shape.', 400));
-};
+const invalidShape = badRequest('AB8062', 'Artifact request has an invalid shape.');
 
 const decodedSegment = (segment: string): string =>
   decodedOpaqueSegment(segment, { code: 'AB8060', message: 'Artifact route path is not valid.' });
@@ -75,9 +73,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return Object.freeze({ epochId: segments[1]!, kind: 'epoch' });
 };
 
-const responseJson = (response: ServerResponse, body: unknown): void =>
-  writeJsonResponse(response, body, { destroyIfEnded: true });
-
 const diffQuery = (requestTarget: string | undefined): Readonly<{ readonly base: string; readonly candidate: string }> => {
   const query = new URL(requestTarget ?? '/', 'http://localhost').searchParams;
   if ([...query.keys()].some((key) => key !== 'base' && key !== 'candidate')) invalidShape();
@@ -86,10 +81,6 @@ const diffQuery = (requestTarget: string | undefined): Readonly<{ readonly base:
   const candidate = query.get('candidate');
   if (!nonemptyString(base) || !nonemptyString(candidate)) return invalidShape();
   return Object.freeze({ base, candidate });
-};
-
-const noQuery = (requestTarget: string | undefined): void => {
-  if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) invalidShape();
 };
 
 /**
@@ -144,10 +135,10 @@ export class ArtifactRoutes {
     }
     if (parsed.kind === 'diff') {
       const query = diffQuery(request.url);
-      return responseJson(response, { diff: await service.diff(query.base, query.candidate) });
+      return responseJsonOrDestroy(response, { diff: await service.diff(query.base, query.candidate) });
     }
-    noQuery(request.url);
-    return responseJson(response, { inspection: await service.inspect(parsed.epochId) });
+    noQuery(request.url, invalidShape);
+    return responseJsonOrDestroy(response, { inspection: await service.inspect(parsed.epochId) });
   }
 
   #unavailable(status: number): Error {
