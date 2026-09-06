@@ -1,6 +1,3 @@
-import { existsSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
@@ -14,6 +11,8 @@ import {
   type AgentRenderInvocation,
 } from '@agent-bundle/runtime';
 
+import { artifactManifestName } from '../../build/manifest.ts';
+import { readArtifactManifest } from '../../build/manifest-file.ts';
 import { renderedDocumentExitCode } from '../../cli-entry.ts';
 import type { EventPreflightResult } from '../../events/preflight.ts';
 import type { EventTraceEvent, EventTraceObserver, EventTracer } from '../../events/trace.ts';
@@ -24,10 +23,10 @@ import type {
   RouteInvocationChildRequest,
   RouteInvocationChildResult,
 } from './route-invocation-service.ts';
+import { resolveRouteExecutable, type RouteExecutableBinding } from './route-invocation-executable.ts';
 import {
   ProductionRouteInvocationError,
   ROUTE_INVOCATION_ARTIFACT_UNAVAILABLE_CODE,
-  ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
   ROUTE_INVOCATION_PREPARATION_FAILURE_CODE,
 } from './route-invocation-production-error.ts';
 import type { RouteInvocationProvider, RouteInvocationTiming } from './route-invocation.ts';
@@ -107,27 +106,6 @@ const completeDocument = (value: JsonValue | undefined): AgentDocument => create
   version: AGENT_DOCUMENT_VERSION,
 });
 
-const workerFiles = async (root: string): Promise<readonly string[]> => {
-  if (!existsSync(root)) return Object.freeze([]);
-  return Object.freeze((await readdir(root))
-    .filter((name) => name.endsWith('-flight.mjs'))
-    .sort()
-    .map((name) => join(root, name)));
-};
-
-const eventWrapperPath = (
-  request: ProductionRequest,
-): string | undefined => {
-  const event = request.manifest.routes[request.routeId]?.event;
-  const target = request.surface.kind === 'event' ? request.surface.host : undefined;
-  if (event === undefined || target === undefined) return undefined;
-  const stem = `event-route-${event.replace('/', '-')}`;
-  const suffixed = join(request.artifactRoot, 'hooks', `${stem}.${target}.mjs`);
-  if (existsSync(suffixed)) return suffixed;
-  const plain = join(request.artifactRoot, 'hooks', `${stem}.mjs`);
-  return existsSync(plain) ? plain : undefined;
-};
-
 const isCliInvocationModule = (module: Partial<CompiledCliInvocationModule>): module is CompiledCliInvocationModule =>
   typeof module.prepareRouteInvocation === 'function' && typeof module.routeInvocationExitCode === 'function';
 
@@ -138,35 +116,66 @@ interface PreparedInput {
   readonly preflight?: CompiledEventPreflight;
 }
 
+/**
+ * Binds the route's executables from the published artifact manifest before
+ * anything runs. The manifest is the #604 contract: a root without a
+ * readable, canonical manifest is not a published artifact (`AB8250`), and a
+ * route the manifest does not compile has no executable (`AB8251`).
+ */
+const bindExecutable = async (request: ProductionRequest): Promise<RouteExecutableBinding> => {
+  const read = await readArtifactManifest(request.artifactRoot);
+  if (read.status !== 'ok') {
+    throw new ProductionRouteInvocationError(
+      ROUTE_INVOCATION_ARTIFACT_UNAVAILABLE_CODE,
+      read.status === 'missing'
+        ? `The published artifact at ${read.root} has no ${artifactManifestName}.`
+        : `The published artifact manifest at ${read.path} is not readable: ${read.detail}`,
+    );
+  }
+  return resolveRouteExecutable({
+    artifactRoot: request.artifactRoot,
+    ...(request.manifest.eventRuntimeServerId === undefined ? {} : { eventRuntimeServerId: request.manifest.eventRuntimeServerId }),
+    manifest: read.manifest,
+    routeId: request.routeId,
+    surface: request.surface,
+  });
+};
+
+/**
+ * Runs the bound bin or wrapper's own preparation. Each is the module the
+ * manifest named, so a bound module that does not export the preparation
+ * contract is a broken artifact, not a cue to look elsewhere: the run fails
+ * before the handler (`AB8252`).
+ */
 const prepareInput = async (
   request: ProductionRequest,
+  binding: RouteExecutableBinding,
   observeTrace: EventTraceObserver,
   signal: AbortSignal,
 ): Promise<PreparedInput> => {
-  const route = request.manifest.routes[request.routeId];
-  if (request.surface.kind === 'cli') {
-    const binRoot = join(request.artifactRoot, 'bin');
-    const bins = existsSync(binRoot)
-      ? (await readdir(binRoot)).filter((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs')).sort()
-      : [];
-    for (const name of bins) {
-      const module = await importedModule<Partial<CompiledCliInvocationModule>>(join(binRoot, name));
-      if (!isCliInvocationModule(module)) continue;
-      return {
-        cli: module,
-        input: module.prepareRouteInvocation(request.routeId, request.surface.args) as JsonValue,
-      };
+  if (binding.bin !== undefined) {
+    const module = await importedModule<Partial<CompiledCliInvocationModule>>(binding.bin);
+    if (!isCliInvocationModule(module)) {
+      throw new ProductionRouteInvocationError(
+        ROUTE_INVOCATION_PREPARATION_FAILURE_CODE,
+        `Routed CLI bin ${binding.bin} does not export the route invocation contract.`,
+      );
     }
+    // A bin is bound for a CLI surface only (`resolveRouteExecutable`).
+    const args = request.surface.kind === 'cli' ? request.surface.args : [];
+    return {
+      cli: module,
+      input: module.prepareRouteInvocation(request.routeId, args) as JsonValue,
+    };
+  }
+  if (binding.wrapper === undefined) return { input: request.input };
+  const wrapper = await importedModule<CompiledEventWrapperModule>(binding.wrapper);
+  if (typeof wrapper.prepareRouteInvocation !== 'function') {
     throw new ProductionRouteInvocationError(
-      ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
-      `Compiled CLI route ${JSON.stringify(request.routeId)} has no invocation entry.`,
+      ROUTE_INVOCATION_PREPARATION_FAILURE_CODE,
+      `Event wrapper ${binding.wrapper} does not export the route invocation preparation contract.`,
     );
   }
-  if (route?.kind !== 'event-route') return { input: request.input };
-  const wrapperPath = eventWrapperPath(request);
-  if (wrapperPath === undefined) return { input: request.input };
-  const wrapper = await importedModule<CompiledEventWrapperModule>(wrapperPath);
-  if (typeof wrapper.prepareRouteInvocation !== 'function') return { input: request.input };
   const native = (request.input as { readonly native?: JsonObject }).native ?? {};
   const preflight = await wrapper.prepareRouteInvocation(native, signal, observeTrace);
   return {
@@ -217,39 +226,6 @@ const invocationFor = (
       return { kind: 'tool', props: { input: input as never, operationId: request.routeId } };
     case 'app':
       throw new Error('MCP App routes are not invocable through the route execution boundary.');
-    default: {
-      const exhaustive: never = route.kind;
-      throw new Error(`Unsupported route kind ${String(exhaustive)}.`);
-    }
-  }
-};
-
-const candidatesFor = async (request: ProductionRequest): Promise<readonly string[]> => {
-  const route = request.manifest.routes[request.routeId];
-  if (route === undefined) return Object.freeze([]);
-  if (request.surface.kind === 'cli') {
-    return workerFiles(join(request.artifactRoot, 'bin'));
-  }
-  switch (route.kind) {
-    case 'cli':
-      return workerFiles(join(request.artifactRoot, 'bin'));
-    case 'script': {
-      const name = request.manifest.scripts.find((candidate) => candidate.routeId === request.routeId)?.name;
-      return name === undefined
-        ? Object.freeze([])
-        : Object.freeze([join(request.artifactRoot, 'scripts', `${name}-flight.mjs`)]);
-    }
-    case 'event-route':
-      return Object.freeze([
-        ...await workerFiles(join(request.artifactRoot, 'mcp')),
-        join(request.artifactRoot, 'hooks', 'hooks-flight.mjs'),
-      ].filter(existsSync));
-    case 'prompt':
-    case 'resource':
-    case 'tool':
-      return workerFiles(join(request.artifactRoot, 'mcp'));
-    case 'app':
-      return Object.freeze([]);
     default: {
       const exhaustive: never = route.kind;
       throw new Error(`Unsupported route kind ${String(exhaustive)}.`);
@@ -429,15 +405,14 @@ const routeProps = (request: ProductionRequest, input: JsonValue): Readonly<Reco
     : { input };
 };
 
-const missingRouteWorkerError = (error: unknown): boolean =>
-  error instanceof Error
-  && (
-    error.message.includes('Generated route must default-export')
-    || error.message.includes('Generated rendered route must default-export')
-  );
-
+/**
+ * Renders the route in the one worker the manifest bound. A failure inside
+ * it — a handler throw, a worker crash, a route the worker turns out not to
+ * register — is this invocation's failure; no other executable is tried.
+ */
 const renderCompiled = async (
   request: ProductionRequest,
+  workerPath: string,
   input: JsonValue,
   signal: AbortSignal,
   env: NodeJS.ProcessEnv,
@@ -453,40 +428,31 @@ const renderCompiled = async (
   };
 }>> => {
   const invocation = invocationFor(request, input);
-  const candidates = await candidatesFor(request);
-  for (const workerPath of candidates) {
-    const startedAt = performance.now();
-    const session = streamFromWorker(workerPath, request, invocation, input, signal, env, trace);
-    const events: AgentRenderEvent[] = [];
-    try {
-      const reader = session.events.getReader();
-      for (;;) {
-        const next = await reader.read();
-        if (next.done) break;
-        events.push(next.value);
-        publishRender?.(next.value);
-      }
-      const complete = events.findLast((event) => event.type === 'complete');
-      if (complete === undefined) throw new Error('Compiled route render ended without a complete event.');
-      return Object.freeze({
-        document: complete.document,
-        durationMs: performance.now() - startedAt,
-        events: Object.freeze(events),
-        observed: {
-          providers: Object.freeze([...session.observed.providers]),
-          timings: Object.freeze([...session.observed.timings]),
-        },
-      });
-    } catch (error) {
-      if (!missingRouteWorkerError(error)) throw error;
-    } finally {
-      await session.close();
+  const startedAt = performance.now();
+  const session = streamFromWorker(workerPath, request, invocation, input, signal, env, trace);
+  const events: AgentRenderEvent[] = [];
+  try {
+    const reader = session.events.getReader();
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      events.push(next.value);
+      publishRender?.(next.value);
     }
+    const complete = events.findLast((event) => event.type === 'complete');
+    if (complete === undefined) throw new Error('Compiled route render ended without a complete event.');
+    return Object.freeze({
+      document: complete.document,
+      durationMs: performance.now() - startedAt,
+      events: Object.freeze(events),
+      observed: {
+        providers: Object.freeze([...session.observed.providers]),
+        timings: Object.freeze([...session.observed.timings]),
+      },
+    });
+  } finally {
+    await session.close();
   }
-  throw new ProductionRouteInvocationError(
-    ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
-    `No compiled worker owns route ${JSON.stringify(request.routeId)}.`,
-  );
 };
 
 export const renderProductionRoute = async (
@@ -513,9 +479,10 @@ export const renderProductionRoute = async (
     publishTrace?.(event);
   };
   const controller = new AbortController();
+  const binding = await bindExecutable(productionRequest);
   let prepared: PreparedInput;
   try {
-    prepared = await prepareInput(productionRequest, observeTrace, controller.signal);
+    prepared = await prepareInput(productionRequest, binding, observeTrace, controller.signal);
   } catch (error) {
     throw preparationFailure(error);
   }
@@ -539,6 +506,7 @@ export const renderProductionRoute = async (
   try {
     const rendered = await renderCompiled(
       productionRequest,
+      binding.worker,
       prepared.input,
       controller.signal,
       env,
