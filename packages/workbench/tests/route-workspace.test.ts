@@ -3,8 +3,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { describe, expect, it } from '@rstest/core';
 
+import type { RouteInvocation } from '../../agent-bundle/src/contracts/invocations.ts';
 import type { TraceEntry } from '../../agent-bundle/src/contracts/trace.ts';
 import { appResourceUriFor, appToolCallRequest, catalogToolsFor, orderedToolsForApp } from '../src/application/app-route-workspace.tsx';
+import type { ApplicationLeaf } from '../src/application/application-tree-model.ts';
 import { defaultEventHostSelection } from '../src/application/event-route-workspace.tsx';
 import { ExecutableRouteWorkspace, resultTabFor } from '../src/application/executable-route-workspace.tsx';
 import { idleInvocationState, reduceInvocationState, selectBackend } from '../src/application/invocation-model.ts';
@@ -28,6 +30,20 @@ import {
 } from './support/workspace-fixtures.ts';
 
 const noop = (): void => undefined;
+
+const schemaLeaf = (resultSchemaState: NonNullable<ApplicationLeaf['resultSchemaState']>): ApplicationLeaf =>
+  ({ ...toolLeaf, resultSchemaState });
+
+const renderSchemaInspector = (leaf: ApplicationLeaf, envelope?: RouteInvocation): string =>
+  renderToStaticMarkup(createElement(RouteInspector, {
+    backendKind: 'dev-server',
+    ...(envelope === undefined ? {} : { invocation: envelope }),
+    leaf,
+    onTabChange: noop,
+    onToggle: noop,
+    open: true,
+    tab: 'schema',
+  }));
 
 const controllerWith = (overrides: Partial<RouteInvocationController> = {}): RouteInvocationController => ({
   backendKind: 'dev-server',
@@ -457,6 +473,102 @@ it('shows an explicit state when a deep-linked invocation is not in this session
 });
 
 describe('RouteInspector', () => {
+  it('does not turn a structured result without a schema into declaration or validation evidence', () => {
+    const markup = renderSchemaInspector(schemaLeaf('absent'), invocation);
+
+    expect(markup).toContain('Absent · no resultSchema export was observed.');
+    expect(markup).toContain('Not applicable · no declared resultSchema can validate or transform this result.');
+    expect(markup).toContain('Available · open Structured result.');
+    expect(markup).not.toContain('This route exports a');
+  });
+
+  it('separates a declared schema, successful validation, and structured-result availability', () => {
+    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), {
+      ...invocation,
+      surface: { kind: 'unit-render' },
+    });
+
+    expect(markup).toContain('Declared · the compiler observed a resultSchema export.');
+    expect(markup).toContain('Succeeded · execution recorded the value parsed by resultSchema.');
+    expect(markup).toContain('Available · open Structured result.');
+  });
+
+  it('does not report successful validation for a non-success outcome that still carries a result', () => {
+    const failed: RouteInvocation = {
+      ...invocation,
+      outcome: { exitCode: 1, kind: 'process-exit' },
+      surface: { args: [], command: 'audible search', kind: 'cli' },
+    };
+    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), failed);
+
+    expect(markup).toContain('Declared · the compiler observed a resultSchema export.');
+    expect(markup).toContain('Not recorded · the invocation completed without a successful outcome.');
+    expect(markup).toContain('Available · open Structured result.');
+    expect(markup).not.toContain('Succeeded · execution recorded');
+  });
+
+  it('reports a failed unit-render validation without inventing a parsed result', () => {
+    const {
+      outcome: _outcome,
+      result: _result,
+      ...failedBase
+    } = invocation;
+    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), {
+      ...failedBase,
+      diagnostics: [{
+        code: 'AB8236',
+        message: "The route's own resultSchema rejected the rendered document value.",
+        severity: 'error',
+      }],
+      status: 'failed',
+      surface: { kind: 'unit-render' },
+    });
+
+    expect(markup).toContain('Not recorded · the invocation did not complete with a parsed result.');
+    expect(markup).toContain('Unavailable · this invocation recorded no structured result.');
+    expect(markup).not.toContain('Succeeded · execution recorded');
+  });
+
+  it('keeps validation neutral when a successful production invocation carries a structured result', () => {
+    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), invocation);
+
+    expect(markup).toContain('Unknown · this invocation surface did not report resultSchema validation or transformation.');
+    expect(markup).toContain('Available · open Structured result.');
+    expect(markup).not.toContain('Succeeded · execution recorded');
+  });
+
+  it('keeps an absent result separate from a declared schema', () => {
+    const { result: _result, ...withoutResult } = invocation;
+    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), {
+      ...withoutResult,
+      surface: { kind: 'unit-render' },
+    });
+
+    expect(markup).toContain('Declared · the compiler observed a resultSchema export.');
+    expect(markup).toContain('Not recorded · execution returned no parsed resultSchema value.');
+    expect(markup).toContain('Unavailable · this invocation recorded no structured result.');
+  });
+
+  it('reports richer unsupported schemas as declared but statically unprojectable', () => {
+    const markup = renderSchemaInspector(
+      { ...schemaLeaf('unprojectable'), inputSchema: undefined },
+    );
+
+    expect(markup).toContain('The input schema is richer than the statically projectable grammar');
+    expect(markup).toContain('Declared · the compiler observed a resultSchema export.');
+    expect(markup).toContain('Unavailable · resultSchema is not statically projected.');
+    expect(markup).toContain('Not run · invoke the route to observe validation or transformation.');
+  });
+
+  it('keeps unknown declaration evidence neutral even when a structured result exists', () => {
+    const markup = renderSchemaInspector(schemaLeaf('unknown'), invocation);
+
+    expect(markup).toContain('Unknown · static declaration evidence is unavailable.');
+    expect(markup).toContain('Unknown · declaration evidence is unavailable.');
+    expect(markup).toContain('Available · open Structured result.');
+    expect(markup).not.toContain('Declared ·');
+  });
+
   it('stays closed by default and opens to the evidence tabs', () => {
     const closed = renderToStaticMarkup(createElement(RouteInspector, {
       backendKind: 'dev-server',

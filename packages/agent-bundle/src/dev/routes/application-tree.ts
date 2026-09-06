@@ -6,6 +6,7 @@ import type {
   RouteManifestCliCommand,
   RouteManifestConfigEntry,
   RouteManifestKind,
+  RouteManifestResultSchemaState,
   RouteManifestRoute,
 } from './route-manifest.ts';
 import {
@@ -31,6 +32,7 @@ export interface ApplicationLeaf {
   readonly label: string;
   readonly preflight?: string;
   readonly ref: ApplicationNodeRef;
+  readonly resultSchemaState?: RouteManifestResultSchemaState;
   readonly routeId?: string;
   readonly source?: string;
 }
@@ -177,6 +179,7 @@ const leafForRoute = (
     label: routeLabel(ref),
     ...(route.execution?.preflight === undefined ? {} : { preflight: route.execution.preflight }),
     ref,
+    ...(route.resultSchemaState === undefined ? {} : { resultSchemaState: route.resultSchemaState }),
     routeId: route.id,
     source: route.source,
   });

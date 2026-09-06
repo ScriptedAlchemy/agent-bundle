@@ -16,6 +16,7 @@ export type {
   RouteManifestProvenance,
   RouteManifestProvider,
   RouteManifestResponse,
+  RouteManifestResultSchemaState,
   RouteManifestRoute,
   RouteManifestServer,
   RouteManifestServerMode,

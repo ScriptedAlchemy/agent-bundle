@@ -117,6 +117,7 @@ const routeSchema: z.ZodType<RouteManifestRoute> = z.strictObject({
   inputSchema: inputSchema.optional(),
   kind: z.enum(['app', 'cli', 'event-route', 'prompt', 'resource', 'script', 'tool']),
   provenance: z.strictObject({ kind: z.literal('conventional') }),
+  resultSchemaState: z.enum(['absent', 'unknown', 'unprojectable']).optional(),
   serverId: z.string().optional(),
   source: z.string(),
 });
