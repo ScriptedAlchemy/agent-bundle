@@ -7,12 +7,9 @@ import type {
   ArtifactInspectionFile,
   ArtifactInspectionFileNode,
   ArtifactInspectionProjection,
-  ArtifactInspectionProvenance,
-  ArtifactInspectionSourceInput,
   ArtifactInspectionTreeNode,
 } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import { deepFreeze } from '../freeze.ts';
-
 
 export type ArtifactDiffChange = 'added' | 'changed' | 'removed' | 'unchanged';
 
@@ -33,12 +30,8 @@ export interface ArtifactTreeRow {
   readonly name: string;
   readonly path: string;
   readonly sha256?: string;
-}
-
-export interface ArtifactProvenanceRow {
-  readonly key: string;
-  readonly outputPath: string;
-  readonly sourceInputs: readonly ArtifactInspectionSourceInput[];
+  /** The manifest's `compiler.provenance` source-input paths for a file row; a directory has none. */
+  readonly sourceInputs?: readonly string[];
 }
 
 export interface ArtifactDiffRow {
@@ -86,7 +79,6 @@ export interface ArtifactView {
   readonly epochId: string | undefined;
   readonly identity: readonly ArtifactDetailRow[];
   readonly projections: readonly ArtifactProjectionOption[];
-  readonly provenance: readonly ArtifactProvenanceRow[];
   readonly selected: ArtifactProjectionOption | undefined;
   readonly state: ArtifactViewState;
   readonly summary: string;
@@ -94,8 +86,6 @@ export interface ArtifactView {
 }
 
 const noDiagnostics: readonly Diagnostic[] = Object.freeze([]);
-
-const noProvenance: readonly ArtifactProvenanceRow[] = Object.freeze([]);
 
 const noRows: readonly ArtifactDetailRow[] = Object.freeze([]);
 
@@ -128,6 +118,7 @@ const fileRow = (node: ArtifactInspectionFileNode, depth: number): ArtifactTreeR
   name: node.name,
   path: node.path,
   sha256: node.file.sha256,
+  sourceInputs: Object.freeze(node.file.sourceInputs.map((input) => input.path)),
 });
 
 const directoryRow = (node: ArtifactInspectionDirectoryNode, depth: number): ArtifactTreeRow => Object.freeze({
@@ -170,20 +161,6 @@ export const artifactEpochIdentityRowsFor = (inspection: ArtifactInspection): re
     row('Config path', inspection.project.configPath),
     row('Emitted files', String(inspection.files.length)),
   ]);
-
-export const artifactProvenanceRowsFor = (
-  provenance: readonly ArtifactInspectionProvenance[],
-): readonly ArtifactProvenanceRow[] => deepFreeze(
-  provenance
-    .map((entry): ArtifactProvenanceRow => ({
-      key: entry.outputPath,
-      outputPath: entry.outputPath,
-      sourceInputs: Object.freeze(
-        [...entry.sourceInputs].sort((left, right) => left.path.localeCompare(right.path)),
-      ),
-    }))
-    .sort((left, right) => left.key.localeCompare(right.key)),
-);
 
 const diffGroup = (
   change: ArtifactDiffChange,
@@ -250,7 +227,6 @@ export const artifactViewFor = (options: ArtifactViewOptions): ArtifactView => {
     epochId: options.epochId,
     identity: inspection === undefined ? noRows : artifactEpochIdentityRowsFor(inspection),
     projections,
-    provenance: inspection === undefined ? noProvenance : artifactProvenanceRowsFor(inspection.provenance),
     selected,
     state,
     summary: summaryFor(state, inspection),

@@ -10,7 +10,6 @@ import type {
 import {
   artifactDiffViewFor,
   artifactEpochIdentityRowsFor,
-  artifactProvenanceRowsFor,
   artifactTreeRowsFor,
   artifactViewFor,
 } from '../src/artifacts/artifacts-model.ts';
@@ -167,6 +166,18 @@ it('flattens one projection tree into ordered directory and file rows', () => {
   expect(Object.isFrozen(rows)).toBe(true);
 });
 
+it('carries each file row\'s provenance from its own manifest file record', () => {
+  const rows = artifactTreeRowsFor(projection);
+
+  expect(rows.map((row) => row.sourceInputs)).toEqual([
+    undefined,
+    undefined,
+    ['hooks/session-start.ts'],
+    [],
+  ]);
+  expect(Object.isFrozen(rows[2]?.sourceInputs)).toBe(true);
+});
+
 it('derives epoch identity rows from the inspection and its project context', () => {
   expect(artifactEpochIdentityRowsFor(inspection)).toEqual([
     { label: 'Build ID', value: 'epoch-2' },
@@ -176,14 +187,6 @@ it('derives epoch identity rows from the inspection and its project context', ()
     { label: 'Config path', value: '/workspace/agent-bundle.config.ts' },
     { label: 'Emitted files', value: '2' },
   ]);
-});
-
-it('orders provenance rows by output path and keeps their declared source inputs', () => {
-  const rows = artifactProvenanceRowsFor(inspection.provenance);
-
-  expect(rows.map((row) => row.outputPath)).toEqual(['AGENTS.md', 'hooks/session-start.mjs']);
-  expect(rows[0]?.sourceInputs).toEqual([]);
-  expect(rows[1]?.sourceInputs).toEqual([{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }]);
 });
 
 it('groups an epoch diff into counted added, removed, changed, and unchanged rows', () => {
@@ -227,7 +230,6 @@ it('derives a ready view bound to the selected projection', () => {
   expect(view.application?.servers).toHaveLength(1);
   expect(view.application?.events).toHaveLength(1);
   expect(view.application?.hosts).toHaveLength(1);
-  expect(view.provenance).toHaveLength(2);
   expect(view.identity[0]).toEqual({ label: 'Build ID', value: 'epoch-2' });
   expect(view.summary).toContain('fixture@1.2.3 build epoch-2');
   expect(view.diagnostics).toEqual([]);

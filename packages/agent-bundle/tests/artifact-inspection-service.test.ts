@@ -1,5 +1,5 @@
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -10,11 +10,12 @@ import type { TargetAdapter, TargetAdapterMetadata } from '../src/adapters/types
 import {
   artifactCompilerRecordVersion,
   assembleArtifactManifest,
+  parseArtifactManifest,
   type ArtifactManifestFileKind,
   type ArtifactManifest,
 } from '../src/build/manifest.ts';
 import { validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
-import { digest } from '../src/core/digest.ts';
+import { digest, stableJson } from '../src/core/digest.ts';
 import { ArtifactInspectionService } from '../src/dev/index.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
@@ -600,6 +601,103 @@ it('revalidates an epoch on each inspection so post-publication corruption is vi
     });
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+interface ProvenanceTamperCase {
+  readonly name: string;
+  readonly rule: string;
+  readonly tamper: (provenance: { path: string; sourceInputs: string[] }[]) => { path: string; sourceInputs: string[] }[];
+}
+
+const provenanceTamperCases: readonly ProvenanceTamperCase[] = [
+  {
+    name: 'missing: an output file has no provenance row',
+    rule: 'compiler.provenance paths must exactly match files.',
+    tamper: (provenance) => provenance.filter((entry) => entry.path !== 'mcp/runner.mjs'),
+  },
+  {
+    name: 'conflicting: a provenance row names an input the project never declared',
+    rule: 'compiler.provenance[mcp/runner.mjs].sourceInputs contains an undeclared project source input.',
+    tamper: (provenance) => provenance.map((entry) => entry.path === 'mcp/runner.mjs'
+      ? { ...entry, sourceInputs: ['src/elsewhere.ts'] }
+      : entry),
+  },
+  {
+    name: 'conflicting: two provenance rows claim the same output file',
+    rule: 'compiler.provenance must be sorted with no duplicate entries.',
+    tamper: (provenance) => provenance.flatMap((entry) => entry.path === 'mcp/runner.mjs'
+      ? [entry, { ...entry, sourceInputs: [configPath] }]
+      : [entry]),
+  },
+  {
+    name: 'relocated: a provenance row names an output the artifact does not carry',
+    rule: 'compiler.provenance paths must exactly match files.',
+    tamper: (provenance) => provenance.map((entry) => entry.path === 'mcp/runner.mjs'
+      ? { ...entry, path: 'mcp/moved/runner.mjs' }
+      : entry),
+  },
+];
+
+it.each(provenanceTamperCases)('refuses to inspect an epoch whose provenance is $name', async ({ rule, tamper }) => {
+  // Every case is a manifest the compiler cannot emit (`createOutputProvenance`
+  // writes one row per output). A copy edited afterwards must fail closed at
+  // the manifest parser, so the inspector never renders a file with invented,
+  // empty, or borrowed source inputs.
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-provenance-tamper-'));
+  const registry = runtimeRegistry();
+  const store = new TrackingEpochStore({ projectRoot: root });
+  const epochId = 'epoch-provenance-tamper';
+
+  try {
+    await publish({ files: runtimeFiles(), id: epochId, registry, root, store });
+    const manifestPath = join(root, '.agent-bundle', 'epochs', epochId, 'agent-bundle.manifest.json');
+    const published = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      compiler: { provenance: { path: string; sourceInputs: string[] }[] };
+    };
+    published.compiler.provenance = tamper(published.compiler.provenance);
+    const tampered = `${stableJson(published)}\n`;
+    expect(() => parseArtifactManifest(tampered)).toThrow(rule);
+    await writeFile(manifestPath, tampered);
+
+    await expect(new ArtifactInspectionService(store, registry).inspect(epochId)).rejects.toMatchObject({
+      code: 'ARTIFACT_INSPECTION_INVALID',
+      diagnostics: [expect.objectContaining({ code: 'AB6001', generatedPath: 'agent-bundle.manifest.json' })],
+    });
+    expect(store).toMatchObject({ acquired: 1, closed: 1 });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('inspects identical root-relative provenance after the published epochs are relocated', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-relocated-origin-'));
+  const relocated = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-relocated-'));
+  const registry = runtimeRegistry();
+  const epochId = 'epoch-relocated';
+
+  try {
+    await publish({ files: runtimeFiles(), id: epochId, registry, root, store: new EpochStore({ projectRoot: root }) });
+    const before = await new ArtifactInspectionService(new EpochStore({ projectRoot: root }), registry).inspect(epochId);
+
+    // The epoch directories move to another project root; the origin keeps its active-build pointer.
+    await mkdir(join(relocated, '.agent-bundle'), { recursive: true });
+    await rename(join(root, '.agent-bundle', 'epochs'), join(relocated, '.agent-bundle', 'epochs'));
+    const store = new TrackingEpochStore({ projectRoot: relocated });
+    const after = await new ArtifactInspectionService(store, registry).inspect(epochId);
+
+    expect(after).toEqual(before);
+    expect(after.provenance).toContainEqual({
+      outputPath: 'mcp/runner.mjs',
+      sourceInputs: [{ path: runnerSourcePath, sha256: fixtureInputs[1]!.sha256 }],
+    });
+    const serialized = JSON.stringify(after);
+    expect(serialized).not.toContain(root);
+    expect(serialized).not.toContain(relocated);
+    expect(store).toMatchObject({ acquired: 1, closed: 1 });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+    await rm(relocated, { force: true, recursive: true });
   }
 });
 

@@ -13,6 +13,7 @@ import { ArtifactClient } from '../src/artifacts/artifact-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import {
   ArtifactEpochDiffView,
+  ArtifactFileDetails,
   ArtifactInspectionView,
   ArtifactsPage,
   compareArtifactEpochs,
@@ -186,6 +187,20 @@ it('renders the emitted file tree without runtime hook or MCP tables', () => {
   expect(markup).not.toContain('review · stdio · claude');
   expect(markup).not.toContain('.mcp.json');
   expect(markup).not.toContain('a'.repeat(64));
+});
+
+it('renders each file\'s provenance from its own manifest record, never from a by-path lookup', () => {
+  // The fixture's flat `provenance` list has no AGENTS.md row; the file record is the only source.
+  const rows = new Map(readyView.tree.map((row) => [row.path, row]));
+
+  const wrapperDetails = renderToStaticMarkup(createElement(ArtifactFileDetails, { row: rows.get('hooks/session-start.mjs')! }));
+  expect(wrapperDetails).toContain('<dt>Provenance</dt><dd>hooks/session-start.ts</dd>');
+  expect(wrapperDetails).toContain('a'.repeat(64));
+  expect(wrapperDetails).toContain('<dt>Mode</dt><dd>0755</dd>');
+
+  const agentsDetails = renderToStaticMarkup(createElement(ArtifactFileDetails, { row: rows.get('AGENTS.md')! }));
+  expect(agentsDetails).toContain('<dt>Provenance</dt><dd>No source inputs recorded</dd>');
+  expect(agentsDetails).toContain('<dt>Mode</dt><dd>—</dd>');
 });
 
 it('renders artifact validation diagnostics as a visible alert', () => {

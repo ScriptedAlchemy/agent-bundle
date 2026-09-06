@@ -272,7 +272,10 @@ Repair a stale catalog in this order:
 - **Evals** has **Runs** and **Compare** views for admitting, cancelling, inspecting, and comparing
   eval runs.
 - **Artifact** defaults to a simple emitted-file tree. Select a file and enable its details to see
-  hashes, modes, and provenance.
+  hashes, modes, and provenance. Provenance is the file's own `compiler.provenance` row from
+  `agent-bundle.manifest.json`: the project source inputs it derives from. The compiler records at
+  least one input for every file it emits; a row with none reads **No source inputs recorded**.
+  Nothing is inferred from paths or file contents.
 - **Protocol** is the low-level MCP session inspector. It retains protocol traces, task controls,
   consent, restart/cancel actions, and the standalone
   [MCP Inspector](https://github.com/modelcontextprotocol/inspector) launcher.
