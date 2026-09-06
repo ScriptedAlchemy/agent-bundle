@@ -436,6 +436,11 @@ const missingRouteWorkerError = (error: unknown): boolean =>
     || error.message.includes('Generated rendered route must default-export')
   );
 
+/**
+ * Drives one compiled worker's render stream. Each event is handed to
+ * `publishRender` as it arrives and then dropped; only the `complete` event's
+ * document is kept, so the producer holds one document, not the stream.
+ */
 const renderCompiled = async (
   request: ProductionRequest,
   input: JsonValue,
@@ -446,7 +451,6 @@ const renderCompiled = async (
 ): Promise<Readonly<{
   readonly document: AgentDocument;
   readonly durationMs: number;
-  readonly events: readonly AgentRenderEvent[];
   readonly observed: {
     readonly providers: readonly RouteInvocationProvider[];
     readonly timings: readonly RouteInvocationTiming[];
@@ -457,21 +461,19 @@ const renderCompiled = async (
   for (const workerPath of candidates) {
     const startedAt = performance.now();
     const session = streamFromWorker(workerPath, request, invocation, input, signal, env, trace);
-    const events: AgentRenderEvent[] = [];
+    let document: AgentDocument | undefined;
     try {
       const reader = session.events.getReader();
       for (;;) {
         const next = await reader.read();
         if (next.done) break;
-        events.push(next.value);
+        if (next.value.type === 'complete') document = next.value.document;
         publishRender?.(next.value);
       }
-      const complete = events.findLast((event) => event.type === 'complete');
-      if (complete === undefined) throw new Error('Compiled route render ended without a complete event.');
+      if (document === undefined) throw new Error('Compiled route render ended without a complete event.');
       return Object.freeze({
-        document: complete.document,
+        document,
         durationMs: performance.now() - startedAt,
-        events: Object.freeze(events),
         observed: {
           providers: Object.freeze([...session.observed.providers]),
           timings: Object.freeze([...session.observed.timings]),
@@ -527,7 +529,6 @@ export const renderProductionRoute = async (
     const value = prepared.preflight.gate as JsonValue;
     return Object.freeze({
       document: completeDocument(value),
-      events: Object.freeze([]),
       input: prepared.input,
       result: value,
       trace: Object.freeze(traceEvents),
@@ -557,7 +558,6 @@ export const renderProductionRoute = async (
         : undefined;
     return Object.freeze({
       document: rendered.document,
-      events: rendered.events,
       ...(exitCode === undefined ? {} : { exitCode }),
       input: prepared.input,
       ...(kind === 'tool'

@@ -7,10 +7,12 @@
  */
 import React, { useEffect, useState } from 'react';
 
-import type {
-  RouteInvocation,
-  RouteInvocationOutcome,
-  RouteInvocationStatus,
+import {
+  emptyRetainedRenderEvents,
+  retainedRenderEvents,
+  type RouteInvocation,
+  type RouteInvocationOutcome,
+  type RouteInvocationStatus,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import {
   isTraceReplayGap,
@@ -93,6 +95,13 @@ const RawDocument = ({ invocation }: { readonly invocation?: RouteInvocation }):
     </details>
     <section aria-label="Render events" className="result-raw-events">
       <h3>Render events ({String(invocation.events.length)})</h3>
+      {invocation.retention === undefined
+        ? undefined
+        : <p className="result-note" data-testid="render-events-retention">
+          Retained {String(invocation.events.length)} of {String(invocation.retention.producedEvents)} events;
+          {' '}{String(invocation.retention.evictedEvents)} older events ({String(invocation.retention.evictedBytes)} B) were evicted.
+          The Agent Document above is the complete final document.
+        </p>}
       {invocation.events.length === 0
         ? <p className="result-note">The stream carried no events.</p>
         : <ol>{invocation.events.map((event) => <li key={`${event.type}-${String(event.sequence)}`}>
@@ -207,7 +216,9 @@ const useTraceEntries = (trace: TraceClient | undefined): TraceLoadState => {
 export const ResultTabs = ({ controller, extraTabs = [], leaf, onNavigate, onTabChange, tab, trace }: ResultTabsProps): React.ReactNode => {
   const invocation = invocationOf(controller.state);
   const running = controller.state.phase === 'running';
-  const events = running ? controller.state.events ?? [] : invocation?.events ?? [];
+  const events = running
+    ? retainedRenderEvents(controller.state.history ?? emptyRetainedRenderEvents)
+    : invocation?.events ?? [];
   const traceState = useTraceEntries(trace);
   const definitions: readonly ResultTabDefinition[] = [
     { id: 'rendered', label: coreTabLabels.rendered, render: () => <RenderedAgentDocument

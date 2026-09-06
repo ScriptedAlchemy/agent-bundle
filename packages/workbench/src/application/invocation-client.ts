@@ -123,6 +123,12 @@ const eventTraceWireSchema = z.strictObject({
 const eventTraceSchema = z.custom<EventTraceEvent>(
   (value) => eventTraceWireSchema.safeParse(value).success,
 );
+const retentionSchema = z.strictObject({
+  evictedBytes: z.number().int().nonnegative(),
+  evictedEvents: z.number().int().positive(),
+  producedEvents: z.number().int().positive(),
+  retainedBytes: z.number().int().nonnegative(),
+});
 const outcomeSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('success') }),
   z.strictObject({ kind: z.literal('represented-error'), summary: z.string() }),
@@ -160,6 +166,7 @@ const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   projection: projectionSchema,
   providers: z.array(providerSchema),
   result: z.json().optional(),
+  retention: retentionSchema.optional(),
   trace: z.array(eventTraceSchema).optional(),
 }).refine(outcomeMatchesStatus);
 const invocationResponseSchema = z.strictObject({ invocation: invocationSchema });
