@@ -1,3 +1,5 @@
+import { setTimeout } from 'node:timers/promises';
+
 import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
 import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
 import React from 'react';
@@ -30,17 +32,8 @@ export const resultSchema = z.object({
   ticks: z.number().int().nonnegative(),
 }).strict();
 
-const sleep = (ms: number, signal: AbortSignal): Promise<'aborted' | 'elapsed'> => new Promise((resolve) => {
-  if (signal.aborted) {
-    resolve('aborted');
-    return;
-  }
-  const timer = setTimeout(() => resolve('elapsed'), ms);
-  signal.addEventListener('abort', () => {
-    clearTimeout(timer);
-    resolve('aborted');
-  }, { once: true });
-});
+const sleep = (ms: number, signal: AbortSignal): Promise<'aborted' | 'elapsed'> =>
+  setTimeout(ms, 'elapsed' as const, { signal }).catch(() => 'aborted' as const);
 
 export default async function Slow({ input, signal }: ToolRouteProps<typeof inputSchema>) {
   const observed = await capture({ kind: 'mcp', observed: { holdMs: input.holdMs, tickMs: input.tickMs, tool: 'slow' } });

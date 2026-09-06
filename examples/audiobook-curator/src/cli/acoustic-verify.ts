@@ -1,9 +1,9 @@
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { defaultEvidenceOperations, evidenceOperations } from '../operations/evidence.js';
+import { evidenceOperations } from '../operations/evidence.js';
 
-const operation = evidenceOperations(defaultEvidenceOperations).acousticVerify;
+const operation = evidenceOperations.acousticVerify;
 
 export const config = {
   description: 'Compare one bounded Audible sample with local audio through optional Audiolocate.',

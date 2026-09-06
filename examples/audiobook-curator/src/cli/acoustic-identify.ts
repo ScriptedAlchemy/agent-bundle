@@ -1,9 +1,9 @@
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { defaultEvidenceOperations, evidenceOperations } from '../operations/evidence.js';
+import { evidenceOperations } from '../operations/evidence.js';
 
-const operation = evidenceOperations(defaultEvidenceOperations).acousticIdentify;
+const operation = evidenceOperations.acousticIdentify;
 
 export const config = {
   description: 'Try score-ranked, deduplicated Audible candidates and retain per-candidate evidence.',

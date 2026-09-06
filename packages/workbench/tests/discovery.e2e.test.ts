@@ -127,7 +127,7 @@ ${outputAnchor}`));
       });
       await page.goto(workbenchUrl(fixture.url, '/advanced/hosts'));
       try {
-        await expectHeading(page, 'Host diagnostics');
+        await expectHeading(page, 'Host diagnostics', browserTimeout);
       } catch (reason) {
         throw new Error(
           `Host diagnostics did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,

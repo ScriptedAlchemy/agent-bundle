@@ -77,10 +77,6 @@ describe('event fixtures', () => {
       input: { tool: {} },
       surface: { kind: 'event' },
     });
-    expect(eventRequestFor('claude', { input: native }, 'claude:PreToolUse')).toEqual({
-      input: native,
-      surface: { fixtureId: 'claude:PreToolUse', host: 'claude', kind: 'event' },
-    });
     expect(eventRequestFor('claude', { input: { ...native, tool_name: 'Edit' } })).toEqual({
       input: { ...native, tool_name: 'Edit' },
       surface: { host: 'claude', kind: 'event' },

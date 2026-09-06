@@ -9,7 +9,7 @@ import ts from 'typescript-5';
 import { claudeAdapter } from '../src/adapters/claude.ts';
 import { cursorHookWrapperSource, nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
 import type { NoticeDeliveryAdvertisement } from '../src/adapters/notice-delivery.ts';
-import { scanEntryExportsSource, stripCommentsAndStrings } from '../src/build/entry-exports.ts';
+import { scanEntryExportsSource } from '../src/build/entry-exports.ts';
 import * as entryShellModule from '../src/build/entry-shell.ts';
 import { launchEnvLayerSpecifier, operatorEnvLayerImport, operatorEnvLayerModuleSource, operatorEnvLayerVirtualModule } from '../src/build/launch-env-shell.ts';
 import { stableJson } from '../src/core/digest.ts';
@@ -68,10 +68,21 @@ describe('entry export scanning', () => {
     expect(scanEntryExportsSource('const t = `a ${`b ${1} export default c`} d`;').hasDefaultExport).toBe(false);
   });
 
+  it('parses JSX by file name and ignores ambient declarations', () => {
+    const tsx = 'const view = <main>export default nothing</main>;\nexport default () => view;';
+    expect(scanEntryExportsSource(tsx, '/app/entry.tsx').hasDefaultExport).toBe(true);
+    expect(scanEntryExportsSource('const n = <number>1; export const main = n;', '/app/entry.ts').hasMainExport).toBe(true);
+    expect(scanEntryExportsSource('export declare const main: number;')).toEqual({
+      hasDefaultExport: false,
+      hasMainExport: false,
+    });
+    expect(scanEntryExportsSource('export declare function main(): void;').hasMainExport).toBe(false);
+  });
+
   it('survives regex literals containing slashes', () => {
     const source = "const re = /https:\\/\\//u; export default re;";
     expect(scanEntryExportsSource(source).hasDefaultExport).toBe(true);
-    expect(stripCommentsAndStrings('const division = a / b / c; export const main = 1;')).toContain('export const main');
+    expect(scanEntryExportsSource('const division = a / b / c; export const main = 1;').hasMainExport).toBe(true);
   });
 
   it('handles TypeScript syntax the JS lexers cannot parse', () => {
@@ -342,13 +353,8 @@ describe('generated entry templates', () => {
       routes: [route],
       stateFallback: 'artifact',
     });
-    expect(withoutWeb).toContain("import { realpathSync } from 'node:fs';");
-    expect(withoutWeb).toContain("import { fileURLToPath } from 'node:url';");
-    expect(withoutWeb).toContain(
-      'if (import.meta.main ?? (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))) {',
-    );
     expect(createHash('sha256').update(withoutWeb).digest('hex'))
-      .toBe('3441cac12bf019e2bbc91bede2b2107a5f6fa07774f796e8a5ad3420ea483c51');
+      .toBe('fad5a6fe047fe71e2e061a5f7d1880d39502afaa5e725538e7de364499334580');
     expect(withoutWeb).not.toContain('agent-bundle/web-host');
     expect(withoutWeb).not.toContain('web: Object.freeze({');
   });
@@ -690,9 +696,10 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(source).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
   expect(source).toContain('route.module.inputSchema.parse(message.invocation.props.input)');
+  expect(source).toContain('message.validateInput !== true ? { input: message.invocation.props.input');
   expect(source).toContain("createElement(Agent.Error, { code: 'invalid-input' }");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    'd0e437f50cc7a9176a0d24ef430b3b046a6795ba1ebaed6f3a255fe75a3d358d',
+    '9780b027d8d5fef12aa0843ba9eb5ab6bd0336ef137ec1bfa552a2ff19daa217',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',

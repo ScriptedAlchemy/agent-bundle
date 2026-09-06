@@ -4,29 +4,12 @@
  * `../integrity-audit.ts`. Conversion and preparation plan by default and
  * mutate only a derived destination; the audit never mutates.
  */
-import { defineCliCommand, type CliCommandContext } from '../cli-command.js';
 import { z } from 'zod';
 
-import { convertAudiobook, type ConvertInput, type ConvertReceipt } from '../conversion.ts';
-import { prepareAudiobook, type PrepareInput, type PrepareReceipt } from '../curator-core.ts';
-import {
-  auditAudiobookIntegrity,
-  type IntegrityAuditInput,
-  type IntegrityAuditReceipt,
-} from '../integrity-audit.ts';
+import { convertAudiobook, type ConvertReceipt } from '../conversion.ts';
+import { prepareAudiobook } from '../curator-core.ts';
+import { auditAudiobookIntegrity, type IntegrityAuditReceipt } from '../integrity-audit.ts';
 import { parityReceiptSchema, pathSchema, probeSchema } from './schemas.ts';
-
-export interface OutputOperations {
-  readonly audit: (input: IntegrityAuditInput, options: CliCommandContext) => Promise<IntegrityAuditReceipt>;
-  readonly convert?: (input: ConvertInput, options: CliCommandContext) => Promise<ConvertReceipt>;
-  readonly prepare: (input: PrepareInput, options: CliCommandContext) => Promise<PrepareReceipt>;
-}
-
-export const defaultOutputOperations: Required<OutputOperations> = {
-  audit: (input, options) => auditAudiobookIntegrity(input, options),
-  convert: (input, options) => convertAudiobook(input, options),
-  prepare: (input, options) => prepareAudiobook(input, options),
-};
 
 const convertResultSchema = parityReceiptSchema<ConvertReceipt>('convert');
 const auditResultSchema = parityReceiptSchema<IntegrityAuditReceipt>('audit');
@@ -44,9 +27,9 @@ const prepareResultSchema = z.object({
   source: pathSchema,
 }).strict();
 
-export const outputOperations = (operations: Required<OutputOperations>) => ({
-  convert: defineCliCommand({
-    handler: operations.convert,
+export const outputOperations = Object.freeze({
+  convert: {
+    handler: convertAudiobook,
     id: 'convert',
     inputSchema: z.object({
       apply: z.boolean().optional(), artwork: pathSchema.optional(), audioBitrate: z.string().min(2).max(32).optional(),
@@ -57,17 +40,17 @@ export const outputOperations = (operations: Required<OutputOperations>) => ({
       selection: pathSchema, title: z.string().min(1).max(1024), year: z.string().min(1).max(64).optional(),
     }).strict(),
     resultSchema: convertResultSchema,
-  }),
-  prepare: defineCliCommand({
-    handler: operations.prepare,
+  },
+  prepare: {
+    handler: prepareAudiobook,
     id: 'prepare',
     inputSchema: prepareInputSchema,
     resultSchema: prepareResultSchema,
-  }),
-  audit: defineCliCommand({
-    handler: operations.audit,
+  },
+  audit: {
+    handler: auditAudiobookIntegrity,
     id: 'audit',
     inputSchema: z.object({ conversionReceipt: pathSchema.optional(), file: pathSchema, fullDecode: z.boolean().optional(), receipt: pathSchema.optional() }).strict(),
     resultSchema: auditResultSchema,
-  }),
+  },
 });

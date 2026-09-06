@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto';
-import { open, lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
-import { canonicalJson, digestValue } from './canonical-json.js';
+import { canonicalJson, digestValue, freezeJson } from './canonical-json.js';
+import { assertInside, copyTree, digestBytes, fsyncPath, isSafeSegment, writeFileDurably } from './durable-tree.js';
 import { emitRuntimeArtifacts } from '../build/emit-artifacts.js';
 import type {
   RscEnvironmentCheckpointValidator,
@@ -89,43 +89,8 @@ export interface MaterializeRuntimeGenerationOptions {
   readonly store: DevRuntimeGenerationStore<RscRuntimeGenerationMetadata>;
 }
 
-const digestBytes = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
-
-const freezeJson = (value: unknown, seen = new WeakSet<object>()): JsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new TypeError('Runtime metadata contains a non-finite number.');
-    return value;
-  }
-  if (typeof value !== 'object') throw new TypeError('Runtime metadata is not JSON serializable.');
-  if (seen.has(value)) throw new TypeError('Runtime metadata cannot contain cyclic values.');
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) return Object.freeze(value.map((item) => freezeJson(item, seen)));
-    const input = value as Record<string, unknown>;
-    const output: Record<string, JsonValue> = {};
-    for (const key of Object.keys(input)) {
-      const item = input[key];
-      if (item !== undefined) output[key] = freezeJson(item, seen);
-    }
-    return Object.freeze(output);
-  } finally {
-    seen.delete(value);
-  }
-};
-
 const isJsonObject = (value: JsonValue): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const isSafeSegment = (value: string): boolean =>
-  value.length > 0 && value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\\') && !value.includes('\0');
-
-const assertInside = (root: string, target: string): void => {
-  const path = relative(resolve(root), resolve(target));
-  if (path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) {
-    throw new Error('Runtime generation path escaped its root.');
-  }
-};
 
 const assertRelativeAssetPath = (value: unknown): string => {
   if (typeof value !== 'string' || value.length === 0 || value.includes('\\') || value.includes('\0') || isAbsolute(value)) {
@@ -136,15 +101,6 @@ const assertRelativeAssetPath = (value: unknown): string => {
     throw new TypeError('Runtime asset path must not escape its root.');
   }
   return segments.join('/');
-};
-
-const fsync = async (path: string): Promise<void> => {
-  const handle = await open(path, 'r');
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 };
 
 /**
@@ -162,54 +118,18 @@ const copyCheckpointFile = async (
   if (checkpoint.files.get(path) !== digestBytes(bytes)) {
     throw new Error(`Staged ${checkpoint.environment} checkpoint no longer matches its recorded digest for ${JSON.stringify(path)}.`);
   }
-  const handle = await open(destination, 'wx');
-  try {
-    await handle.writeFile(bytes);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  await writeFileDurably(destination, bytes);
 };
 
 const copyCheckpointTree = async (
   checkpoint: RscStagedEnvironmentCheckpoint,
   destinationRoot: string,
 ): Promise<void> => {
-  const sourceRoot = checkpoint.root;
-  const sourceStatus = await lstat(sourceRoot);
-  if (!sourceStatus.isDirectory() || sourceStatus.isSymbolicLink()) {
-    throw new Error(`Staged ${checkpoint.environment} checkpoint must be a regular directory.`);
-  }
-  await mkdir(destinationRoot, { recursive: false });
   let copied = 0;
-
-  const copyDirectory = async (source: string, destination: string, prefix: string): Promise<void> => {
-    assertInside(sourceRoot, source);
-    assertInside(destinationRoot, destination);
-    const entries = await readdir(source, { withFileTypes: true });
-    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (!isSafeSegment(entry.name)) throw new Error('Compiler output contains an unsafe path segment.');
-      const sourcePath = join(source, entry.name);
-      const destinationPath = join(destination, entry.name);
-      assertInside(sourceRoot, sourcePath);
-      assertInside(destinationRoot, destinationPath);
-      const status = await lstat(sourcePath);
-      if (status.isSymbolicLink()) throw new Error('Compiler output cannot contain symbolic links.');
-      const path = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
-      if (status.isDirectory()) {
-        await mkdir(destinationPath, { recursive: false });
-        await copyDirectory(sourcePath, destinationPath, path);
-      } else if (status.isFile()) {
-        await copyCheckpointFile(checkpoint, path, sourcePath, destinationPath);
-        copied += 1;
-      } else {
-        throw new Error('Compiler output can contain only regular files and directories.');
-      }
-    }
-    await fsync(destination);
-  };
-
-  await copyDirectory(sourceRoot, destinationRoot, '');
+  await copyTree(checkpoint.root, destinationRoot, async (path, source, destination) => {
+    await copyCheckpointFile(checkpoint, path, source, destination);
+    copied += 1;
+  });
   if (copied !== checkpoint.files.size) {
     throw new Error(`Staged ${checkpoint.environment} checkpoint no longer matches its recorded file set.`);
   }
@@ -254,7 +174,7 @@ const copyDeclaredRscAssets = async (
     await copyCheckpointFile(checkpoint, path, source, destination);
   }
   for (const directory of [...destinationDirectories].sort((left, right) => right.length - left.length)) {
-    await fsync(directory);
+    await fsyncPath(directory);
   }
 };
 
@@ -748,14 +668,12 @@ export const captureRuntimeGenerationSnapshot = async (
   const runtimeAssets = await parseRuntimeAssets(rsc.root);
   await copyDeclaredRscAssets(rsc, runtimeAssets, candidateRsc);
   const definition = await runDefinitionExecutable(join(candidateRsc, 'dev', 'definition.js'));
-  const definitionBytes = Buffer.from(canonicalJson(definition));
-  await writeFile(join(candidateRsc, 'runtime-definition.json'), definitionBytes, { encoding: 'utf8', flag: 'wx' });
-  await fsync(join(candidateRsc, 'runtime-definition.json'));
+  await writeFileDurably(join(candidateRsc, 'runtime-definition.json'), Buffer.from(canonicalJson(definition)));
   await emitRuntimeArtifacts(candidateRsc, definition);
-  await fsync(candidateRsc);
+  await fsyncPath(candidateRsc);
   await copyCheckpointTree(app, join(input.candidate.root, 'app'));
   await copyCheckpointTree(widget, join(input.candidate.root, 'widget'));
-  await fsync(input.candidate.root);
+  await fsyncPath(input.candidate.root);
   const assets = await walkRegularFiles(input.candidate.root);
   return Object.freeze({
     assets,
