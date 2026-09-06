@@ -125,7 +125,7 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     await openWorkbench(page, server.url, '/advanced/artifact');
     await expect(page.getByRole('heading', { name: 'Emitted files' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.artifact-table tbody tr').first()).toBeVisible({ timeout: browserTimeout });
-    for (const host of ['portable', 'codex', 'claude']) {
+    for (const host of ['portable', 'codex', 'cursor']) {
       await expect(page.locator(`#artifact-projection option[value="${host}"]`)).toBeAttached({ timeout: browserTimeout });
     }
     await captureExampleState(page, 'skills-starter', 'artifacts-populated');
