@@ -162,8 +162,8 @@ dev server environment plus the hook receipt variables, `AGENT_BUNDLE_DEV_SESSIO
 `AGENT_BUNDLE_DEV_SESSION` is the Workbench resource id, not a credential. Every generated hook
 receipt carries it as `devSession` alongside the host's own `session_id`. Once the first receipt
 arrives, Trace aliases the resource to the host session id and groups later lifecycle, hook, and
-MCP entries by that id; a receipt with a new host id (Claude Code issues one on `/clear`) moves
-the alias and publishes another `session.attached` entry. Entries that arrive before any receipt
+MCP entries by that id; a `session/start` receipt with a new host id (Claude Code issues one on
+`/clear`) moves the alias and publishes another `session.attached` entry. Entries that arrive before any receipt
 stay grouped under the `hs_…` id. Claude inherits the variable into its stdio MCP
 server, so the proxy supplies the alias header. Codex filters the environment of stdio MCP
 servers, so the proxy cannot inherit that variable; it always sends its process id instead, and

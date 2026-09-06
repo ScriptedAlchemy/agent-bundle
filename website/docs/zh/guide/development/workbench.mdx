@@ -132,8 +132,8 @@ npx agent-bundle dev --install-host claude --install-host codex
 
 `AGENT_BUNDLE_DEV_SESSION` 是 Workbench 资源 id，不是凭据。每条生成的钩子收据都会把它作为
 `devSession`，并同时携带宿主自己的 `session_id`。首条收据到达后，Trace 会把资源别名关联到宿主会话 id，
-后续生命周期、钩子与 MCP 条目都按该 id 分组；携带新宿主 id 的收据（Claude Code 在 `/clear` 时会签发
-新 id）会移动别名并再发布一条 `session.attached` 条目。在任何收据之前到达的条目仍按 `hs_…` id 分组。Claude 会把该变量传给 stdio MCP 服务器，因此代理通过
+后续生命周期、钩子与 MCP 条目都按该 id 分组；携带新宿主 id 的 `session/start` 收据（Claude Code 在
+`/clear` 时会签发新 id）会移动别名并再发布一条 `session.attached` 条目。在任何收据之前到达的条目仍按 `hs_…` id 分组。Claude 会把该变量传给 stdio MCP 服务器，因此代理通过
 别名标头传递它。Codex 会过滤 stdio MCP 服务器的环境，因此代理无法继承该变量；代理始终改为发送自己的
 进程 id，前台服务器沿代理的父进程链查找到拥有 Workbench 会话的 PTY 子进程。Codex 帧还可以通过
 `x-codex-turn-metadata.session_id` 携带宿主会话 id。它的钩子仍继承

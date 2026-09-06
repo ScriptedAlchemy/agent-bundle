@@ -106,7 +106,8 @@ export class HookReceiptRoutes {
       }
       throw error;
     }
-    if (receipt.devSession !== undefined) {
+    // Only a session start moves the alias: `/clear` issues a new host id, while a nested host run's tool hooks must not flip it.
+    if (receipt.devSession !== undefined && receipt.execution.event === 'session/start') {
       this.#attachHostSession?.(receipt.devSession, receipt.identity.sessionId);
     }
     const entries: readonly TraceEntryInput[] = lowerHookReceipt(receipt);

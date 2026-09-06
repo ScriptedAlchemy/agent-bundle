@@ -526,7 +526,7 @@ it('posts a top-level devSession when AGENT_BUNDLE_DEV_SESSION is set and keeps 
   expect(posted[1]).not.toHaveProperty('devSession');
 });
 
-it('calls attachHostSession with the validated devSession and the host identity', async () => {
+it('calls attachHostSession only for a session/start receipt carrying devSession', async () => {
   const attached: [string, string | undefined][] = [];
   const hub = new TraceHub({ projectRoot: '/work/project' });
   const routes = new HookReceiptRoutes({
@@ -537,8 +537,15 @@ it('calls attachHostSession with the validated devSession and the host identity'
     trace: hub,
   });
   const { url } = await listen((request, response) => routes.handle(request, response));
-  const accepted = await post(url, JSON.stringify({ ...receipt(), devSession: hostSessionId }), jsonHeaders('secret-token'));
+  const start = { ...execution, event: 'session/start', nativeEvent: 'SessionStart' } as const;
+  const accepted = await post(url, JSON.stringify({ ...receipt({ execution: start }), devSession: hostSessionId }), jsonHeaders('secret-token'));
   expect(accepted.status).toBe(204);
+  // A nested host run's tool hook carries the same devSession with its own session id; it must not move the alias.
+  const nested = await post(url, JSON.stringify({
+    ...receipt({ identity: { conversationId: 'agent-8', requestId: 'toolu_2', sessionId: 'session-2' } }),
+    devSession: hostSessionId,
+  }), jsonHeaders('secret-token'));
+  expect(nested.status).toBe(204);
   expect(attached).toEqual([[hostSessionId, 'session-1']]);
   expect(hub.replay().entries[0]?.correlation.sessionId).toBe('session-1');
 });
