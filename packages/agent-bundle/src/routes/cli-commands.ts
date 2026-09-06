@@ -48,7 +48,7 @@ import {
 const renderedCliExtensions = new Set(['.jsx', '.tsx']);
 
 /** True for a rendered (`.tsx`/`.jsx`) CLI route module (#102 stage 3 surface). */
-export const isRenderedCliRoute = (route: CompiledAgentRoute): boolean =>
+export const isRenderedCliRoute = (route: Pick<CompiledAgentRoute, 'source'>): boolean =>
   renderedCliExtensions.has(extname(route.source).toLowerCase());
 
 /** The path-derived command segments of one CLI route (`cli:library/audit` -> `['library', 'audit']`). */

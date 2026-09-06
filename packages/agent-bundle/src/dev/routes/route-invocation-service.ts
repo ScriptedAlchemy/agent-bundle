@@ -7,9 +7,11 @@ import { fileURLToPath } from 'node:url';
 
 import type { AgentDocument, AgentDocumentNode, AgentRenderEvent } from '@agent-bundle/runtime';
 
+import { hooksFlightWorkerPath } from '../../adapters/composite-layout.ts';
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type { TargetHookContract } from '../../adapters/hook-contract.ts';
 import { generatedRouteArtifactEpoch } from '../../build/entry-shell.ts';
+import type { ArtifactManifest } from '../../build/manifest.ts';
 import { projectCliDocumentToMarkdown } from '../../cli-entry.ts';
 import { sleep } from '../../core/async.ts';
 import type { Diagnostic } from '../../core/diagnostics.ts';
@@ -28,6 +30,7 @@ import type {
   RequestProvenanceUnavailableReason,
 } from '../../contracts/request-provenance.ts';
 import { createCanonicalEventProps, projectEventDocument } from '../../events/projection.ts';
+import { isRenderedCliRoute } from '../../routes/cli-commands.ts';
 import {
   eventTraceEventKinds,
   type EventTraceEvent,
@@ -46,6 +49,7 @@ import { applicationNodePath, applicationNodeRefForRouteId } from './application
 import {
   isProductionRouteInvocationCode,
   ProductionRouteInvocationError,
+  ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
 } from './route-invocation-production-error.ts';
 import {
   emptyRetainedRenderEvents,
@@ -110,10 +114,15 @@ export interface RouteInvocationFixture {
  */
 export interface RouteInvocationPreparedProject {
   /**
-   * The published build a plain script runs from, and a target whose layout
-   * emits the `scripts/` directory. Absent while no build is published.
+   * The leased published build. `manifest` is the authoritative execution
+   * registry; `target` is present when a host layout emits `scripts/`.
    */
-  readonly artifact?: Readonly<{ epochId: string; target: string }>;
+  readonly artifact?: Readonly<{
+    readonly epochId: string;
+    readonly manifest: ArtifactManifest;
+    readonly root: string;
+    readonly target?: string;
+  }>;
   readonly fixtures?: Readonly<Record<string, readonly RouteInvocationFixture[]>>;
   readonly manifest: AgentBundleTestManifest;
   /** Writable framework state (`devStateRoot`), shared with dev MCP sessions and never the code root. */
@@ -125,6 +134,11 @@ export interface RouteInvocationPreparedLease {
   readonly project: RouteInvocationPreparedProject;
   readonly release: () => Promise<void> | void;
 }
+
+export type RouteInvocationProductionBinding =
+  | Readonly<{ readonly executable: string; readonly kind: 'direct' }>
+  | Readonly<{ readonly executable: string; readonly kind: 'cli'; readonly preparation: string }>
+  | Readonly<{ readonly executable: string; readonly kind: 'event'; readonly preparation: string }>;
 
 export interface RouteInvocationScriptRunner {
   run(request: ScriptPlaygroundRunRequest): Promise<ScriptPlaygroundResult>;
@@ -154,6 +168,8 @@ export interface RouteInvocationChildRequest {
   readonly context: RequestContextProvenance;
   readonly input: JsonValue;
   readonly manifest: AgentBundleTestManifest;
+  /** Exact manifest-owned executable and preparation selected by the leased parent. */
+  readonly production?: RouteInvocationProductionBinding;
   readonly routeId: string;
   readonly stateRoot: string;
   readonly surface: RouteInvocationSurface;
@@ -533,6 +549,95 @@ const plainScriptFor = (prepared: RouteInvocationPreparedProject, route: RouteMa
     ? prepared.manifest.scripts.find((script) => script.routeId === route.id && !script.rendered)
     : undefined;
 
+const unavailableBinding = (routeId: string, detail: string): never => {
+  throw new ProductionRouteInvocationError(
+    ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
+    `Published artifact cannot invoke route ${JSON.stringify(routeId)}: ${detail}`,
+  );
+};
+
+const productionBindingFor = (
+  manifest: ArtifactManifest,
+  route: RouteManifestRoute,
+  surface: RouteInvocationSurface,
+): RouteInvocationProductionBinding => {
+  if (surface.kind === 'cli') {
+    const command = manifest.routes.cli?.commands?.find((candidate) =>
+      candidate.routeId === route.id && candidate.path.join(' ') === surface.command);
+    const bin = manifest.executables.bins.find((candidate) =>
+      candidate.name === manifest.application.name && candidate.worker !== undefined);
+    if (command === undefined || (route.kind === 'cli' && !isRenderedCliRoute(route)) || bin?.worker === undefined) {
+      return unavailableBinding(route.id, 'the selected CLI command has no compiled executable; rebuild the project.');
+    }
+    return Object.freeze({ executable: bin.worker, kind: 'cli', preparation: bin.path });
+  }
+
+  if (route.kind === 'event-route') {
+    const host = surface.kind === 'event' ? surface.host : undefined;
+    const execution = manifest.routes.events.find((candidate) => candidate.id === route.id)?.execution;
+    if (execution === undefined) {
+      return unavailableBinding(route.id, 'the event route has no execution record in the published artifact.');
+    }
+    const wrappers = manifest.executables.hooks.filter((candidate) =>
+      candidate.kind === 'event-route' && candidate.routeId === route.id);
+    const wrapper = host === undefined
+      ? undefined
+      : wrappers.find((candidate) => candidate.host === host);
+    if (host === undefined && wrappers.length === 0) {
+      return unavailableBinding(route.id, 'the canonical event route has no eligible emitted executable.');
+    }
+    if (host !== undefined && wrapper === undefined) {
+      return unavailableBinding(
+        route.id,
+        `host ${JSON.stringify(host)} is not an eligible emitted projection, or its preparation executable is missing.`,
+      );
+    }
+    const eligibleHosts = host === undefined
+      ? new Set(wrappers.map((candidate) => candidate.host))
+      : new Set([host]);
+    const shared = manifest.routes.servers
+      .filter((server) => server.mode === 'generated')
+      .map((server) => manifest.executables.mcpServers.find((candidate) =>
+        candidate.id === server.id
+        && candidate.kind === 'compiled'
+        && candidate.hosts.some((candidateHost) => eligibleHosts.has(candidateHost))
+        && candidate.launch?.worker !== undefined))
+      .find((candidate) => candidate !== undefined);
+    const standalone = manifest.files.find((file) => file.path === hooksFlightWorkerPath)?.path;
+    const executable = execution.runtime === 'standalone'
+      ? standalone
+      : shared?.launch?.worker ?? (execution.fallback === 'standalone' ? standalone : undefined);
+    if (executable === undefined) {
+      return unavailableBinding(route.id, 'the selected event preparation has no compiled route executable.');
+    }
+    return wrapper === undefined
+      ? Object.freeze({ executable, kind: 'direct' })
+      : Object.freeze({ executable, kind: 'event', preparation: wrapper.path });
+  }
+
+  if (route.kind === 'script') {
+    const script = manifest.executables.scripts.find((candidate) =>
+      candidate.rendered?.routeId === route.id && candidate.worker !== undefined);
+    if (script?.worker === undefined) {
+      return unavailableBinding(route.id, 'the rendered script has no compiled executable.');
+    }
+    return Object.freeze({ executable: script.worker, kind: 'direct' });
+  }
+
+  const server = manifest.routes.servers.find((candidate) =>
+    candidate.routes.some((candidateRoute) => candidateRoute.id === route.id));
+  const executable = server === undefined
+    ? undefined
+    : manifest.executables.mcpServers.find((candidate) =>
+        candidate.id === server.id
+        && candidate.kind === 'compiled'
+        && candidate.launch?.worker !== undefined);
+  if (executable?.launch?.worker === undefined) {
+    return unavailableBinding(route.id, 'the owning MCP server has no compiled executable.');
+  }
+  return Object.freeze({ executable: executable.launch.worker, kind: 'direct' });
+};
+
 /**
  * Plain scripts have no route component for the Agent renderer. Run the
  * emitted executable and project its output into the invocation result.
@@ -546,7 +651,9 @@ const runPlainScript = async (
   publishRenderEvent: (event: AgentRenderEvent) => void,
 ): Promise<RouteInvocationChildResult> => {
   if (scripts === undefined) throw new Error('No script runner is available for a plain script.');
-  if (prepared.artifact === undefined) throw new Error('A plain script runs from the published build; none is published.');
+  if (prepared.artifact?.target === undefined) {
+    throw new Error('A plain script runs from the published build; no script-capable target is published.');
+  }
   const startedAt = performance.now();
   const run = await scripts.run({
     epochId: prepared.artifact.epochId,
@@ -1483,6 +1590,7 @@ export class RouteInvocationService {
           );
         }
         const rawInput = request.input ?? fixture?.input ?? {};
+        const plainScript = plainScriptFor(prepared, route);
         const input = route.kind === 'event-route'
           ? eventInput(route, rawInput, surface.kind === 'event' ? surface.host : undefined, this.#registry)
           : rawInput;
@@ -1538,22 +1646,29 @@ export class RouteInvocationService {
         admissionSignal.addEventListener('abort', abort, { once: true });
         const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
         let child: RouteInvocationChildResult;
-        const plainScript = plainScriptFor(prepared, route);
         const publishRenderEvent = (event: AgentRenderEvent): void => {
           this.#publishStream(streamRecord, { event, type: 'render' });
         };
         try {
+          let production: RouteInvocationProductionBinding | undefined;
+          if (plainScript === undefined && surface.kind !== 'unit-render' && prepared.artifact !== undefined) {
+            if (prepared.artifact.manifest.routes.digest !== manifest.digest) {
+              unavailableBinding(route.id, 'the leased artifact manifest does not match the published route manifest; rebuild the project.');
+            }
+            production = productionBindingFor(prepared.artifact.manifest, route, surface);
+          }
           child = plainScript === undefined
             ? await this.#renderChild({
               ...(prepared.artifact === undefined
                 ? {}
                 : {
                     artifactEpoch: generatedRouteArtifactEpoch(prepared.manifest.plugin),
-                    artifactRoot: join(prepared.manifest.projectRoot, '.agent-bundle', 'epochs', prepared.artifact.epochId),
+                    artifactRoot: prepared.artifact.root,
                   }),
               context,
               input,
               manifest: prepared.manifest,
+              ...(production === undefined ? {} : { production }),
               routeId: route.id,
               stateRoot: prepared.stateRoot,
               surface,
@@ -1590,6 +1705,8 @@ export class RouteInvocationService {
                 ? 'Route invocation child stopped because the request was cancelled.'
               : controller.signal.aborted
                 ? 'Route invocation child stopped because the service closed.'
+              : error instanceof ProductionRouteInvocationError
+                ? error.message
               : `${plainScript === undefined ? 'Route invocation child' : 'Script run'} failed: ${error instanceof Error ? error.message : String(error)}`,
             request: { ...request, input },
             route,
@@ -1667,7 +1784,9 @@ export class RouteInvocationService {
         throw error;
       }
       return failedInvocation({
-        code: error instanceof RouteInvocationRequestError ? error.code : ROUTE_INVOCATION_CHILD_FAILURE_CODE,
+        code: error instanceof RouteInvocationRequestError || error instanceof ProductionRouteInvocationError
+          ? error.code
+          : ROUTE_INVOCATION_CHILD_FAILURE_CODE,
         completedAt,
         context: cancellationContext,
         history: streamRecord.history,

@@ -353,6 +353,18 @@ The explicit `unit-render` surface is a component-preview fallback: it loads liv
 route-unit harness and mounts disposable state. It is not an artifact-parity receipt. A projected
 CLI command keeps the canonical `tool:` route id; a mismatched command is `AB8253`, while using
 its duplicate-looking `cli:` id is `AB8254` with the canonical id and surface to use.
+
+A production surface selects its executable from the published epoch's
+`agent-bundle.manifest.json` before the child runs. Rendered CLI routes, projected tool commands,
+and rendered scripts use their manifest worker; MCP routes use their owning compiled server's
+`launch.worker`; and event routes use the host wrapper plus the worker selected by
+`routes.events[].execution`: the standalone hooks worker, or the first compiled server that
+owns the shared runtime for that host. The binding fails closed: an unavailable published
+artifact is `AB8250`; an ineligible host or
+surface, missing executable, or missing preparation row is `AB8251`; and a preparation module
+that cannot be imported or does not export its contract is `AB8252`. A preflight route submitted
+without a host is refused as `AB8255`. These failures never reach the handler, and an import,
+preflight, or handler failure never causes another executable to run.
 Production state lives at `<project>/.agent-bundle/state`, outside the published epochs that
 retirement removes. It is shared with dev MCP sessions through `AGENT_BUNDLE_STATE_ROOT`, so it
 survives a successful republish; `unit-render` still uses a fresh temporary state root per run.

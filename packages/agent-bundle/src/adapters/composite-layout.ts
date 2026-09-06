@@ -62,3 +62,6 @@ export const hookWrapperPath = (
   const reached = hookTargets.filter((target) => selection.has(target));
   return reached.length > 1 ? `hooks/${hookName}.${host}.mjs` : `hooks/${hookName}.mjs`;
 };
+
+/** Artifact-relative path of the standalone event-route Flight worker. */
+export const hooksFlightWorkerPath = 'hooks/hooks-flight.mjs';

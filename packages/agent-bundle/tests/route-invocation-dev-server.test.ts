@@ -15,6 +15,8 @@ import type { RouteInvocation, RouteInvocationResponse } from '../src/dev/routes
 import type { RouteInvocationListResponse } from '../src/dev/routes/route-invocation.ts';
 import type { RouteManifestResponse } from '../src/dev/routes/route-manifest.ts';
 import type { TraceReplay } from '../src/dev/trace/trace-entry.ts';
+import { readArtifactManifest } from '../src/build/manifest-file.ts';
+import { serializeArtifactManifest } from '../src/build/manifest.ts';
 import { confirmationRequiredMessage } from '../src/cli-entry.ts';
 import { stableJson } from '../src/core/digest.ts';
 import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../src/core/types.ts';
@@ -153,6 +155,20 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
+      'src/cli/plain.ts': [
+        "import { writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "import { z } from 'zod';",
+        '',
+        'export const inputSchema = z.object({}).strict();',
+        'export const resultSchema = z.object({ ok: z.boolean() }).strict();',
+        '',
+        'export default async function Plain() {',
+        "  writeFileSync(join(process.cwd(), '.agent-bundle', 'plain-cli-handler.marker'), 'ran');",
+        '  return { ok: true };',
+        '}',
+        '',
+      ].join('\n'),
       'src/events/tool/after.preflight.ts': [
         "import { appendFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
@@ -199,6 +215,18 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
+      'src/events/session/end.tsx': [
+        "import { writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "writeFileSync(join(process.cwd(), '.agent-bundle', 'session-worker.marker'), 'load\\n');",
+        "export const config = { runtime: 'standalone' };",
+        'export default async function SessionEnd() {',
+        "  return createElement(Agent.Result, { value: { canonical: true } });",
+        '}',
+        '',
+      ].join('\n'),
       'src/events/tool/before.preflight.ts': "export default () => ({ outcome: 'deny', reason: 'blocked by preflight' });\n",
       'src/events/tool/before.tsx': [
         "import { writeFileSync } from 'node:fs';",
@@ -209,6 +237,66 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "  writeFileSync(join(process.cwd(), '.agent-bundle', 'deny-handler.marker'), 'ran');",
         "  throw new Error('deny preflight reached handler');",
         '}',
+        '',
+      ].join('\n'),
+      'src/events/tool/failure.preflight.ts': [
+        "import { appendFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "export default () => {",
+        "  appendFileSync(join(process.cwd(), '.agent-bundle', 'failure-gate.marker'), 'gate\\n');",
+        "  throw new Error('Generated route must default-export from preflight.');",
+        '};',
+        '',
+      ].join('\n'),
+      'src/events/tool/failure.tsx': [
+        "import { writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "export { default as preflight } from './failure.preflight.js';",
+        "export const config = { runtime: 'standalone' };",
+        'export default async function ToolFailure() {',
+        "  writeFileSync(join(process.cwd(), '.agent-bundle', 'failure-handler.marker'), 'ran');",
+        "  throw new Error('preflight failure reached handler');",
+        '}',
+        '',
+      ].join('\n'),
+      'src/mcp/alpha/tools/fail.tsx': [
+        "import { appendFileSync } from 'node:fs';",
+        "import { z } from 'zod';",
+        '',
+        "appendFileSync('.agent-bundle/alpha-worker.marker', 'load\\n');",
+        'export const inputSchema = z.object({}).strict();',
+        'export const resultSchema = z.object({ failed: z.boolean() }).strict();',
+        '',
+        'export default async function Fail() {',
+        "  appendFileSync('.agent-bundle/alpha-handler.marker', 'run\\n');",
+        "  throw new Error('Generated route must default-export an async Server Component.');",
+        '}',
+        '',
+      ].join('\n'),
+      'src/mcp/omega/tools/pass.tsx': [
+        "import { appendFileSync } from 'node:fs';",
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "appendFileSync('.agent-bundle/omega-worker.marker', 'load\\n');",
+        'export const inputSchema = z.object({}).strict();',
+        "export const resultSchema = z.object({ selected: z.literal('omega') }).strict();",
+        '',
+        'export default async function Pass() {',
+        "  return createElement(Agent.Result, { value: { selected: 'omega' } });",
+        '}',
+        '',
+      ].join('\n'),
+      'src/mcp/importer/tools/fail.tsx': [
+        "import { appendFileSync } from 'node:fs';",
+        "import { z } from 'zod';",
+        '',
+        "appendFileSync('.agent-bundle/importer-worker.marker', 'load\\n');",
+        "throw new Error('Generated route must default-export from import.');",
+        'export const inputSchema = z.object({}).strict();',
+        'export const resultSchema = z.object({ failed: z.boolean() }).strict();',
+        'export default async function Fail() { return undefined; }',
         '',
       ].join('\n'),
       'src/mcp/status/tools/counter.tsx': [
@@ -305,6 +393,17 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       'src/mcp/status/tools/report.cli.ts': [
         "export const config = { command: ['report'], confirm: true, flags: { service: { name: 'name' }, source: { required: false } } };",
         "export const mapInput = (input) => ({ ...input, source: input.source ?? 'cli-projection' });",
+        '',
+      ].join('\n'),
+      'src/mcp/status/tools/plain.cli.ts': "export const config = { command: ['plain-tool'] };\n",
+      'src/mcp/status/tools/plain.ts': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        'export const inputSchema = z.object({}).strict();',
+        "export const resultSchema = z.object({ selected: z.literal('plain-tool') }).strict();",
+        "export default async function PlainTool() { return createElement(Agent.Result, { value: { selected: 'plain-tool' } }); }",
         '',
       ].join('\n'),
       'src/providers/clock.ts': [
@@ -525,6 +624,91 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const activeEpoch = server.status().artifact;
     if (activeEpoch.state !== 'active') throw new Error('Expected an active compiled epoch.');
     const artifactRoot = join(project.root, '.agent-bundle', 'epochs', activeEpoch.activeEpoch.id);
+    const alphaWorkerMarker = join(project.root, '.agent-bundle', 'alpha-worker.marker');
+    const alphaHandlerMarker = join(project.root, '.agent-bundle', 'alpha-handler.marker');
+    const importerWorkerMarker = join(project.root, '.agent-bundle', 'importer-worker.marker');
+    const omegaWorkerMarker = join(project.root, '.agent-bundle', 'omega-worker.marker');
+    const sessionWorkerMarker = join(project.root, '.agent-bundle', 'session-worker.marker');
+    const candidateMarkers = [
+      alphaWorkerMarker,
+      alphaHandlerMarker,
+      importerWorkerMarker,
+      omegaWorkerMarker,
+      sessionWorkerMarker,
+    ];
+    await Promise.all(candidateMarkers.map((path) =>
+      rm(path, { force: true })));
+    const exactSelectionResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'tool:omega/pass' }),
+      headers,
+      method: 'POST',
+    });
+    expect(exactSelectionResponse.status).toBe(200);
+    const exactSelection = await exactSelectionResponse.json() as RouteInvocationResponse;
+    expect(exactSelection.invocation).toMatchObject({
+      result: { selected: 'omega' },
+      status: 'succeeded',
+    });
+    expect(existsSync(alphaWorkerMarker)).toBe(false);
+    expect(existsSync(importerWorkerMarker)).toBe(false);
+    expect(await readFile(omegaWorkerMarker, 'utf8')).toBe('load\n');
+
+    await Promise.all(candidateMarkers.map((path) =>
+      rm(path, { force: true })));
+    const handlerFailureResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'tool:alpha/fail' }),
+      headers,
+      method: 'POST',
+    });
+    expect(handlerFailureResponse.status).toBe(200);
+    const handlerFailure = await handlerFailureResponse.json() as RouteInvocationResponse;
+    expect(handlerFailure.invocation).toMatchObject({
+      diagnostics: [{ code: 'AB8236' }],
+      status: 'failed',
+    });
+    expect(await readFile(alphaWorkerMarker, 'utf8')).toBe('load\n');
+    expect(await readFile(alphaHandlerMarker, 'utf8')).toBe('run\n');
+    expect(existsSync(importerWorkerMarker)).toBe(false);
+    expect(existsSync(omegaWorkerMarker)).toBe(false);
+
+    await Promise.all(candidateMarkers.map((path) =>
+      rm(path, { force: true })));
+    const importFailureResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'tool:importer/fail' }),
+      headers,
+      method: 'POST',
+    });
+    expect(importFailureResponse.status).toBe(200);
+    const importFailure = await importFailureResponse.json() as RouteInvocationResponse;
+    expect(importFailure.invocation).toMatchObject({
+      diagnostics: [{ code: 'AB8236' }],
+      status: 'failed',
+    });
+    expect(await readFile(importerWorkerMarker, 'utf8')).toBe('load\n');
+    expect(existsSync(alphaWorkerMarker)).toBe(false);
+    expect(existsSync(omegaWorkerMarker)).toBe(false);
+
+    await Promise.all(candidateMarkers.map((path) => rm(path, { force: true })));
+    const canonicalEventResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        input: { event: 'session/end' },
+        routeId: 'event:session/end',
+        surface: { kind: 'event' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(canonicalEventResponse.status).toBe(200);
+    const canonicalEvent = await canonicalEventResponse.json() as RouteInvocationResponse;
+    expect(canonicalEvent.invocation).toMatchObject({
+      result: { canonical: true },
+      status: 'succeeded',
+    });
+    expect(await readFile(sessionWorkerMarker, 'utf8')).toBe('load\n');
+    expect(existsSync(alphaWorkerMarker)).toBe(false);
+    expect(existsSync(importerWorkerMarker)).toBe(false);
+    expect(existsSync(omegaWorkerMarker)).toBe(false);
+
     const toolResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 'catalog', source: 'api' }, routeId: 'tool:status/report' }),
       headers,
@@ -547,7 +731,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       stateRoot,
     });
     const mcpName = (await readdir(join(artifactRoot, 'mcp')))
-      .find((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs'));
+      .find((name) => name.startsWith('mcp-status-') && name.endsWith('.mjs') && !name.endsWith('-flight.mjs'));
     if (mcpName === undefined) throw new Error('Expected a generated MCP server.');
     const mcpTransport = new StdioClientTransport({
       args: [join(artifactRoot, 'mcp', mcpName)],
@@ -738,7 +922,36 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       'render.finish',
     ]);
 
-    for (const [routeId, input, expected] of [
+    const failureHandlerMarker = join(project.root, '.agent-bundle', 'failure-handler.marker');
+    await Promise.all([...candidateMarkers, failureHandlerMarker].map((path) => rm(path, { force: true })));
+    const preflightFailureResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        input: {
+          cwd: project.root,
+          error: 'Exit code 9',
+          hook_event_name: 'PostToolUseFailure',
+          session_id: 'session-preflight-failure',
+          tool_input: {},
+          tool_name: 'Write',
+          tool_use_id: 'use-preflight-failure',
+          transcript_path: join(project.root, 'transcript.json'),
+        },
+        routeId: 'event:tool/failure',
+        surface: { host: 'claude', kind: 'event' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(preflightFailureResponse.status).toBe(200);
+    const preflightFailure = await preflightFailureResponse.json() as RouteInvocationResponse;
+    expect(preflightFailure.invocation).toMatchObject({
+      diagnostics: [{ code: 'AB8252' }],
+      status: 'failed',
+    });
+    expect(existsSync(failureHandlerMarker)).toBe(false);
+    expect(candidateMarkers.every((path) => !existsSync(path))).toBe(true);
+
+    const preflightCases = [
       [
         'event:tool/before',
         {
@@ -765,7 +978,8 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         },
         { outcome: 'continue' },
       ],
-    ] as const) {
+    ] as const;
+    for (const [routeId, input, expected] of preflightCases) {
       const response = await fetch(`${server.url}/api/routes/invocations`, {
         body: JSON.stringify({ input, routeId, surface: { host: 'claude', kind: 'event' } }),
         headers,
@@ -803,6 +1017,98 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       }
     }
 
+    const artifactManifest = await readArtifactManifest(artifactRoot);
+    if (artifactManifest.status !== 'ok') throw new Error('Expected a readable artifact manifest.');
+    const preparation = artifactManifest.manifest.executables.hooks.find((hook) =>
+      hook.kind === 'event-route' && hook.routeId === 'event:tool/before' && hook.host === 'claude');
+    if (preparation === undefined) throw new Error('Expected the compiled Claude event preparation.');
+    const preparationPath = join(artifactRoot, preparation.path);
+    const preparationSource = await readFile(preparationPath);
+    const denyHandlerMarker = join(project.root, '.agent-bundle', 'deny-handler.marker');
+    await writeFile(preparationPath, 'export const unrelated = true;\n');
+    try {
+      await Promise.all([...candidateMarkers, denyHandlerMarker].map((path) => rm(path, { force: true })));
+      const response = await fetch(`${server.url}/api/routes/invocations`, {
+        body: JSON.stringify({
+          input: preflightCases[0][1],
+          routeId: preflightCases[0][0],
+          surface: { host: 'claude', kind: 'event' },
+        }),
+        headers,
+        method: 'POST',
+      });
+      expect(response.status).toBe(200);
+      const missingPreparation = await response.json() as RouteInvocationResponse;
+      expect(missingPreparation.invocation).toMatchObject({
+        diagnostics: [{ code: 'AB8252' }],
+        status: 'failed',
+      });
+      expect(existsSync(denyHandlerMarker)).toBe(false);
+      expect(candidateMarkers.every((path) => !existsSync(path))).toBe(true);
+    } finally {
+      await writeFile(preparationPath, preparationSource);
+    }
+
+    const workerlessMcpServers = artifactManifest.manifest.executables.mcpServers.map((executable) => {
+      if (executable.id !== 'mcp:omega' || executable.launch === undefined) return executable;
+      return {
+        ...executable,
+        launch: {
+          args: executable.launch.args,
+          entry: executable.launch.entry,
+          env: executable.launch.env,
+        },
+      };
+    });
+    await writeFile(artifactManifest.path, serializeArtifactManifest({
+      ...artifactManifest.manifest,
+      executables: {
+        ...artifactManifest.manifest.executables,
+        hooks: artifactManifest.manifest.executables.hooks.filter((hook) =>
+          hook.routeId !== 'event:tool/before' && hook.routeId !== 'event:prompt/submit'),
+        mcpServers: workerlessMcpServers,
+      },
+    }));
+    try {
+      await Promise.all(candidateMarkers.map((path) =>
+        rm(path, { force: true })));
+      const unavailableExecutableResponse = await fetch(`${server.url}/api/routes/invocations`, {
+        body: JSON.stringify({ routeId: 'tool:omega/pass' }),
+        headers,
+        method: 'POST',
+      });
+      expect(unavailableExecutableResponse.status).toBe(200);
+      const unavailableExecutable = await unavailableExecutableResponse.json() as RouteInvocationResponse;
+      expect(unavailableExecutable.invocation).toMatchObject({
+        diagnostics: [{ code: 'AB8251' }],
+        status: 'failed',
+      });
+      expect(existsSync(alphaWorkerMarker)).toBe(false);
+      expect(existsSync(importerWorkerMarker)).toBe(false);
+      expect(existsSync(omegaWorkerMarker)).toBe(false);
+
+      for (const [routeId, input] of preflightCases) {
+        const response = await fetch(`${server.url}/api/routes/invocations`, {
+          body: JSON.stringify({ input, routeId, surface: { host: 'claude', kind: 'event' } }),
+          headers,
+          method: 'POST',
+        });
+        expect(response.status).toBe(200);
+        const invoked = await response.json() as RouteInvocationResponse;
+        expect(invoked.invocation).toMatchObject({
+          diagnostics: [{ code: 'AB8251' }],
+          status: 'failed',
+        });
+        expect(existsSync(join(
+          project.root,
+          '.agent-bundle',
+          routeId === 'event:tool/before' ? 'deny-handler.marker' : 'continue-handler.marker',
+        ))).toBe(false);
+      }
+    } finally {
+      await writeFile(artifactManifest.path, serializeArtifactManifest(artifactManifest.manifest));
+    }
+
     const cliResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ routeId: 'cli:greet', surface: { args: ['Ada'], command: 'greet', kind: 'cli' } }),
       headers,
@@ -823,6 +1129,18 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       status: 'succeeded',
       surface: { args: ['Ada'], command: 'greet', kind: 'cli' },
     });
+
+    const plainCliHandlerMarker = join(project.root, '.agent-bundle', 'plain-cli-handler.marker');
+    const plainCliResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'cli:plain', surface: { args: [], command: 'plain', kind: 'cli' } }),
+      headers,
+      method: 'POST',
+    });
+    expect(plainCliResponse.status).toBe(200);
+    await expect(plainCliResponse.json()).resolves.toMatchObject({
+      invocation: { diagnostics: [{ code: 'AB8251' }], status: 'failed' },
+    });
+    expect(existsSync(plainCliHandlerMarker)).toBe(false);
 
     // A completed run whose bin exits non-zero: `status` stays `succeeded`
     // (the boundary completed), the outcome carries the bin's own exit code,
@@ -895,6 +1213,23 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       command: 'report',
       kind: 'cli',
     });
+
+    const plainToolCliResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        routeId: 'tool:status/plain',
+        surface: { args: ['--yes'], command: 'plain-tool', kind: 'cli' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(plainToolCliResponse.status).toBe(200);
+    const plainToolCli = await plainToolCliResponse.json() as RouteInvocationResponse;
+    expect(plainToolCli.invocation, JSON.stringify(plainToolCli.invocation.diagnostics)).toMatchObject({
+      projection: { cli: { exitCode: 0 } },
+      result: { selected: 'plain-tool' },
+      status: 'succeeded',
+    });
+
     const binName = (await readdir(join(artifactRoot, 'bin')))
       .find((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs'));
     if (binName === undefined) throw new Error('Expected a generated routed CLI bin.');
@@ -1052,7 +1387,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
-      { timeoutMs: 10_000 },
+      { timeoutMs: 20_000 },
     );
     expect(failedAttempt.outcome).toBe('failed');
     expect(server.status().build.state).toBe('failed');
@@ -1095,7 +1430,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
-      { timeoutMs: 10_000 },
+      { timeoutMs: 20_000 },
     );
     expect(repairedAttempt.outcome, JSON.stringify(repairedAttempt.diagnostics)).toBe('succeeded');
     const repairedInvocationResponse = await fetch(`${server.url}/api/routes/invocations`, {
@@ -1122,6 +1457,110 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     await expect(missingApi.json()).resolves.toEqual({
       diagnostic: { code: 'AB8007', message: 'Route was not found.' },
     });
+  } finally {
+    await server?.close().catch(() => undefined);
+    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+  }
+});
+
+it('fails closed when a valid host is ineligible for the compiled event route', { timeout: 180_000 }, async () => {
+  const project = await createProjectFixture({
+    config: "export default { plugin: { name: 'route-invocation-host-binding', version: '1.0.0' }, targets: ['claude', 'codex'] };\n",
+    files: {
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*"},"type":"module"}\n',
+      'src/events/tool/before.preflight.ts': "export default () => ({ outcome: 'deny', reason: 'blocked' });\n",
+      'src/events/tool/before.tsx': [
+        "import { writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "export { default as preflight } from './before.preflight.js';",
+        "writeFileSync(join(process.cwd(), '.agent-bundle', 'ineligible-import.marker'), 'loaded');",
+        "export const config = { runtime: 'standalone', targets: ['claude'] };",
+        'export default async function BeforeTool() {',
+        "  writeFileSync(join(process.cwd(), '.agent-bundle', 'ineligible-handler.marker'), 'ran');",
+        "  throw new Error('ineligible event handler ran');",
+        '}',
+        '',
+      ].join('\n'),
+    },
+    prefix: 'agent-bundle-route-invocation-host-binding-',
+  });
+  const assetsRoot = join(project.root, 'workbench');
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await mkdir(assetsRoot, { recursive: true });
+  await Promise.all([
+    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route invocation host binding</title>'),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    const session = await bootstrap.json() as { readonly token: string };
+    const headers = {
+      'content-type': 'application/json',
+      origin: server.url,
+      'x-agent-bundle-session': session.token,
+    };
+    await expect.poll(
+      async () => fetch(`${server!.url}/api/routes/manifest`, { headers }).then((response) => response.status),
+      { timeout: 10_000 },
+    ).toBe(200);
+
+    const input = {
+      cwd: project.root,
+      hook_event_name: 'PreToolUse',
+      permission_mode: 'default',
+      session_id: 'session-host-binding',
+      tool_input: { file_path: 'blocked.txt' },
+      tool_name: 'Write',
+      tool_use_id: 'use-host-binding',
+      transcript_path: join(project.root, 'transcript.json'),
+    };
+    const importMarker = join(project.root, '.agent-bundle', 'ineligible-import.marker');
+    const handlerMarker = join(project.root, '.agent-bundle', 'ineligible-handler.marker');
+    const ineligibleResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        input,
+        routeId: 'event:tool/before',
+        surface: { host: 'codex', kind: 'event' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(ineligibleResponse.status).toBe(200);
+    await expect(ineligibleResponse.json()).resolves.toMatchObject({
+      invocation: {
+        diagnostics: [{ code: 'AB8251' }],
+        status: 'failed',
+      },
+    });
+    expect(existsSync(importMarker)).toBe(false);
+    expect(existsSync(handlerMarker)).toBe(false);
+
+    const deniedResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        input,
+        routeId: 'event:tool/before',
+        surface: { host: 'claude', kind: 'event' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(deniedResponse.status).toBe(200);
+    await expect(deniedResponse.json()).resolves.toMatchObject({
+      invocation: {
+        result: { outcome: 'deny', reason: 'blocked' },
+        status: 'succeeded',
+      },
+    });
+    expect(existsSync(importMarker)).toBe(false);
+    expect(existsSync(handlerMarker)).toBe(false);
   } finally {
     await server?.close().catch(() => undefined);
     await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });

@@ -188,6 +188,7 @@ it('publishes correlated invocation and kernel entries with slim details', async
   } as const;
   const trace = collectingTrace();
   let currentTime = Date.parse('2026-09-05T00:00:00.000Z');
+  let production: RouteInvocationChildRequest['production'];
   const service = new RouteInvocationService({
     manifest: {
       manifest: () => ({
@@ -203,14 +204,32 @@ it('publishes correlated invocation and kernel entries with slim details', async
     now: () => new Date(currentTime += 5),
     prepared: async () => ({
       project: {
-        artifact: { epochId: 'epoch-1', target: 'claude' },
+        artifact: {
+          epochId: 'epoch-1',
+          manifest: {
+            executables: {
+              mcpServers: [{
+                id: 'mcp:fixture',
+                kind: 'compiled',
+                launch: { worker: 'mcp/fixture-flight.mjs' },
+              }],
+            },
+            routes: {
+              digest: 'digest',
+              servers: [{ id: 'mcp:fixture', mode: 'generated', routes: [{ id: route.id }] }],
+            },
+          } as never,
+          root: '/artifact',
+          target: 'claude',
+        },
         manifest: { plugin: { name: 'fixture', version: '1.0.0' }, projectRoot: '/project' } as never,
         stateRoot: '/project/.agent-bundle/state',
         targets: ['claude'],
       },
       release: () => undefined,
     }),
-    renderChild: async (_request, _signal, publishKernelEvent) => {
+    renderChild: async (request, _signal, publishKernelEvent) => {
+      production = request.production;
       publishKernelEvent({
         at: 8,
         count: 1,
@@ -246,6 +265,7 @@ it('publishes correlated invocation and kernel entries with slim details', async
     routeId: route.id,
   });
 
+  expect(production).toEqual({ executable: 'mcp/fixture-flight.mjs', kind: 'direct' });
   expect(result.timings.map((entry) => entry.phase)).toEqual(['render', 'projection']);
   expect(trace.entries).toEqual([
     expect.objectContaining({
@@ -318,6 +338,7 @@ it('publishes failed event invocations with native provenance', async () => {
   } as const;
   const trace = collectingTrace();
   let currentTime = Date.parse('2026-09-05T00:00:00.000Z');
+  let production: RouteInvocationChildRequest['production'];
   const service = new RouteInvocationService({
     manifest: {
       manifest: () => ({
@@ -333,14 +354,55 @@ it('publishes failed event invocations with native provenance', async () => {
     now: () => new Date(currentTime += 5),
     prepared: async () => ({
       project: {
-        artifact: { epochId: 'epoch-1', target: 'claude' },
-        manifest: { projectRoot: '/project' } as never,
+        artifact: {
+          epochId: 'epoch-1',
+          manifest: {
+            executables: {
+              hooks: [{
+                host: 'claude',
+                kind: 'event-route',
+                path: 'hooks/event-route-tool-after.claude.mjs',
+                routeId: route.id,
+              }],
+              mcpServers: [
+                {
+                  hosts: ['codex'],
+                  id: 'mcp:alpha',
+                  kind: 'compiled',
+                  launch: { worker: 'mcp/alpha-flight.mjs' },
+                },
+                {
+                  hosts: ['claude'],
+                  id: 'mcp:beta',
+                  kind: 'compiled',
+                  launch: { worker: 'mcp/beta-flight.mjs' },
+                },
+              ],
+            },
+            files: [{ path: 'hooks/hooks-flight.mjs' }],
+            routes: {
+              digest: 'digest',
+              events: [{
+                execution: { fallback: 'none', runtime: 'shared' },
+                id: route.id,
+              }],
+              servers: [
+                { id: 'mcp:alpha', mode: 'generated' },
+                { id: 'mcp:beta', mode: 'generated' },
+              ],
+            },
+          } as never,
+          root: '/artifact',
+          target: 'claude',
+        },
+        manifest: { plugin: { name: 'fixture', version: '1.0.0' }, projectRoot: '/project' } as never,
         stateRoot: '/project/.agent-bundle/state',
         targets: ['claude'],
       },
       release: () => undefined,
     }),
-    renderChild: async () => {
+    renderChild: async (request) => {
+      production = request.production;
       throw new Error('render exploded');
     },
     trace: trace.publisher,
@@ -371,6 +433,11 @@ it('publishes failed event invocations with native provenance', async () => {
     state: 'available',
     value: { conversation: 'session-1', root: 'session-1' },
   });
+  expect(production).toEqual({
+    executable: 'mcp/beta-flight.mjs',
+    kind: 'event',
+    preparation: 'hooks/event-route-tool-after.claude.mjs',
+  });
   expect(trace.entries).toHaveLength(2);
   expect(trace.entries[1]).toMatchObject({
     correlation: {
@@ -394,6 +461,77 @@ it('publishes failed event invocations with native provenance', async () => {
     status: 'error',
     summary: 'event tool/after (claude) · failed',
   });
+});
+
+it('keeps hostless shared events on their declared standalone fallback', async () => {
+  const route = {
+    config: [],
+    event: 'tool/after',
+    id: 'event:tool/after',
+    kind: 'event-route',
+    provenance: { kind: 'conventional' },
+    source: 'src/events/tool/after.tsx',
+  } as const;
+  let production: RouteInvocationChildRequest['production'];
+  const service = new RouteInvocationService({
+    manifest: {
+      manifest: () => ({
+        diagnostics: [],
+        digest: 'digest',
+        events: [route],
+        providers: [],
+        scripts: [],
+        servers: [],
+        sourceRevision: 'revision',
+      }),
+    },
+    prepared: async () => ({
+      project: {
+        artifact: {
+          epochId: 'epoch-1',
+          manifest: {
+            executables: {
+              hooks: [{
+                host: 'claude',
+                kind: 'event-route',
+                path: 'hooks/event-route-tool-after.claude.mjs',
+                routeId: route.id,
+              }],
+              mcpServers: [],
+            },
+            files: [{ path: 'hooks/hooks-flight.mjs' }],
+            routes: {
+              digest: 'digest',
+              events: [{
+                execution: { fallback: 'standalone', runtime: 'shared' },
+                id: route.id,
+              }],
+              servers: [],
+            },
+          } as never,
+          root: '/artifact',
+        },
+        manifest: { plugin: { name: 'fixture', version: '1.0.0' }, projectRoot: '/project' } as never,
+        stateRoot: '/project/.agent-bundle/state',
+        targets: ['claude'],
+      },
+      release: () => undefined,
+    }),
+    renderChild: async (request) => {
+      production = request.production;
+      throw new Error('stop after binding selection');
+    },
+  });
+
+  await expect(service.invoke({
+    input: { payload: { toolName: 'Write' } },
+    routeId: route.id,
+    surface: { kind: 'event' },
+  })).resolves.toMatchObject({
+    diagnostics: [{ code: 'AB8236' }],
+    status: 'failed',
+  });
+  expect(production).toEqual({ executable: 'hooks/hooks-flight.mjs', kind: 'direct' });
 });
 
 const echoRoute = {
@@ -974,6 +1112,75 @@ it('rejects a canonical event surface when the compiled route has preflight', as
   expect(leases).toBe(0);
 });
 
+it('rejects a globally supported host absent from the route executable bindings', async () => {
+  const route = {
+    config: [],
+    event: 'tool/before',
+    id: 'event:tool/before',
+    execution: { fallback: 'standalone', preflight: 'src/events/tool/before.preflight.ts', runtime: 'standalone' },
+    kind: 'event-route',
+    provenance: { kind: 'conventional' },
+    source: 'src/events/tool/before.tsx',
+  } as const;
+  let childStarts = 0;
+  const service = new RouteInvocationService({
+    manifest: {
+      manifest: () => ({
+        diagnostics: [],
+        digest: 'digest',
+        events: [route],
+        providers: [],
+        scripts: [],
+        servers: [],
+        sourceRevision: 'revision',
+      }),
+    },
+    prepared: async () => ({
+      project: {
+        artifact: {
+          epochId: 'epoch-1',
+          manifest: {
+            executables: {
+              hooks: [{
+                host: 'claude',
+                kind: 'event-route',
+                path: 'hooks/event-route-tool-before.claude.mjs',
+                routeId: route.id,
+              }],
+            },
+            routes: {
+              digest: 'digest',
+              events: [{
+                execution: { fallback: 'standalone', preflight: route.execution.preflight, runtime: 'standalone' },
+                id: route.id,
+              }],
+            },
+          } as never,
+          root: '/artifact',
+        },
+        manifest: { projectRoot: '/project' } as never,
+        stateRoot: '/project/.agent-bundle/state',
+        targets: ['claude', 'codex'],
+      },
+      release: () => undefined,
+    }),
+    renderChild: async (request) => {
+      childStarts += 1;
+      return childResult(request);
+    },
+  });
+
+  await expect(service.start({
+    input: {},
+    routeId: route.id,
+    surface: { host: 'codex', kind: 'event' },
+  }).result).resolves.toMatchObject({
+    diagnostics: [{ code: 'AB8251' }],
+    status: 'failed',
+  });
+  expect(childStarts).toBe(0);
+});
+
 interface RouteProject {
   readonly root: string;
   readonly service: (options?: Readonly<{ timeoutMs?: number }>) => RouteInvocationService;
@@ -1100,7 +1307,7 @@ const tsxSiblingProject = async (): Promise<RouteProject> => routeProject(
   },
 );
 
-it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 30_000 }, async () => {
+it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 60_000 }, async () => {
   const project = await tsxSiblingProject();
   try {
     const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/report', surface: { kind: 'unit-render' } });

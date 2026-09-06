@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { readArtifactManifest } from '../build/manifest-file.ts';
 import type { InstallHost } from '../install/install.ts';
 import { HookService } from '../services/hook-service.ts';
 import { AgentApi } from './agent-api.ts';
@@ -974,7 +975,6 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         .find((target) => registry.artifactLayout(target).scripts !== undefined);
       const epochId = artifact.activeEpoch.id;
       const project = Object.freeze({
-        ...(scriptTarget === undefined ? {} : { artifact: { epochId, target: scriptTarget } }),
         manifest: testManifestFromRouteGraph({
           apps: prepared.model.mcpApps,
           configPath: prepared.configPath,
@@ -1011,8 +1011,25 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         }
         throw error;
       }
+      const manifestRead = await readArtifactManifest(reference.root);
+      if (manifestRead.status !== 'ok') {
+        await reference.close();
+        throw new RouteInvocationRequestError(
+          ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE,
+          `The leased artifact manifest is ${manifestRead.status}; rebuild before invoking routes.`,
+          409,
+        );
+      }
       return {
-        project,
+        project: Object.freeze({
+          ...project,
+          artifact: Object.freeze({
+            epochId,
+            manifest: manifestRead.manifest,
+            root: manifestRead.root,
+            ...(scriptTarget === undefined ? {} : { target: scriptTarget }),
+          }),
+        }),
         release: () => reference.close(),
       };
     },
