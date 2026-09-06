@@ -10,11 +10,18 @@ import type {
   RouteInvocationSummary,
 } from './route-invocation.ts';
 
+/**
+ * Render events one invocation retains — in the producer while it streams, in
+ * the live stream replay, and in the completed envelope. Older events are
+ * evicted oldest-first; the final `complete` event and `document` survive.
+ */
+export const MAX_RETAINED_RENDER_EVENTS = 256;
+
 export interface RouteInvocation extends RouteInvocationSummary {
   readonly context: RequestContextProvenance;
   /** The final Agent Document; absent when rendering failed before a document existed. */
   readonly document?: AgentDocument;
-  /** The production `shell | progress | replace | error | complete` stream, in order. */
+  /** The newest `MAX_RETAINED_RENDER_EVENTS` of the production `shell | progress | replace | error | complete` stream, in order. */
   readonly events: readonly AgentRenderEvent[];
   readonly projection: RouteInvocationProjection;
   readonly providers: readonly RouteInvocationProvider[];

@@ -21,8 +21,10 @@ description: 'Workbench 调用、统一 Trace、Raw logs 与宿主钩子收据�
 POST 正文是一份 `RouteInvocationRequest`：包含 `routeId`，以及可选的 `input`、`args`、
 `correlationId`、调用方 `requestId` 与事件夹具选项。前台会把这两个标识回显到调用上，使路由工作区与
 Trace 可以关联此次运行。完成后的信封包含输入、provenance 上下文、providers、渲染事件、Agent
-Document、结果、投影、诊断与计时。Trace 条目链接到这份完整快照，而不会复制它。取消后的调用带有
-`status: "cancelled"` 且不含 `outcome`；取消已终止的调用会返回 `AB8256`（409）。
+Document、结果、投影、诊断与计时。Trace 条目链接到这份完整快照，而不会复制它。渲染历史是有界的：
+流回放、完成后的信封与渲染子进程各自只保留最新的 256 个渲染事件，按最旧优先淘汰；流会以一个
+`truncated` 事件报告这次淘汰，而最终的 `complete` 事件、Agent Document、`outcome` 与关联标识始终保留。
+取消后的调用带有 `status: "cancelled"` 且不含 `outcome`；取消已终止的调用会返回 `AB8256`（409）。
 
 ## 宿主会话
 

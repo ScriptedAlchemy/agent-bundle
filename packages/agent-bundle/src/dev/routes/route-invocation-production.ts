@@ -30,6 +30,7 @@ import {
   ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
   ROUTE_INVOCATION_PREPARATION_FAILURE_CODE,
 } from './route-invocation-production-error.ts';
+import { MAX_RETAINED_RENDER_EVENTS } from './route-invocation-result.ts';
 import type { RouteInvocationProvider, RouteInvocationTiming } from './route-invocation.ts';
 
 interface CompiledCliInvocationModule {
@@ -463,6 +464,7 @@ const renderCompiled = async (
       for (;;) {
         const next = await reader.read();
         if (next.done) break;
+        if (events.length === MAX_RETAINED_RENDER_EVENTS) events.shift();
         events.push(next.value);
         publishRender?.(next.value);
       }

@@ -25,8 +25,12 @@ The POST body is a `RouteInvocationRequest`: `routeId` plus optional `input`, `a
 identifiers on the invocation so the route workspace and trace can join the run. The completed
 envelope holds the input, provenance context, providers, render events, Agent Document, result,
 projections, diagnostics, and timings. Trace entries link to that full snapshot instead of
-duplicating it. A cancelled invocation has `status: "cancelled"` and no `outcome`; cancelling an
-already-final invocation returns `AB8256` (409).
+duplicating it. Render history is bounded: the stream replay, the completed envelope, and the
+render child each keep only the newest 256 render events, evicting oldest-first; the stream
+reports the eviction with one `truncated` event, and the final `complete` event, Agent Document,
+`outcome`, and correlation identifiers always survive. A cancelled invocation has
+`status: "cancelled"` and no `outcome`; cancelling an already-final invocation returns `AB8256`
+(409).
 
 ## Host sessions
 

@@ -47,10 +47,11 @@ import {
   isProductionRouteInvocationCode,
   ProductionRouteInvocationError,
 } from './route-invocation-production-error.ts';
-import type {
-  RouteInvocation,
-  RouteInvocationStart,
-  RouteInvocationStreamMessage,
+import {
+  MAX_RETAINED_RENDER_EVENTS,
+  type RouteInvocation,
+  type RouteInvocationStart,
+  type RouteInvocationStreamMessage,
 } from './route-invocation-result.ts';
 import { nativeEventRequestContext } from './route-invocation.ts';
 import type {
@@ -1318,7 +1319,7 @@ export class RouteInvocationService {
     if (message.type === 'render') {
       const renderCount = record.messages.reduce((count, retained) =>
         count + (retained.type === 'render' ? 1 : 0), 0);
-      if (renderCount === 256) {
+      if (renderCount === MAX_RETAINED_RENDER_EVENTS) {
         const oldest = record.messages.findIndex((retained) => retained.type === 'render');
         if (oldest !== -1) record.messages.splice(oldest, 1);
         const markerIndex = record.messages.findIndex((retained) => retained.type === 'truncated');
@@ -1607,7 +1608,7 @@ export class RouteInvocationService {
                 },
               }
             : {}),
-          events: child.events,
+          events: child.events.slice(-MAX_RETAINED_RENDER_EVENTS),
           id,
           input: canonical ?? child.input,
           kind: route.kind as RouteInvocationKind,
