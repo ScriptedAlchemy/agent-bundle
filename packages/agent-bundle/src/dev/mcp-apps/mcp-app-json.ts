@@ -34,9 +34,3 @@ export const requireMcpAppJson = (value: unknown, message: string): McpAppJsonVa
     throw error;
   }
 };
-
-export const requireMcpAppJsonRecord = (value: unknown, message: string): McpAppJsonRecord => {
-  const snapshot = requireMcpAppJson(value, message);
-  if (!isJsonRecord(snapshot)) throw new TypeError(message);
-  return snapshot;
-};

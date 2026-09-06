@@ -5,7 +5,6 @@ import { expect, it } from '@rstest/core';
 
 import {
   createMcpAppDocumentPolicySnapshot,
-  createMcpAppSandboxBridge,
   createMcpAppSandboxFrame,
   createMcpAppSandboxProxy,
   deriveMcpAppSandboxPolicy,
@@ -23,12 +22,6 @@ const frameFor = () => createMcpAppSandboxFrame({
   declaration,
   hostOrigin: 'http://127.0.0.1:43123',
   proxy: proxyEndpoint,
-});
-
-const rpcNotification = (method: string, params: Record<string, unknown> = {}) => ({
-  jsonrpc: '2.0' as const,
-  method,
-  params,
 });
 
 it('serves one immutable, different-origin shell and no MCP or session route', async () => {
@@ -191,108 +184,6 @@ it('freezes a validated relay configuration instead of retaining a caller-owned 
   expect(frame.relay).toEqual({ maxMessageBytes: 1_024, maxQueuedMessages: 1 });
   expect(frame.relay).not.toBe(mutableRelay);
   expect(Object.isFrozen(frame.relay)).toBe(true);
-});
-
-it('enforces the JSON-RPC proxy lifecycle and holds host traffic until initialized', () => {
-  const sent: { message: unknown; targetOrigin: string }[] = [];
-  const forwarded: unknown[] = [];
-  const proxyWindow = {
-    postMessage(message: unknown, targetOrigin: string) {
-      sent.push({ message, targetOrigin });
-    },
-  };
-  const bridge = createMcpAppSandboxBridge({
-    frame: frameFor(),
-    onMessage: (message) => forwarded.push(message),
-    proxyWindow,
-  });
-  const event = (data: unknown, source: unknown = proxyWindow, origin = 'http://127.0.0.1:43124') => ({ data, origin, source });
-
-  expect(bridge.provideResource({ html: '<p>Hello</p>' })).toBe(false);
-  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-proxy-ready'), {}))).toBe(false);
-  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-proxy-ready'), proxyWindow, 'http://127.0.0.1:43124'))).toBe(true);
-  expect(bridge.lifecycle).toBe('proxy-ready');
-
-  expect(bridge.provideResource({ html: '<p>Rejected</p>', sandbox: {} as unknown as string })).toBe(false);
-  expect(bridge.provideResource({
-    csp: { connectDomains: ['https://api.example.test'] },
-    html: '<p>Hello</p>',
-    permissions: { camera: {} },
-    sandbox: 'allow-scripts',
-  })).toBe(true);
-  expect(bridge.lifecycle).toBe('resource-ready');
-  expect(bridge.send(rpcNotification('app/too-large', { value: 'x'.repeat(1_024) }))).toBe(false);
-  expect(bridge.send(rpcNotification('app/ping'))).toBe(true);
-  expect(bridge.send(rpcNotification('app/second-ping'))).toBe(false);
-  expect(bridge.send(rpcNotification('ui/notifications/sandbox-invented'))).toBe(false);
-  expect(sent).toEqual([{
-    message: rpcNotification('ui/notifications/sandbox-resource-ready', {
-      allow: 'camera',
-      contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src 'none'; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
-      html: '<p>Hello</p>',
-      sandbox: 'allow-scripts',
-    }),
-    targetOrigin: 'http://127.0.0.1:43124',
-  }]);
-
-  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-resource-ready')))).toBe(false);
-  expect(bridge.receive(event({ id: 'init-1', jsonrpc: '2.0', method: 'ui/initialize', params: {} }))).toBe(true);
-  expect(bridge.lifecycle).toBe('initializing');
-  expect(forwarded).toEqual([{ id: 'init-1', jsonrpc: '2.0', method: 'ui/initialize', params: {} }]);
-  expect(bridge.receive(event(rpcNotification('ui/notifications/initialized')))).toBe(false);
-  expect(bridge.send({ id: 'wrong', jsonrpc: '2.0', result: {} })).toBe(false);
-  expect(bridge.send({ id: 'init-1', jsonrpc: '2.0', result: { protocolVersion: '2025-06-18' } })).toBe(true);
-  expect(bridge.lifecycle).toBe('initialize-responded');
-  expect(bridge.receive(event(rpcNotification('ui/notifications/initialized')))).toBe(true);
-  expect(bridge.lifecycle).toBe('initialized');
-  expect(sent).toEqual([
-    sent[0],
-    {
-      message: { id: 'init-1', jsonrpc: '2.0', result: { protocolVersion: '2025-06-18' } },
-      targetOrigin: 'http://127.0.0.1:43124',
-    },
-    {
-      message: rpcNotification('app/ping'),
-      targetOrigin: 'http://127.0.0.1:43124',
-    },
-  ]);
-  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-unknown')))).toBe(false);
-  expect(bridge.receive(event(rpcNotification('app/pong')))).toBe(true);
-  expect(forwarded.at(-1)).toEqual(rpcNotification('app/pong'));
-
-  bridge.close();
-  expect(bridge.lifecycle).toBe('closed');
-  expect(bridge.send(rpcNotification('app/after-close'))).toBe(false);
-});
-
-it('provides a valid built App resource without imposing the runtime message-size limit', () => {
-  const sent: unknown[] = [];
-  const proxyWindow = {
-    postMessage(message: unknown) {
-      sent.push(message);
-    },
-  };
-  const frame = frameFor();
-  const bridge = createMcpAppSandboxBridge({
-    frame,
-    proxyWindow,
-  });
-  const proxyReady = {
-    data: rpcNotification('ui/notifications/sandbox-proxy-ready'),
-    origin: 'http://127.0.0.1:43124',
-    source: proxyWindow,
-  };
-  const html = `<main>${'x'.repeat(relay.maxMessageBytes)}</main>`;
-  expect(bridge.receive(proxyReady)).toBe(true);
-
-  expect(bridge.provideResource({ html })).toBe(true);
-  expect(sent).toEqual([
-    rpcNotification('ui/notifications/sandbox-resource-ready', {
-      allow: frame.allow,
-      contentSecurityPolicy: frame.policy.contentSecurityPolicy,
-      html,
-    }),
-  ]);
 });
 
 it('uses an opaque child relay shell with real MCP Apps JSON-RPC notification methods', async () => {

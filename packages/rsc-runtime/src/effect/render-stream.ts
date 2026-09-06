@@ -1,10 +1,9 @@
-import { Effect, Latch, Stream } from 'effect';
+import { Effect, Latch } from 'effect';
 
 import {
   createAgentRenderEventSequence,
   type AgentRenderEvent,
   type AgentRenderEventInput,
-  type AgentRenderLimits,
 } from '../agent-document.js';
 import { toRuntimeError } from './boundary.js';
 
@@ -45,19 +44,3 @@ export const emitBoundRenderEvent = (
     catch: (error) => toRuntimeError(error),
     try: () => sequence.emit(input),
   });
-
-/**
- * Contract bounds as a stream stage: sequence numbers, elapsed / rate /
- * count / event-bytes, document snapshot bounds (depth / nodes / bytes),
- * and handoff-required after complete. Uses the same stepper as
- * `createAgentRenderEventSequence` so the #140 tests stay the source of
- * truth.
- */
-export const boundRenderEventStream = (
-  limits?: Partial<AgentRenderLimits>,
-): <E, R>(
-  stream: Stream.Stream<AgentRenderEventInput, E, R>,
-) => Stream.Stream<AgentRenderEvent, E | Error, R> => {
-  const sequence = createAgentRenderEventSequence(limits);
-  return (stream) => Stream.mapEffect(stream, (input) => emitBoundRenderEvent(sequence, input));
-};

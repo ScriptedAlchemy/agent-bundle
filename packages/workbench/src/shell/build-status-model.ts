@@ -366,7 +366,3 @@ export const problemsFor = ({ catalog, runtimeDiagnostic, status, tree }: Proble
     .sort((left, right) => severityRank[left.problem.severity] - severityRank[right.problem.severity] || left.index - right.index)
     .map(({ problem }) => problem));
 };
-
-/** The header badge count: error-severity problems. */
-export const problemFailureCount = (problems: readonly Problem[]): number =>
-  problems.filter((problem) => problem.severity === 'error').length;
