@@ -26,6 +26,7 @@ import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { isPlatformErrno, readFileString, runWithPlatform } from '../effect/platform.ts';
 
 /**
@@ -123,9 +124,6 @@ const diagnostic = (
   severity,
   target,
 });
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const displayPath = (root: string, path: string): string => relative(root, path).replaceAll('\\', '/');
 

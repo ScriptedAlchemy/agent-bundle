@@ -10,6 +10,7 @@
  * `em`/`i`, `code`, `pre` (fenced, `language-*` class), `blockquote`, `a`,
  * `hr`, `br`, fragments, arrays, strings, and numbers.
  */
+import { errorMessage } from '../core/errors.ts';
 
 const reactFragment = Symbol.for('react.fragment');
 
@@ -55,7 +56,7 @@ const resolveNode = async (node: unknown, depth = 0): Promise<unknown> => {
     rendered = (node.type as (props: ElementProps) => unknown)(node.props);
   } catch (error) {
     throw new MarkdownRenderError(
-      `Rendered skill component ${componentName(node.type)} threw: ${error instanceof Error ? error.message : String(error)}`,
+      `Rendered skill component ${componentName(node.type)} threw: ${errorMessage(error)}`,
     );
   }
   return resolveNode(isThenable(rendered) ? await rendered : rendered, depth + 1);

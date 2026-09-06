@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { createJiti } from 'jiti';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { errorMessage } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type {
@@ -194,7 +195,7 @@ export const loadDevContractMatrix = async (
     configured = declaration(config);
   } catch (error) {
     return Object.freeze({
-      diagnostics: Object.freeze([diagnostic(configPath, error instanceof Error ? error.message : String(error))]),
+      diagnostics: Object.freeze([diagnostic(configPath, errorMessage(error))]),
       modulePath: configPath,
     });
   }
@@ -225,7 +226,7 @@ export const loadDevContractMatrix = async (
   } catch (error) {
     return Object.freeze({
       ...base,
-      diagnostics: Object.freeze([diagnostic(requestedPath, error instanceof Error ? error.message : String(error))]),
+      diagnostics: Object.freeze([diagnostic(requestedPath, errorMessage(error))]),
     });
   }
 };

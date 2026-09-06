@@ -3,11 +3,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { HostDiscoveryReport } from '../../contracts/discovery.ts';
 import {
+  badRequest,
   diagnostic,
+  noQuery,
   rawPathname,
   requestError,
   responseDiagnostic,
-  responseJson as writeJsonResponse,
+  responseJsonOrDestroy,
 } from '../http.ts';
 
 export const hostDiscoveryResponseLimit = 16 * 1024 * 1024;
@@ -22,9 +24,6 @@ export interface HostDiscoveryRoutesOptions {
   readonly service?: HostDiscoveryRouteService;
 }
 
-const responseJson = (response: ServerResponse, body: unknown): void =>
-  writeJsonResponse(response, body, { destroyIfEnded: true });
-
 const matchesDiscoveryRoute = (requestTarget: string | undefined): boolean => {
   const pathname = rawPathname(requestTarget);
   if (pathname === '/api/discovery') return true;
@@ -37,11 +36,7 @@ const matchesDiscoveryRoute = (requestTarget: string | undefined): boolean => {
   return false;
 };
 
-const noQuery = (requestTarget: string | undefined): void => {
-  if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) {
-    throw requestError(diagnostic('AB8216', 'Host discovery request is not valid.', 400));
-  }
-};
+const invalidRequest = badRequest('AB8216', 'Host discovery request is not valid.');
 
 export class HostDiscoveryRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
@@ -65,7 +60,7 @@ export class HostDiscoveryRoutes {
     if (this.#closed || this.#service === undefined) {
       throw requestError(diagnostic('AB8218', 'Host discovery is not available.', 503));
     }
-    noQuery(request.url);
+    noQuery(request.url, invalidRequest);
     const method = request.method ?? 'GET';
     if (method !== 'GET') {
       responseDiagnostic(response, diagnostic('AB8216', 'Host discovery request is not valid.', 405));
@@ -75,7 +70,7 @@ export class HostDiscoveryRoutes {
     if (Buffer.byteLength(JSON.stringify(report), 'utf8') > this.#responseByteLimit) {
       throw requestError(diagnostic('AB8217', 'Host discovery exceeds the 16 MiB response limit.', 413));
     }
-    responseJson(response, report);
+    responseJsonOrDestroy(response, report);
     return true;
   }
 }

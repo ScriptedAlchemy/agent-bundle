@@ -22,12 +22,11 @@
 import { execFile as executeFile } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFile = promisify(executeFile);
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repositoryRoot = resolve(import.meta.dirname, '..');
 const fixtureRoot = join(repositoryRoot, 'packages/agent-bundle/tests/fixtures/claude-hooks-schema');
 const pluginPathPlaceholder = '/bundle/claude';
 const claudeBinary = process.env.CLAUDE_BIN ?? 'claude';

@@ -3,7 +3,7 @@
 import { execFile as executeFile } from 'node:child_process';
 import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { promisify } from 'node:util';
+import { parseArgs, promisify } from 'node:util';
 
 const execFile = promisify(executeFile);
 
@@ -111,28 +111,15 @@ const usage = () => {
 };
 
 const parseArguments = (arguments_) => {
-  let root;
-  let output;
-  let check = false;
-  for (let index = 0; index < arguments_.length; index += 1) {
-    const argument = arguments_[index];
-    if (argument === '--check') {
-      if (check) usage();
-      check = true;
-      continue;
-    }
-    if (argument !== '--root' && argument !== '--output') usage();
-    const value = arguments_[index + 1];
-    if (value === undefined || value.startsWith('--')) usage();
-    index += 1;
-    if (argument === '--root') {
-      if (root !== undefined) usage();
-      root = value;
-    } else {
-      if (output !== undefined) usage();
-      output = value;
-    }
-  }
+  const { values: { check, output, root } } = parseArgs({
+    args: arguments_,
+    options: {
+      check: { type: 'boolean', default: false },
+      output: { type: 'string' },
+      root: { type: 'string' },
+    },
+    strict: true,
+  });
   if (root === undefined || output === undefined || isAbsolute(output)) usage();
   return Object.freeze({ check, output, root });
 };

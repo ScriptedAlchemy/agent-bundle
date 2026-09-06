@@ -1,9 +1,9 @@
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { audibleOperations, defaultAudibleOperations } from '../operations/audible.js';
+import { audibleOperations } from '../operations/audible.js';
 
-const operation = audibleOperations(defaultAudibleOperations).audibleSelect;
+const operation = audibleOperations.audibleSelect;
 
 export const config = {
   description: 'Record one explicit human-reviewed Audible edition choice.',

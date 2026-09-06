@@ -4,6 +4,7 @@ import { CodedError } from '../../core/errors.ts';
 import { isRecord } from '../../core/strict-json.ts';
 import { isHookSimulationCancellation } from '../../services/hook-service.ts';
 import {
+  badRequest,
   decodedOpaqueSegment,
   diagnostic,
   hasOnly,
@@ -13,7 +14,7 @@ import {
   readJsonBody,
   requestError,
   responseDiagnostic,
-  responseJson as writeJsonResponse,
+  responseJsonOrDestroy,
 } from '../http.ts';
 import type {
   HookPlaygroundDiagnosticResult,
@@ -73,9 +74,6 @@ export interface HookPlaygroundRoutesOptions {
   readonly service?: HookPlaygroundRouteService;
 }
 
-const responseJson = (response: ServerResponse, body: unknown): void =>
-  writeJsonResponse(response, body, { destroyIfEnded: true });
-
 const decodedSegment = (segment: string): string =>
   decodedOpaqueSegment(segment, { code: 'AB8030', message: 'Hook playground route path is not valid.' });
 
@@ -94,9 +92,7 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return Object.freeze({ kind: segments[0] });
 };
 
-const invalidShape = (): never => {
-  throw requestError(diagnostic('AB8032', 'Hook playground request has an invalid shape.', 400));
-};
+const invalidShape = badRequest('AB8032', 'Hook playground request has an invalid shape.');
 
 const jsonBody = (request: IncomingMessage): Promise<JsonObject> => readJsonBody(request, { invalidShape });
 
@@ -227,20 +223,20 @@ export class HookPlaygroundRoutes {
     const method = request.method ?? 'GET';
     if (parsed.kind === 'hooks') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      return responseJson(response, { hooks: await service.list(listQuery(request.url)) });
+      return responseJsonOrDestroy(response, { hooks: await service.list(listQuery(request.url)) });
     }
     if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     const body = await jsonBody(request);
     if (parsed.kind === 'simulations') {
       const options = simulationRequest(body);
-      return responseJson(response, simulationResponse(await this.#cancellable(
+      return responseJsonOrDestroy(response, simulationResponse(await this.#cancellable(
         'simulation',
         response,
         (signal) => service.simulate({ ...options, signal }),
       )));
     }
     const replay = replayRequest(body);
-    return responseJson(response, simulationResponse(await this.#cancellable(
+    return responseJsonOrDestroy(response, simulationResponse(await this.#cancellable(
       'replay',
       response,
       (signal) => service.replay(replay, { signal }),

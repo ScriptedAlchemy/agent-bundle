@@ -1,7 +1,8 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { isIP, type Socket } from 'node:net';
+import type { Socket } from 'node:net';
 
+import { isNonGlobalUnicastIpv6, isSpecialPurposeIp } from '../../core/special-ip.ts';
 import { isRecord } from '../../core/strict-json.ts';
 
 import type { McpAppJsonValue } from './mcp-app-binding-service.ts';
@@ -479,63 +480,12 @@ export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: 
 
 const isCapability = (value: unknown): value is McpAppSandboxCapability => isRecord(value);
 
-const specialIpv4 = (host: string): boolean => {
-  const octets = host.split('.').map(Number);
-  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
-  const [a, b, c] = octets as [number, number, number, number];
-  return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127)
-    || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && (b === 0 || b === 2 || b === 88 || b === 168)) || (a === 198 && (b === 18 || b === 19 || b === 51))
-    || (a === 203 && b === 0 && c === 113);
-};
-
-const ipv6Number = (host: string): bigint | undefined => {
-  const source = host.toLowerCase().replace(/^\[|\]$/gu, '');
-  if (isIP(source) !== 6) return undefined;
-  const [left, right] = source.split('::', 2);
-  const leftParts = left === undefined || left.length === 0 ? [] : left.split(':');
-  const rightParts = right === undefined || right.length === 0 ? [] : right.split(':');
-  if (source.includes('::') ? leftParts.length + rightParts.length >= 8 : leftParts.length !== 8) return undefined;
-  const parts = source.includes('::')
-    ? [...leftParts, ...Array.from({ length: 8 - leftParts.length - rightParts.length }, () => '0'), ...rightParts]
-    : leftParts;
-  let value = 0n;
-  for (const part of parts) {
-    if (!/^[0-9a-f]{1,4}$/u.test(part)) return undefined;
-    value = (value << 16n) | BigInt(`0x${part}`);
-  }
-  return value;
-};
-
-const inIpv6Prefix = (value: bigint, prefix: bigint, bits: number): boolean => {
-  const width = 128n;
-  const mask = ((1n << BigInt(bits)) - 1n) << (width - BigInt(bits));
-  return (value & mask) === prefix;
-};
-
-const specialIpv6 = (host: string): boolean => {
-  const value = ipv6Number(host);
-  if (value === undefined) return false;
-  // CSP network authority is fail-closed: only IANA global-unicast 2000::/3
-  // can pass.  Everything else (site-local, ULA, NAT64, mapped IPv4, etc.)
-  // remains a special-purpose address even when a parser accepts its syntax.
-  if (!inIpv6Prefix(value, 0x2000n << 112n, 3)) return true;
-  // Deny the special-purpose ranges that live inside global-unicast space.
-  const ranges: readonly (readonly [bigint, number])[] = [
-    [0x20010000n << 96n, 23], // IANA 2001::/23 special-purpose block
-    [0x20010db8n << 96n, 32], // documentation
-    [0x2002n << 112n, 16], // 6to4
-    [0x3fffn << 112n, 20], // RFC 9637 documentation
-  ];
-  return ranges.some(([prefix, bits]) => inIpv6Prefix(value, prefix, bits));
-};
-
 const prohibitedHost = (value: string): boolean => {
   const host = value.toLowerCase().replace(/^\[|\]$/gu, '');
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (isIP(host) === 4) return specialIpv4(host);
-  if (isIP(host) !== 6) return false;
-  return specialIpv6(host);
+  // CSP network authority is fail-closed: only IANA global-unicast 2000::/3
+  // can pass, and the special-purpose blocks inside it are denied too.
+  return isSpecialPurposeIp(host) || isNonGlobalUnicastIpv6(host);
 };
 
 const cspSources = (sources: readonly string[] | undefined): Readonly<{ accepted: readonly string[]; warnings: readonly McpAppSandboxWarning[] }> => {
@@ -666,8 +616,6 @@ const messageSize = (message: unknown): number | undefined => {
   }
 };
 
-const hasOwn = (value: object, key: string): boolean => Object.hasOwn(value, key);
-
 const isRequestId = (value: unknown): value is McpAppSandboxRequestId => value === null || typeof value === 'string' || typeof value === 'number';
 
 const isMessage = (value: unknown, maxMessageBytes: number): value is McpAppSandboxMessage => {
@@ -675,20 +623,20 @@ const isMessage = (value: unknown, maxMessageBytes: number): value is McpAppSand
   const size = messageSize(value);
   if (size === undefined || size > maxMessageBytes) return false;
   const hasMethod = typeof value.method === 'string' && value.method.length > 0;
-  const hasId = hasOwn(value, 'id') && isRequestId(value.id);
-  return hasMethod || (hasId && (hasOwn(value, 'result') || hasOwn(value, 'error')));
+  const hasId = Object.hasOwn(value, 'id') && isRequestId(value.id);
+  return hasMethod || (hasId && (Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error')));
 };
 
-const isNotification = (message: McpAppSandboxMessage, method: string): boolean => message.method === method && !hasOwn(message, 'id');
+const isNotification = (message: McpAppSandboxMessage, method: string): boolean => message.method === method && !Object.hasOwn(message, 'id');
 
 const isSandboxNotification = (message: McpAppSandboxMessage): boolean => typeof message.method === 'string' && message.method.startsWith(SANDBOX_NOTIFICATION_PREFIX);
 
 const isInitializeRequest = (message: McpAppSandboxMessage): message is McpAppSandboxMessage & { readonly id: McpAppSandboxRequestId } => (
-  message.method === INITIALIZE_METHOD && hasOwn(message, 'id') && isRequestId(message.id)
+  message.method === INITIALIZE_METHOD && Object.hasOwn(message, 'id') && isRequestId(message.id)
 );
 
 const isInitializeResponse = (message: McpAppSandboxMessage, id: McpAppSandboxRequestId | undefined): boolean => (
-  !hasOwn(message, 'method') && hasOwn(message, 'id') && message.id === id && (hasOwn(message, 'result') || hasOwn(message, 'error'))
+  !Object.hasOwn(message, 'method') && Object.hasOwn(message, 'id') && message.id === id && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error'))
 );
 
 const notification = (method: string, params: unknown = {}): McpAppSandboxMessage => ({ jsonrpc: JSON_RPC_VERSION, method, params });

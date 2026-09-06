@@ -52,6 +52,8 @@ import {
 } from '@modelcontextprotocol/server';
 import type { McpProgressNotificationParams } from '@agent-bundle/runtime';
 
+import { errorMessage } from './core/errors.ts';
+import { isRecord } from './core/strict-json.ts';
 import type { ToolTaskSupport } from './routes/public.ts';
 
 /** The one protocol revision whose core specification defines the Tasks utility. */
@@ -106,9 +108,6 @@ type RequestHandler = (request: JSONRPCRequest, ctx: ServerContext) => Promise<R
 const isTerminal = (status: TaskStatus): boolean =>
   status === 'completed' || status === 'failed' || status === 'cancelled';
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const now = (): string => new Date().toISOString();
 
 /** A Standard Schema for the params of one task request, without a schema library dependency. */
@@ -149,14 +148,12 @@ const clampPollInterval = (requested: unknown): number => {
   return Math.max(Math.floor(requested), MIN_MCP_TASK_POLL_INTERVAL_MS);
 };
 
-const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
 const errorOutcome = (error: unknown): TaskOutcome => {
   if (ProtocolError.isInstance(error)) {
     return { code: error.code, ...(error.data === undefined ? {} : { data: error.data }), kind: 'error', message: error.message };
   }
   const code = isRecord(error) && Number.isSafeInteger(error['code']) ? (error['code'] as number) : ProtocolErrorCode.InternalError;
-  return { code, kind: 'error', message: describeError(error) };
+  return { code, kind: 'error', message: errorMessage(error) };
 };
 
 /** The page size of `tasks/list`; the cursor is the sequence of the last task returned. */
@@ -491,7 +488,7 @@ export class TaskAugmentedServer extends Server {
       },
       (error: unknown) => {
         record.outcome = errorOutcome(error);
-        this.#transition(record, 'failed', describeError(error));
+        this.#transition(record, 'failed', errorMessage(error));
       },
     ).finally(settle);
 
