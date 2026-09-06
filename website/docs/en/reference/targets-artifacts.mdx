@@ -93,8 +93,10 @@ revision), so one wrapper cannot serve two hosts:
 - A hook that reaches several selected hosts is emitted once per host as
   `hooks/<name>.<host>.mjs`, and each host's hook document points at its own wrapper.
 
-Which hosts a hook reaches is its `targets` (every target, by default) intersected with the
-selection, so the same source hook is `hooks/audit.mjs` in a `claude`-only root and
+Which hosts a config hook reaches is its `targets` (every target, by default) intersected with
+the selection. An event route may instead declare `requires`; the compiler intersects the
+selection with the hosts that support every named capability row. Thus the same source hook is
+`hooks/audit.mjs` in a `claude`-only root and
 `hooks/audit.claude.mjs` plus `hooks/audit.cursor.mjs` in a `claude` + `cursor` root. Native hooks
 are preserved for every selected host. The manifest's `executables.hooks[]` carries one row per
 wrapper per host — there is no separate hook index file — and `hooks list`, `hooks simulate`, and

@@ -361,6 +361,8 @@ export interface AgentEventRouteConfig {
    * compatibility behavior of resolving all providers; use `[]` for none.
    */
   readonly providers?: readonly string[];
+  /** Capability rows every projected host must support; mutually exclusive with `targets`. */
+  readonly requires?: readonly string[];
   readonly runtime?: AgentEventRuntimeMode;
   readonly targets?: readonly string[];
   /** Route budget within the adapter's stricter native-host deadline. */

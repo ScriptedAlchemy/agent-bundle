@@ -26,6 +26,7 @@ import {
 } from '../core/runtime.ts';
 import { canonicalHookEvents, isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
 import { type RouteModuleExports, scanRouteModuleExports } from '../routes/contract.ts';
+import { targetsSatisfyingEventRequirements } from '../routes/event-requirements.ts';
 import { mcpRouteProtocolName } from '../routes/protocol-name.ts';
 import { featureCapabilityName } from '../core/components.ts';
 import { isServeAppAllowCapability } from '../core/mcp-app-allow.ts';
@@ -1429,6 +1430,15 @@ const validateEventRoutes = (
 
   for (const route of discovered.routeGraph?.events ?? []) {
     const declaredTargets = route.config['targets'];
+    const declaredRequirements = route.config['requires'];
+    if (declaredTargets !== undefined && declaredRequirements !== undefined) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4825',
+        `Event route ${route.provenance.relativePath} declares both config.targets and config.requires; choose one projection selector.`,
+        route.source,
+      ));
+      continue;
+    }
     if (
       declaredTargets !== undefined &&
       (!Array.isArray(declaredTargets) ||
@@ -1442,8 +1452,36 @@ const validateEventRoutes = (
       ));
       continue;
     }
+    if (
+      declaredRequirements !== undefined &&
+      (!Array.isArray(declaredRequirements) ||
+        declaredRequirements.length === 0 ||
+        declaredRequirements.some((requirement) => typeof requirement !== 'string' || requirement.trim().length === 0))
+    ) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4825',
+        `Event route ${route.provenance.relativePath} config.requires must be a nonempty array of capability row ids.`,
+        route.source,
+      ));
+      continue;
+    }
+    const requirements = declaredRequirements === undefined
+      ? []
+      : [...new Set(declaredRequirements as readonly string[])];
+    for (const requirement of requirements) {
+      if (selectedTargets.some((target) => registry.supports(target, requirement))) continue;
+      for (const target of selectedTargets) {
+        diagnostics.push({
+          code: 'AB4824',
+          message: `Event route ${route.provenance.relativePath} requires capability row ${requirement}, unsupported on ${target}.`,
+          severity: 'error',
+          sourcePath: route.source,
+          target,
+        });
+      }
+    }
     const targets = declaredTargets === undefined
-      ? selectedTargets
+      ? targetsSatisfyingEventRequirements(requirements, selectedTargets, registry)
       : [...new Set(declaredTargets as readonly string[])];
     for (const target of targets) {
       if (!registry.has(target)) {

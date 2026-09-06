@@ -494,9 +494,9 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 （`compose.ts` 的 `compositeNoticeDelivery`），应用到每一个共享的 MCP
 入口上，并且不写进清单。
 
-**能力选择仍然是宿主名。** 作者写的是 `targets: ['claude', 'codex']`（或按组件的
-`targets`），而不是 `requires: ['hooks.preTool']`。能力表是存在的；编译器还没有通过它们来
-解析应用需求。
+**能力选择保持窄范围。** 事件路由可以声明 `requires: ['events.toolBefore.deny']`
+这样的能力行；编译器根据固定的能力表选择支持它的宿主。其他组件仍使用 `targets`；当事件路由的行为
+确实依赖特定宿主时，`targets` 也仍是它的逃生口。
 
 ## 路线图
 

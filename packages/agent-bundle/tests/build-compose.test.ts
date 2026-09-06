@@ -546,6 +546,35 @@ describe('composite plugin root (#555)', () => {
     }
   });
 
+  it('normalizes the same event projections for requires as explicit targets', async () => {
+    const eventRouteTargets = async (selection: string): Promise<readonly string[]> => {
+      const root = await mkdtemp(join(tmpdir(), 'agent-bundle-event-projections-'));
+      roots.push(root);
+      await Promise.all([
+        writeProjectFile(root, 'package.json', '{"name":"event-projections","type":"module","version":"1.0.0"}\n'),
+        writeProjectFile(root, 'agent-bundle.config.ts', [
+          'export default {',
+          "  plugin: { name: 'event-projections', version: '1.0.0' },",
+          "  targets: ['claude', 'codex', 'cursor', 'portable'],",
+          '};',
+          '',
+        ].join('\n')),
+        writeProjectFile(root, 'src/events/tool/before.tsx', [
+          `export const config = { ${selection}, runtime: 'standalone' };`,
+          'export default async function ToolBefore() { return undefined; }',
+          '',
+        ].join('\n')),
+      ]);
+      const result = await validate({ root });
+      expect(result.diagnostics).toEqual([]);
+      return result.model?.hooks.find((hook) => hook.eventRoute?.event === 'tool/before')?.targets ?? [];
+    };
+
+    expect(await eventRouteTargets("requires: ['events.toolBefore.deny']")).toEqual(
+      await eventRouteTargets("targets: ['claude', 'codex', 'cursor']"),
+    );
+  });
+
   it('refuses one path planned with different bytes by two selected projections (AB4103)', { timeout: 120_000 }, async () => {
     // A Claude-only frontmatter extension lowers the skill to different
     // Markdown for Claude Code than for Codex, yet both hosts read

@@ -180,7 +180,7 @@ import type { AgentEventRouteConfig, AgentEventRouteProps } from 'agent-bundle';
 
 export const config = {
   runtime: 'standalone', // 'shared' 表示在生成的 MCP 服务器进程内渲染
-  targets: ['claude', 'codex'],
+  requires: ['events.toolAfter.context'],
   timeoutMs: 30_000, // 在宿主自身原生截止时间之内的预算
   tools: ['file.write'], // 规范选择器 -> 各宿主的原生匹配器
 } satisfies AgentEventRouteConfig;
@@ -204,6 +204,13 @@ export default async function AfterFileEdit(
 `canonical` 是框架推导出的跨宿主身份——`event`、由事件、target 与原生载荷哈希而来的 `idempotencyKey`、
 `observedAt`、一个 `sequence`、记录触发宿主与原生事件名的 `provenance`，以及该事件族的规范 `payload`。
 `native` 是经过校验的宿主信封的冻结快照。`canonical` 中没有任何伪造：宿主未报告的字段保持缺失。
+
+`requires` 会选择能力表支持全部所列能力行的每一个已配置宿主。事件路由能力行包括
+`events.sessionStart.context`、`events.stop.deny`、`events.toolAfter.context`，以及
+`events.toolBefore.deny`；生成的[事件与 Hook 矩阵](../../reference/events.md)展示了底层宿主支持情况。
+当路由需要的是语义能力而非特定宿主时使用 `requires`。`targets` 仍是宿主特定的逃生口；一条事件路由
+不能同时声明两者。如果已配置宿主中没有任何一个满足某项要求，校验诊断会同时列出该能力行与所有被检查
+的宿主。
 
 ### 预检（preflight）
 

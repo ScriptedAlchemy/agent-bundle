@@ -42,7 +42,7 @@ const graph = Object.freeze({
       source: '/project/src/events/session/end.tsx',
     },
     {
-      config: Object.freeze({}),
+      config: Object.freeze({ requires: Object.freeze(['events.toolAfter.context']) }),
       event: 'tool/after',
       id: 'event:tool/after',
       kind: 'event-route',
@@ -120,9 +120,9 @@ it('projects event routes across concrete hosts and diagnoses excluded targets',
     });
   const toolAfter = listed.lifecycles.find((lifecycle) => lifecycle.event === 'tool/after');
   expect(toolAfter?.diagnostics).toContainEqual({
-    code: 'lifecycle.target.unsupported',
-    message: 'Lifecycle replay target "portable" cannot map canonical event "tool/after".',
-    severity: 'error',
+    code: 'lifecycle.target.excluded',
+    message: 'Lifecycle replay route "event:tool/after" excludes target "portable".',
+    severity: 'warning',
     target: 'portable',
   });
 });
