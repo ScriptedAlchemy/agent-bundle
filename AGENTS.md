@@ -204,6 +204,9 @@
   paste the commands and their results in the PR body. Do not wait for CI on
   the PR. CI still runs on `main` after the merge: whoever merged watches
   that run and fixes or reverts a red `main` before starting anything else.
+  A later push to `main` cancels the superseded run (`concurrency` in
+  `ci.yml`, `docs.yml`, `package-preview.yml`), so watch the tip commit's
+  run; `release.yml` alone never cancels a publish in flight.
   `gh pr update-branch` only when GitHub reports the branch as conflicting;
   never `--admin`, never force-push `main`.
 

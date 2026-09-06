@@ -21,13 +21,14 @@ on:
 permissions:
   contents: read
 
-# PR pushes cancel the superseded run of the same PR (only the latest commit
-# matters). Pushes to main, merge-queue entries, and manual dispatches get
-# SHA-keyed groups with no cancellation, so a new main push can never kill an
-# in-flight main or queue run. Same pattern as package-preview.yml.
+# Only the latest commit of a ref matters: a PR push cancels the superseded
+# run of the same PR, and a main push cancels the superseded main run, so a
+# burst of merges leaves one run for the tip instead of a queue. Merge-queue
+# entries and dispatches key on their own ref. Same pattern as
+# package-preview.yml and docs.yml; release.yml never cancels a publish.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   # Workbench browser suites launch Playwright's bundled Chromium — pinned by
