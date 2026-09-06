@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import type { AgentRenderEvent } from '@agent-bundle/runtime';
 import { expect, it } from '@rstest/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
@@ -15,6 +16,7 @@ import { stableJson } from '../src/core/digest.ts';
 import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../src/core/types.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
+import { gatedRouteFiles } from './helpers/gated-routes.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 import { replaceWatchedSourceAndAwaitRebuild } from './support/watched-files.ts';
@@ -44,25 +46,51 @@ const readEvent = async (
   }
 };
 
-const readInvocationStream = async (response: Response): Promise<readonly Record<string, unknown>[]> => {
+type StreamMessage = Record<string, unknown>;
+
+/** Reads one invocation SSE stream message at a time, so the test can act between messages. */
+const invocationMessages = (response: Response): Readonly<{
+  readonly next: (matches: (message: StreamMessage) => boolean) => Promise<StreamMessage>;
+  readonly seen: readonly StreamMessage[];
+}> => {
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  const messages: Record<string, unknown>[] = [];
+  const seen: StreamMessage[] = [];
+  const queue: StreamMessage[] = [];
   let buffered = '';
-  for (;;) {
-    const next = await reader.read();
-    if (next.done) throw new Error('Invocation stream ended before final.');
-    buffered += next.value;
-    const frames = buffered.split('\n\n');
-    buffered = frames.pop() ?? '';
-    for (const frame of frames) {
-      const data = frame.split('\n').find((line) => line.startsWith('data: '));
-      if (data === undefined) continue;
-      const message = JSON.parse(data.slice('data: '.length)) as Record<string, unknown>;
-      messages.push(message);
-      if (message.type === 'final') return messages;
+  const pull = async (): Promise<StreamMessage> => {
+    while (queue.length === 0) {
+      const next = await reader.read();
+      if (next.done) throw new Error('Invocation stream ended.');
+      buffered += next.value;
+      const frames = buffered.split('\n\n');
+      buffered = frames.pop() ?? '';
+      for (const frame of frames) {
+        const data = frame.split('\n').find((line) => line.startsWith('data: '));
+        if (data !== undefined) queue.push(JSON.parse(data.slice('data: '.length)) as StreamMessage);
+      }
     }
-  }
+    const message = queue.shift()!;
+    seen.push(message);
+    return message;
+  };
+  return {
+    next: async (matches) => {
+      for (;;) {
+        const message = await pull();
+        if (matches(message)) return message;
+      }
+    },
+    seen,
+  };
 };
+
+const renderEvents = (messages: readonly StreamMessage[]): readonly AgentRenderEvent[] =>
+  messages.filter((message) => message.type === 'render').map((message) => message.event as AgentRenderEvent);
+
+const isFallbackRender = (fallback: string) => (message: StreamMessage): boolean =>
+  message.type === 'render' && JSON.stringify(message.event).includes(JSON.stringify(fallback));
+
+const isFinal = (message: StreamMessage): boolean => message.type === 'final';
 
 it('invokes compiled tool and event routes through the foreground server', { timeout: 180_000 }, async () => {
   const project = await createProjectFixture({
@@ -125,19 +153,26 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "import { appendFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
         "import { Agent, agent } from '@agent-bundle/runtime';",
-        "import { createElement } from 'react';",
+        "import { createElement, Suspense } from 'react';",
+        "import { awaitGate } from '../../gate.js';",
         "export { default as preflight } from './after.preflight.js';",
         '',
         "export const config = { providers: ['clock'], runtime: 'standalone' };",
         '',
-        'export default async function AfterTool({ canonical, preflight }) {',
+        'const Observed = async ({ gate, signal, toolName }) => {',
+        '  if (gate !== undefined) await awaitGate(gate, signal);',
+        '  return createElement(Agent.Context, null, `Observed ${toolName}.`);',
+        '};',
+        '',
+        'export default async function AfterTool({ canonical, preflight, signal }) {',
         '  const context = await agent();',
         "  appendFileSync(join(process.cwd(), '.agent-bundle', 'defer-handler.marker'), 'run\\n');",
         "  const value = { outcome: 'defer', providers: Object.keys(context.providers).sort(), ticket: preflight.ticket };",
-        "  return createElement(Agent.Result, { value }, createElement(Agent.Context, null, `Observed ${canonical.payload.toolName}.`));",
+        "  return createElement(Agent.Result, { value }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'event streaming', total: 1 }) }, createElement(Observed, { gate: canonical.payload.toolInput?.gate, signal, toolName: canonical.payload.toolName })));",
         '}',
         '',
       ].join('\n'),
+      ...gatedRouteFiles,
       'src/events/prompt/submit.preflight.ts': "export default () => ({ outcome: 'continue' });\n",
       'src/events/prompt/submit.tsx': [
         "import { writeFileSync } from 'node:fs';",
@@ -222,20 +257,17 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
-      'src/mcp/status/tools/live.tsx': [
+      'src/mcp/status/tools/crash.tsx': [
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement, Suspense } from 'react';",
         "import { z } from 'zod';",
         '',
         'export const inputSchema = z.object({}).strict();',
-        'export const resultSchema = z.object({ done: z.boolean() }).strict();',
-        'const Slow = async () => {',
-        '  await new Promise((resolve) => setTimeout(resolve, 1_000));',
-        "  return createElement(Agent.Text, null, 'stream complete');",
-        '};',
+        'export const resultSchema = z.object({ ok: z.boolean() }).strict();',
+        "const Boom = async () => { throw new Error('render exploded'); };",
         '',
-        'export default async function Live() {',
-        "  return createElement(Agent.Result, { value: { done: true } }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'streaming', total: 1 }) }, createElement(Slow)));",
+        'export default async function Crash() {',
+        "  return createElement(Agent.Result, { value: { ok: true } }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'crashing', total: 1 }) }, createElement(Boom)));",
         '}',
         '',
       ].join('\n'),
@@ -310,30 +342,58 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       headers: { cookie, origin: server.url },
     });
     const stateRoot = join(project.root, '.agent-bundle', 'state');
-    const startLive = async () => {
+    const startStreaming = async (body: Record<string, unknown>) => {
       const response = await fetch(`${server!.url}/api/routes/invocations`, {
-        body: JSON.stringify({ routeId: 'tool:status/live', stream: true }),
+        body: JSON.stringify({ ...body, stream: true }),
         headers,
         method: 'POST',
       });
       expect(response.status).toBe(202);
-      return response.json() as Promise<{ readonly invocation: { readonly id: string; readonly status: string } }>;
+      const started = await response.json() as RouteInvocationResponse;
+      expect(started.invocation.status).toBe('running');
+      const stream = await fetch(`${server!.url}/api/routes/invocations/${started.invocation.id}/stream`, { headers });
+      expect(stream.status).toBe(200);
+      return { id: started.invocation.id, stream: invocationMessages(stream) };
     };
-    const live = await startLive();
-    expect(live.invocation.status).toBe('running');
-    const liveStreamResponse = await fetch(`${server.url}/api/routes/invocations/${live.invocation.id}/stream`, { headers });
-    expect(liveStreamResponse.status).toBe(200);
-    const liveMessages = await readInvocationStream(liveStreamResponse);
-    expect(liveMessages.findIndex((message) => message.type === 'render')).toBeGreaterThanOrEqual(0);
-    expect(liveMessages.at(-1)).toMatchObject({
-      invocation: { status: 'succeeded' },
-      type: 'final',
-    });
+    const gatePath = (gate: string): string => join(project.root, '.agent-bundle', gate);
+    const releaseGate = (gate: string): Promise<void> => writeFile(gatePath(gate), 'open\n');
 
-    const cancelling = await startLive();
-    const cancellingStream = await fetch(`${server.url}/api/routes/invocations/${cancelling.invocation.id}/stream`, { headers });
-    const cancellingMessages = readInvocationStream(cancellingStream);
-    const cancelResponse = await fetch(`${server.url}/api/routes/invocations/${cancelling.invocation.id}/cancel`, {
+    // The compiled MCP tool streams its authored Suspense fallback to the
+    // Workbench consumer while the child is still blocked on the gate; no
+    // terminal event exists yet (#686).
+    const live = await startStreaming({ input: { gate: 'live-gate' }, routeId: 'tool:status/live' });
+    const liveFallback = await live.stream.next(isFallbackRender('streaming'));
+    expect(liveFallback.event).toMatchObject({ type: 'shell' });
+    expect(existsSync(gatePath('live-gate'))).toBe(false);
+    expect(renderEvents(live.stream.seen).map((event) => event.type)).toEqual(['shell']);
+    await releaseGate('live-gate');
+    const liveFinal = await live.stream.next(isFinal);
+    expect(liveFinal).toMatchObject({ invocation: { status: 'succeeded' }, type: 'final' });
+    const liveEvents = renderEvents(live.stream.seen);
+    expect(liveEvents.map((event) => event.type)).toEqual(['shell', 'replace', 'complete']);
+    const liveComplete = liveEvents.at(-1)!;
+    if (liveComplete.type !== 'complete') throw new Error('Expected a complete render event.');
+    expect(JSON.stringify(liveComplete.document)).toContain('stream complete');
+    expect(JSON.stringify(liveComplete.document)).not.toContain('"streaming"');
+    // Parity control: the same route completing without a gate renders the
+    // same final document the streamed run replaced its fallback with.
+    const controlResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ input: {}, routeId: 'tool:status/live' }),
+      headers,
+      method: 'POST',
+    });
+    expect(controlResponse.status).toBe(200);
+    const control = await controlResponse.json() as RouteInvocationResponse;
+    expect(control.invocation.status).toBe('succeeded');
+    expect(stableJson(control.invocation.document)).toBe(stableJson(liveComplete.document));
+    expect(stableJson((liveFinal.invocation as RouteInvocationResponse['invocation']).document)).toBe(stableJson(control.invocation.document));
+
+    // Cancelling while blocked: the fallback is the only render published,
+    // the terminal message says cancelled, and the released gate publishes
+    // nothing afterwards because the stream has already closed.
+    const cancelling = await startStreaming({ input: { gate: 'cancel-gate' }, routeId: 'tool:status/live' });
+    await cancelling.stream.next(isFallbackRender('streaming'));
+    const cancelResponse = await fetch(`${server.url}/api/routes/invocations/${cancelling.id}/cancel`, {
       headers,
       method: 'POST',
     });
@@ -341,11 +401,35 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const cancelled = await cancelResponse.json() as RouteInvocationResponse;
     expect(cancelled.invocation).toMatchObject({ status: 'cancelled' });
     expect(cancelled.invocation).not.toHaveProperty('outcome');
-    expect((await cancellingMessages).at(-1)).toMatchObject({
+    await expect(cancelling.stream.next(isFinal)).resolves.toMatchObject({
       invocation: { status: 'cancelled' },
       type: 'final',
     });
-    const finalCancelResponse = await fetch(`${server.url}/api/routes/invocations/${cancelling.invocation.id}/cancel`, {
+    expect(renderEvents(cancelling.stream.seen).map((event) => event.type)).toEqual(['shell']);
+    await releaseGate('cancel-gate');
+    await expect(cancelling.stream.next(() => true)).rejects.toThrow('Invocation stream ended.');
+
+    // A render that fails behind its fallback settles once: one terminal
+    // render event, one final message, and the same outcome the completed
+    // (non-streamed) run reports.
+    const crashing = await startStreaming({ input: {}, routeId: 'tool:status/crash' });
+    const crashFinal = await crashing.stream.next(isFinal);
+    const crashEvents = renderEvents(crashing.stream.seen);
+    expect(crashEvents.filter((entry) => entry.type === 'complete')).toHaveLength(1);
+    expect(crashEvents.at(-1)).toMatchObject({ type: 'complete' });
+    expect(JSON.stringify(crashEvents.at(-1))).toContain('render exploded');
+    await expect(crashing.stream.next(() => true)).rejects.toThrow('Invocation stream ended.');
+    const crashControlResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ input: {}, routeId: 'tool:status/crash' }),
+      headers,
+      method: 'POST',
+    });
+    const crashControl = await crashControlResponse.json() as RouteInvocationResponse;
+    const crashInvocation = crashFinal.invocation as RouteInvocationResponse['invocation'];
+    expect(crashInvocation.status).toBe(crashControl.invocation.status);
+    expect(crashInvocation.outcome).toEqual(crashControl.invocation.outcome);
+    expect(stableJson(crashInvocation.document)).toBe(stableJson(crashControl.invocation.document));
+    const finalCancelResponse = await fetch(`${server.url}/api/routes/invocations/${cancelling.id}/cancel`, {
       headers,
       method: 'POST',
     });
@@ -490,6 +574,36 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(await readFile(join(project.root, '.agent-bundle', 'defer-gate.marker'), 'utf8')).toBe('gate\n');
     expect(await readFile(join(project.root, '.agent-bundle', 'defer-handler.marker'), 'utf8')).toBe('run\n');
     expect(event.invocation.projection.hosts?.[0]).toMatchObject({ host: 'claude' });
+    // The same compiled event route, streamed: the manifest-selected host's
+    // preflight runs, the authored fallback arrives while the child is gated,
+    // and the released render matches the completed run's document (#686).
+    const gatedEvent = await startStreaming({
+      input: {
+        cwd: project.root,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-1',
+        tool_input: { gate: 'event-gate' },
+        tool_name: 'Write',
+        tool_response: { ok: true },
+        tool_use_id: 'use-2',
+        transcript_path: join(project.root, 'transcript.json'),
+      },
+      routeId: 'event:tool/after',
+      surface: { host: 'claude', kind: 'event' },
+    });
+    const eventFallback = await gatedEvent.stream.next(isFallbackRender('event streaming'));
+    expect(eventFallback.event).toMatchObject({ type: 'shell' });
+    expect(existsSync(gatePath('event-gate'))).toBe(false);
+    expect(renderEvents(gatedEvent.stream.seen).map((entry) => entry.type)).toEqual(['shell']);
+    await releaseGate('event-gate');
+    const gatedEventFinal = await gatedEvent.stream.next(isFinal);
+    expect(gatedEventFinal).toMatchObject({ invocation: { status: 'succeeded' }, type: 'final' });
+    expect(renderEvents(gatedEvent.stream.seen).map((entry) => entry.type)).toEqual(['shell', 'replace', 'complete']);
+    const gatedEventInvocation = gatedEventFinal.invocation as RouteInvocationResponse['invocation'];
+    expect(gatedEventInvocation.result).toEqual(event.invocation.result);
+    expect(stableJson(gatedEventInvocation.document)).toBe(stableJson(event.invocation.document));
+    expect(gatedEventInvocation.projection.hosts?.[0]).toMatchObject({ host: 'claude' });
+    expect(gatedEventInvocation.trace?.map((trace) => trace.kind)).toEqual(event.invocation.trace?.map((trace) => trace.kind));
     expect(event.invocation.context.session).toEqual({
       source: 'receipt',
       state: 'available',
