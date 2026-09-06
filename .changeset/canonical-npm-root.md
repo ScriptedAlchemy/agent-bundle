@@ -3,4 +3,4 @@
 "create-agent-bundle": minor
 ---
 
-Package the validated composite root as the npm root, remove the obsolete package installer wrapper, point generated CLI bins at the manifest-declared executable so every command including `web` has artifact parity, persist package-only compile evidence, rebase supported consumer lifecycle paths and report `AB4768` for absent source assets, expose manifest file kinds through `PackageOutputFile.kind`, keep npm metadata outside host install comparisons, update generated projects for the `dist/` publish root, and report `AB4767` when no selected target emitted that executable (#656).
+Package the validated composite root as the npm root, point generated CLI bins at its manifest-declared executable, advance `agent-bundle.manifest.json` to version 3, preserve supported lifecycle assets and authored `AGENTS.md`, persist package-only compile evidence, reject unpublishable dependency protocols with `AB7015`, and report missing generated executables or lifecycle assets with `AB4767` and `AB4768`; rebuild and replace version 2 installs before managing them with this release (#656).

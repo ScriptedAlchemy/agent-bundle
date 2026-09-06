@@ -420,8 +420,9 @@ lean web reader rejects the version mismatch itself, before it reads a slice).
   `runtime`, `projections[]`, `routes`, `executables`, `distribution`). It bumps on **any**
   change an old closed reader would reject — adding, renaming, or removing a public-contract
   key (optional or not), or changing an enumerated value set a reader closes. Within one
-  version the key inventory is frozen. Readers refuse any other `manifestVersion`. Version 3
-  adds `distribution.install.instructions` and `distribution.install.script`; version 2
+  version the key inventory is frozen. Readers refuse any other `manifestVersion`. Version 3 marks
+  the canonical npm-root guarantee that packages preserve the manifest-owned bytes and executable;
+  version 2 already reserved the same `distribution.install` pointer shape. Version 2
   renamed `targets[]` to `projections[]`, moved the hook rows that `agent-bundle.hooks.json`
   used to carry into `executables.hooks[]` and deleted that file, and added `application`,
   `routes`, `executables`, `distribution`, and `projections[].documents`.

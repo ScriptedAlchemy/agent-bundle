@@ -399,8 +399,8 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 - `manifestVersion` 为消费者读取的**公开契约**版本化（`application`、`files[]`、`runtime`、
   `projections[]`、`routes`、`executables`、`distribution`）。旧的封闭读取方会拒绝的**任何**变更
   都会使其递增——新增、重命名或删除一个公开契约键（无论是否可选），或更改读取方封闭的枚举值集合。
-  同一版本内键清单冻结。读取方拒绝任何其他 `manifestVersion`。版本 3 新增
-  `distribution.install.instructions` 与 `distribution.install.script`；版本 2 把 `targets[]` 重命名为
+  同一版本内键清单冻结。读取方拒绝任何其他 `manifestVersion`。版本 3 标记 npm 根目录保留清单所拥有的
+  字节与可执行文件这一规范保证；版本 2 已预留同样的 `distribution.install` 指针形状。版本 2 把 `targets[]` 重命名为
   `projections[]`，把过去由 `agent-bundle.hooks.json` 承载的钩子行移入 `executables.hooks[]` 并删除了
   该文件，并新增了 `application`、`routes`、`executables`、`distribution` 与
   `projections[].documents`。

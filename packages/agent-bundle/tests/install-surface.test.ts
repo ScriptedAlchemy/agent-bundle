@@ -412,6 +412,12 @@ it('reads plugin identity and MCP launch paths from the artifact manifest before
       writeFile(installer, writes.get('install.mjs') ?? ''),
       writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
       writeFile(join(bundle, 'agent-bundle.manifest.json'), JSON.stringify({
+        files: [
+          { path: 'declared/mcp.json' },
+          { path: 'declared/plugin.json' },
+          { path: 'INSTALL.md' },
+          { path: 'install.mjs' },
+        ],
         projections: [{
           builtInHost: 'portable',
           documents: { mcp: 'declared/mcp.json', plugin: 'declared/plugin.json' },
@@ -425,6 +431,7 @@ it('reads plugin identity and MCP launch paths from the artifact manifest before
       writeFile(join(bundle, 'declared', 'mcp.json'), declaredMcp),
       writeFile(join(bundle, 'plugin.json'), JSON.stringify({ name: 'conventional-decoy', version: '9.9.9' })),
       writeFile(join(bundle, 'mcp.json'), '{"mcpServers":{}}\n'),
+      writeFile(join(bundle, 'package.json'), '{"name":"npm-only"}\n'),
     ]);
 
     const installed = await run(installer, [], home);
@@ -438,7 +445,8 @@ it('reads plugin identity and MCP launch paths from the artifact manifest before
     });
     expect(JSON.parse(await readFile(join(destination, 'declared', 'mcp.json'), 'utf8')))
       .toMatchObject({ mcpServers: { probe: { cwd: destination } } });
-    expect(await readFile(join(destination, 'mcp.json'), 'utf8')).toBe('{"mcpServers":{}}\n');
+    await expect(readFile(join(destination, 'mcp.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(destination, 'package.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

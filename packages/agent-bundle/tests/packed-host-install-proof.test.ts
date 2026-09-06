@@ -75,7 +75,7 @@ beforeAll(async () => {
       const config = await readFile(configPath, 'utf8');
       await writeFile(configPath, config.replace(
         'export default {\n',
-        "export default {\n  bin: false,\n  lib: { dts: false, entry: './src/index.ts' },\n",
+        "export default {\n  lib: { dts: false, entry: './src/index.ts' },\n",
       ));
     },
   });
@@ -85,6 +85,12 @@ beforeAll(async () => {
   const consumer = join(cleanupRoot, 'consumer');
   await Promise.all([mkdir(tarballs), mkdir(consumer)]);
   expect(await readdir(consumer), proofLabel).toEqual([]);
+  const generatedPackage = JSON.parse(await readFile(join(projectRoot, 'dist', 'package.json'), 'utf8')) as {
+    readonly files?: unknown;
+  };
+  expect(generatedPackage.files, `${proofLabel}: authored files policy`).toBeUndefined();
+  await expect(access(join(projectRoot, 'dist', '.npmignore')), `${proofLabel}: authored ignore policy`)
+    .rejects.toMatchObject({ code: 'ENOENT' });
 
   const packed = await execFile(
     'npm',

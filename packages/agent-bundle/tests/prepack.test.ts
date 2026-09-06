@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -754,7 +754,7 @@ it('fails prepack with compile-time AB6005, never AB7014, when only a compiled d
   expect(withCode(reported, 'AB7014')).toHaveLength(0);
 }, 180_000);
 
-it('installs a real packed tarball and runs its Cursor installer from node_modules', async () => {
+it('installs a real generated tarball and runs its manifest-driven Cursor installer from node_modules', async () => {
   const tarballs = join(cleanupRoot, 'tarballs');
   const consumer = join(cleanupRoot, 'consumer');
   const home = join(cleanupRoot, 'home');
@@ -764,23 +764,20 @@ it('installs a real packed tarball and runs its Cursor installer from node_modul
     mkdir(join(home, '.cursor'), { recursive: true }),
   ]);
   const { stdout } = await execFile('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', tarballs], {
-    cwd: projectRoot,
+    cwd: join(projectRoot, 'dist'),
   });
   const packed = packOutputFromJson(stdout);
   await writeFile(join(consumer, 'package.json'), '{"private":true}\n');
   await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(tarballs, packed.filename)], {
     cwd: consumer,
   });
-  const sourceCopy = join(cleanupRoot, 'source-copy');
-  await cp(projectRoot, sourceCopy, { recursive: true, filter: (source) => source !== join(projectRoot, 'node_modules') });
   await rm(projectRoot, { force: true, recursive: true });
 
-  const installedBin = join(consumer, 'node_modules', '.bin', 'installer-fixture');
-  const installed = await execFile(installedBin, ['install', 'cursor', '--json'], {
+  const installer = join(consumer, 'node_modules', 'installer-fixture', 'install.mjs');
+  const installed = await execFile(process.execPath, [installer], {
     cwd: consumer,
     env: { ...process.env, HOME: home },
   });
-  expect(JSON.parse(installed.stdout)).toMatchObject({ host: 'cursor', state: 'installed' });
+  expect(installed.stdout).toContain('Installed installer-fixture@1.2.3');
   await expect(stat(join(home, '.cursor', 'plugins', 'local', 'installer-fixture'))).resolves.toBeDefined();
-  expect(await readFile(join(sourceCopy, 'src', 'index.ts'), 'utf8')).toBe('export const value = 1;\n');
 });
