@@ -622,7 +622,11 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
   const traceHub = new TraceHub({ projectRoot: root });
-  const hookReceipts = attachHookReceipts({ projectRoot: root, trace: traceHub });
+  const hookReceipts = attachHookReceipts({
+    attachHostSession: (devSession, hostSessionId) => hostSessions.attach(devSession, hostSessionId),
+    projectRoot: root,
+    trace: traceHub,
+  });
   let hookReceiptUrl: string | undefined;
   const logs = new DevLogService({ projectRoot: root, trace: traceHub });
   const detachProjectLogs = attachProjectEventLogs(logs, eventHub);
@@ -842,7 +846,13 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     projectRoot: root,
     trace: traceHub,
   });
-  const hostMcp = new HostMcpRoutes({ adoption: epochAdoption, epochStore, eventHub, mcpSessions });
+  const hostMcp = new HostMcpRoutes({
+    adoption: epochAdoption,
+    epochStore,
+    eventHub,
+    mcpSessions,
+    traceSessionId: (devSession) => hostSessions.traceSessionId(devSession),
+  });
   const hookPlayground = new HookPlaygroundService({
     epochStore,
     hookService: new HookService({

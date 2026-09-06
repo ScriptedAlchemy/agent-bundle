@@ -1,9 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import type {
-  HostAvailability,
-  HostSession,
-  HostSessionHost,
+import {
+  type HostAvailability,
+  type HostSession,
+  type HostSessionHost,
+  isHostSessionId,
 } from '../../contracts/host-sessions.ts';
 import {
   createBackpressuredWriter,
@@ -47,7 +48,7 @@ const sessionPath = (target: string | undefined): SessionPath | undefined => {
     message: 'Host-session path is not valid.',
     rejectBlank: true,
   });
-  if (!/^hs_[0-9a-z]{16}$/u.test(id)) invalid();
+  if (!isHostSessionId(id)) invalid();
   if (parts.length === 4) return { id, kind: 'item' };
   const action = parts[4];
   switch (action) {
