@@ -4,7 +4,7 @@ import { pluginLlms } from '@rspress/plugin-llms';
 import { pluginTwoslash } from '@rspress/plugin-twoslash';
 import { pluginTypeDoc } from '@rspress/plugin-typedoc';
 import { transformerNotationHighlight } from '@shikijs/transformers';
-import ts from 'typescript';
+import ts from 'typescript-6';
 import { generatedReference } from './plugins/generated-reference.ts';
 import { cleanGeneratedApiMarkdown, mirrorApiLocale } from './plugins/mirror-api-locale.ts';
 import { rehypeTableCellBreaks } from './plugins/rehype-table-cell-breaks.ts';
@@ -192,8 +192,8 @@ export default defineConfig({
   plugins: [
     // TypeDoc reads packages/agent-bundle/dist declarations produced by the
     // package build. Twoslash still compiles documentation samples against
-    // package sources. Both use the TypeScript 6 pin in website/package.json
-    // because typedoc 0.28 peers on `<= 6.0.x`.
+    // package sources. Both use the JavaScript compiler API from the
+    // `typescript-6` alias; the website's `typescript` dependency is native.
     pluginTypeDoc({
       entryPoints: publicApiEntryPoints,
       outDir: generatedApiDir,

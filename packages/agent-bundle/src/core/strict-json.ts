@@ -245,12 +245,6 @@ const snapshotJsonValue = (value: unknown, ancestors: Set<object>, nullPrototype
 export const snapshotStrictJsonValue = (value: unknown, options: SnapshotStrictJsonOptions = {}): JsonValue =>
   snapshotJsonValue(value, new Set<object>(), options.nullPrototype === true);
 
-/** Boolean acceptance form of `snapshotStrictJsonValue` for validation-only callers. */
-export const isStrictJsonValue = (value: unknown): boolean => {
-  try { snapshotStrictJsonValue(value); return true; }
-  catch { return false; }
-};
-
 /** Parses JSON only after rejecting duplicate object keys at every depth. */
 export const parseJsonWithoutDuplicateKeys = (bytes: string): unknown => {
   const end = skipWhitespace(bytes, scanJsonValue(bytes, 0));

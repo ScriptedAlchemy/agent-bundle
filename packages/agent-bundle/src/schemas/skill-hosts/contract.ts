@@ -1,6 +1,5 @@
 import type { ErrorObject } from 'ajv/dist/2020.js';
 
-import { validateAgentSkillsFrontmatter } from '../agent-skills/contract.ts';
 import { createSchemaValidator, toIssue, type SchemaIssue } from '../ajv-issues.ts';
 import claudeSchema from './claude-skill-frontmatter.schema.json' with { type: 'json' };
 import codexSchema from './codex-openai-yaml.schema.json' with { type: 'json' };
@@ -43,5 +42,3 @@ export const validateCursorSkillFrontmatter = (value: unknown): readonly SkillHo
 
 export const validateCodexOpenaiYaml = (value: unknown): readonly SkillHostDocumentIssue[] =>
   issuesFrom(validateCodex(value), validateCodex.errors);
-
-export const validatePortableSkillFrontmatter = validateAgentSkillsFrontmatter;
