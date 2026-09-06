@@ -146,9 +146,13 @@ const resultSchemaRows = (
           ? 'Not run · invoke the route to observe validation or transformation.'
           : invocation.status !== 'succeeded'
             ? 'Not recorded · the invocation did not complete with a parsed result.'
-            : invocation.result === undefined
-              ? 'Not recorded · execution returned no parsed resultSchema value.'
-              : 'Succeeded · execution recorded the value parsed by resultSchema.';
+            : invocation.outcome?.kind !== 'success'
+              ? 'Not recorded · the invocation completed without a successful outcome.'
+              : invocation.surface.kind !== 'unit-render'
+                ? 'Unknown · this invocation surface did not report resultSchema validation or transformation.'
+                : invocation.result === undefined
+                  ? 'Not recorded · execution returned no parsed resultSchema value.'
+                  : 'Succeeded · execution recorded the value parsed by resultSchema.';
       return [
         row('Declaration', 'Declared · the compiler observed a resultSchema export.'),
         row('Static projection', 'Unavailable · resultSchema is not statically projected.'),

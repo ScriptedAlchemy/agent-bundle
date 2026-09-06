@@ -483,40 +483,44 @@ describe('RouteInspector', () => {
   });
 
   it('separates a declared schema, successful validation, and structured-result availability', () => {
-    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), invocation);
+    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), {
+      ...invocation,
+      surface: { kind: 'unit-render' },
+    });
 
     expect(markup).toContain('Declared · the compiler observed a resultSchema export.');
     expect(markup).toContain('Succeeded · execution recorded the value parsed by resultSchema.');
     expect(markup).toContain('Available · open Structured result.');
   });
 
-  it('does not report successful validation when execution records a validation failure', () => {
-    const {
-      document: _document,
-      outcome: _outcome,
-      result: _result,
-      ...failedBase
-    } = invocation;
+  it('does not report successful validation for a non-success outcome that still carries a result', () => {
     const failed: RouteInvocation = {
-      ...failedBase,
-      diagnostics: [{
-        code: 'AB8236',
-        message: "The route's own resultSchema rejected the rendered document value.",
-        severity: 'error',
-      }],
-      status: 'failed',
+      ...invocation,
+      outcome: { exitCode: 1, kind: 'process-exit' },
+      surface: { args: [], command: 'audible search', kind: 'cli' },
     };
     const markup = renderSchemaInspector(schemaLeaf('unprojectable'), failed);
 
     expect(markup).toContain('Declared · the compiler observed a resultSchema export.');
-    expect(markup).toContain('Not recorded · the invocation did not complete with a parsed result.');
-    expect(markup).toContain('Unavailable · this invocation recorded no structured result.');
+    expect(markup).toContain('Not recorded · the invocation completed without a successful outcome.');
+    expect(markup).toContain('Available · open Structured result.');
+    expect(markup).not.toContain('Succeeded · execution recorded');
+  });
+
+  it('keeps validation neutral when a successful production invocation carries a structured result', () => {
+    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), invocation);
+
+    expect(markup).toContain('Unknown · this invocation surface did not report resultSchema validation or transformation.');
+    expect(markup).toContain('Available · open Structured result.');
     expect(markup).not.toContain('Succeeded · execution recorded');
   });
 
   it('keeps an absent result separate from a declared schema', () => {
     const { result: _result, ...withoutResult } = invocation;
-    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), withoutResult);
+    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), {
+      ...withoutResult,
+      surface: { kind: 'unit-render' },
+    });
 
     expect(markup).toContain('Declared · the compiler observed a resultSchema export.');
     expect(markup).toContain('Not recorded · execution returned no parsed resultSchema value.');

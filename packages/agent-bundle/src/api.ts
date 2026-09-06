@@ -133,6 +133,7 @@ export type {
   RouteContract,
   RouteContractOrigin,
   RouteProvenance,
+  RouteResultSchemaState,
 } from './routes/types.ts';
 export type { BuildResult } from './build/build.ts';
 export type { PackageBuildResult, PackageOutputFile } from './build/package-build.ts';

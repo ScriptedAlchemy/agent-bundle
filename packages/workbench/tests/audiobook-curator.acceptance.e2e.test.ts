@@ -217,7 +217,7 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await page.getByRole('tab', { name: 'Schema' }).click();
     const schemaPanel = page.getByRole('tabpanel', { name: 'Schema' });
     await expect(schemaPanel).toContainText('Declared · the compiler observed a resultSchema export.');
-    await expect(schemaPanel).toContainText('Succeeded · execution recorded the value parsed by resultSchema.');
+    await expect(schemaPanel).toContainText('Unknown · this invocation surface did not report resultSchema validation or transformation.');
     await expect(schemaPanel).toContainText('Available · open Structured result.');
 
     const epochBeforeEdit = await readBuildEpoch(page);
