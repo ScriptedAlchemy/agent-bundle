@@ -25,7 +25,7 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
       model: {
         metadata: { name: 'skills-starter' },
         scripts: [],
-        targets: [{ name: 'claude' }, { name: 'codex' }, { name: 'cursor' }, { name: 'portable' }],
+        targets: [{ name: 'codex' }, { name: 'cursor' }, { name: 'portable' }],
       },
       state: 'ready',
     });
@@ -36,12 +36,7 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     expect(inspection.projectContext.packageVersion).toBeUndefined();
     expect(projectVersionLabel(inspection.projectContext)).toContain('development fallback');
     const built = await build({ output, root });
-    const validation = await validate({ artifact: output, root });
-    expect(validation.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
-    expect(validation.diagnostics).toContainEqual(expect.objectContaining({
-      code: 'AB6020',
-      target: 'claude',
-    }));
+    await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
     expect(built.build.manifest.executables).toEqual({
       bins: [],
       hooks: [],

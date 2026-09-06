@@ -161,7 +161,11 @@ const staticDocument = (
   const expectedPath = `${capabilityName}/${document.name}.${kind === 'command' ? 'md' : 'mdc'}`;
   const projections = model.targets.map(({ name: target }): StaticDocumentProjection => {
     const adapter = registry.get(target);
-    const capability = kind === 'command' ? adapter.capabilities.commands : adapter.capabilities.rules;
+    const capability = (kind === 'command' ? adapter.capabilities.commands : adapter.capabilities.rules)
+      ?? Object.freeze({
+        reason: `Target ${JSON.stringify(target)} does not declare a ${capabilityName} capability.`,
+        state: 'unavailable' as const,
+      });
     const entry = plans.get(target)!.entries.find((candidate) =>
       candidate.relativePath === expectedPath && candidate.sourceInputs.includes(document.source));
     return Object.freeze({

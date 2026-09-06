@@ -6,5 +6,5 @@ export default defineConfig({
     name: 'skills-starter',
     version: '1.0.0',
   },
-  targets: ['portable', 'codex', 'claude', 'cursor'],
+  targets: ['portable', 'codex', 'cursor'],
 });

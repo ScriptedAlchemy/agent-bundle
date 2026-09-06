@@ -135,9 +135,9 @@ artifact/
 
 Host manifests live in their dotfolders; `skills/`, `hooks/`, `mcp/`, `scripts/`, `bin/`, and
 `assets/` are emitted once and shared. Hook and MCP documents appear when the project declares
-hooks or MCP servers — plus one empty Codex or Cursor document whenever another selected host
-claims the conventional `hooks/hooks.json`, `.mcp.json`, or `mcp.json` path, so that host's folder discovery
-never loads the other host's file — and `bin/` when it has a routed CLI, when
+hooks or MCP servers — plus one empty Codex or Cursor document when a Hook or MCP server reaches
+another selected host's conventional `hooks/hooks.json`, `.mcp.json`, or `mcp.json` path, so folder
+discovery never loads the other host's file — and `bin/` when it has a routed CLI, when
 [`web`](../../reference/configuration.mdx#web) is configured, or both. Two selected hosts that
 would write the same path with different bytes cannot share the root, and the build fails with
 `AB4103`; a command or rule scoped to some of the selected hosts but sitting in a

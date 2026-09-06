@@ -245,7 +245,7 @@ describe('the Workbench surface of the configured-only examples', () => {
       ],
     });
     expect(surface.advanced).toEqual(['evals', 'artifact', 'hosts', 'logs']);
-    expect(surface.counts).toMatchObject({ hooks: 0, mcpServers: 0, scripts: 0, skills: 3, targets: 4 });
+    expect(surface.counts).toMatchObject({ hooks: 0, mcpServers: 0, scripts: 0, skills: 3, targets: 3 });
   });
 });
 

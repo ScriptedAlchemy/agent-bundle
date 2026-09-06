@@ -10,17 +10,17 @@ content needs no MCP server, App route, state owner, or executable renderer.
 - **Run from the repository root:** `pnpm example:skills`
 - **Package:** `@agent-bundle-example/skills-starter`
 - **Public dependencies:** `agent-bundle` (`workspace:*`)
-- **Targets:** `portable`, `codex`, `claude`, `cursor`
+- **Targets:** `portable`, `codex`, `cursor`
 - **Credentials:** none — both eval suites are deterministic and read checked-in fixtures
 - **Source:** [`examples/skills-starter`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/skills-starter)
 
 ## What it proves
 
-- **Convention discovery.** `agent-bundle.config.ts` declares the plugin and its four targets.
+- **Convention discovery.** `agent-bundle.config.ts` declares the plugin and its three targets.
   Skills, commands, and rules under `src/` are found by convention. That is the authoring model described in
   [Skills](../guide/authoring/skills.mdx).
-- **One source, four host projections.** The same authored documents are lowered for the
-  portable, Codex, Claude, and Cursor projections of one composite plugin root — `skills/` is emitted once
+- **One source, three host projections.** The same authored documents are lowered for the
+  portable, Codex, and Cursor projections of one composite plugin root — `skills/` is emitted once
   and every selected host reads it. The Workbench's Source and Generated views show whether a
   host copied a document or adapted it.
 - **No invented runtime.** The built artifact has no MCP executable, App runtime, Flight worker,
@@ -37,7 +37,7 @@ content needs no MCP server, App route, state owner, or executable renderer.
 | `src/skills/incident-triage/` | A production incident from first signal through containment, evidence collection, and a handoff-ready update. |
 | `src/skills/dependency-upgrade/` | Dependency upgrade planning with API, runtime, rollout, and rollback checks. |
 | `src/skills/release-review/` | The evidence, severity, workflow, and final-report requirements for an explicit release review. |
-| `src/commands/review-release.md` | A Claude and Cursor command that starts the release review. |
+| `src/commands/review-release.md` | A Cursor command that starts the release review. |
 | `src/rules/release-safety.mdc` | A Cursor rule that keeps release decisions evidence-based. |
 | `evals/release-readiness.eval.ts` | The `release-readiness` suite and its deterministic `release-artifact-is-ready` case. |
 | `evals/engineering-operations.eval.ts` | The `engineering-operations` suite: `incident-handoff-is-actionable` and `upgrade-plan-has-rollback`. |

@@ -12,8 +12,8 @@ required. Both eval suites are deterministic and read only checked-in fixtures.
 
 ## What is authored
 
-- `agent-bundle.config.ts` declares the plugin and its portable, Codex, Claude,
-  and Cursor targets. Skills, commands, and rules under `src/` are discovered
+- `agent-bundle.config.ts` declares the plugin and its portable, Codex, and
+  Cursor targets. Skills, commands, and rules under `src/` are discovered
   automatically by convention, the model described in
   [`docs/framework-mode.md`](../../docs/framework-mode.md).
 - `src/skills/incident-triage/SKILL.md` guides a production incident from first

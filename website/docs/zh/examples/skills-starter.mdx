@@ -10,16 +10,16 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 - **在仓库根目录运行：** `pnpm example:skills`
 - **包名：** `@agent-bundle-example/skills-starter`
 - **公开依赖：** `agent-bundle`（`workspace:*`）
-- **Target：** `portable`、`codex`、`claude`、`cursor`
+- **Target：** `portable`、`codex`、`cursor`
 - **凭据：** 不需要——两个 eval 套件都是确定性的，只读取签入的夹具
 - **源码：** [`examples/skills-starter`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/skills-starter)
 
 ## 它证明什么
 
-- **约定发现。** `agent-bundle.config.ts` 声明插件与四个 target。`src/` 下的 Skill、命令和规则
+- **约定发现。** `agent-bundle.config.ts` 声明插件与三个 target。`src/` 下的 Skill、命令和规则
   都按约定发现。这正是
   [Skills](../guide/authoring/skills.mdx) 中描述的编写模型。
-- **一份源码，四种宿主投影。** 同一批文档为复合插件根目录中的 portable、Codex、Claude 与 Cursor
+- **一份源码，三种宿主投影。** 同一批文档为复合插件根目录中的 portable、Codex 与 Cursor
   投影分别降级——`skills/` 只输出一份，由所有选中宿主共同读取。Workbench 的 Source 与 Generated 视图
   会显示某个宿主究竟是复制还是改写了一份文档。
 - **不虚构运行时。** 构建产物没有 MCP 可执行文件、App 运行时、Flight worker、状态所有者或 notice
@@ -34,7 +34,7 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 | `src/skills/incident-triage/` | 一次生产事故，从最初信号到止损、证据收集，直到可直接交接的进展更新。 |
 | `src/skills/dependency-upgrade/` | 依赖升级规划，包含 API、运行时、灰度与回滚检查。 |
 | `src/skills/release-review/` | 一次显式发布评审所需的证据、严重级别、流程与最终报告要求。 |
-| `src/commands/review-release.md` | 启动发布评审的 Claude 与 Cursor 命令。 |
+| `src/commands/review-release.md` | 启动发布评审的 Cursor 命令。 |
 | `src/rules/release-safety.mdc` | 让发布决策保持证据导向的 Cursor 规则。 |
 | `evals/release-readiness.eval.ts` | `release-readiness` 套件及其确定性用例 `release-artifact-is-ready`。 |
 | `evals/engineering-operations.eval.ts` | `engineering-operations` 套件：`incident-handoff-is-actionable` 与 `upgrade-plan-has-rollback`。 |
