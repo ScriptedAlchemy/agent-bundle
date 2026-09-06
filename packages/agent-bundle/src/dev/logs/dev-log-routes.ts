@@ -12,7 +12,7 @@ import {
   rawPathname,
   requestError,
   responseDiagnostic,
-  responseJson as writeJsonResponse,
+  responseJsonOrDestroy,
   type RequestDiagnostic,
 } from '../http.ts';
 import { createBackpressuredWriter, encodedNdjsonFrame, writeKeepAliveStreamHead } from '../route-streams.ts';
@@ -26,9 +26,6 @@ export interface DevLogRoutesOptions {
   readonly authorize: (request: IncomingMessage) => void;
   readonly service?: DevLogService;
 }
-
-const responseJson = (response: ServerResponse, body: unknown): void =>
-  writeJsonResponse(response, body, { destroyIfEnded: true });
 
 const route = (requestTarget: string | undefined): Route | undefined => {
   const pathname = rawPathname(requestTarget);
@@ -99,7 +96,7 @@ export class DevLogRoutes {
     try {
       const afterSequence = cursor(request.url);
       if (parsed === 'replay') {
-        responseJson(response, { replay: service.replay({ afterSequence }) });
+        responseJsonOrDestroy(response, { replay: service.replay({ afterSequence }) });
       } else {
         this.#stream(service, afterSequence, response);
       }

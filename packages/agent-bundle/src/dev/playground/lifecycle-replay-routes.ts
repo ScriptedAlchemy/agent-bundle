@@ -9,15 +9,17 @@ import type {
 } from '../../contracts/lifecycles.ts';
 import { isRecord } from '../../core/strict-json.ts';
 import {
+  badRequest,
   diagnostic,
   hasOnly,
   isRequestDiagnostic,
+  noQuery,
   nonemptyString,
   rawPathname,
   readJsonBody,
   requestError,
   responseDiagnostic,
-  responseJson as writeJsonResponse,
+  responseJsonOrDestroy,
 } from '../http.ts';
 
 type Route = 'list' | 'replay';
@@ -39,12 +41,7 @@ export interface LifecycleReplayRoutesOptions {
   readonly service?: LifecycleReplayRouteService;
 }
 
-const responseJson = (response: ServerResponse, body: unknown): void =>
-  writeJsonResponse(response, body, { destroyIfEnded: true });
-
-const invalidShape = (): never => {
-  throw requestError(diagnostic('AB8211', 'Lifecycle replay request has an invalid shape.', 400));
-};
+const invalidShape = badRequest('AB8211', 'Lifecycle replay request has an invalid shape.');
 
 const route = (requestTarget: string | undefined): Route | undefined => {
   const pathname = rawPathname(requestTarget);
@@ -52,10 +49,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   if (pathname === '/api/lifecycles') return 'list';
   if (pathname === '/api/lifecycles/replays') return 'replay';
   throw requestError(diagnostic('AB8210', 'Lifecycle replay route path is not valid.', 400));
-};
-
-const noQuery = (requestTarget: string | undefined): void => {
-  if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) invalidShape();
 };
 
 const replayRequest = (value: JsonObject): LifecycleReplayRequest => {
@@ -134,7 +127,7 @@ export class LifecycleReplayRoutes {
     if (this.#closed) throw this.#unavailable(503);
     const service = this.#service;
     if (service === undefined) throw this.#unavailable(404);
-    noQuery(request.url);
+    noQuery(request.url, invalidShape);
     try {
       const method = request.method ?? 'GET';
       if (parsed === 'list') {
@@ -142,7 +135,7 @@ export class LifecycleReplayRoutes {
           responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
           return true;
         }
-        responseJson(response, await service.list());
+        responseJsonOrDestroy(response, await service.list());
         return true;
       }
       if (method !== 'POST') {
@@ -160,7 +153,7 @@ export class LifecycleReplayRoutes {
       if (Buffer.byteLength(JSON.stringify(result), 'utf8') > this.#responseByteLimit) {
         throw requestError(diagnostic('AB8214', 'Lifecycle replay exceeds the 16 MiB response limit.', 413));
       }
-      responseJson(response, result);
+      responseJsonOrDestroy(response, result);
       return true;
     } catch (error) {
       if (isRequestDiagnostic(error)) throw error;

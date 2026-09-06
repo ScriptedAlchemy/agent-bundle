@@ -3,15 +3,17 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { McpProbeHost, McpProbeReport } from '../../contracts/mcp-probe.ts';
 import {
+  badRequest,
   diagnostic,
   hasOnly,
   isRequestDiagnostic,
+  noQuery,
   nonemptyString,
   rawPathname,
   readJsonBody,
   requestError,
   responseDiagnostic,
-  responseJson as writeJsonResponse,
+  responseJsonOrDestroy,
 } from '../http.ts';
 import { McpProbeTargetNotFoundError } from './mcp-probe-service.ts';
 
@@ -30,9 +32,6 @@ export interface McpProbeRoutesOptions {
   readonly service?: McpProbeRouteService;
 }
 
-const responseJson = (response: ServerResponse, body: unknown): void =>
-  writeJsonResponse(response, body, { destroyIfEnded: true });
-
 const matchesProbeRoute = (requestTarget: string | undefined): boolean => {
   const pathname = rawPathname(requestTarget);
   if (pathname === '/api/discovery/probes') return true;
@@ -42,15 +41,7 @@ const matchesProbeRoute = (requestTarget: string | undefined): boolean => {
   return false;
 };
 
-const noQuery = (requestTarget: string | undefined): void => {
-  if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) {
-    throw requestError(diagnostic('AB8220', 'MCP probe request is not valid.', 400));
-  }
-};
-
-const invalidRequest = (): never => {
-  throw requestError(diagnostic('AB8220', 'MCP probe request is not valid.', 400));
-};
+const invalidRequest = badRequest('AB8220', 'MCP probe request is not valid.');
 
 const isHost = (value: unknown): value is McpProbeHost =>
   value === 'claude' || value === 'codex' || value === 'cursor';
@@ -97,7 +88,7 @@ export class McpProbeRoutes {
       responseDiagnostic(response, diagnostic('AB8220', 'MCP probe request is not valid.', 405));
       return true;
     }
-    noQuery(request.url);
+    noQuery(request.url, invalidRequest);
     let report: McpProbeReport;
     try {
       report = await this.#service.probe(await probeRequest(request));
@@ -111,7 +102,7 @@ export class McpProbeRoutes {
     if (Buffer.byteLength(JSON.stringify(report), 'utf8') > this.#responseByteLimit) {
       throw requestError(diagnostic('AB8222', 'MCP probe exceeds the 16 MiB response limit.', 413));
     }
-    responseJson(response, report);
+    responseJsonOrDestroy(response, report);
     return true;
   }
 }

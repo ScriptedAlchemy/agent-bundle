@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { relative, resolve } from 'node:path';
 
+import { isSpecialPurposeIp } from '../../core/special-ip.ts';
 import { isPlainRecord } from '../../core/strict-json.ts';
 
 import {
@@ -359,14 +360,10 @@ const emptyConfigExtensions: McpAppConfigExtensionInspection = Object.freeze({
 
 const capabilities = new Set<McpAppCapability>(['camera', 'clipboardWrite', 'geolocation', 'microphone']);
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-
-const isConfigExtensionRecord: (value: unknown) => value is Record<string, unknown> = isPlainRecord;
 
 const cloneRecord = (value: unknown, label: string): { readonly [key: string]: McpAppJsonValue } => {
   const cloned = cloneMcpAppFiniteJson(value, label);
-  if (!isRecord(cloned)) throw new TypeError(`${label} must be a finite JSON object.`);
+  if (!isPlainRecord(cloned)) throw new TypeError(`${label} must be a finite JSON object.`);
   return cloned;
 };
 
@@ -414,13 +411,13 @@ export const inspectMcpAppConfigExtensions = (
   const sourceRevision = requireNonempty(options.sourceRevision, 'MCP App config source revision');
   const descriptorTargetByKey = new Map<string, string>();
   for (const descriptor of options.descriptors) {
-    if (!isRecord(descriptor)) throw new TypeError('MCP App config descriptor must be a plain record.');
+    if (!isPlainRecord(descriptor)) throw new TypeError('MCP App config descriptor must be a plain record.');
     const key = ownNonemptyString(descriptor, 'key', 'MCP App config descriptor key');
     const target = ownNonemptyString(descriptor, 'target', 'MCP App config descriptor target');
     if (descriptorTargetByKey.has(key)) throw new TypeError(`MCP App config descriptor has duplicate key ${key}.`);
     descriptorTargetByKey.set(key, target);
   }
-  if (!isConfigExtensionRecord(options.extensions)) {
+  if (!isPlainRecord(options.extensions)) {
     throw new TypeError('MCP App normalized extensions must have an ordinary or null prototype.');
   }
   for (const key of Object.keys(options.extensions)) {
@@ -431,7 +428,7 @@ export const inspectMcpAppConfigExtensions = (
   for (const [key, descriptorTarget] of [...descriptorTargetByKey.entries()].sort(([left], [right]) => left.localeCompare(right))) {
     if (!Object.hasOwn(options.extensions, key)) continue;
     const extension = options.extensions[key];
-    if (!isRecord(extension)) throw new TypeError(`MCP App config extension ${key} must be a plain record.`);
+    if (!isPlainRecord(extension)) throw new TypeError(`MCP App config extension ${key} must be a plain record.`);
     const id = ownNonemptyString(extension, 'id', `MCP App config extension ${key} id`);
     const extensionKey = ownNonemptyString(extension, 'key', `MCP App config extension ${key} key`);
     const target = ownNonemptyString(extension, 'target', `MCP App config extension ${key} target`);
@@ -439,7 +436,7 @@ export const inspectMcpAppConfigExtensions = (
       throw new TypeError(`MCP App config extension ${key} does not match its registered descriptor.`);
     }
     const provenance = ownDataValue(extension, 'provenance', `MCP App config extension ${key} provenance`);
-    if (!isRecord(provenance) || ownDataValue(provenance, 'kind', `MCP App config extension ${key} provenance kind`) !== 'config') {
+    if (!isPlainRecord(provenance) || ownDataValue(provenance, 'kind', `MCP App config extension ${key} provenance kind`) !== 'config') {
       throw new TypeError(`MCP App config extension ${key} must have config provenance.`);
     }
     const sourcePath = ownNonemptyString(provenance, 'sourcePath', `MCP App config extension ${key} provenance source path`);
@@ -501,91 +498,10 @@ const validResourceUri = (value: unknown): value is string => {
   }
 };
 
-const hasPrefix = (address: readonly number[], prefix: readonly number[], prefixLength: number): boolean => {
-  for (let bit = 0; bit < prefixLength; bit += 1) {
-    const byte = Math.floor(bit / 8);
-    const mask = 1 << (7 - (bit % 8));
-    if ((address[byte] & mask) !== (prefix[byte] & mask)) return false;
-  }
-  return true;
-};
-
-type IpPrefix = readonly [readonly number[], number];
-
-const parseIpv4 = (hostname: string): readonly number[] | undefined => {
-  const octets = hostname.split('.').map(Number);
-  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return undefined;
-  return Object.freeze(octets);
-};
-
-const parseIpv6 = (hostname: string): readonly number[] | undefined => {
-  const source = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  const halves = source.split('::');
-  if (halves.length > 2) return undefined;
-  const left = halves[0] === '' ? [] : halves[0].split(':');
-  const right = halves.length === 1 || halves[1] === '' ? [] : halves[1].split(':');
-  const segments = [...left, ...right];
-  const groups = segments.map((group) => Number.parseInt(group, 16));
-  if (groups.some((group, index) => !/^[0-9a-f]{1,4}$/.test(segments[index]) || group < 0 || group > 0xffff)) {
-    return undefined;
-  }
-  const missingGroups = 8 - groups.length;
-  if ((halves.length === 1 && missingGroups !== 0) || (halves.length === 2 && missingGroups < 1)) return undefined;
-  const expanded = halves.length === 1 ? groups : [...groups.slice(0, left.length), ...Array<number>(missingGroups).fill(0), ...groups.slice(left.length)];
-  return Object.freeze(expanded.flatMap((group) => [group >> 8, group & 0xff]));
-};
-
-const specialIpv4Prefixes: readonly IpPrefix[] = [
-    [[0], 8],
-    [[10], 8],
-    [[100, 64], 10],
-    [[127], 8],
-    [[169, 254], 16],
-    [[172, 16], 12],
-    [[192, 0, 0], 24],
-    [[192, 0, 2], 24],
-    [[192, 31, 196], 24],
-    [[192, 52, 193], 24],
-    [[192, 88, 99], 24],
-    [[192, 168], 16],
-    [[192, 175, 48], 24],
-    [[198, 18], 15],
-    [[198, 51, 100], 24],
-    [[203, 0, 113], 24],
-    [[224], 4],
-  [[240], 4],
-];
-
-const specialIpv6Prefixes: readonly IpPrefix[] = [
-    [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 96],
-    [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff], 96],
-    [[0, 100, 255, 155, 0, 0, 0, 0, 0, 0, 0, 0], 96],
-    [[0, 100, 255, 155, 0, 1], 48],
-    [[1, 0, 0, 0, 0, 0, 0, 0], 64],
-    [[1, 0, 0, 0, 0, 0, 0, 1], 64],
-    [[32, 1], 23],
-    [[32, 1, 13, 184], 32],
-    [[32, 2], 16],
-    [[63, 255, 0], 20],
-    [[95, 0], 16],
-    [[252], 7],
-    [[254, 128], 10],
-  [[255], 8],
-];
-
-const isSpecialIpv4 = (address: readonly number[]): boolean =>
-  specialIpv4Prefixes.some(([prefix, prefixLength]) => hasPrefix(address, prefix, prefixLength));
-
-const isSpecialIpv6 = (address: readonly number[]): boolean =>
-  specialIpv6Prefixes.some(([prefix, prefixLength]) => hasPrefix(address, prefix, prefixLength));
-
 const isPublicHostname = (hostname: string): boolean => {
   const normalized = hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
   if (normalized === 'localhost' || normalized.endsWith('.localhost') || normalized.endsWith('.local')) return false;
-  const ipv4 = parseIpv4(normalized);
-  if (ipv4 !== undefined) return !isSpecialIpv4(ipv4);
-  const ipv6 = parseIpv6(normalized);
-  return ipv6 === undefined || !isSpecialIpv6(ipv6);
+  return !isSpecialPurposeIp(normalized);
 };
 
 const claudeDomain = (publicMcpUrl: string): string | undefined => {
@@ -613,7 +529,7 @@ const setOwn = <Value>(target: Record<string, Value>, key: string, value: Value)
 
 const resourceDeclaredDomain = (metadata: McpAppMetadataInspection): string | undefined => {
   const ui = metadata.standard.ui;
-  return isRecord(ui) && typeof ui.domain === 'string' ? ui.domain : undefined;
+  return isPlainRecord(ui) && typeof ui.domain === 'string' ? ui.domain : undefined;
 };
 
 const inspectProfileMetadata = (
