@@ -48,7 +48,7 @@ Document、结果、投影、诊断与计时。Trace 条目链接到这份完整
 `install` 目的地。`HostAvailability` 包含 `host`、`launchable`，以及可选的 `reason` 与已解析
 `executable`。
 
-流以一条 state 帧开始，重放最多 256 KiB 的保留输出，再继续发送实时 state 与 output。它每 15 秒发送
+流以一条 state 帧开始，以一帧重放最多 256 KiB 的保留输出，再继续发送实时 state 与 output。它每 15 秒发送
 一条 keep-alive 注释，并在 `end` 后关闭。每个事件带有一个 JSON `data:` 对象：
 
 ```text

@@ -87,7 +87,8 @@ const dimensions = (value: Readonly<Record<string, unknown>>): HostSessionSize =
 const creation = (value: Readonly<Record<string, unknown>>) => {
   if (!hasOnly(value, ['cols', 'host', 'prompt', 'rows'])) invalid();
   if (value.host !== 'claude' && value.host !== 'codex') invalid();
-  if (value.prompt !== undefined && typeof value.prompt !== 'string') invalid();
+  // The prompt is the host's positional argument: a leading dash would be parsed as an option.
+  if (value.prompt !== undefined && (typeof value.prompt !== 'string' || value.prompt.trim() === '' || value.prompt.startsWith('-'))) invalid();
   return {
     ...dimensions({ cols: value.cols, rows: value.rows }),
     host: value.host as HostSessionHost,

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { AgentLineage, Observed } from '@agent-bundle/runtime';
 
+import { isHostSessionId } from '../contracts/host-sessions.ts';
 import type { RequestLineageProvenance, RequestProvenanceAxis } from '../contracts/request-provenance.ts';
 import { isLoopbackHttpOrigin } from '../core/loopback-origin.ts';
 import type { EventTraceEvent, EventTraceExecution, EventTraceObserver } from './trace.ts';
@@ -224,7 +225,7 @@ export const openEventTraceReceipt = async (
       sent = true;
       const session = options.env[EVENT_TRACE_RECEIPT_SESSION_ENV];
       const receipt: EventTraceReceipt = {
-        ...(typeof session === 'string' && session !== '' ? { devSession: session } : {}),
+        ...(isHostSessionId(session) ? { devSession: session } : {}),
         events,
         execution: options.execution,
         identity,

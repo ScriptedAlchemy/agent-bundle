@@ -507,6 +507,23 @@ it('posts a top-level devSession when AGENT_BUNDLE_DEV_SESSION is set and keeps 
   await recorder!.send();
   expect(posted[0]!.devSession).toBe(hostSessionId);
   expect(posted[0]!.identity).toEqual({ conversationId: 'host-session', requestId: 'u', sessionId: 'host-session' });
+
+  const stray = await openEventTraceReceipt({
+    anchor: 'file:///nowhere/hooks/x.mjs',
+    env: {
+      [EVENT_TRACE_RECEIPT_SESSION_ENV]: 'not-a-workbench-session',
+      [EVENT_TRACE_RECEIPT_TOKEN_ENV]: 't',
+      [EVENT_TRACE_RECEIPT_URL_ENV]: 'http://127.0.0.1:6000',
+    },
+    execution: traced,
+    fetch: async (_input, init) => {
+      posted.push(JSON.parse(init!.body as string) as EventTraceReceipt);
+      return new Response(null, { status: 204 });
+    },
+  });
+  createEventTracer({ execution: traced, now: () => 1, observer: stray!.observer }).executeStart('standalone');
+  await stray!.send();
+  expect(posted[1]).not.toHaveProperty('devSession');
 });
 
 it('calls attachHostSession with the validated devSession and the host identity', async () => {

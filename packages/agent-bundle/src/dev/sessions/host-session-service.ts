@@ -192,12 +192,7 @@ export class HostSessionService {
 
   attach(devSession: string, hostSessionId: string | undefined): void {
     const record = this.#sessions.get(devSession);
-    if (
-      record === undefined
-      || record.state !== 'running'
-      || hostSessionId === undefined
-      || record.traceSessionId !== undefined
-    ) return;
+    if (record === undefined || record.state !== 'running' || hostSessionId === undefined || record.traceSessionId === hostSessionId) return;
     record.traceSessionId = hostSessionId;
     this.#publish(record, 'session.attached', 'ok', { hostSessionId });
     this.#send(record, { session: this.#snapshot(record), type: 'state' });
@@ -342,7 +337,7 @@ export class HostSessionService {
   subscribe(id: string, listener: (message: HostSessionStreamMessage) => void): () => void {
     const record = this.#known(id);
     listener({ session: this.#snapshot(record), type: 'state' });
-    for (const output of record.output) listener({ data: output.toString('base64'), type: 'output' });
+    if (record.output.length > 0) listener({ data: Buffer.concat(record.output).toString('base64'), type: 'output' });
     if (record.state === 'running') record.listeners.add(listener);
     else listener({ session: this.#snapshot(record), type: 'end' });
     return () => record.listeners.delete(listener);

@@ -53,7 +53,7 @@ are strict, input is limited to 16 KiB of UTF-8 text, and terminal dimensions ar
 `epochId`, and host plugin `install` destination. `HostAvailability` contains `host`,
 `launchable`, and optional `reason` and resolved `executable`.
 
-The stream starts with a state frame, replays up to 256 KiB of retained output, then continues
+The stream starts with a state frame, replays up to 256 KiB of retained output as one frame, then continues
 with live state and output. It sends a keep-alive comment every 15 seconds and closes after
 `end`. Each event has one JSON `data:` object:
 

@@ -86,6 +86,11 @@ it('serves the frozen collection, item, control, restart, and delete contract', 
     });
     expect(created.status).toBe(201);
     const body = await created.json() as { readonly session: { readonly id: string } };
+    for (const prompt of ['--dangerously-skip-permissions', '-p x', '  ']) {
+      expect((await fetch(`${started.url}/api/sessions`, {
+        body: JSON.stringify({ cols: 80, host: 'claude', prompt, rows: 24 }), headers: json, method: 'POST',
+      })).status).toBe(400);
+    }
 
     await expect(fetch(`${started.url}/api/sessions`).then((response) => response.json())).resolves.toMatchObject({
       hosts: [{ host: 'claude', launchable: true }, { host: 'codex', launchable: true }],

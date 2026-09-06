@@ -139,12 +139,13 @@ it('reports unavailable hosts and enforces four live sessions', async () => {
   await expect(service.create({ cols: 80, host: 'claude', rows: 24 })).rejects.toMatchObject({ code: 'AB8264' });
 });
 
-it('replays bounded scrollback before live output', async () => {
+it('replays bounded scrollback as one frame before live output', async () => {
   const adapter = new FakeAdapter();
   const service = serviceFor(adapter, { scrollbackBytes: 8 });
   const session = await service.create({ cols: 80, host: 'codex', rows: 24 });
   adapter.spawns[0]!.pty.emitData('discard');
-  adapter.spawns[0]!.pty.emitData('retained');
+  adapter.spawns[0]!.pty.emitData('reta');
+  adapter.spawns[0]!.pty.emitData('ined');
   const messages: HostSessionStreamMessage[] = [];
 
   const unsubscribe = service.subscribe(session.id, (message) => messages.push(message));
@@ -168,10 +169,13 @@ it('attaches the host trace id and uses it for later lifecycle entries', async (
   const messages: HostSessionStreamMessage[] = [];
   service.subscribe(session.id, (message) => messages.push(message));
 
+  service.attach(session.id, 'host-session-41');
+  service.attach(session.id, 'host-session-42');
   service.attach(session.id, 'host-session-42');
   service.attach('hs_0000000000000000', 'ignored');
   service.attach(session.id, undefined);
 
+  expect(traces.filter((entry) => entry.kind === 'session.attached')).toHaveLength(2);
   expect(service.traceSessionId(session.id)).toBe('host-session-42');
   expect(service.traceSessionId('hs_0000000000000000')).toBe('hs_0000000000000000');
   expect(service.read(session.id)).toMatchObject({ traceSessionId: 'host-session-42' });
