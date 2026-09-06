@@ -217,7 +217,8 @@ npx agent-bundle prepack --root . --output artifact --json
 `npm pack --dry-run --json --ignore-scripts`。生成的包会原样复制已校验的组合产物，让路由式
 `package.json` bin 指向清单声明的 `bin/<name>.mjs`，并且只额外加入单独编写的 bin 与库。
 门禁会检查这份精确清单、清单哈希、包 bin 目标、发布版本一致性、包专属编译证据以及
-`package.json` 中的安装期依赖字段。构建会把每个依赖内联进手写包入口与各宿主包，因此已发布的插件不应安装任何东西：请把框架、`@agent-bundle/runtime`、`react`、
+`package.json` 中的安装期依赖字段。作者写入的 `package.json.files` 与 `.npmignore` 规则不会缩窄
+生成根目录：每个所选隐藏宿主目录与每个清单文件都必须进入包，否则 prepack 会在发布前失败。构建会把每个依赖内联进手写包入口与各宿主包，因此已发布的插件不应安装任何东西：请把框架、`@agent-bundle/runtime`、`react`、
 `zod` 以及其余技术栈都声明在 `devDependencies` 下。已编译的 bundle——无论是宿主包模块还是 `dist`
 bundle——都不能把裸包保持外部化：编译器会在 `prepack` 触及清单之前报告 `AB6005`。因此
 仅仅把包内联进 bundle 并不能证明消费者需要安装它。`--output` 是相对

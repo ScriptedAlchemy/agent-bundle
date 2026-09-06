@@ -1,0 +1,493 @@
+{
+  "enums": {
+    "distribution.channels": [
+      [
+        "local",
+        "npm"
+      ],
+      [
+        "local"
+      ]
+    ],
+    "distribution.channels[]": [
+      "local",
+      "npm"
+    ],
+    "executables.hooks[].kind": [
+      "config",
+      "event-route"
+    ],
+    "executables.mcpServers[].apps[].prebuilt": [
+      true
+    ],
+    "executables.mcpServers[].kind": [
+      "command",
+      "compiled",
+      "prebuilt",
+      "remote"
+    ],
+    "executables.mcpServers[].launch.args[].kind": [
+      "artifact",
+      "literal"
+    ],
+    "executables.scripts[].mode": [
+      "bundle",
+      "copy"
+    ],
+    "files[].kind": [
+      "bundle",
+      "copy",
+      "generated",
+      "prebuilt"
+    ],
+    "manifestVersion": [
+      3
+    ],
+    "projections[].builtInHost": [
+      "claude",
+      "codex",
+      "cursor",
+      "portable"
+    ],
+    "routes.cli.commands[].exitCode": [
+      "result",
+      "zero"
+    ],
+    "routes.cli.commands[].options[].kind": [
+      "boolean",
+      "enum",
+      "number",
+      "string"
+    ],
+    "routes.cli.mode": [
+      "conflict",
+      "conventional",
+      "generated"
+    ],
+    "routes.cli.routes[].execution.fallback": [
+      "none",
+      "standalone"
+    ],
+    "routes.cli.routes[].execution.runtime": [
+      "shared",
+      "standalone"
+    ],
+    "routes.cli.routes[].inputSchema.additionalProperties": [
+      false
+    ],
+    "routes.cli.routes[].inputSchema.properties.*.items.type": [
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.cli.routes[].inputSchema.properties.*.type": [
+      "array",
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.cli.routes[].inputSchema.type": [
+      "object"
+    ],
+    "routes.cli.routes[].kind": [
+      "cli",
+      "tool"
+    ],
+    "routes.cli.routes[].provenance.kind": [
+      "conventional"
+    ],
+    "routes.contracts[].input.additionalProperties": [
+      false
+    ],
+    "routes.contracts[].input.properties.*.items.type": [
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.contracts[].input.properties.*.type": [
+      "array",
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.contracts[].input.type": [
+      "object"
+    ],
+    "routes.events[].execution.fallback": [
+      "none",
+      "standalone"
+    ],
+    "routes.events[].execution.runtime": [
+      "shared",
+      "standalone"
+    ],
+    "routes.events[].inputSchema.additionalProperties": [
+      false
+    ],
+    "routes.events[].inputSchema.properties.*.items.type": [
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.events[].inputSchema.properties.*.type": [
+      "array",
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.events[].inputSchema.type": [
+      "object"
+    ],
+    "routes.events[].kind": [
+      "event-route"
+    ],
+    "routes.events[].provenance.kind": [
+      "conventional"
+    ],
+    "routes.layouts[].scope": [
+      "root",
+      "server"
+    ],
+    "routes.scripts[].execution.fallback": [
+      "none",
+      "standalone"
+    ],
+    "routes.scripts[].execution.runtime": [
+      "shared",
+      "standalone"
+    ],
+    "routes.scripts[].inputSchema.additionalProperties": [
+      false
+    ],
+    "routes.scripts[].inputSchema.properties.*.items.type": [
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.scripts[].inputSchema.properties.*.type": [
+      "array",
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.scripts[].inputSchema.type": [
+      "object"
+    ],
+    "routes.scripts[].kind": [
+      "script"
+    ],
+    "routes.scripts[].provenance.kind": [
+      "conventional"
+    ],
+    "routes.servers[].mode": [
+      "command",
+      "conflict",
+      "custom",
+      "generated",
+      "remote"
+    ],
+    "routes.servers[].routes[].execution.fallback": [
+      "none",
+      "standalone"
+    ],
+    "routes.servers[].routes[].execution.runtime": [
+      "shared",
+      "standalone"
+    ],
+    "routes.servers[].routes[].inputSchema.additionalProperties": [
+      false
+    ],
+    "routes.servers[].routes[].inputSchema.properties.*.items.type": [
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.servers[].routes[].inputSchema.properties.*.type": [
+      "array",
+      "boolean",
+      "number",
+      "string"
+    ],
+    "routes.servers[].routes[].inputSchema.type": [
+      "object"
+    ],
+    "routes.servers[].routes[].kind": [
+      "app",
+      "prompt",
+      "resource",
+      "tool"
+    ],
+    "routes.servers[].routes[].provenance.kind": [
+      "conventional"
+    ],
+    "web.apps[].allow[]": [
+      "call-tool",
+      "download-file",
+      "open-external-link",
+      "request-display-mode"
+    ],
+    "web.open": [
+      "browser",
+      "never"
+    ]
+  },
+  "keys": [
+    "application",
+    "application.description",
+    "application.id",
+    "application.name",
+    "application.version",
+    "compiler",
+    "distribution",
+    "distribution.channels",
+    "distribution.install",
+    "distribution.install.instructions",
+    "distribution.install.script",
+    "distribution.payloads",
+    "distribution.payloads[].hosts",
+    "distribution.payloads[].name",
+    "distribution.payloads[].runtimeDependencies",
+    "executables",
+    "executables.bins",
+    "executables.bins[].hosts",
+    "executables.bins[].name",
+    "executables.bins[].path",
+    "executables.bins[].worker",
+    "executables.hooks",
+    "executables.hooks[].event",
+    "executables.hooks[].host",
+    "executables.hooks[].id",
+    "executables.hooks[].kind",
+    "executables.hooks[].name",
+    "executables.hooks[].path",
+    "executables.hooks[].routeId",
+    "executables.hooks[].timeout",
+    "executables.mcpServers",
+    "executables.mcpServers[].apps",
+    "executables.mcpServers[].apps[].id",
+    "executables.mcpServers[].apps[].name",
+    "executables.mcpServers[].apps[].path",
+    "executables.mcpServers[].apps[].prebuilt",
+    "executables.mcpServers[].apps[].resourceUri",
+    "executables.mcpServers[].hosts",
+    "executables.mcpServers[].id",
+    "executables.mcpServers[].kind",
+    "executables.mcpServers[].launch",
+    "executables.mcpServers[].launch.args",
+    "executables.mcpServers[].launch.args[].kind",
+    "executables.mcpServers[].launch.args[].path",
+    "executables.mcpServers[].launch.args[].value",
+    "executables.mcpServers[].launch.entry",
+    "executables.mcpServers[].launch.env",
+    "executables.mcpServers[].launch.worker",
+    "executables.mcpServers[].name",
+    "executables.mcpServers[].transport",
+    "executables.scripts",
+    "executables.scripts[].hosts",
+    "executables.scripts[].id",
+    "executables.scripts[].mode",
+    "executables.scripts[].name",
+    "executables.scripts[].path",
+    "executables.scripts[].rendered",
+    "executables.scripts[].rendered.routeId",
+    "executables.scripts[].worker",
+    "files",
+    "files[].bytes",
+    "files[].kind",
+    "files[].mode",
+    "files[].path",
+    "files[].sha256",
+    "manifestVersion",
+    "projections",
+    "projections[].builtInHost",
+    "projections[].documents",
+    "projections[].documents.hooks",
+    "projections[].documents.marketplace",
+    "projections[].documents.mcp",
+    "projections[].documents.plugin",
+    "projections[].host",
+    "projections[].marketplace",
+    "projections[].marketplace.name",
+    "routes",
+    "routes.cli",
+    "routes.cli.commands",
+    "routes.cli.commands[].aliases",
+    "routes.cli.commands[].description",
+    "routes.cli.commands[].exitCode",
+    "routes.cli.commands[].mcp",
+    "routes.cli.commands[].mcp.confirm",
+    "routes.cli.commands[].mcp.server",
+    "routes.cli.commands[].mcp.tool",
+    "routes.cli.commands[].options",
+    "routes.cli.commands[].options[].aliases",
+    "routes.cli.commands[].options[].choices",
+    "routes.cli.commands[].options[].description",
+    "routes.cli.commands[].options[].key",
+    "routes.cli.commands[].options[].kind",
+    "routes.cli.commands[].options[].option",
+    "routes.cli.commands[].options[].positional",
+    "routes.cli.commands[].options[].repeated",
+    "routes.cli.commands[].options[].required",
+    "routes.cli.commands[].path",
+    "routes.cli.commands[].projection",
+    "routes.cli.commands[].projection.defaults",
+    "routes.cli.commands[].projection.mapInput",
+    "routes.cli.commands[].projection.module",
+    "routes.cli.commands[].projection.relaxed",
+    "routes.cli.commands[].routeId",
+    "routes.cli.mode",
+    "routes.cli.routes",
+    "routes.cli.routes[].contract",
+    "routes.cli.routes[].description",
+    "routes.cli.routes[].event",
+    "routes.cli.routes[].execution",
+    "routes.cli.routes[].execution.fallback",
+    "routes.cli.routes[].execution.preflight",
+    "routes.cli.routes[].execution.providers",
+    "routes.cli.routes[].execution.runtime",
+    "routes.cli.routes[].id",
+    "routes.cli.routes[].inputSchema",
+    "routes.cli.routes[].inputSchema.additionalProperties",
+    "routes.cli.routes[].inputSchema.properties",
+    "routes.cli.routes[].inputSchema.properties.*.default",
+    "routes.cli.routes[].inputSchema.properties.*.description",
+    "routes.cli.routes[].inputSchema.properties.*.enum",
+    "routes.cli.routes[].inputSchema.properties.*.items",
+    "routes.cli.routes[].inputSchema.properties.*.items.enum",
+    "routes.cli.routes[].inputSchema.properties.*.items.type",
+    "routes.cli.routes[].inputSchema.properties.*.type",
+    "routes.cli.routes[].inputSchema.required",
+    "routes.cli.routes[].inputSchema.type",
+    "routes.cli.routes[].kind",
+    "routes.cli.routes[].provenance",
+    "routes.cli.routes[].provenance.kind",
+    "routes.cli.routes[].serverId",
+    "routes.cli.routes[].source",
+    "routes.contracts",
+    "routes.contracts[].id",
+    "routes.contracts[].input",
+    "routes.contracts[].input.additionalProperties",
+    "routes.contracts[].input.properties",
+    "routes.contracts[].input.properties.*.default",
+    "routes.contracts[].input.properties.*.description",
+    "routes.contracts[].input.properties.*.enum",
+    "routes.contracts[].input.properties.*.items",
+    "routes.contracts[].input.properties.*.items.enum",
+    "routes.contracts[].input.properties.*.items.type",
+    "routes.contracts[].input.properties.*.type",
+    "routes.contracts[].input.required",
+    "routes.contracts[].input.type",
+    "routes.contracts[].origin",
+    "routes.contracts[].origin.binding",
+    "routes.contracts[].origin.module",
+    "routes.contracts[].routes",
+    "routes.digest",
+    "routes.events",
+    "routes.events[].contract",
+    "routes.events[].description",
+    "routes.events[].event",
+    "routes.events[].execution",
+    "routes.events[].execution.fallback",
+    "routes.events[].execution.preflight",
+    "routes.events[].execution.providers",
+    "routes.events[].execution.runtime",
+    "routes.events[].id",
+    "routes.events[].inputSchema",
+    "routes.events[].inputSchema.additionalProperties",
+    "routes.events[].inputSchema.properties",
+    "routes.events[].inputSchema.properties.*.default",
+    "routes.events[].inputSchema.properties.*.description",
+    "routes.events[].inputSchema.properties.*.enum",
+    "routes.events[].inputSchema.properties.*.items",
+    "routes.events[].inputSchema.properties.*.items.enum",
+    "routes.events[].inputSchema.properties.*.items.type",
+    "routes.events[].inputSchema.properties.*.type",
+    "routes.events[].inputSchema.required",
+    "routes.events[].inputSchema.type",
+    "routes.events[].kind",
+    "routes.events[].provenance",
+    "routes.events[].provenance.kind",
+    "routes.events[].serverId",
+    "routes.events[].source",
+    "routes.layouts",
+    "routes.layouts[].id",
+    "routes.layouts[].scope",
+    "routes.layouts[].serverId",
+    "routes.layouts[].source",
+    "routes.providers",
+    "routes.providers[].id",
+    "routes.providers[].name",
+    "routes.providers[].source",
+    "routes.scripts",
+    "routes.scripts[].contract",
+    "routes.scripts[].description",
+    "routes.scripts[].event",
+    "routes.scripts[].execution",
+    "routes.scripts[].execution.fallback",
+    "routes.scripts[].execution.preflight",
+    "routes.scripts[].execution.providers",
+    "routes.scripts[].execution.runtime",
+    "routes.scripts[].id",
+    "routes.scripts[].inputSchema",
+    "routes.scripts[].inputSchema.additionalProperties",
+    "routes.scripts[].inputSchema.properties",
+    "routes.scripts[].inputSchema.properties.*.default",
+    "routes.scripts[].inputSchema.properties.*.description",
+    "routes.scripts[].inputSchema.properties.*.enum",
+    "routes.scripts[].inputSchema.properties.*.items",
+    "routes.scripts[].inputSchema.properties.*.items.enum",
+    "routes.scripts[].inputSchema.properties.*.items.type",
+    "routes.scripts[].inputSchema.properties.*.type",
+    "routes.scripts[].inputSchema.required",
+    "routes.scripts[].inputSchema.type",
+    "routes.scripts[].kind",
+    "routes.scripts[].provenance",
+    "routes.scripts[].provenance.kind",
+    "routes.scripts[].serverId",
+    "routes.scripts[].source",
+    "routes.servers",
+    "routes.servers[].id",
+    "routes.servers[].mode",
+    "routes.servers[].name",
+    "routes.servers[].routes",
+    "routes.servers[].routes[].contract",
+    "routes.servers[].routes[].description",
+    "routes.servers[].routes[].event",
+    "routes.servers[].routes[].execution",
+    "routes.servers[].routes[].execution.fallback",
+    "routes.servers[].routes[].execution.preflight",
+    "routes.servers[].routes[].execution.providers",
+    "routes.servers[].routes[].execution.runtime",
+    "routes.servers[].routes[].id",
+    "routes.servers[].routes[].inputSchema",
+    "routes.servers[].routes[].inputSchema.additionalProperties",
+    "routes.servers[].routes[].inputSchema.properties",
+    "routes.servers[].routes[].inputSchema.properties.*.default",
+    "routes.servers[].routes[].inputSchema.properties.*.description",
+    "routes.servers[].routes[].inputSchema.properties.*.enum",
+    "routes.servers[].routes[].inputSchema.properties.*.items",
+    "routes.servers[].routes[].inputSchema.properties.*.items.enum",
+    "routes.servers[].routes[].inputSchema.properties.*.items.type",
+    "routes.servers[].routes[].inputSchema.properties.*.type",
+    "routes.servers[].routes[].inputSchema.required",
+    "routes.servers[].routes[].inputSchema.type",
+    "routes.servers[].routes[].kind",
+    "routes.servers[].routes[].provenance",
+    "routes.servers[].routes[].provenance.kind",
+    "routes.servers[].routes[].serverId",
+    "routes.servers[].routes[].source",
+    "runtime",
+    "runtime.node",
+    "web",
+    "web.apps",
+    "web.apps[].allow",
+    "web.apps[].app",
+    "web.apps[].input",
+    "web.apps[].name",
+    "web.apps[].resourceUri",
+    "web.apps[].server",
+    "web.apps[].tool",
+    "web.open"
+  ],
+  "manifestVersion": 3
+}

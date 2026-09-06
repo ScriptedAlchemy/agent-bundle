@@ -1,4 +1,5 @@
 import { execFile as executeFile, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -63,8 +64,10 @@ beforeAll(async () => {
       }
       fixturePackageVersion = packageDocument.version;
       delete packageDocument.private;
+      packageDocument.files = ['README.md'];
       await Promise.all([
         writeFile(packagePath, `${JSON.stringify(packageDocument, null, 2)}\n`),
+        writeFile(join(projectRoot, '.npmignore'), '.agents/\n.claude-plugin/\n.codex-plugin/\n'),
         writeFile(join(projectRoot, 'README.md'), '# Host install proof fixture\n'),
         writeFile(join(projectRoot, 'src', 'index.ts'), 'export const fixture = true;\n'),
       ]);
@@ -99,7 +102,76 @@ beforeAll(async () => {
   const installedArtifactRoot = join(consumer, 'packed-artifact');
   const manifestName = 'agent-bundle.manifest.json';
   const manifestText = await readFile(join(installedPackageRoot, manifestName), 'utf8');
-  const manifest = JSON.parse(manifestText) as { readonly files: readonly { readonly path: string }[] };
+  const manifest = JSON.parse(manifestText) as {
+    readonly distribution: {
+      readonly install?: { readonly instructions?: string; readonly script?: string };
+    };
+    readonly executables: {
+      readonly bins: readonly { readonly path: string; readonly worker?: string }[];
+      readonly hooks: readonly { readonly path: string }[];
+      readonly mcpServers: readonly {
+        readonly apps: readonly { readonly path: string }[];
+        readonly launch?: { readonly entry: string; readonly worker?: string };
+      }[];
+      readonly scripts: readonly { readonly path: string; readonly worker?: string }[];
+    };
+    readonly files: readonly {
+      readonly bytes: number;
+      readonly mode?: number;
+      readonly path: string;
+      readonly sha256: string;
+    }[];
+    readonly projections: readonly {
+      readonly documents: Readonly<Record<string, string>>;
+    }[];
+  };
+  const packedPaths = new Set(packOutput.files.map((file) => file.path));
+  expect(packedPaths.has(manifestName), proofLabel).toBe(true);
+  for (const hiddenRoot of ['.agents/plugins/', '.claude-plugin/', '.codex-plugin/']) {
+    expect(
+      [...packedPaths].some((path) => path.startsWith(hiddenRoot)),
+      `${proofLabel}: selected hidden host root ${hiddenRoot}`,
+    ).toBe(true);
+  }
+  for (const file of manifest.files) {
+    expect(packedPaths.has(file.path), `${proofLabel}: packed ${file.path}`).toBe(true);
+    const [artifactBytes, installedBytes, installedMetadata] = await Promise.all([
+      readFile(join(sourceFixture.artifactRoot, file.path)),
+      readFile(join(installedPackageRoot, file.path)),
+      stat(join(installedPackageRoot, file.path)),
+    ]);
+    expect(installedBytes, `${proofLabel}: installed ${file.path}`).toEqual(artifactBytes);
+    expect(installedBytes.byteLength, `${proofLabel}: bytes ${file.path}`).toBe(file.bytes);
+    expect(createHash('sha256').update(installedBytes).digest('hex'), `${proofLabel}: digest ${file.path}`)
+      .toBe(file.sha256);
+    if (file.mode !== undefined) {
+      expect(installedMetadata.mode & 0o777, `${proofLabel}: mode ${file.path}`).toBe(file.mode);
+    }
+  }
+  const manifestPaths = new Set(manifest.files.map((file) => file.path));
+  for (const projection of manifest.projections) {
+    for (const path of Object.values(projection.documents)) {
+      expect(manifestPaths.has(path), `${proofLabel}: projection document ${path}`).toBe(true);
+    }
+  }
+  const executablePaths = [
+    ...manifest.executables.bins.flatMap((entry) => [entry.path, entry.worker]),
+    ...manifest.executables.hooks.map((entry) => entry.path),
+    ...manifest.executables.mcpServers.flatMap((entry) => [
+      entry.launch?.entry,
+      entry.launch?.worker,
+      ...entry.apps.map((app) => app.path),
+    ]),
+    ...manifest.executables.scripts.flatMap((entry) => [entry.path, entry.worker]),
+    manifest.distribution.install?.instructions,
+    manifest.distribution.install?.script,
+  ].filter((path): path is string => path !== undefined);
+  for (const path of executablePaths) {
+    expect(manifestPaths.has(path), `${proofLabel}: executable ${path}`).toBe(true);
+  }
+  for (const forbidden of ['plugin.json', 'mcp.json']) {
+    expect(packedPaths.has(forbidden), `${proofLabel}: forbidden discovery ${forbidden}`).toBe(false);
+  }
   await mkdir(installedArtifactRoot);
   for (const file of [...manifest.files, { path: manifestName }]) {
     const destination = join(installedArtifactRoot, file.path);

@@ -55,7 +55,9 @@ node ./install.mjs
 ```
 
 Its staged copy is idempotent for identical content and refuses version or content collisions. It
-never invokes `sudo` and never changes `PATH`.
+never invokes `sudo` and never changes `PATH`. When `agent-bundle.manifest.json` is present, the
+installer reads the selected projection's plugin and MCP pointers from it; conventional
+`.cursor-plugin/*` and root Agent Plugins paths are fallback discovery for manifest-less packs only.
 
 For a root Cursor loads as an Agent Plugins 1.0.0 pack — `portable` selected without `cursor`,
 so the root `plugin.json` is the only manifest Cursor finds — the installer also expands the
@@ -84,6 +86,9 @@ artifact; `install --from` is manifest-aware and accepts either root. For a gene
 without a second compilation or wrapper. Its complete command surface, including `web`, therefore
 works from `node_modules` exactly as it does from a copied artifact. **No npm lifecycle performs a
 host installation** — installing a package never mutates a host's plugin state.
+
+Repository `AGENTS.md` instructions are copied as authored package metadata. They are never
+replaced by generated projection instructions; a path collision fails the package build.
 
 Install any supported host explicitly from that root with
 `npx agent-bundle install <host> --from node_modules/<package>`. This manifest-aware path excludes

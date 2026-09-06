@@ -250,7 +250,9 @@ npx agent-bundle prepack --root . --output artifact --json
 validated composite artifact unchanged, points routed `package.json` bins at the
 manifest-declared `bin/<name>.mjs`, and adds only separately authored bins and libraries. The gate
 checks that exact inventory, manifest hashes, package bin targets, release-version agreement,
-package-only compile evidence, and the installed-dependency fields of `package.json`. The build
+package-only compile evidence, and the installed-dependency fields of `package.json`. Authored
+`package.json.files` and `.npmignore` rules never narrow the generated root: every selected hidden
+host directory and every manifest file is packed, or prepack fails before publication. The build
 inlines every dependency into authored package entries and the host packs, so a published plugin should install nothing:
 declare the framework, `@agent-bundle/runtime`, `react`, `zod`, and the rest of the stack under
 `devDependencies`. A compiled bundle — a host-pack module or a `dist` bundle alike — cannot keep

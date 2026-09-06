@@ -46,7 +46,7 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 只输出一次
 ├── INSTALL.md                            # 选中了任一内置宿主时
 ├── install.mjs                           # 选中了 cursor 或 portable 时
-├── agent-bundle.manifest.json            # 产物索引（manifestVersion 2）
+├── agent-bundle.manifest.json            # 产物索引（manifestVersion 3）
 └── agent-bundle.compile-evidence.json    # 每个已编译文件的编译器记录
 ```
 
@@ -127,14 +127,14 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 
 ## agent-bundle.manifest.json
 
-每个根目录输出一份清单（`manifestVersion: 2`）。它是根目录的**索引**——每个消费者都通过这一份文档了解
+每个根目录输出一份清单（`manifestVersion: 3`）。它是根目录的**索引**——每个消费者都通过这一份文档了解
 根目录包含什么——也是之后每一项完整性检查的输入：`validate --artifact`、`prepack`、`install`、
 `doctor --from`、`serve-app`、`mcp`、`hooks`，以及 packed 与 installed-host 证明级别。完整的字段参考见
 [产物清单](./artifact-manifest.mdx)页；概要如下：
 
 | 分节 | 内容 |
 | --- | --- |
-| `manifestVersion`、`runtime` | `2`，以及 `{ node }`，即面向消费者的生成式可执行文件下限。 |
+| `manifestVersion`、`runtime` | `3`，以及 `{ node }`，即面向消费者的生成式可执行文件下限。 |
 | `application` | 身份，只记录一次且与宿主无关：`id`、`name`、`version`，可选的 `description`。这是 `install`、`doctor` 与 `uninstall` 作用的对象。 |
 | `files[]` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`（`bundle`、`copy`、`generated`、`prebuilt`）、可选的 `mode`。 |
 | `projections[]` | 每个所选宿主一行，按 `host` 排序：`host`、可选的 `builtInHost`、指向该投影输出的宿主插件、市场、MCP 与钩子文档的 `documents` 指针，以及它的 `marketplace` 名。 |

@@ -129,6 +129,7 @@ describe('framework-owned package build', () => {
   it('builds bin, lib, and dts outputs from conventions and stays deterministic', async () => {
     const root = await fixtureRoot({
       ...conventionFixture(),
+      'AGENTS.md': '# Authored repository instructions\n',
       'package.json': '{"name":"package-build-fixture","type":"module","private":true,"imports":{"#fixture":"./dist/index.js"},"scripts":{"prepack":"agent-bundle prepack","test":"rstest"}}\n',
     });
     await installTypescriptToolchain(root);
@@ -151,6 +152,7 @@ describe('framework-owned package build', () => {
       type: 'module',
     });
     const paths = packageBuild!.files.map((file) => file.path);
+    expect(paths).toContain('AGENTS.md');
     expect(paths).toContain('bin/package-build-fixture.js');
     expect(paths).toContain('index.js');
     expect(paths).toContain('index.d.ts');
@@ -165,6 +167,7 @@ describe('framework-owned package build', () => {
       .toContain('evidence-package');
     expect(JSON.parse(await readFile(join(root, 'dist', packageCompileEvidenceFileName), 'utf8')))
       .toEqual(packageBuild!.evidence);
+    expect(await readFile(join(root, 'dist', 'AGENTS.md'), 'utf8')).toBe('# Authored repository instructions\n');
     for (const file of packageBuild!.files) {
       expect(file.sourceInputs).toEqual([...file.sourceInputs].sort((left, right) => left.localeCompare(right)));
     }

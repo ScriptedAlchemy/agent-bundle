@@ -353,7 +353,7 @@ const copyStandardPackageFiles = async (
   stageRoot: string,
 ): Promise<Map<string, string>> => {
   const sources = new Map<string, string>();
-  for (const name of ['README.md', 'LICENSE', 'LICENSE.md', 'NOTICE', 'NOTICE.md']) {
+  for (const name of ['README.md', 'AGENTS.md', 'LICENSE', 'LICENSE.md', 'NOTICE', 'NOTICE.md']) {
     const source = join(projectRoot, name);
     if (!existsSync(source)) continue;
     const destination = join(stageRoot, name);

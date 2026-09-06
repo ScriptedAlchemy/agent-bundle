@@ -1,5 +1,5 @@
 ---
-description: 'agent-bundle.manifest.json 契约（manifestVersion 2）：build 一次性写出的组合插件根目录索引——每个分节与字段、由谁写入、由谁读取、随包发布的 JSON Schema、保留键，以及版本规则。'
+description: 'agent-bundle.manifest.json 契约（manifestVersion 3）：build 一次性写出的组合插件根目录索引——每个分节与字段、由谁写入、由谁读取、随包发布的 JSON Schema、保留键，以及版本规则。'
 ---
 
 # 产物清单
@@ -16,11 +16,11 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | 属性 | 规则 |
 | --- | --- |
 | 只写一次 | 只有 `agent-bundle build` 在暂存根目录完成之后写出它。没有任何别的东西会创建它；构建之后唯一的编辑是 `files[]` 一节所述对派生变体的重新索引，它只重新测量非编译行，绝不触碰编译行。 |
-| `manifestVersion` | `2`。读取方拒绝任何其他值。 |
+| `manifestVersion` | `3`。读取方拒绝任何其他值。 |
 | 规范字节 | 文件就是该文档的规范 JSON 序列化——对象键已排序、没有无意义的空白、末尾恰有一个换行。每个读取方都会把解析结果重新序列化，字节不完全一致就拒绝该文件。手工编辑、重新格式化或重复键都会让读取失败。 |
 | 封闭键 | 每个对象只接受文档化的那些键。任何层级上的未知键都是解析错误。 |
 | 有序数组 | 每个数组都有显式的排序键（各分节下方注明），且没有重复项。 |
-| 精简读取方 | 上面各行描述的是完整解析器（`parseArtifactManifest`），下表中的消费者除一个之外都使用它：打包进生成 bin 的 `<plugin> web` 支持不经解析器读取清单。它只校验自己启动所需的切片并忽略其余所有键，但对这些切片是拒绝而非过滤，所用检查与完整解析器相同（由 `web-host/manifest.ts` 持有，两者都从它导入）：`2` 以外的 `manifestVersion` 或重复的 JSON 键；不是对象、未命名 host 或重复 host 的 `projections[]` 行；不是对象、`kind` 未知、按 kind 不应携带却带有 `launch` 记录（或应携带却缺失）、或重复 server `name` 的 `executables.mcpServers[]` 行——同名两行绝不会解析为后者；格式错误的 `launch` 记录，或其 entry 不是其服务器 kind 所启动的那种 `files[]` 行（`compiled` 对应 `bundle`，`prebuilt` 对应 `prebuilt`）、worker 不是 `bundle` 行、或 `artifact` 参数不在根目录之内的记录（参数可以指向根目录下含有行的目录）；以及 `server` 并非带 launch 记录之行的 `web.apps[]` 行。 |
+| 精简读取方 | 上面各行描述的是完整解析器（`parseArtifactManifest`），下表中的消费者除一个之外都使用它：打包进生成 bin 的 `<plugin> web` 支持不经解析器读取清单。它只校验自己启动所需的切片并忽略其余所有键，但对这些切片是拒绝而非过滤，所用检查与完整解析器相同（由 `web-host/manifest.ts` 持有，两者都从它导入）：`3` 以外的 `manifestVersion` 或重复的 JSON 键；不是对象、未命名 host 或重复 host 的 `projections[]` 行；不是对象、`kind` 未知、按 kind 不应携带却带有 `launch` 记录（或应携带却缺失）、或重复 server `name` 的 `executables.mcpServers[]` 行——同名两行绝不会解析为后者；格式错误的 `launch` 记录，或其 entry 不是其服务器 kind 所启动的那种 `files[]` 行（`compiled` 对应 `bundle`，`prebuilt` 对应 `prebuilt`）、worker 不是 `bundle` 行、或 `artifact` 参数不在根目录之内的记录（参数可以指向根目录下含有行的目录）；以及 `server` 并非带 launch 记录之行的 `web.apps[]` 行。 |
 | 路径 | 每个路径都是 POSIX 形式、相对根目录且安全：没有前导 `/`、没有反斜杠、没有 `.` 或 `..` 段，也绝不会是构建机上的绝对路径。把整个组合根目录搬到另一个绝对路径后，每个读取方仍然可用：所有路径都保持相对根目录，并在搬迁后的树内解析。任何分节指向的路径——宿主文档、可执行文件、App 视图、安装文件——同时也是一行 `files[]`。 |
 
 ## 由谁写入
@@ -58,7 +58,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 | 字段 | 内容 |
 | --- | --- |
-| `manifestVersion` | `2`。为消费者读取的公开契约版本化。 |
+| `manifestVersion` | `3`。为消费者读取的公开契约版本化。 |
 | `runtime` | `{ node }`——该根目录据以构建的面向消费者的生成式可执行文件运行时下限，为满足框架下限的规范 `major.minor.patch` 字符串。 |
 
 ### `application`
@@ -320,7 +320,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
     { "bytes": 412, "kind": "generated", "path": ".claude-plugin/plugin.json",
       "sha256": "…" }
   ],
-  "manifestVersion": 2,
+  "manifestVersion": 3,
   "projections": [
     { "builtInHost": "claude",
       "documents": { "hooks": "hooks/hooks.json", "marketplace": ".claude-plugin/marketplace.json",
@@ -372,7 +372,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `readArtifactManifest(root)` | 打开 `<root>/agent-bundle.manifest.json`，返回 `{ status: 'ok', manifest, path, root }`、`{ status: 'missing', … }` 或 `{ status: 'invalid', detail, … }`。这是框架自身的消费者打开已构建根目录的唯一方式。 |
 | `parseArtifactManifest(bytes)` | 把规范字节解析并校验为冻结的 `ArtifactManifest`；任何违规——包括重复键或非规范字节——都会抛出。 |
 | `artifactManifestName` | `'agent-bundle.manifest.json'`。 |
-| `artifactManifestVersion` | `2`。 |
+| `artifactManifestVersion` | `3`。 |
 | `artifactCompilerRecordVersion` | `1`。 |
 
 类型（`ArtifactManifest`、`ArtifactManifestCompiler`、`ArtifactManifestCompilerAdapter`、
@@ -381,7 +381,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 ## 保留键
 
-这些键属于设计的一部分，但**不会输出**，v2 读取方会像对待任何未知键一样拒绝它们。在此列出，是为了让消费者
+这些键属于设计的一部分，但**不会输出**，v3 读取方会像对待任何未知键一样拒绝它们。在此列出，是为了让消费者
 不要自创拼写：
 
 | 保留键 | 预期内容 |
@@ -399,7 +399,8 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 - `manifestVersion` 为消费者读取的**公开契约**版本化（`application`、`files[]`、`runtime`、
   `projections[]`、`routes`、`executables`、`distribution`）。旧的封闭读取方会拒绝的**任何**变更
   都会使其递增——新增、重命名或删除一个公开契约键（无论是否可选），或更改读取方封闭的枚举值集合。
-  同一版本内键清单冻结。读取方拒绝任何其他 `manifestVersion`。版本 2 把 `targets[]` 重命名为
+  同一版本内键清单冻结。读取方拒绝任何其他 `manifestVersion`。版本 3 新增
+  `distribution.install.instructions` 与 `distribution.install.script`；版本 2 把 `targets[]` 重命名为
   `projections[]`，把过去由 `agent-bundle.hooks.json` 承载的钩子行移入 `executables.hooks[]` 并删除了
   该文件，并新增了 `application`、`routes`、`executables`、`distribution` 与
   `projections[].documents`。
