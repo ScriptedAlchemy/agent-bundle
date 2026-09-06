@@ -346,7 +346,7 @@ export class DevHostInstallManager {
   constructor(options: DevHostInstallManagerOptions) {
     this.#adoption = options.adoption;
     this.#epochStore = options.epochStore;
-    this.#environment = options.environment ?? process.env;
+    this.#environment = Object.freeze({ ...(options.environment ?? process.env) });
     this.#eventHub = options.eventHub;
     this.#home = options.home;
     this.#hosts = Object.freeze([...new Set(options.hosts)]);
