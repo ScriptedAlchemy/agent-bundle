@@ -353,13 +353,8 @@ describe('generated entry templates', () => {
       routes: [route],
       stateFallback: 'artifact',
     });
-    expect(withoutWeb).toContain("import { realpathSync } from 'node:fs';");
-    expect(withoutWeb).toContain("import { fileURLToPath } from 'node:url';");
-    expect(withoutWeb).toContain(
-      'if (import.meta.main ?? (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))) {',
-    );
     expect(createHash('sha256').update(withoutWeb).digest('hex'))
-      .toBe('3441cac12bf019e2bbc91bede2b2107a5f6fa07774f796e8a5ad3420ea483c51');
+      .toBe('fad5a6fe047fe71e2e061a5f7d1880d39502afaa5e725538e7de364499334580');
     expect(withoutWeb).not.toContain('agent-bundle/web-host');
     expect(withoutWeb).not.toContain('web: Object.freeze({');
   });
@@ -701,9 +696,10 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(source).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
   expect(source).toContain('route.module.inputSchema.parse(message.invocation.props.input)');
+  expect(source).toContain('message.validateInput !== true ? { input: message.invocation.props.input');
   expect(source).toContain("createElement(Agent.Error, { code: 'invalid-input' }");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    'd0e437f50cc7a9176a0d24ef430b3b046a6795ba1ebaed6f3a255fe75a3d358d',
+    '9780b027d8d5fef12aa0843ba9eb5ab6bd0336ef137ec1bfa552a2ff19daa217',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',

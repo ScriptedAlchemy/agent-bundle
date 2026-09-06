@@ -78,14 +78,9 @@ export const eventFixturesFor = (lifecycle: Lifecycle | undefined): readonly Rou
     })),
 );
 
-export const eventRequestFor = (
-  host: EventHostSelection,
-  draft: RouteInvocationDraft,
-  fixtureId?: string,
-): RouteInvocationDraft => Object.freeze({
+export const eventRequestFor = (host: EventHostSelection, draft: RouteInvocationDraft): RouteInvocationDraft => Object.freeze({
   ...draft,
   surface: Object.freeze({
-    ...(fixtureId === undefined ? {} : { fixtureId }),
     ...(host === 'canonical' ? {} : { host }),
     kind: 'event',
   }),
@@ -248,8 +243,11 @@ export const EventRouteWorkspace = ({ clients, controller, leaf, onNavigate, tab
   // A loaded host invocation switches the selector to its host so the editor
   // shows the native payload it was actually run with.
   useEffect(() => {
-    setHost(invocation?.event?.host ?? defaultEventHostSelection(leaf, lifecycle));
-  }, [invocation, leaf, lifecycle]);
+    if (invocation?.event?.host !== undefined) setHost(invocation.event.host);
+  }, [invocation]);
+  useEffect(() => {
+    setHost(defaultEventHostSelection(leaf, lifecycle));
+  }, [leaf, lifecycle]);
 
   const nativeLeaf = useMemo<ApplicationLeaf>(() => {
     const { inputSchema: _schema, ...rest } = leaf;

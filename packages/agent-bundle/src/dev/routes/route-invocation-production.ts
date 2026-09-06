@@ -394,6 +394,7 @@ const streamFromWorker = (
         session: request.context.session,
         terminal: { reason: 'not-provided', state: 'unavailable' },
         type: 'render',
+        validateInput: true,
         workspace: request.context.workspace,
       });
       return stream;

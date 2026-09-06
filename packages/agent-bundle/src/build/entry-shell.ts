@@ -428,7 +428,6 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     // module-level `process.env` read sees the composed environment. The
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
-    "import { realpathSync } from 'node:fs';",
     ...(stateFallback === 'artifact' || options.web?.pluginRootRelativeUrl !== undefined
       ? []
       : ["import { fileURLToPath } from 'node:url';"]),
@@ -558,7 +557,7 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
         '',
       ]
       : []),
-    'if (import.meta.main ?? (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))) {',
+    'if (import.meta.main) {',
     ...(options.state === undefined ? [] : ['try {']),
     `${options.state === undefined ? '' : '  '}await runGeneratedCliProcess({`,
     '  commands,',
@@ -1188,7 +1187,9 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     '      let validationError;',
     "      const props = message.invocation.kind === 'event'",
     '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
-    '        : (() => {',
+    // The MCP server hands the worker input the SDK already validated; only
+    // the Workbench, which bypasses the SDK, asks the worker to validate.
+    '        : message.validateInput !== true ? { input: message.invocation.props.input, signal: controller.signal } : (() => {',
     '            try { return { input: route.module.inputSchema.parse(message.invocation.props.input), signal: controller.signal }; }',
     "            catch (error) { validationError = error; return { input: message.invocation.props.input, signal: controller.signal }; }",
     '          })();',
