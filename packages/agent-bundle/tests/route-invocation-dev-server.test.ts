@@ -20,7 +20,11 @@ import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 import { replaceWatchedSourceAndAwaitRebuild } from './support/watched-files.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 
-const readEvent = async (response: Response, type: string): Promise<Record<string, unknown>> => {
+const readEvent = async (
+  response: Response,
+  type: string,
+  matches: (event: Record<string, unknown>) => boolean = () => true,
+): Promise<Record<string, unknown>> => {
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
   let buffered = '';
   for (;;) {
@@ -32,7 +36,30 @@ const readEvent = async (response: Response, type: string): Promise<Record<strin
     for (const frame of frames) {
       if (!frame.includes(`event: ${type}\n`)) continue;
       const data = frame.split('\n').find((line) => line.startsWith('data: '));
-      if (data !== undefined) return JSON.parse(data.slice('data: '.length)) as Record<string, unknown>;
+      if (data !== undefined) {
+        const event = JSON.parse(data.slice('data: '.length)) as Record<string, unknown>;
+        if (matches(event)) return event;
+      }
+    }
+  }
+};
+
+const readInvocationStream = async (response: Response): Promise<readonly Record<string, unknown>[]> => {
+  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+  const messages: Record<string, unknown>[] = [];
+  let buffered = '';
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) throw new Error('Invocation stream ended before final.');
+    buffered += next.value;
+    const frames = buffered.split('\n\n');
+    buffered = frames.pop() ?? '';
+    for (const frame of frames) {
+      const data = frame.split('\n').find((line) => line.startsWith('data: '));
+      if (data === undefined) continue;
+      const message = JSON.parse(data.slice('data: '.length)) as Record<string, unknown>;
+      messages.push(message);
+      if (message.type === 'final') return messages;
     }
   }
 };
@@ -195,6 +222,23 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
+      'src/mcp/status/tools/live.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement, Suspense } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        'export const inputSchema = z.object({}).strict();',
+        'export const resultSchema = z.object({ done: z.boolean() }).strict();',
+        'const Slow = async () => {',
+        '  await new Promise((resolve) => setTimeout(resolve, 1_000));',
+        "  return createElement(Agent.Text, null, 'stream complete');",
+        '};',
+        '',
+        'export default async function Live() {',
+        "  return createElement(Agent.Result, { value: { done: true } }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'streaming', total: 1 }) }, createElement(Slow)));",
+        '}',
+        '',
+      ].join('\n'),
       'src/mcp/status/tools/report.cli.ts': [
         "export const config = { command: ['report'], confirm: true, flags: { service: { name: 'name' }, source: { required: false } } };",
         "export const mapInput = (input) => ({ ...input, source: input.source ?? 'cli-projection' });",
@@ -269,6 +313,50 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     if (activeEpoch.state !== 'active') throw new Error('Expected an active compiled epoch.');
     const artifactRoot = join(project.root, '.agent-bundle', 'epochs', activeEpoch.activeEpoch.id);
     const stateRoot = join(project.root, '.agent-bundle', 'state');
+    const startLive = async () => {
+      const response = await fetch(`${server!.url}/api/routes/invocations`, {
+        body: JSON.stringify({ routeId: 'tool:status/live', stream: true }),
+        headers,
+        method: 'POST',
+      });
+      expect(response.status).toBe(202);
+      return response.json() as Promise<{ readonly invocation: { readonly id: string; readonly status: string } }>;
+    };
+    const live = await startLive();
+    expect(live.invocation.status).toBe('running');
+    const liveStreamResponse = await fetch(`${server.url}/api/routes/invocations/${live.invocation.id}/stream`, { headers });
+    expect(liveStreamResponse.status).toBe(200);
+    const liveMessages = await readInvocationStream(liveStreamResponse);
+    expect(liveMessages.findIndex((message) => message.type === 'render')).toBeGreaterThanOrEqual(0);
+    expect(liveMessages.at(-1)).toMatchObject({
+      invocation: { status: 'succeeded' },
+      type: 'final',
+    });
+
+    const cancelling = await startLive();
+    const cancellingStream = await fetch(`${server.url}/api/routes/invocations/${cancelling.invocation.id}/stream`, { headers });
+    const cancellingMessages = readInvocationStream(cancellingStream);
+    const cancelResponse = await fetch(`${server.url}/api/routes/invocations/${cancelling.invocation.id}/cancel`, {
+      headers,
+      method: 'POST',
+    });
+    expect(cancelResponse.status).toBe(202);
+    const cancelled = await cancelResponse.json() as RouteInvocationResponse;
+    expect(cancelled.invocation).toMatchObject({ status: 'cancelled' });
+    expect(cancelled.invocation).not.toHaveProperty('outcome');
+    expect((await cancellingMessages).at(-1)).toMatchObject({
+      invocation: { status: 'cancelled' },
+      type: 'final',
+    });
+    const finalCancelResponse = await fetch(`${server.url}/api/routes/invocations/${cancelling.invocation.id}/cancel`, {
+      headers,
+      method: 'POST',
+    });
+    expect(finalCancelResponse.status).toBe(409);
+    await expect(finalCancelResponse.json()).resolves.toMatchObject({ diagnostic: { code: 'AB8256' } });
+    const unknownStream = await fetch(`${server.url}/api/routes/invocations/inv_missing/stream`, { headers });
+    expect(unknownStream.status).toBe(404);
+
     const toolResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 'catalog', source: 'api' }, routeId: 'tool:status/report' }),
       headers,
@@ -713,7 +801,10 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const read = await fetch(`${server.url}/api/routes/invocations/${tool.invocation.id}`, { headers });
     await expect(read.json()).resolves.toEqual(tool);
 
-    const published = await readEvent(stream, 'route.invocation');
+    const published = await readEvent(stream, 'route.invocation', (event) => {
+      const invocation = (event.payload as { readonly invocation?: { readonly routeId?: string; readonly status?: string } } | undefined)?.invocation;
+      return invocation?.routeId === 'tool:status/report' && invocation.status === 'succeeded';
+    });
     expect(published).toMatchObject({
       payload: { invocation: { outcome: { kind: 'success' }, routeId: 'tool:status/report', status: 'succeeded' } },
       type: 'route.invocation',

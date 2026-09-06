@@ -76,8 +76,9 @@ executable route, the input editor is generated from its schema and offers appli
 and the last input kept for that leaf. **Run** executes the production route path on the
 foreground server.
 
-Results open on **Rendered**, the browser rendering of the production Agent Document and its
-streamed progress or Suspense replacements. Secondary result tabs are **Structured result**,
+Results open on **Rendered**, the browser rendering of the production Agent Document. While a
+route runs, streamed progress and Suspense replacements update this view in place and **Cancel**
+stops the child; cancelled invocations have no `outcome`. Secondary result tabs are **Structured result**,
 **Raw AgentDocument**, **MCP projection**, **CLI projection** when available, and **Trace**.
 The inspector opens only when requested and contains **Source**, **Schema**, **Context**,
 **Providers**, **Execution timings**, **Projection**, and **Raw protocol**. A provider the run
@@ -157,7 +158,7 @@ keys, optional status and duration, and, when a full record is available, an `hr
 
 | Source | Kinds | Correlation keys | Destination |
 | --- | --- | --- | --- |
-| `invocation` | `invocation.started`, `invocation.completed`, `invocation.failed` | `correlationId`, `requestId`, `invocationId`, `routeId`, `epochId`, plus session/conversation when available | The Application route with `?invocation=<id>` |
+| `invocation` | `invocation.started`, `invocation.completed`, `invocation.failed`, `invocation.cancelled` | `correlationId`, `requestId`, `invocationId`, `routeId`, `epochId`, plus session/conversation when available | The Application route with `?invocation=<id>` |
 | `kernel` | `kernel.preflight.start`, `kernel.preflight.outcome`, `kernel.execute.start`, provider and render start/finish, `kernel.failure` | `executionId`, route, host, session and conversation identity when available | The corresponding route invocation |
 | `mcp` | request, response, notification, progress, logging, session, and stderr kinds | `mcpSessionId`, JSON-RPC `mcpRequestId`, `requestId`, route and host metadata when known | The route workspace with `?session=<id>`, or the bound Protocol session |
 | `runtime` | run start/completion/failure, generation publication, and App updates | `runId`, `correlationId`, `routeId`, `epochId`, `mcpSessionId` | The route with `?invocation=<runId>` |
@@ -278,10 +279,15 @@ survive refresh.
 The route workspace uses one authenticated, origin-guarded foreground API:
 
 - `POST /api/routes/invocations` accepts a route invocation request and returns its completed
-  invocation envelope.
+  invocation envelope. With `stream: true`, it returns `202` immediately with the running id.
+- `GET /api/routes/invocations/<id>/stream` streams retained and live `render`, `trace`,
+  `truncated`, and terminal `final` messages as server-sent events. It retains the newest 256
+  render events and reports dropped older events once.
+- `POST /api/routes/invocations/<id>/cancel` stops a running or queued invocation and returns its
+  cancelled final envelope; cancelling an already-final invocation reports `AB8256` (409).
 - `GET /api/routes/invocations?limit=50` returns newest-first summaries for Trace.
 - `GET /api/routes/invocations/<id>` returns one invocation.
-- `/api/project/events` publishes completed summaries as `route.invocation` events.
+- `/api/project/events` publishes the running record and final summary as `route.invocation` events.
 - `GET /api/trace?after=<sequence>` returns a correlated trace replay.
 - `GET /api/trace/stream?after=<sequence>` streams trace entries and replay gaps as NDJSON.
 - `POST /api/trace/receipts` accepts one bounded, bearer-authenticated hook receipt from a
@@ -320,8 +326,9 @@ unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed 
 (`AB8237`), unknown fixture ids (`AB8238`), a queued invocation whose published revision
 moved before it acquired a slot (`AB8239`), unavailable compiled artifacts (`AB8250`), missing
 compiled route executables (`AB8251`), compiled projection or preflight failures (`AB8252`),
-CLI command/operation mismatches (`AB8253`), projected duplicate CLI ids (`AB8254`), and
-preflight routes submitted without a concrete host (`AB8255`) are reported as diagnostics.
+CLI command/operation mismatches (`AB8253`), projected duplicate CLI ids (`AB8254`), preflight
+routes submitted without a concrete host (`AB8255`), and cancellation of an already-final
+invocation (`AB8256`) are reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
 
@@ -334,12 +341,14 @@ reported as plain success.
 | Field | Value | Meaning |
 | --- | --- | --- |
 | `status` | `succeeded` | The child completed a final document (or a plain script exited). |
-| `status` | `failed` | The boundary never completed: crash, timeout, abort, or an `AB825x` diagnostic. |
+| `status` | `failed` | The boundary never completed: crash, timeout, or an `AB825x` diagnostic. |
+| `status` | `cancelled` | The operator cancelled a running or queued invocation; no `outcome` is present. |
 | `outcome` | `{ kind: "success" }` | The projected result is a success by the route's surface. |
 | `outcome` | `{ kind: "represented-error", summary }` | The MCP projection carries `isError: true` (a non-`success` Agent Document, such as `Agent.Error`), or an event route's decision is `deny`. `summary` lists the `Agent.Error` codes and messages, or the deny reason. |
 | `outcome` | `{ kind: "process-exit", exitCode }` | A CLI or script route completed and its generated executable set a non-zero exit code — the bin's own `exitCode` policy applied to the validated result, or `1` for a non-`success` document. A zero exit reports `success`. |
 
-The Workbench status line shows the execution status (`Completed` / `Failed`) beside an outcome
+The Workbench status line shows the execution status (`Running` / `Completed` / `Failed` /
+`Cancelled`) beside an outcome
 badge, and Trace lists both for every entry.
 
 The complete browser-facing HTTP shapes, including the trace entry and replay contracts, are in

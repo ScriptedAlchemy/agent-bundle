@@ -40,6 +40,8 @@
 .route-run, .route-input-editor .route-run { background: #0b5bd3; border: 1px solid #0b5bd3; border-radius: 4px; color: #fff; cursor: pointer; font-size: 13px; font-weight: 700; min-width: 96px; padding: 8px 18px; }
 .route-run:hover:not(:disabled) { background: #0a4fb8; }
 .route-run:disabled { cursor: not-allowed; opacity: .55; }
+.route-cancel { background: #fff; border: 1px solid #b31b23; border-radius: 4px; color: #b31b23; cursor: pointer; justify-self: start; padding: 6px 14px; }
+.route-cancel:disabled { cursor: not-allowed; opacity: .55; }
 .route-input-shortcut { color: #7a8492; font-size: 11px; }
 .route-input-error { color: #aa1f2a; display: block; font-size: 11px; margin-top: 4px; }
 

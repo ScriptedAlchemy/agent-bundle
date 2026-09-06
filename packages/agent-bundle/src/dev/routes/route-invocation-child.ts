@@ -1,4 +1,5 @@
 import * as AgentRuntime from '@agent-bundle/runtime';
+import type { AgentRenderEvent } from '@agent-bundle/runtime';
 
 import { renderedDocumentExitCode } from '../../cli-entry.ts';
 import { isJsonRecord, type JsonObject } from '../../core/strict-json.ts';
@@ -65,6 +66,10 @@ const respond = (response: RouteInvocationChildResponse): Promise<void> => new P
 
 const forwardEventTrace = (event: EventTraceEvent): void => {
   process.send?.({ event, type: 'trace' } satisfies RouteInvocationChildResponse);
+};
+
+const forwardRenderEvent = (event: AgentRenderEvent): void => {
+  process.send?.({ event, type: 'render' } satisfies RouteInvocationChildResponse);
 };
 
 /**
@@ -147,10 +152,15 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
   });
 };
 
-const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> =>
-  request.surface.kind === 'unit-render'
-    ? renderUnitRoute(request)
-    : renderProductionRoute(request, forwardEventTrace);
+const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
+  const result = request.surface.kind === 'unit-render'
+    ? await renderUnitRoute(request)
+    : await renderProductionRoute(request, forwardEventTrace, forwardRenderEvent);
+  if (request.surface.kind === 'unit-render') {
+    for (const event of result.events) forwardRenderEvent(event);
+  }
+  return result;
+};
 
 process.once('message', (request: RouteInvocationChildRequest) => {
   const disposeTraceObserver = installEventTraceObserver(forwardEventTrace);

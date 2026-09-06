@@ -17,6 +17,7 @@ export type {
   RouteInvocationProviderStatus,
   RouteInvocationRequest,
   RouteInvocationStatus,
+  RunningRouteInvocation,
   RouteInvocationSummary,
   RouteInvocationSurface,
   RouteInvocationTiming,
@@ -24,5 +25,8 @@ export type {
 export type {
   RouteInvocation,
   RouteInvocationResponse,
+  RouteInvocationStart,
+  RouteInvocationStreamMessage,
+  RunningRouteInvocationResponse,
 } from '../dev/routes/route-invocation-result.ts';
 export type { EventTraceEvent } from '../events/trace.ts';

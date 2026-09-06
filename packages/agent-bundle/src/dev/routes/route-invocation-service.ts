@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { AgentDocument, AgentDocumentNode } from '@agent-bundle/runtime';
+import type { AgentDocument, AgentDocumentNode, AgentRenderEvent } from '@agent-bundle/runtime';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type { TargetHookContract } from '../../adapters/hook-contract.ts';
@@ -47,7 +47,11 @@ import {
   isProductionRouteInvocationCode,
   ProductionRouteInvocationError,
 } from './route-invocation-production-error.ts';
-import type { RouteInvocation } from './route-invocation-result.ts';
+import type {
+  RouteInvocation,
+  RouteInvocationStart,
+  RouteInvocationStreamMessage,
+} from './route-invocation-result.ts';
 import { nativeEventRequestContext } from './route-invocation.ts';
 import type {
   RouteInvocationEventHost,
@@ -55,6 +59,7 @@ import type {
   RouteInvocationOutcome,
   RouteInvocationProvider,
   RouteInvocationRequest,
+  RunningRouteInvocation,
   RouteInvocationSurface,
   RouteInvocationSummary,
   RouteInvocationTiming,
@@ -71,6 +76,7 @@ export const ROUTE_INVOCATION_STALE_REVISION_CODE = 'AB8239';
 export const ROUTE_INVOCATION_CLI_COMMAND_MISMATCH_CODE = 'AB8253';
 export const ROUTE_INVOCATION_PROJECTED_CLI_ID_CODE = 'AB8254';
 export const ROUTE_INVOCATION_EVENT_HOST_REQUIRED_CODE = 'AB8255';
+export const ROUTE_INVOCATION_ALREADY_FINAL_CODE = 'AB8256';
 export const ROUTE_INVOCATION_STALE_REVISION_MESSAGE =
   'The published route manifest changed while this invocation waited to run. Retry against the current revision.';
 
@@ -127,6 +133,7 @@ export interface RouteInvocationServiceOptions {
     request: RouteInvocationChildRequest,
     signal: AbortSignal,
     publishKernelEvent: (event: EventTraceEvent) => void,
+    publishRenderEvent: (event: AgentRenderEvent) => void,
   ) => Promise<RouteInvocationChildResult>;
   readonly scripts?: RouteInvocationScriptRunner;
   readonly timeoutMs?: number;
@@ -172,6 +179,7 @@ export interface RouteInvocationChildResult {
 
 export type RouteInvocationChildResponse =
   | Readonly<{ readonly result: RouteInvocationChildResult; readonly type: 'result' }>
+  | Readonly<{ readonly event: AgentRenderEvent; readonly type: 'render' }>
   | Readonly<{ readonly event: EventTraceEvent; readonly type: 'trace' }>
   | Readonly<{
     readonly error: Readonly<{ readonly code?: string; readonly message: string; readonly name: string }>;
@@ -187,6 +195,7 @@ export class RouteInvocationRequestError extends Error {
     | typeof ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE
     | typeof ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE
     | typeof ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE
+    | typeof ROUTE_INVOCATION_ALREADY_FINAL_CODE
     | typeof ROUTE_INVOCATION_STALE_REVISION_CODE;
   readonly status: 400 | 404 | 409;
 
@@ -614,6 +623,11 @@ const isEventTraceEvent = (value: unknown): value is EventTraceEvent => {
 const isChildResponse = (value: unknown): value is RouteInvocationChildResponse => {
   if (!isRecord(value)) return false;
   if (value.type === 'result') return isRecord(value.result);
+  if (value.type === 'render') {
+    return isRecord(value.event)
+      && typeof value.event.type === 'string'
+      && ['complete', 'error', 'progress', 'replace', 'shell'].includes(value.event.type);
+  }
   if (value.type === 'trace') {
     return hasOnlyOwnKeys(value, ['event', 'type']) && isEventTraceEvent(value.event);
   }
@@ -661,6 +675,7 @@ const renderInChild = async (
   request: RouteInvocationChildRequest,
   signal: AbortSignal,
   publishKernelEvent: (event: EventTraceEvent) => void,
+  publishRenderEvent: (event: AgentRenderEvent) => void,
 ): Promise<RouteInvocationChildResult> => {
   if (signal.aborted) throw signal.reason;
   const executable = childPath();
@@ -697,6 +712,10 @@ const renderInChild = async (
       if (!isChildResponse(message)) return settle(() => rejectPromise(new Error('Route invocation child returned an invalid response.')));
       if (message.type === 'trace') {
         publishKernelEvent(message.event);
+        return;
+      }
+      if (message.type === 'render') {
+        publishRenderEvent(message.event);
         return;
       }
       if (message.type === 'error') {
@@ -1152,9 +1171,72 @@ const failedInvocation = (input: {
   });
 };
 
+interface InvocationStreamRecord {
+  readonly controller: AbortController;
+  readonly listeners: Set<(message: RouteInvocationStreamMessage) => void>;
+  readonly messages: RouteInvocationStreamMessage[];
+  readonly running: RunningRouteInvocation;
+  cancelRequested: boolean;
+  dropped: number;
+  final?: RouteInvocation;
+  result?: Promise<RouteInvocation>;
+}
+
+const latestDocument = (
+  messages: readonly RouteInvocationStreamMessage[],
+): AgentDocument | undefined => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.type !== 'render') continue;
+    if (message.event.type === 'shell' || message.event.type === 'replace' || message.event.type === 'complete') {
+      return message.event.document;
+    }
+  }
+  return undefined;
+};
+
+const cancelledInvocation = (input: {
+  readonly context: RequestContextProvenance;
+  readonly id: string;
+  readonly manifest: RouteManifest;
+  readonly messages: readonly RouteInvocationStreamMessage[];
+  readonly request: RouteInvocationRequest;
+  readonly route: RouteManifestRoute;
+  readonly startedAt: Date;
+  readonly surface: RouteInvocationSurface;
+  readonly completedAt: Date;
+}): RouteInvocation => {
+  const events = input.messages.flatMap((message) => message.type === 'render' ? [message.event] : []);
+  const document = latestDocument(input.messages);
+  return deepFreeze({
+    completedAt: input.completedAt.toISOString(),
+    context: input.context,
+    ...(input.request.correlationId === undefined ? {} : { correlationId: input.request.correlationId }),
+    diagnostics: [],
+    ...(document === undefined ? {} : { document }),
+    events,
+    id: input.id,
+    input: input.request.input ?? {},
+    kind: input.route.kind as RouteInvocationKind,
+    manifestDigest: input.manifest.digest,
+    projection: {},
+    providers: unobservedProviders(input.manifest),
+    routeId: input.route.id,
+    source: input.route.source,
+    sourceRevision: input.manifest.sourceRevision,
+    startedAt: input.startedAt.toISOString(),
+    status: 'cancelled',
+    surface: input.surface,
+    timings: [timing('elapsed', input.startedAt, input.completedAt.getTime() - input.startedAt.getTime())],
+  });
+};
+
 export class RouteInvocationService {
+  readonly #completedStreams: string[] = [];
   readonly #controllers = new Set<AbortController>();
   readonly #history: InvocationRingBuffer;
+  readonly #historyLimit: number;
+  readonly #streams = new Map<string, InvocationStreamRecord>();
   readonly #manifest: RouteManifestRouteService;
   readonly #now: () => Date;
   readonly #pending = new Set<Promise<RouteInvocation>>();
@@ -1168,7 +1250,8 @@ export class RouteInvocationService {
   readonly #closeController = new AbortController();
 
   constructor(options: RouteInvocationServiceOptions) {
-    this.#history = new InvocationRingBuffer(options.historyLimit);
+    this.#historyLimit = options.historyLimit ?? defaultHistoryLimit;
+    this.#history = new InvocationRingBuffer(this.#historyLimit);
     this.#manifest = options.manifest;
     this.#now = options.now ?? (() => new Date());
     this.#prepared = options.prepared;
@@ -1189,6 +1272,68 @@ export class RouteInvocationService {
     return this.#history.read(id);
   }
 
+  has(id: string): boolean {
+    return this.#streams.has(id);
+  }
+
+  subscribe(id: string, listener: (message: RouteInvocationStreamMessage) => void): () => void {
+    const record = this.#streams.get(id);
+    if (record === undefined) {
+      throw new RouteInvocationRequestError(
+        ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE,
+        `Route invocation ${JSON.stringify(id)} was not found.`,
+        404,
+      );
+    }
+    for (const message of record.messages) listener(message);
+    if (record.final === undefined) record.listeners.add(listener);
+    return () => record.listeners.delete(listener);
+  }
+
+  async cancel(id: string): Promise<RouteInvocation> {
+    const record = this.#streams.get(id);
+    if (record === undefined) {
+      throw new RouteInvocationRequestError(
+        ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE,
+        `Route invocation ${JSON.stringify(id)} was not found.`,
+        404,
+      );
+    }
+    if (record.final !== undefined) {
+      throw new RouteInvocationRequestError(
+        ROUTE_INVOCATION_ALREADY_FINAL_CODE,
+        `Route invocation ${JSON.stringify(id)} is already final.`,
+        409,
+      );
+    }
+    record.cancelRequested = true;
+    record.controller.abort(new DOMException('Route invocation cancelled by the operator.', 'AbortError'));
+    return record.result!;
+  }
+
+  #publishStream(record: InvocationStreamRecord, message: RouteInvocationStreamMessage): void {
+    if (message.type === 'render') {
+      const renderCount = record.messages.reduce((count, retained) =>
+        count + (retained.type === 'render' ? 1 : 0), 0);
+      if (renderCount === 256) {
+        const oldest = record.messages.findIndex((retained) => retained.type === 'render');
+        if (oldest !== -1) record.messages.splice(oldest, 1);
+        record.dropped += 1;
+        const marker = deepFreeze<RouteInvocationStreamMessage>({ dropped: record.dropped, type: 'truncated' });
+        const markerIndex = record.messages.findIndex((retained) => retained.type === 'truncated');
+        if (markerIndex === -1) {
+          record.messages.unshift(marker);
+          for (const listener of record.listeners) listener(marker);
+        } else {
+          record.messages[markerIndex] = marker;
+        }
+      }
+    }
+    const frozen = deepFreeze(message);
+    record.messages.push(frozen);
+    for (const listener of record.listeners) listener(frozen);
+  }
+
   async close(): Promise<void> {
     this.#closeController.abort(new DOMException('Route invocation service closed.', 'AbortError'));
     for (const controller of this.#controllers) {
@@ -1197,10 +1342,29 @@ export class RouteInvocationService {
     await Promise.allSettled([...this.#pending]);
   }
 
-  async invoke(
+  invoke(
     request: RouteInvocationRequest,
     options: Readonly<{ readonly signal?: AbortSignal }> = {},
   ): Promise<RouteInvocation> {
+    try {
+      return this.#start(request, options, false).result;
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  start(
+    request: RouteInvocationRequest,
+    options: Readonly<{ readonly signal?: AbortSignal }> = {},
+  ): RouteInvocationStart {
+    return this.#start(request, options, true);
+  }
+
+  #start(
+    request: RouteInvocationRequest,
+    options: Readonly<{ readonly signal?: AbortSignal }>,
+    terminalErrors: boolean,
+  ): RouteInvocationStart {
     let queued: RouteManifest;
     try {
       queued = this.#manifest.manifest();
@@ -1232,15 +1396,39 @@ export class RouteInvocationService {
     const surface = resolvedSurface(route, request.surface, queued);
     const id = `inv_${this.#now().getTime().toString(36)}${randomBytes(8).toString('hex')}`;
     const startedAt = this.#now();
+    const operationController = new AbortController();
+    const runningInvocation: RunningRouteInvocation = deepFreeze({
+      id,
+      routeId: route.id,
+      startedAt: startedAt.toISOString(),
+      status: 'running',
+      surface,
+    });
+    const streamRecord: InvocationStreamRecord = {
+      cancelRequested: false,
+      controller: operationController,
+      dropped: 0,
+      listeners: new Set(),
+      messages: [],
+      running: runningInvocation,
+    };
+    this.#streams.set(id, streamRecord);
+    this.#controllers.add(operationController);
     let traceMeta: Readonly<{
       readonly correlation: TraceCorrelation;
       readonly eventOutcome: () => EventTracePreflightOutcome | undefined;
       readonly href?: string;
       readonly label: string;
     }> | undefined;
-    const admissionSignal = options.signal === undefined
-      ? this.#closeController.signal
-      : AbortSignal.any([this.#closeController.signal, options.signal]);
+    let cancellationContext = deepFreeze({
+      ...contextFor(route, '', surface),
+      workspace: unavailable<Readonly<{ readonly root: string }>>('not-provided'),
+    });
+    const admissionSignal = AbortSignal.any([
+      this.#closeController.signal,
+      operationController.signal,
+      ...(options.signal === undefined ? [] : [options.signal]),
+    ]);
     const running = this.#semaphore.run<RouteInvocation>(async () => {
       admissionSignal.throwIfAborted();
       let release: RouteInvocationPreparedLease['release'] | undefined;
@@ -1283,6 +1471,7 @@ export class RouteInvocationService {
           ? eventInput(route, rawInput, surface.kind === 'event' ? surface.host : undefined, this.#registry)
           : rawInput;
         const context = contextForRequest(route, prepared.manifest.projectRoot, surface, rawInput, this.#registry);
+        cancellationContext = context;
         const correlation = traceCorrelation(request, context, id, prepared.artifact?.epochId);
         const href = routeHref(route.id, id);
         const label = routeLabel(
@@ -1310,6 +1499,7 @@ export class RouteInvocationService {
         });
         const publishKernelEvent = (event: EventTraceEvent): void => {
           if (event.kind === 'preflight.outcome') eventOutcome = event.outcome;
+          this.#publishStream(streamRecord, { event, type: 'trace' });
           this.#trace?.publish({
             correlation: {
               ...correlation,
@@ -1348,10 +1538,25 @@ export class RouteInvocationService {
               routeId: route.id,
               stateRoot: prepared.stateRoot,
               surface,
-            }, controller.signal, publishKernelEvent)
+            }, controller.signal, publishKernelEvent, (event) => {
+              this.#publishStream(streamRecord, { event, type: 'render' });
+            })
             : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
         } catch (error) {
           const completedAt = this.#now();
+          if (streamRecord.cancelRequested) {
+            return cancelledInvocation({
+              completedAt,
+              context,
+              id,
+              manifest,
+              messages: streamRecord.messages,
+              request: { ...request, input },
+              route,
+              startedAt,
+              surface,
+            });
+          }
           const childCode = error instanceof ProductionRouteInvocationError
             ? error.code
             : ROUTE_INVOCATION_CHILD_FAILURE_CODE;
@@ -1424,33 +1629,88 @@ export class RouteInvocationService {
       } finally {
         await release?.();
       }
-    }, admissionSignal);
+    }, admissionSignal).catch((error: unknown) => {
+      const completedAt = this.#now();
+      if (streamRecord.cancelRequested) {
+        return cancelledInvocation({
+          completedAt,
+          context: cancellationContext,
+          id,
+          manifest: queued,
+          messages: streamRecord.messages,
+          request,
+          route,
+          startedAt,
+          surface,
+        });
+      }
+      if (!terminalErrors) throw error;
+      return failedInvocation({
+        code: error instanceof RouteInvocationRequestError ? error.code : ROUTE_INVOCATION_CHILD_FAILURE_CODE,
+        completedAt,
+        context: cancellationContext,
+        id,
+        manifest: queued,
+        message: error instanceof Error ? error.message : String(error),
+        request,
+        route,
+        startedAt,
+        surface,
+      });
+    });
     this.#pending.add(running);
-    let invocation: RouteInvocation;
-    try {
-      invocation = await running;
-    } finally {
-      this.#pending.delete(running);
-    }
-    this.#history.push(invocation);
-    if (traceMeta !== undefined) {
+    const result = (async (): Promise<RouteInvocation> => {
+      let invocation: RouteInvocation;
+      try {
+        invocation = await running;
+      } finally {
+        this.#pending.delete(running);
+        this.#controllers.delete(operationController);
+      }
+      this.#history.push(invocation);
+      streamRecord.final = invocation;
+      this.#publishStream(streamRecord, { invocation, type: 'final' });
+      streamRecord.listeners.clear();
+      this.#completedStreams.push(id);
+      while (this.#completedStreams.length > this.#historyLimit) {
+        const expired = this.#completedStreams.shift();
+        if (expired !== undefined) this.#streams.delete(expired);
+      }
+      const completedTrace = traceMeta ?? {
+        correlation: traceCorrelation(request, cancellationContext, id, undefined),
+        eventOutcome: () => undefined,
+        href: routeHref(route.id, id),
+        label: routeLabel(
+          route.kind as RouteInvocationKind,
+          route.id,
+          route.event,
+          surface.kind === 'event' ? surface.host : undefined,
+        ),
+      };
       const durationMs = new Date(invocation.completedAt).getTime() - new Date(invocation.startedAt).getTime();
+      const kind = invocation.status === 'succeeded'
+        ? 'invocation.completed'
+        : invocation.status === 'cancelled'
+          ? 'invocation.cancelled'
+          : 'invocation.failed';
       this.#trace?.publish({
-        correlation: traceMeta.correlation,
+        correlation: completedTrace.correlation,
         details: invocationTraceDetails(invocation),
         durationMs,
-        ...(traceMeta.href === undefined ? {} : { href: traceMeta.href }),
-        kind: invocation.status === 'succeeded' ? 'invocation.completed' : 'invocation.failed',
+        ...(completedTrace.href === undefined ? {} : { href: completedTrace.href }),
+        kind,
         occurredAt: invocation.completedAt,
         source: 'invocation',
         status: invocation.status === 'succeeded' ? 'ok' : 'error',
         summary: invocation.status === 'succeeded'
-          ? `${traceMeta.label} · ${route.kind === 'event-route' && traceMeta.eventOutcome() !== undefined
-            ? traceMeta.eventOutcome()
+          ? `${completedTrace.label} · ${route.kind === 'event-route' && completedTrace.eventOutcome() !== undefined
+            ? completedTrace.eventOutcome()
             : durationText(durationMs)}`
-          : `${traceMeta.label} · failed`,
+          : `${completedTrace.label} · ${invocation.status}`,
       });
-    }
-    return invocation;
+      return invocation;
+    })();
+    streamRecord.result = result;
+    return Object.freeze({ invocation: runningInvocation, result });
   }
 }
