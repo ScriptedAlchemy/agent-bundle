@@ -36,9 +36,6 @@ export interface RunPromiseOptions {
   readonly signal?: AbortSignal;
 }
 
-const interruptAs = <A, E, R>(): Effect.Effect<A, E, R> =>
-  Effect.interrupt as Effect.Effect<A, E, R>;
-
 export const abortError = (cause?: unknown): DOMException => {
   const error = new DOMException('The operation was aborted', 'AbortError');
   if (cause !== undefined) {
@@ -92,12 +89,6 @@ export const runPromise = async <A, E>(
   options?: RunPromiseOptions,
 ): Promise<A> => throwExitFailure(await Effect.runPromiseExit(effect, runOptions(options)));
 
-/** Promise edge that preserves the Effect `Exit` for callers that branch on cause. */
-export const runPromiseExit = async <A, E>(
-  effect: Effect.Effect<A, E>,
-  options?: RunPromiseOptions,
-): Promise<Exit.Exit<A, E>> => Effect.runPromiseExit(effect, runOptions(options));
-
 /**
  * Sync edge for effects that cannot suspend. Do not use for I/O, streams,
  * or anything that waits on a fiber.
@@ -132,41 +123,6 @@ export const makeScopedEffectRuntime = <R, E>(
     },
   });
 };
-
-/**
- * Host AbortSignal → Effect interruption. Re-checks `signal.aborted` when
- * the effect starts (not only when this helper is constructed) so a signal
- * that aborts between construction and run still interrupts. The listener
- * is registered first; aborted signals do not replay `abort`, so the
- * callback rechecks immediately after `addEventListener`.
- */
-export const abortToInterrupt = (signal: AbortSignal): Effect.Effect<never> =>
-  Effect.suspend(() => {
-    if (signal.aborted) return interruptAs();
-    return Effect.callback<never>((resume) => {
-      let settled = false;
-      const onAbort = (): void => {
-        if (settled) return;
-        settled = true;
-        resume(Effect.interrupt);
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-      if (signal.aborted) onAbort();
-      return Effect.sync(() => {
-        signal.removeEventListener('abort', onAbort);
-      });
-    });
-  });
-
-/**
- * AbortSignal → Effect interruption, for programs that still run inside
- * Effect and receive a host signal. The Promise edge also accepts `signal`
- * directly via {@link runPromise}.
- */
-export const interruptWhenAborted = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-  signal: AbortSignal,
-): Effect.Effect<A, E, R> => Effect.raceFirst(effect, abortToInterrupt(signal));
 
 /**
  * Effect interruption → AbortSignal, for Promise/fetch APIs that take a

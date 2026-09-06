@@ -11,7 +11,6 @@ import { deepFreeze } from '../../core/freeze.ts';
 
 
 const JSON_RPC_VERSION = '2.0';
-const SANDBOX_NOTIFICATION_PREFIX = 'ui/notifications/sandbox-';
 const PROXY_READY_METHOD = 'ui/notifications/sandbox-proxy-ready';
 const RESOURCE_READY_METHOD = 'ui/notifications/sandbox-resource-ready';
 const INITIALIZED_METHOD = 'ui/notifications/initialized';
@@ -259,50 +258,6 @@ export interface McpAppSandboxFrame {
   readonly sandbox: 'allow-scripts allow-same-origin';
   readonly src: string;
   readonly targetOrigin: string;
-}
-
-export type McpAppSandboxLifecycle = 'created' | 'proxy-ready' | 'resource-ready' | 'initializing' | 'initialize-responded' | 'initialized' | 'closed';
-
-export type McpAppSandboxRequestId = string | number | null;
-
-export interface McpAppSandboxMessage {
-  readonly error?: unknown;
-  readonly id?: McpAppSandboxRequestId;
-  readonly jsonrpc: '2.0';
-  readonly method?: string;
-  readonly params?: unknown;
-  readonly result?: unknown;
-}
-
-export interface McpAppSandboxMessageEvent {
-  readonly data: unknown;
-  readonly origin: string;
-  readonly source: unknown;
-}
-
-export interface McpAppSandboxWindow {
-  postMessage(message: unknown, targetOrigin: string): void;
-}
-
-export interface McpAppSandboxResource {
-  readonly csp?: McpAppSandboxCsp;
-  readonly html: string;
-  readonly permissions?: McpAppSandboxPermissions;
-  readonly sandbox?: string;
-}
-
-export interface CreateMcpAppSandboxBridgeOptions {
-  readonly frame: McpAppSandboxFrame;
-  readonly onMessage?: (message: McpAppSandboxMessage) => void;
-  readonly proxyWindow: McpAppSandboxWindow;
-}
-
-export interface McpAppSandboxBridge {
-  readonly lifecycle: McpAppSandboxLifecycle;
-  close(): void;
-  provideResource(resource: McpAppSandboxResource): boolean;
-  receive(event: McpAppSandboxMessageEvent): boolean;
-  send(message: McpAppSandboxMessage): boolean;
 }
 
 const finiteJson = (value: unknown): value is McpAppJsonValue => value === null || typeof value === 'string' || typeof value === 'boolean'
@@ -607,40 +562,6 @@ const relayOf = (maxMessageBytes: number | undefined, maxQueuedMessages: number 
   maxQueuedMessages: maximum(maxQueuedMessages, DEFAULT_MAX_QUEUED_MESSAGES, 'maxQueuedMessages'),
 });
 
-const messageSize = (message: unknown): number | undefined => {
-  try {
-    const serialized = JSON.stringify(message);
-    return typeof serialized === 'string' ? Buffer.byteLength(serialized) : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const isRequestId = (value: unknown): value is McpAppSandboxRequestId => value === null || typeof value === 'string' || typeof value === 'number';
-
-const isMessage = (value: unknown, maxMessageBytes: number): value is McpAppSandboxMessage => {
-  if (!isRecord(value) || value.jsonrpc !== JSON_RPC_VERSION) return false;
-  const size = messageSize(value);
-  if (size === undefined || size > maxMessageBytes) return false;
-  const hasMethod = typeof value.method === 'string' && value.method.length > 0;
-  const hasId = Object.hasOwn(value, 'id') && isRequestId(value.id);
-  return hasMethod || (hasId && (Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error')));
-};
-
-const isNotification = (message: McpAppSandboxMessage, method: string): boolean => message.method === method && !Object.hasOwn(message, 'id');
-
-const isSandboxNotification = (message: McpAppSandboxMessage): boolean => typeof message.method === 'string' && message.method.startsWith(SANDBOX_NOTIFICATION_PREFIX);
-
-const isInitializeRequest = (message: McpAppSandboxMessage): message is McpAppSandboxMessage & { readonly id: McpAppSandboxRequestId } => (
-  message.method === INITIALIZE_METHOD && Object.hasOwn(message, 'id') && isRequestId(message.id)
-);
-
-const isInitializeResponse = (message: McpAppSandboxMessage, id: McpAppSandboxRequestId | undefined): boolean => (
-  !Object.hasOwn(message, 'method') && Object.hasOwn(message, 'id') && message.id === id && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error'))
-);
-
-const notification = (method: string, params: unknown = {}): McpAppSandboxMessage => ({ jsonrpc: JSON_RPC_VERSION, method, params });
-
 export const createMcpAppSandboxFrame = (
   options: CreateMcpAppSandboxFrameOptions,
 ): McpAppSandboxFrame => {
@@ -663,93 +584,6 @@ export const createMcpAppSandboxFrame = (
     sandbox: 'allow-scripts allow-same-origin',
     src: `${proxyOrigin}/#${configuration}`,
     targetOrigin: proxyOrigin,
-  });
-};
-
-export const createMcpAppSandboxBridge = (
-  options: CreateMcpAppSandboxBridgeOptions,
-): McpAppSandboxBridge => {
-  const proxyOrigin = originOf(options.frame.targetOrigin);
-  const relay = relayOf(options.frame.relay.maxMessageBytes, options.frame.relay.maxQueuedMessages);
-  const queuedMessages: McpAppSandboxMessage[] = [];
-  let lifecycle: McpAppSandboxLifecycle = 'created';
-  let initializeId: McpAppSandboxRequestId | undefined;
-
-  const post = (message: McpAppSandboxMessage): void => options.proxyWindow.postMessage(message, proxyOrigin);
-
-  const flush = (): void => {
-    while (queuedMessages.length > 0) {
-      const message = queuedMessages.shift();
-      if (message) post(message);
-    }
-  };
-
-  return Object.freeze({
-    get lifecycle(): McpAppSandboxLifecycle {
-      return lifecycle;
-    },
-    close(): void {
-      lifecycle = 'closed';
-      queuedMessages.length = 0;
-      initializeId = undefined;
-    },
-    provideResource(resource: McpAppSandboxResource): boolean {
-      if (lifecycle !== 'proxy-ready' || typeof resource.html !== 'string' || (resource.sandbox !== undefined && typeof resource.sandbox !== 'string')) return false;
-      const message = notification(RESOURCE_READY_METHOD, {
-        allow: options.frame.policy.iframeAllow,
-        contentSecurityPolicy: options.frame.policy.contentSecurityPolicy,
-        html: resource.html,
-        ...(resource.sandbox === undefined ? {} : { sandbox: resource.sandbox }),
-      });
-      lifecycle = 'resource-ready';
-      post(message);
-      return true;
-    },
-    receive(event: McpAppSandboxMessageEvent): boolean {
-      if (lifecycle === 'closed' || event.source !== options.proxyWindow || event.origin !== proxyOrigin) return false;
-      if (!isMessage(event.data, relay.maxMessageBytes)) return false;
-      const message = event.data;
-      if (isNotification(message, PROXY_READY_METHOD)) {
-        if (lifecycle !== 'created') return false;
-        lifecycle = 'proxy-ready';
-        return true;
-      }
-      if (isNotification(message, INITIALIZED_METHOD)) {
-        if (lifecycle !== 'initialize-responded') return false;
-        lifecycle = 'initialized';
-        flush();
-        return true;
-      }
-      if (isSandboxNotification(message)) return false;
-      if (isInitializeRequest(message)) {
-        if (lifecycle !== 'resource-ready') return false;
-        initializeId = message.id;
-        lifecycle = 'initializing';
-        options.onMessage?.(message);
-        return true;
-      }
-      if (lifecycle !== 'initialized') return false;
-      options.onMessage?.(message);
-      return true;
-    },
-    send(message: McpAppSandboxMessage): boolean {
-      if (lifecycle === 'closed' || !isMessage(message, relay.maxMessageBytes) || isSandboxNotification(message)) return false;
-      if (lifecycle === 'initializing') {
-        if (!isInitializeResponse(message, initializeId)) return false;
-        lifecycle = 'initialize-responded';
-        post(message);
-        return true;
-      }
-      if (lifecycle === 'initialized') {
-        post(message);
-        return true;
-      }
-      if (lifecycle !== 'resource-ready' || queuedMessages.length >= relay.maxQueuedMessages) {
-        return false;
-      }
-      queuedMessages.push(message);
-      return true;
-    },
   });
 };
 

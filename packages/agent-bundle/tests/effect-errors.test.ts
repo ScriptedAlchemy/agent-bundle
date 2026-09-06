@@ -8,7 +8,7 @@ import { CodedError } from '../src/core/errors.ts';
 import { DevCoordinatorCloseError } from '../src/dev/coordinator.ts';
 import { RuntimeMcpRegistryError } from '../src/dev/runtime-mcp-registry.ts';
 import { ScriptPlaygroundFailure } from '../src/dev/playground/script-playground-service.ts';
-import { isTypedDevError, runPromise, runPromiseExit } from '../src/effect/boundary.ts';
+import { isTypedDevError, runPromise } from '../src/effect/boundary.ts';
 import { YieldableCodedError, YieldableFrameworkError } from '../src/effect/errors.ts';
 
 /** The plain-`Error` twin the yieldable bases replace; the serialization pins compare against it. */
@@ -36,7 +36,7 @@ describe('yieldable framework error bases (src/effect/errors.ts)', () => {
     const program = Effect.gen(function* () {
       return yield* error;
     });
-    const exit = await runPromiseExit(program);
+    const exit = await runPromise(Effect.exit(program));
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
       expect(Cause.squash(exit.cause)).toBe(error);
