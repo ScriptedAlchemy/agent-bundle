@@ -240,12 +240,15 @@ export const EventRouteWorkspace = ({ clients, controller, leaf, onNavigate, tab
   const invocation = invocationOf(controller.state);
   const [host, setHost] = useState<EventHostSelection>(() => defaultEventHostSelection(leaf, lifecycle));
 
+  // Repairs a selection the leaf forbids (canonical on a preflight route)
+  // without overriding a loaded or chosen host when the catalog arrives.
   useEffect(() => {
-    setHost(defaultEventHostSelection(leaf, lifecycle));
+    setHost((current) => current === 'canonical' && leaf.preflight !== undefined
+      ? defaultEventHostSelection(leaf, lifecycle)
+      : current);
   }, [leaf, lifecycle]);
   // A loaded host invocation switches the selector to its host so the editor
-  // shows the native payload it was actually run with; declared after the
-  // default so it wins on the same mount.
+  // shows the native payload it was actually run with.
   useEffect(() => {
     if (invocation?.event?.host !== undefined) setHost(invocation.event.host);
   }, [invocation]);
