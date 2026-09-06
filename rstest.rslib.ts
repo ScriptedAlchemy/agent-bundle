@@ -11,7 +11,7 @@ const packageRoot = resolve(workspaceRoot, 'packages/agent-bundle');
 /**
  * Plugins `packages/agent-bundle/rslib.config.ts` registers for publishing
  * the package, not for compiling its modules. The adapter copies the lib
- * config's `plugins` into every pool verbatim, so without this filter both
+ * config's `plugins` into every pool verbatim, so without this filter they
  * would run inside each test bundle:
  *
  * - `plugin-publint` (rsbuild-plugin-publint, `throwOn: 'warning'`) audits
@@ -20,16 +20,16 @@ const packageRoot = resolve(workspaceRoot, 'packages/agent-bundle');
  *   test build has no manifest to gate. Rstest 0.11 never drives
  *   `onAfterBuild` (DEBUG=rstest shows no publint output), so today the
  *   registration is inert; it stays out so a runner change cannot arm it.
- * - `agent-bundle:esm-node-globals` prepends the `__filename`/`__dirname`
- *   shim to emitted chunks that inline the TypeScript 5 parser. Its
- *   `processAssets` scan did run over every test chunk. Pools leave
- *   dependencies external, and Rstest supplies the real `__dirname` and
- *   `__filename` of each test module itself.
+ *
+ * The `__filename`/`__dirname` shim for the inlined TypeScript 5 parser is
+ * the lib entries' `shims.esm`, a field the adapter never reads (below), so
+ * nothing filters it: pools leave dependencies external, and Rstest supplies
+ * the real `__dirname` and `__filename` of each test module itself.
  *
  * Verify the names against the plugin objects, not the package names:
  * `pluginPublint().name` is `plugin-publint`.
  */
-const publishOnlyPlugins: ReadonlySet<string> = new Set(['plugin-publint', 'agent-bundle:esm-node-globals']);
+const publishOnlyPlugins: ReadonlySet<string> = new Set(['plugin-publint']);
 
 /** The `name` of an Rsbuild plugin entry; nested arrays, promises, and falsy entries have none. */
 const pluginName = (plugin: unknown): string | undefined => (
@@ -114,8 +114,7 @@ export const rstestHygiene = {
  * published build — and `source.tsconfigPath`, repointed at the workspace
  * tsconfig so test files resolve beside the sources. It drops the
  * publish-only plugins above and `tools.rspack`, whose `ignoreWarnings` entry
- * and `node.__dirname = false` exist for the inlined TypeScript parser
- * (external in pools; Rstest sets its own `node` options).
+ * exists for the inlined TypeScript parser (external in pools).
  *
  * Exported so rstest-rslib-adapter.test.ts can hold `libId` against the
  * config's lib entries: the resolved config cannot show whether the lookup

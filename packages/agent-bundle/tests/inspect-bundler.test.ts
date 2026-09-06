@@ -246,6 +246,29 @@ it('renders the lowered Rspack configuration of every compiled output with the t
   ]));
 });
 
+it('wires output.sourceMap into the lowered generated-executable config', async () => {
+  const root = await createProject();
+  await writeFile(
+    join(root, 'agent-bundle.config.ts'),
+    [
+      'export default {',
+      "  plugin: { name: 'bundler-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      "  scripts: { tool: './src/tool.ts' },",
+      '  output: { sourceMap: true },',
+      '};',
+      '',
+    ].join('\n'),
+  );
+  const result = await inspect({ focus: 'bundler', root });
+  expect(result.state).toBe('ready');
+  const script = entryOf(bundlerEntries(result as ReadyInspectResult), 'script', 'tool');
+  expect(script.config).toMatchObject({
+    devtool: 'inline-source-map',
+    target: expect.arrayContaining(['es2022', 'node']),
+  });
+});
+
 it('keeps the bundler inspection deterministic, JSON-serializable, and free of the staged output path', async () => {
   const root = await createProject();
   const [first, second] = await Promise.all([

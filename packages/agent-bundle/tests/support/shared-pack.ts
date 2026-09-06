@@ -6,10 +6,8 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { isolatedCommandEnvironment } from '../../../../rstest.worker-isolation.ts';
-import {
-  packOutputFromJson,
-  type PackOutput as SharedPackOutput,
-} from '../../src/build/pack-inventory.ts';
+import { pnpmPack, type PnpmPackOutput as SharedPackOutput } from '../../../../scripts/pnpm-pack.mjs';
+import { packOutputFromJson } from '../../src/build/pack-inventory.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -18,7 +16,7 @@ export { packOutputFromJson };
 export type { SharedPackOutput };
 
 export interface SharedPack {
-  /** The package's own `npm pack --json` entry recorded when the tarball was produced. */
+  /** The package's own `pnpm pack --json` entry recorded when the tarball was produced. */
   readonly packOutput: SharedPackOutput;
   readonly tarball: string;
   readonly variant?: 'runtime-rebundle';
@@ -31,16 +29,17 @@ export type SharedPackPackage =
   | 'markdown-stream'
   | 'runtime';
 
-/** packages/ directory and npm package name for each shared-pack key. */
-const sharedPackPackages: Readonly<Record<SharedPackPackage, Readonly<{ directory: string; npmName: string }>>> = {
-  'agent-bundle': { directory: 'agent-bundle', npmName: 'agent-bundle' },
-  'agent-bundle-runtime-rebundle': { directory: 'agent-bundle', npmName: 'agent-bundle' },
-  'create-agent-bundle': { directory: 'create-agent-bundle', npmName: 'create-agent-bundle' },
-  // `@agent-bundle/runtime` depends on it by exact version; a consumer that
-  // installs the runtime tarball needs this one alongside until that version
-  // is on the registry (npm dedupes the runtime's edge onto it).
-  'markdown-stream': { directory: 'rsc-markdown-stream', npmName: 'rsc-markdown-stream' },
-  runtime: { directory: 'rsc-runtime', npmName: '@agent-bundle/runtime' },
+/** packages/ directory for each shared-pack key. */
+const sharedPackDirectories: Readonly<Record<SharedPackPackage, string>> = {
+  'agent-bundle': 'agent-bundle',
+  'agent-bundle-runtime-rebundle': 'agent-bundle',
+  'create-agent-bundle': 'create-agent-bundle',
+  // `@agent-bundle/runtime` declares it `workspace:^`, which the packer ships
+  // as the caret of the workspace version; a consumer that installs the
+  // runtime tarball needs this one alongside until that version is on the
+  // registry (npm dedupes the runtime's edge onto it).
+  'markdown-stream': 'rsc-markdown-stream',
+  runtime: 'rsc-runtime',
 };
 
 /**
@@ -127,23 +126,21 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
   process.once('exit', () => {
     rmSync(destination, { force: true, recursive: true });
   });
-  const { directory, npmName } = sharedPackPackages[packageName];
-  const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', destination], {
-    cwd: join(workspaceRoot, 'packages', directory),
+  return pnpmPack({
+    cwd: join(workspaceRoot, 'packages', sharedPackDirectories[packageName]),
+    destination,
     env: { ...installedEnvironment(), NODE_ENV: 'production' },
   });
-  // Select by npm name: a workspace-aware `npm pack --json` can list sibling
-  // packages, and the first entry is not necessarily this one.
-  const packOutput = packOutputFromJson(stdout, npmName);
-  return { packOutput, tarball: join(destination, packOutput.filename) };
 };
 
 /**
  * Run-level release tarball for a public package. `test:packed` builds and
- * `npm pack`s each package exactly once per run (scripts/run-packed-tests.mjs)
- * and shares the result through AGENT_BUNDLE_SHARED_PACK_DIR, so every
- * pack-and-install suite consumes the same tarball a release would publish
- * instead of re-packing (and previously rebuilding) per test file.
+ * `pnpm pack`s each package exactly once per run (scripts/run-packed-tests.mjs;
+ * pnpm's packer rather than npm's because `pnpm publish` is what ships, and
+ * it rewrites `workspace:` ranges — scripts/pnpm-pack.mjs) and shares the
+ * result through AGENT_BUNDLE_SHARED_PACK_DIR, so every pack-and-install
+ * suite consumes the same tarball a release would publish instead of
+ * re-packing (and previously rebuilding) per test file.
  */
 export const sharedPackedTarball = (packageName: SharedPackPackage): Promise<SharedPack> => {
   const existing = packs.get(packageName);

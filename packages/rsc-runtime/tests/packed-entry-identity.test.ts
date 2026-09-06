@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
+import markdownStreamManifest from '../../rsc-markdown-stream/package.json' with { type: 'json' };
+import runtimeManifest from '../package.json' with { type: 'json' };
 import {
   cachedNpmInstallArguments,
   installedEnvironment,
@@ -67,9 +69,17 @@ describe.sequential('packed @agent-bundle/runtime entry identity', () => {
       const manifest = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')) as InstalledManifest;
       expect(Object.keys(manifest.dependencies)).not.toContain('@modelcontextprotocol/sdk');
       expect(manifest.dependencies['@modelcontextprotocol/server']).toBeDefined();
+      // The source manifest says `workspace:^`; the packer ships the caret of
+      // the sibling's version, the same rewrite `pnpm publish` performs.
+      expect(manifest.dependencies['rsc-markdown-stream']).toBe(`^${markdownStreamManifest.version}`);
       expect(manifest.exports['./package.json']).toBe('./package.json');
+      expect(manifest.peerDependencies).toEqual(runtimeManifest.peerDependencies);
       for (const range of Object.values(manifest.peerDependencies)) expect(range).not.toBe('*');
       expect(manifest.peerDependenciesMeta?.['@rspack/core']?.optional).toBe(true);
+      // npm validates every peer edge — the runtime's React carets and the
+      // Flight binding's — against the React the consumer installed.
+      const { stdout: tree } = await execFile('npm', ['ls', '--all', '--json'], { cwd: consumer, env: installedEnvironment() });
+      expect(JSON.parse(tree)).not.toHaveProperty('problems');
       const declarations = (await readdir(join(installed, 'dist'), { recursive: true }))
         .filter((file): file is string => typeof file === 'string' && file.endsWith('.d.ts'));
       expect(declarations.length).toBeGreaterThan(0);

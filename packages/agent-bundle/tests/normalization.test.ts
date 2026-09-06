@@ -903,6 +903,35 @@ it('validates host-native hook tool selectors against the registry and hook targ
   expect(diagnosticsFor([':WebSearch'])).toEqual(['AB4202']);
 });
 
+it('normalizes output.sourceMap as a generated-executable opt-in', async () => {
+  const defaulted = await normalizeProject(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { skills: [] },
+    registry,
+  );
+  expect(defaulted.sourceMap).toBeUndefined();
+
+  const optedIn = await normalizeProject(
+    loadedProject({
+      output: { sourceMap: true },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+    }),
+    { skills: [] },
+    registry,
+  );
+  expect(optedIn.sourceMap).toBe(true);
+
+  const optedOut = await normalizeProject(
+    loadedProject({
+      output: { distPath: 'artifact', sourceMap: false },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+    }),
+    { skills: [] },
+    registry,
+  );
+  expect(optedOut.sourceMap).toBeUndefined();
+});
+
 it('normalizes the generated-executable runtime floor and validates raises only', async () => {
   const defaulted = await normalizeProject(
     loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
