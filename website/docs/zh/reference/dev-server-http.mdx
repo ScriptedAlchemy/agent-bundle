@@ -69,7 +69,6 @@ interface TraceEntry {
     | 'invocation'
     | 'kernel'
     | 'mcp'
-    | 'runtime'
     | 'hook'
     | 'log'
     | 'diagnostic';
@@ -84,7 +83,7 @@ interface TraceEntry {
 ```
 
 `TraceCorrelation` 可以携带 `correlationId`、`conversationId`、`epochId`、`executionId`、`host`、
-`invocationId`、`mcpRequestId`、`mcpSessionId`、`requestId`、`routeId`、`runId` 与 `sessionId`。
+`invocationId`、`mcpRequestId`、`mcpSessionId`、`requestId`、`routeId` 与 `sessionId`。
 生产者只填充自己已知的键。`details` 是有界且已确保安全的 JSON 投影，不是载荷正文。
 
 当请求的游标早于保留的历史时，重放会返回一个 gap，流也会把同一份 `TraceReplayGap` 作为一个 NDJSON

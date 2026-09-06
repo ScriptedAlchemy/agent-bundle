@@ -76,7 +76,6 @@ interface TraceEntry {
     | 'invocation'
     | 'kernel'
     | 'mcp'
-    | 'runtime'
     | 'hook'
     | 'log'
     | 'diagnostic';
@@ -91,7 +90,7 @@ interface TraceEntry {
 ```
 
 `TraceCorrelation` can carry `correlationId`, `conversationId`, `epochId`, `executionId`, `host`,
-`invocationId`, `mcpRequestId`, `mcpSessionId`, `requestId`, `routeId`, `runId`, and `sessionId`.
+`invocationId`, `mcpRequestId`, `mcpSessionId`, `requestId`, `routeId`, and `sessionId`.
 Publishers fill only keys they know. `details` is a bounded, already-safe JSON projection; it is
 not a payload body.
 

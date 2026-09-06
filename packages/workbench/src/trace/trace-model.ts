@@ -13,7 +13,7 @@ export const maximumTraceEntries = 4_096;
  * group. `epochId`, `host`, and `routeId` are facets, not joins: every entry
  * of an epoch would otherwise become one group.
  */
-export const traceJoinKeys = Object.freeze([
+const traceJoinKeys = Object.freeze([
   'conversationId',
   'sessionId',
   'mcpSessionId',
@@ -23,7 +23,7 @@ export const traceJoinKeys = Object.freeze([
   'correlationId',
 ] as const);
 
-export type TraceJoinKey = (typeof traceJoinKeys)[number];
+type TraceJoinKey = (typeof traceJoinKeys)[number];
 
 export type TraceGroupKeyKind = TraceJoinKey | 'entry';
 

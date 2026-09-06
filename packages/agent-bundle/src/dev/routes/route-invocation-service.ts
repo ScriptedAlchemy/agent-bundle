@@ -1271,10 +1271,6 @@ export class RouteInvocationService {
     return this.#history.read(id);
   }
 
-  has(id: string): boolean {
-    return this.#streams.has(id);
-  }
-
   subscribe(id: string, listener: (message: RouteInvocationStreamMessage) => void): () => void {
     const record = this.#streams.get(id);
     if (record === undefined) {
@@ -1490,6 +1486,7 @@ export class RouteInvocationService {
           ...(href === undefined ? {} : { href }),
           label,
         };
+        admissionSignal.throwIfAborted();
         this.#trace?.publish({
           correlation,
           details: { status: 'running' },
@@ -1518,7 +1515,6 @@ export class RouteInvocationService {
             summary: kernelSummary(event),
           });
         };
-        admissionSignal.throwIfAborted();
         const controller = new AbortController();
         const abort = (): void => controller.abort(admissionSignal.reason);
         this.#controllers.add(controller);

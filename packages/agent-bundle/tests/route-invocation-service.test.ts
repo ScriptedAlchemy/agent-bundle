@@ -709,7 +709,6 @@ it('removes a rejecting invocation from the stream registry', async () => {
   encoded.mockRestore();
 
   const id = 'inv_00202020202020202';
-  expect(service.has(id)).toBe(false);
   expect(() => service.subscribe(id, () => undefined)).toThrow(RouteInvocationRequestError);
 });
 
@@ -1036,6 +1035,25 @@ it('reaps the render child and its descendants when the invocation times out', {
     });
     expect(alive(pids.child)).toBe(false);
     expect(alive(pids.descendant)).toBe(false);
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
+
+it('reaps the render child and its descendants when the invocation is cancelled', { timeout: 30_000 }, async () => {
+  const project = await leakingRouteProject('hang');
+  try {
+    const service = project.service();
+    const started = service.start({ input: {}, routeId: 'tool:fixture/leak', surface: { kind: 'unit-render' } });
+    const pids = await recordedPids(project);
+    expect(alive(pids.child)).toBe(true);
+    expect(alive(pids.descendant)).toBe(true);
+
+    const cancelled = await service.cancel(started.invocation.id);
+    expect(cancelled.status).toBe('cancelled');
+    expect(alive(pids.child)).toBe(false);
+    expect(alive(pids.descendant)).toBe(false);
+    expect(await started.result).toBe(cancelled);
   } finally {
     await rm(project.root, { force: true, recursive: true });
   }

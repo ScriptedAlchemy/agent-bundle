@@ -134,7 +134,6 @@ const traceRequestContextKeys: ReadonlySet<string> = new Set([
   'mcpRequestId',
   'mcpSessionId',
   'requestId',
-  'runId',
   'sessionId',
 ]);
 const loweredProjectEventMirrors: ReadonlySet<string> = new Set([
@@ -289,7 +288,6 @@ const traceCorrelationFor = (context: Readonly<Record<string, string>>): TraceCo
   ...(context.mcpSessionId === undefined ? {} : { mcpSessionId: context.mcpSessionId }),
   ...(context.requestId === undefined ? {} : { requestId: context.requestId }),
   ...(context.routeId === undefined ? {} : { routeId: context.routeId }),
-  ...(context.runId === undefined ? {} : { runId: context.runId }),
   ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
 });
 
@@ -303,7 +301,7 @@ const traceHrefFor = (record: DevLogRecord): string => {
   const routeId = record.context.routeId;
   const node = routeId === undefined ? undefined : applicationNodeRefForRouteId(routeId);
   if (node === undefined) return `/advanced/logs?sequence=${String(record.sequence)}`;
-  const invocationId = record.context.invocationId ?? record.context.runId;
+  const invocationId = record.context.invocationId;
   return invocationId === undefined
     ? applicationNodePath(node)
     : `${applicationNodePath(node)}?invocation=${encodeURIComponent(invocationId)}`;
