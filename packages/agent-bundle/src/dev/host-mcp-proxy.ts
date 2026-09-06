@@ -11,13 +11,22 @@ import { isRecord } from '../core/strict-json.ts';
 import { discoverDevServerUrl } from './dev-lock.ts';
 
 export const HOST_MCP_DEV_SESSION_HEADER = 'x-agent-bundle-dev-session';
+export const HOST_MCP_DEV_PID_HEADER = 'x-agent-bundle-dev-pid';
 
+/** The proxy always names its pid; the session id rides along only when the host forwarded the env. */
 export const hostMcpProxyRequestInit = (
   env: Readonly<NodeJS.ProcessEnv> = process.env,
-): { readonly requestInit: { readonly headers: Readonly<Record<string, string>> } } | undefined => {
+  pid = process.pid,
+): { readonly requestInit: { readonly headers: Readonly<Record<string, string>> } } => {
   const session = env.AGENT_BUNDLE_DEV_SESSION;
-  if (!isHostSessionId(session)) return undefined;
-  return { requestInit: { headers: { [HOST_MCP_DEV_SESSION_HEADER]: session } } };
+  return {
+    requestInit: {
+      headers: {
+        [HOST_MCP_DEV_PID_HEADER]: String(pid),
+        ...(isHostSessionId(session) ? { [HOST_MCP_DEV_SESSION_HEADER]: session } : {}),
+      },
+    },
+  };
 };
 
 export const hostMcpUnavailableCode = 'AB8025';

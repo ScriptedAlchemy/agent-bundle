@@ -851,6 +851,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     epochStore,
     eventHub,
     mcpSessions,
+    sessionForProcess: (pid) => hostSessions.sessionForProcess(pid),
     traceSessionId: (devSession) => hostSessions.traceSessionId(devSession),
   });
   const hookPlayground = new HookPlaygroundService({

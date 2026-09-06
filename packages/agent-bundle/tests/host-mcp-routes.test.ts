@@ -1,8 +1,8 @@
 import { expect, it } from '@rstest/core';
 
 import { isHostSessionId } from '../src/contracts/host-sessions.ts';
-import { hostMcpProxyRequestInit, HOST_MCP_DEV_SESSION_HEADER } from '../src/dev/host-mcp-proxy.ts';
-import { HOST_MCP_DEV_SESSION_CODE, hostDevSessionId } from '../src/dev/host-mcp-routes.ts';
+import { hostMcpProxyRequestInit, HOST_MCP_DEV_PID_HEADER, HOST_MCP_DEV_SESSION_HEADER } from '../src/dev/host-mcp-proxy.ts';
+import { HOST_MCP_DEV_SESSION_CODE, hostDevProcessId, hostDevSessionId } from '../src/dev/host-mcp-routes.ts';
 import { isRequestDiagnostic } from '../src/dev/http.ts';
 
 const hostSessionId = 'hs_0123456789abcdef';
@@ -28,10 +28,26 @@ it('reads a valid x-agent-bundle-dev-session header and rejects a malformed valu
   expect(caught).toMatchObject({ code: HOST_MCP_DEV_SESSION_CODE, status: 400 });
 });
 
-it('sends the proxy header only when AGENT_BUNDLE_DEV_SESSION is a valid host-session id', () => {
-  expect(hostMcpProxyRequestInit({})).toBeUndefined();
-  expect(hostMcpProxyRequestInit({ AGENT_BUNDLE_DEV_SESSION: 'hs_nope' })).toBeUndefined();
-  expect(hostMcpProxyRequestInit({ AGENT_BUNDLE_DEV_SESSION: hostSessionId })).toEqual({
-    requestInit: { headers: { [HOST_MCP_DEV_SESSION_HEADER]: hostSessionId } },
+it('always names the proxy pid and adds the session header only for a valid AGENT_BUNDLE_DEV_SESSION', () => {
+  expect(hostMcpProxyRequestInit({}, 4242)).toEqual({ requestInit: { headers: { [HOST_MCP_DEV_PID_HEADER]: '4242' } } });
+  expect(hostMcpProxyRequestInit({ AGENT_BUNDLE_DEV_SESSION: 'hs_nope' }, 4242)).toEqual({
+    requestInit: { headers: { [HOST_MCP_DEV_PID_HEADER]: '4242' } },
   });
+  expect(hostMcpProxyRequestInit({ AGENT_BUNDLE_DEV_SESSION: hostSessionId }, 4242)).toEqual({
+    requestInit: { headers: { [HOST_MCP_DEV_PID_HEADER]: '4242', [HOST_MCP_DEV_SESSION_HEADER]: hostSessionId } },
+  });
+});
+
+it('reads x-agent-bundle-dev-pid as a process id and rejects anything else with AB8266', () => {
+  expect(hostDevProcessId({})).toBeUndefined();
+  expect(hostDevProcessId({ [HOST_MCP_DEV_PID_HEADER]: '4242' })).toBe(4242);
+  for (const value of ['0', '-1', '12a', '01']) {
+    let caught: unknown;
+    try {
+      hostDevProcessId({ [HOST_MCP_DEV_PID_HEADER]: value });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({ code: HOST_MCP_DEV_SESSION_CODE, status: 400 });
+  }
 });

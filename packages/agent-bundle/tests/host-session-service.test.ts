@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+
 import { expect, it } from '@rstest/core';
 
 import type { HostSessionStreamMessage } from '../src/dev/sessions/host-session-service.ts';
@@ -59,8 +61,10 @@ class FakeAdapter implements PtyAdapter {
     readonly pty: FakePty;
   }> = [];
 
+  constructor(readonly pids: readonly number[] = []) {}
+
   spawn(file: string, args: readonly string[], options: PtySpawnOptions): PtyProcess {
-    const pty = new FakePty(4_000 + this.spawns.length);
+    const pty = new FakePty(this.pids[this.spawns.length] ?? 4_000 + this.spawns.length);
     this.spawns.push({ args, file, options, pty });
     return pty;
   }
@@ -185,6 +189,20 @@ it('attaches the host trace id and uses it for later lifecycle entries', async (
     correlation: { sessionId: 'host-session-42' },
     kind: 'session.exited',
   });
+});
+
+it('finds the session owning a descendant process by walking its ancestry', async () => {
+  const service = serviceFor(new FakeAdapter([process.pid]));
+  const session = await service.create({ cols: 80, host: 'codex', rows: 24 });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  try {
+    await new Promise((resolvePromise) => child.once('spawn', resolvePromise));
+    expect(await service.sessionForProcess(child.pid!)).toBe(session.id);
+    expect(await service.sessionForProcess(process.pid)).toBe(session.id);
+    expect(await service.sessionForProcess(2 ** 22 - 1)).toBeUndefined();
+  } finally {
+    child.kill('SIGKILL');
+  }
 });
 
 it('terminates with SIGKILL fallback and restarts with the prompt', async () => {

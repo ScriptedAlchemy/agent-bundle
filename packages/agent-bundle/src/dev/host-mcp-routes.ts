@@ -20,6 +20,7 @@ import {
 
 export const HOST_MCP_DEV_SESSION_CODE = 'AB8266';
 const hostDevSessionHeader = 'x-agent-bundle-dev-session';
+const hostDevPidHeader = 'x-agent-bundle-dev-pid';
 
 export const hostDevSessionId = (headers: IncomingMessage['headers']): string | undefined => {
   const value = singleHeader(headers[hostDevSessionHeader]);
@@ -32,6 +33,15 @@ export const hostDevSessionId = (headers: IncomingMessage['headers']): string | 
     ));
   }
   return value;
+};
+
+export const hostDevProcessId = (headers: IncomingMessage['headers']): number | undefined => {
+  const value = singleHeader(headers[hostDevPidHeader]);
+  if (value === undefined) return undefined;
+  if (!/^[1-9]\d{0,9}$/u.test(value)) {
+    throw requestError(diagnostic(HOST_MCP_DEV_SESSION_CODE, 'x-agent-bundle-dev-pid must be a process id.', 400));
+  }
+  return Number(value);
 };
 
 const hostMcpPathPrefix = '/mcp/host/';
@@ -72,6 +82,8 @@ export interface HostMcpRoutesOptions {
   readonly eventHub: ProjectEventHub;
   readonly mcpSessions: McpSessionService;
   readonly traceSessionId?: (devSession: string) => string;
+  /** Resolves the Workbench host session owning a proxy process when the host did not forward `AGENT_BUNDLE_DEV_SESSION`. */
+  readonly sessionForProcess?: (pid: number) => Promise<string | undefined>;
 }
 
 const requestSessionId = (request: IncomingMessage): string | undefined => {
@@ -382,6 +394,7 @@ export class HostMcpRoutes {
   readonly #mcpSessions: McpSessionService;
   readonly #sessions = new Map<string, HostMcpConnection>();
   readonly #subscription: ProjectEventSubscription;
+  readonly #sessionForProcess: HostMcpRoutesOptions['sessionForProcess'];
   readonly #traceSessionId: HostMcpRoutesOptions['traceSessionId'];
   #closed = false;
 
@@ -389,6 +402,7 @@ export class HostMcpRoutes {
     this.#adoption = options.adoption;
     this.#epochStore = options.epochStore;
     this.#mcpSessions = options.mcpSessions;
+    this.#sessionForProcess = options.sessionForProcess;
     this.#traceSessionId = options.traceSessionId;
     this.#subscription = subscribeToEpochAdoption(options.adoption, options.eventHub, (epochId) => {
       for (const connection of this.#connections) connection.refreshCatalog(epochId);
@@ -418,7 +432,9 @@ export class HostMcpRoutes {
       return true;
     }
 
-    const devSession = hostDevSessionId(request.headers);
+    const pid = hostDevProcessId(request.headers);
+    const devSession = hostDevSessionId(request.headers)
+      ?? (pid === undefined ? undefined : await this.#sessionForProcess?.(pid));
     const connection = new HostMcpConnection(
       binding,
       {

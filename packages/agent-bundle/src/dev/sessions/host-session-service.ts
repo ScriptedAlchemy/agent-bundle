@@ -1,7 +1,9 @@
 import { Buffer } from 'node:buffer';
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { delimiter, resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 import type {
   HostAvailability,
@@ -105,6 +107,24 @@ const executableOnPath = async (
   return undefined;
 };
 
+const maxAncestryHops = 32;
+
+/**
+ * Codex hands its stdio MCP servers eight whitelisted variables, so the dev
+ * proxy cannot carry `AGENT_BUNDLE_DEV_SESSION`; it reports its pid instead
+ * and the session is found by walking up to the PTY child.
+ */
+const parentPid = async (pid: number): Promise<number | undefined> => {
+  if (process.platform === 'linux') {
+    const stat = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => undefined);
+    const fields = stat?.slice(stat.lastIndexOf(')') + 2).split(' ');
+    return fields === undefined ? undefined : Number(fields[1]);
+  }
+  const { stdout } = await promisify(execFile)('ps', ['-o', 'ppid=', '-p', String(pid)]).catch(() => ({ stdout: '' }));
+  const parsed = Number(stdout.trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+
 const signalName = (signal: number | undefined): string | undefined =>
   signal === undefined ? undefined : signalNames.get(signal) ?? String(signal);
 
@@ -184,6 +204,20 @@ export class HostSessionService {
 
   traceSessionId(devSession: string): string {
     return this.#sessions.get(devSession)?.traceSessionId ?? devSession;
+  }
+
+  /** The live session whose PTY child is `pid` or one of its ancestors. */
+  async sessionForProcess(pid: number): Promise<string | undefined> {
+    const byPid = new Map(
+      [...this.#sessions.values()].filter((record) => record.state === 'running').map((record) => [record.process.pid, record.id]),
+    );
+    let current: number | undefined = pid;
+    for (let hop = 0; current !== undefined && current > 1 && hop < maxAncestryHops; hop += 1) {
+      const id = byPid.get(current);
+      if (id !== undefined) return id;
+      current = await parentPid(current);
+    }
+    return undefined;
   }
 
   async create(request: CreateHostSession): Promise<HostSession> {
