@@ -95,8 +95,7 @@ try {
     }
   }
   if (workspaceRefs.length > 0) {
-    console.error(`packed manifests still carry workspace: ranges:\n${workspaceRefs.join('\n')}`);
-    process.exit(1);
+    throw new Error(`packed manifests still carry workspace: ranges:\n${workspaceRefs.join('\n')}`);
   }
   const binConsumer = join(packDirectory, 'bin-consumer');
   await mkdir(binConsumer);

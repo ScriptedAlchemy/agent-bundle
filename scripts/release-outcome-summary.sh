@@ -11,8 +11,10 @@ registry_outcome=${REGISTRY_OUTCOME:-skipped}
 job_status=${JOB_STATUS:-success}
 workflow_sha=${CANDIDATE_SHA:-}
 
-if [ "$changesets_outcome" = failure ] || [ "$qualify_outcome" = failure ] \
-  || [ "$registry_outcome" = failure ] || [ "$job_status" = failure ]; then
+if [ "$changesets_outcome" = failure ] || [ "$changesets_outcome" = cancelled ] \
+  || [ "$qualify_outcome" = failure ] || [ "$qualify_outcome" = cancelled ] \
+  || [ "$registry_outcome" = failure ] || [ "$registry_outcome" = cancelled ] \
+  || [ "$job_status" = failure ] || [ "$job_status" = cancelled ]; then
   outcome=failed
 elif [ "$published" = true ] && [ "$publish_enabled" = true ]; then
   outcome=published
@@ -30,7 +32,7 @@ fi
 
 if [ "$qualify_outcome" = success ] || [ "$published" = true ]; then
   qualification=executed
-elif [ "$qualify_outcome" = failure ]; then
+elif [ "$qualify_outcome" = failure ] || [ "$qualify_outcome" = cancelled ]; then
   qualification=failed
 else
   qualification=skipped

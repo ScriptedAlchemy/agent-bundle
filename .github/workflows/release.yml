@@ -36,9 +36,9 @@ jobs:
       PUBLISH_ENABLED: ${{ vars.AGENT_BUNDLE_NPM_PUBLISH == 'true' && secrets.NPM_TOKEN != '' }}
       AGENT_BUNDLE_PLAYWRIGHT_CHANNEL: chromium
       # Packed qualification writes package/digest evidence here when
-      # `pnpm check:release` / `pnpm release` runs. Absent when this run only
-      # refreshes the Version Packages PR.
-      AGENT_BUNDLE_RELEASE_EVIDENCE: ${{ runner.temp }}/release-qualification.json
+      # `pnpm check:release` / `pnpm release` runs. `github.workspace` is
+      # valid at job env; `runner.temp` is not (no runner assigned yet).
+      AGENT_BUNDLE_RELEASE_EVIDENCE: ${{ github.workspace }}/.release-qualification.json
     steps:
       # The action pushes and opens the PR through the GitHub API with the
       # token passed below, so the checkout must not persist GITHUB_TOKEN.
@@ -93,6 +93,8 @@ jobs:
       - name: Verify published registry artifacts
         id: registry
         if: env.PUBLISH_ENABLED == 'true' && steps.changesets.outputs.published == 'true'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in \

@@ -97,7 +97,8 @@ bumps and `CHANGELOG.md` entries. Merging that PR versions the packages but,
 by default, publishes nothing: the workflow only runs the release gates
 (`pnpm check:release`) against that exact versioned candidate SHA and
 records `qualified-without-publish`. A push that only refreshes the Version
-Packages PR records `version-maintenance-only`. Publishing turns on when the
+Packages PR — or that neither refreshes it nor qualifies a versioned
+candidate — records `version-maintenance-only`. Publishing turns on when the
 repository variable `AGENT_BUNDLE_NPM_PUBLISH` is `true` *and* the
 `NPM_TOKEN` secret exists; the action then runs `pnpm release`
 (`pnpm check:release && changeset publish`) with npm provenance and records
