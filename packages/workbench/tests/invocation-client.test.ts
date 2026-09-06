@@ -140,16 +140,17 @@ it('sends and decodes the optional correlationId on invocations and summaries', 
 it('decodes the render-history retention account and rejects an impossible one', async () => {
   const retained = {
     ...invocation,
-    retention: Object.freeze({ evictedBytes: 4_096, evictedEvents: 44, producedEvents: 300, retainedBytes: 512 }),
+    retention: Object.freeze({ evictedBytes: 4_096, evictedEvents: 44, producedEvents: 45, retainedBytes: 512 }),
   } satisfies RouteInvocation;
   const client = new InvocationClient({ foreground: foreground(() => Response.json({ invocation: retained })) });
   await expect(client.read(invocation.id)).resolves.toEqual(retained);
 
   for (const retention of [
-    { evictedBytes: 4_096, evictedEvents: 0, producedEvents: 300, retainedBytes: 512 },
-    { evictedBytes: -1, evictedEvents: 44, producedEvents: 300, retainedBytes: 512 },
-    { evictedEvents: 44, producedEvents: 300, retainedBytes: 512 },
-    { evictedBytes: 4_096, evictedEvents: 44, producedEvents: 300, retainedBytes: 512, truncated: true },
+    { evictedBytes: 4_096, evictedEvents: 0, producedEvents: 1, retainedBytes: 512 },
+    { evictedBytes: -1, evictedEvents: 44, producedEvents: 45, retainedBytes: 512 },
+    { evictedEvents: 44, producedEvents: 45, retainedBytes: 512 },
+    { evictedBytes: 4_096, evictedEvents: 44, producedEvents: 300, retainedBytes: 512 },
+    { evictedBytes: 4_096, evictedEvents: 44, producedEvents: 45, retainedBytes: 512, truncated: true },
   ]) {
     const rejecting = new InvocationClient({ foreground: foreground(() => Response.json({ invocation: { ...invocation, retention } })) });
     await expect(rejecting.read(invocation.id)).rejects.toMatchObject({ code: 'AB8230' });

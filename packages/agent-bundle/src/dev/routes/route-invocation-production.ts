@@ -459,7 +459,7 @@ const renderCompiled = async (
   signal: AbortSignal,
   env: NodeJS.ProcessEnv,
   trace?: EventTracer,
-  publishRender?: (event: AgentRenderEvent) => void,
+  publishRender?: (event: AgentRenderEvent) => Promise<void> | void,
 ): Promise<Readonly<{
   readonly document: AgentDocument;
   readonly durationMs: number;
@@ -480,7 +480,7 @@ const renderCompiled = async (
         const next = await reader.read();
         if (next.done) break;
         if (next.value.type === 'complete') document = next.value.document;
-        publishRender?.(next.value);
+        await publishRender?.(next.value);
       }
       if (document === undefined) throw new Error('Compiled route render ended without a complete event.');
       return Object.freeze({
@@ -506,7 +506,7 @@ const renderCompiled = async (
 export const renderProductionRoute = async (
   request: RouteInvocationChildRequest,
   publishTrace?: EventTraceObserver,
-  publishRender?: (event: AgentRenderEvent) => void,
+  publishRender?: (event: AgentRenderEvent) => Promise<void> | void,
 ): Promise<RouteInvocationChildResult> => {
   if (request.artifactEpoch === undefined || request.artifactRoot === undefined) {
     throw new ProductionRouteInvocationError(

@@ -305,11 +305,12 @@ providers、持久状态、CLI `mapInput` 与确认、事件 preflight 以及渲
 最终的 Agent Document、结构化结果、投影、诊断与执行计时。渲染事件由同一个渲染历史窗口保留，该窗口
 同样适用于实时流重放、已完成与已取消的信封、`GET /api/routes/invocations/<id>`、`final` 流消息以及
 Workbench 的实时视图：最新 256 条事件、序列化后至多 2 MiB，且始终保留最新一条事件与最新一条携带文档
-的事件（`shell`、`replace` 或 `complete`），因此即使发生淘汰，`events` 折叠后仍是连贯的最新文档。
-更早的中间事件会被丢弃；子进程不会再次返回整条事件流。一旦有事件被淘汰，信封会携带 `retention`
-——`producedEvents`、`evictedEvents`、`evictedBytes` 与 `retainedBytes`——流也会发送一次
-`truncated`。最终的 `document`、`result`、`outcome` 与 `correlationId` 永不被该窗口截断；文档在到达
-服务之前已由运行时自身的 `maxDocumentBytes` 约束。worker 报告观测值时，`providers` 只包含
+的事件（`shell`、`replace` 或 `complete`）——仅这两条事件本身可能使窗口超过 2 MiB——因此即使发生
+淘汰，`events` 折叠后仍是连贯的最新文档。更早的中间事件会被丢弃；子进程不会再次返回整条事件流。
+一旦有事件被淘汰，信封会携带 `retention`——`producedEvents`、`evictedEvents`、`evictedBytes` 与
+`retainedBytes`——流也会发送一次 `truncated`。已取消或失败的运行保留同一窗口以及它到达的最新文档。
+最终的 `document`、`result`、`outcome` 与 `correlationId` 永不被该窗口截断；文档在到达服务之前已由
+运行时自身的 `maxDocumentBytes` 约束。worker 报告观测值时，`providers` 只包含
 它实际选择的 provider，并将状态报告为 `mounted` 或 `failed`；未选择的目录 provider 不会出现。只有
 实际测到时长时才带 `durationMs`。子进程未报告观测值时（普通脚本、preflight 短路，或在观测开始之前
 失败），每个目录 provider 为 `unobserved` 且省略 `durationMs`；`0` 是测得的零，不是「未知」。

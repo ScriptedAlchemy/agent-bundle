@@ -588,6 +588,31 @@ it('bounds retained bytes with large intermediate snapshots and pins the latest 
   expect(cancelled.retention!.evictedBytes).toBeGreaterThan(6 * 300 * 1024);
 });
 
+it('keeps the retained window and latest document when the child fails after eviction', async () => {
+  const service = streamingService(async (_request, _signal, _trace, publishRender) => {
+    publishRender({ document: shellDocument, sequence: 0, type: 'shell' });
+    for (let sequence = 1; sequence <= 300; sequence += 1) publishRender({ completed: sequence, sequence, type: 'progress' });
+    throw new Error('render exploded');
+  });
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  const failed = await started.result;
+  const replay: Parameters<Parameters<typeof service.subscribe>[1]>[0][] = [];
+  service.subscribe(started.invocation.id, (message) => replay.push(message));
+
+  expect(failed).toMatchObject({
+    diagnostics: [{ code: 'AB8236', message: 'Route invocation child failed: render exploded' }],
+    document: shellDocument,
+    retention: { evictedEvents: 45, producedEvents: 301 },
+    status: 'failed',
+  });
+  expect(failed).not.toHaveProperty('outcome');
+  expect(failed.events).toHaveLength(routeInvocationRenderHistoryLimits.maxEvents);
+  expect(failed.events[0]).toEqual({ document: shellDocument, sequence: 0, type: 'shell' });
+  expect(replay[0]).toEqual({ type: 'truncated' });
+  expect(replay.flatMap((message) => message.type === 'render' ? [message.event] : [])).toEqual(failed.events);
+});
+
 it('cancels after the shell was evicted with the pinned document and the truncation account', async () => {
   const startedChild = deferred();
   const rendered = deferred();

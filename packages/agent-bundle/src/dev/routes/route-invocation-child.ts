@@ -68,9 +68,9 @@ const forwardEventTrace = (event: EventTraceEvent): void => {
   process.send?.({ event, type: 'trace' } satisfies RouteInvocationChildResponse);
 };
 
-const forwardRenderEvent = (event: AgentRenderEvent): void => {
-  process.send?.({ event, type: 'render' } satisfies RouteInvocationChildResponse);
-};
+/** Awaited per event so the IPC channel, not an in-child queue, paces a fast producer. */
+const forwardRenderEvent = (event: AgentRenderEvent): Promise<void> =>
+  respond({ event, type: 'render' });
 
 /**
  * The exit code a generated executable would set for this unit render. There
@@ -136,7 +136,7 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
   }
   // The harness drains the stream before returning, so the unit surface's
   // events reach the service after the render rather than live.
-  for (const event of rendered.events) forwardRenderEvent(event);
+  for (const event of rendered.events) await forwardRenderEvent(event);
   const exitCode = unitRenderExitCode(request, rendered.document, rendered.result ?? rendered.document.value);
   return Object.freeze({
     document: rendered.document,
