@@ -71,7 +71,7 @@ export interface InstallCommandRunner {
   run(
     command: string,
     args: readonly string[],
-    options: { readonly cwd: string },
+    options: { readonly cwd: string; readonly environment?: Readonly<NodeJS.ProcessEnv> },
   ): Promise<InstallCommandResult>;
 }
 
@@ -125,9 +125,12 @@ export const defaultCommandRunner: InstallCommandRunner = Object.freeze({
   run: (
     command: string,
     args: readonly string[],
-    options: { readonly cwd: string },
+    options: { readonly cwd: string; readonly environment?: Readonly<NodeJS.ProcessEnv> },
   ): Promise<InstallCommandResult> => new Promise((resolvePromise, reject) => {
-    execFile(command, [...args], { cwd: options.cwd }, (error, stdout, stderr) => {
+    execFile(command, [...args], {
+      cwd: options.cwd,
+      ...(options.environment === undefined ? {} : { env: options.environment }),
+    }, (error, stdout, stderr) => {
       if (error !== null && isErrno(error, 'ENOENT')) {
         reject(error);
         return;
