@@ -8,13 +8,10 @@ import { DevLockError } from '../src/dev/dev-lock.ts';
 import { ProjectEventHubError } from '../src/dev/events.ts';
 import {
   abortError,
-  abortToInterrupt,
-  interruptWhenAborted,
   isAbortError,
   isTypedDevError,
   mapCause,
   runPromise,
-  runPromiseExit,
   runSync,
   toDevError,
 } from '../src/effect/boundary.ts';
@@ -26,7 +23,6 @@ describe('effect boundary (agent-bundle dev seam)', () => {
     expect('runPromise' in rootApi).toBe(false);
     expect('runSync' in rootApi).toBe(false);
     expect('runPromise' in devApi).toBe(false);
-    expect('interruptWhenAborted' in devApi).toBe(false);
   });
 
   it('resolves a successful effect', async () => {
@@ -57,38 +53,9 @@ describe('effect boundary (agent-bundle dev seam)', () => {
     await expect(runPromise(Effect.never, { signal: controller.signal })).rejects.toSatisfy(isAbortError);
   });
 
-  it('interrupts an in-flight effect when the host signal aborts', async () => {
-    const controller = new AbortController();
-    const pending = runPromise(interruptWhenAborted(Effect.never, controller.signal));
-    await Promise.resolve();
-    controller.abort();
-    await expect(pending).rejects.toSatisfy(isAbortError);
-  });
-
-  it('preserves Exit on runPromiseExit', async () => {
-    const success = await runPromiseExit(Effect.succeed(7));
-    expect(Exit.isSuccess(success)).toBe(true);
-    if (Exit.isSuccess(success)) expect(success.value).toBe(7);
-
-    const failure = await runPromiseExit(Effect.fail('nope'));
-    expect(Exit.isFailure(failure)).toBe(true);
-  });
-
   it('wraps non-Error fail values', () => {
     expect(toDevError('plain')).toEqual(new Error('plain'));
     expect(abortError().name).toBe('AbortError');
-  });
-
-  it('interrupts when the host signal aborts between construction and run', async () => {
-    const controller = new AbortController();
-    const program = interruptWhenAborted(Effect.never, controller.signal);
-    controller.abort();
-    const pending = runPromise(program);
-    const hung = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('interruptWhenAborted hung after abort-before-start')), 250);
-    });
-    await expect(Promise.race([pending, hung])).rejects.toSatisfy(isAbortError);
-    await expect(runPromise(abortToInterrupt(controller.signal))).rejects.toSatisfy(isAbortError);
   });
 });
 
@@ -96,11 +63,11 @@ describe('effect lifts (src/effect/lift.ts)', () => {
   it('keeps the rejected or thrown value identity-preserved on the fail channel', async () => {
     const typed = new EpochStoreError('EPOCH_NOT_FOUND', 'Epoch "e1" does not exist.');
     const reason = { code: 'ECUSTOM', message: 'not an Error' };
-    const rejected = await runPromiseExit(liftPromise(() => Promise.reject(typed)));
+    const rejected = await runPromise(Effect.exit(liftPromise(() => Promise.reject(typed))));
     expect(Exit.isFailure(rejected) && Cause.squash(rejected.cause)).toBe(typed);
-    const rawReason = await runPromiseExit(liftPromise(() => Promise.reject(reason)));
+    const rawReason = await runPromise(Effect.exit(liftPromise(() => Promise.reject(reason))));
     expect(Exit.isFailure(rawReason) && Cause.squash(rawReason.cause)).toBe(reason);
-    const thrown = await runPromiseExit(liftTry((): never => { throw typed; }));
+    const thrown = await runPromise(Effect.exit(liftTry((): never => { throw typed; })));
     expect(Exit.isFailure(thrown) && Cause.squash(thrown.cause)).toBe(typed);
     expect(runSync(liftTry(() => 7))).toBe(7);
     // The Promise edge rethrows typed errors as-is and wraps non-Error values,

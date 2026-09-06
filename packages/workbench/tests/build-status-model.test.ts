@@ -2,7 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
 import type { ApplicationTree } from '../src/application/application-tree-model.ts';
-import { buildStatusFor, problemFailureCount, problemsFor, staleCatalogMessage } from '../src/shell/build-status-model.ts';
+import { buildStatusFor, problemsFor, staleCatalogMessage } from '../src/shell/build-status-model.ts';
 
 it('projects one real active epoch, generated targets, and a current-source summary', () => {
   const model = buildStatusFor({
@@ -219,7 +219,6 @@ it('lists source, build, contract-gate, catalog, host, and runtime problems, err
   expect(problems[5]).toMatchObject({ message: staleCatalogMessage, repairable: true });
   expect(problems[6]).toMatchObject({ location: 'agent-bundle.config.ts', repairable: true });
   expect(problems[6]!.node).toBeUndefined();
-  expect(problemFailureCount(problems)).toBe(4);
   expect(Object.isFrozen(problems)).toBe(true);
 });
 
