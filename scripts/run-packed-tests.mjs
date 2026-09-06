@@ -10,6 +10,7 @@
  * pass through to rstest.
  */
 import { execFile as executeFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -60,27 +61,83 @@ try {
     sharedPacks.set(packageName, pack);
     await writeFile(join(packDirectory, `${packageName}.json`), `${JSON.stringify(pack)}\n`);
   }));
+  const dependencyFields = ['dependencies', 'optionalDependencies', 'peerDependencies'];
+  const packedRecords = [];
+  for (const pack of sharedPacks.values()) {
+    const { stdout } = await execFile('tar', ['-xOf', pack.tarball, 'package/package.json']);
+    packedRecords.push({
+      digest: createHash('sha256').update(await readFile(pack.tarball)).digest('hex'),
+      filename: pack.packOutput.filename,
+      manifest: JSON.parse(stdout),
+      tarball: pack.tarball,
+    });
+  }
+  const siblingNames = new Set(packedRecords.map((record) => record.manifest.name));
+  const workspaceRefs = [];
+  const interPackageRanges = [];
+  for (const record of packedRecords) {
+    for (const field of dependencyFields) {
+      const section = record.manifest[field];
+      if (section === undefined || typeof section !== 'object' || section === null) continue;
+      for (const [name, specifier] of Object.entries(section)) {
+        if (typeof specifier === 'string' && specifier.startsWith('workspace:')) {
+          workspaceRefs.push(`${record.manifest.name} ${field} ${name} ${specifier}`);
+        }
+        if (siblingNames.has(name)) {
+          interPackageRanges.push({
+            field,
+            name,
+            package: record.manifest.name,
+            specifier,
+          });
+        }
+      }
+    }
+  }
+  if (workspaceRefs.length > 0) {
+    console.error(`packed manifests still carry workspace: ranges:\n${workspaceRefs.join('\n')}`);
+    process.exit(1);
+  }
   const binConsumer = join(packDirectory, 'bin-consumer');
   await mkdir(binConsumer);
   await writeFile(join(binConsumer, 'package.json'), '{"private":true}\n');
-  const binPackages = ['agent-bundle', 'create-agent-bundle'];
   await execFile('npm', [
     'install',
     '--ignore-scripts',
     '--no-audit',
     '--no-fund',
     '--prefer-offline',
-    ...binPackages.map((name) => sharedPacks.get(name).tarball),
+    ...packedRecords.map((record) => record.tarball),
   ], { cwd: binConsumer, env: environment });
-  for (const packageName of binPackages) {
-    const packageDocument = JSON.parse(await readFile(join(binConsumer, 'node_modules', packageName, 'package.json'), 'utf8'));
-    const bins = typeof packageDocument.bin === 'string'
-      ? [[packageDocument.name.replace(/^@[^/]+\//u, ''), packageDocument.bin]]
-      : Object.entries(packageDocument.bin ?? {});
-    for (const [name] of bins) {
+  const executedBins = [];
+  for (const record of packedRecords) {
+    const bins = typeof record.manifest.bin === 'string'
+      ? [record.manifest.name.replace(/^@[^/]+\//u, '')]
+      : Object.keys(record.manifest.bin ?? {});
+    for (const name of bins) {
       const executable = join(binConsumer, 'node_modules', '.bin', process.platform === 'win32' ? `${name}.cmd` : name);
       await execFile(executable, ['--help'], { cwd: binConsumer, env: environment });
+      executedBins.push(name);
     }
+  }
+  const evidencePath = environment.AGENT_BUNDLE_RELEASE_EVIDENCE;
+  if (typeof evidencePath === 'string' && evidencePath.length > 0) {
+    await writeFile(evidencePath, `${JSON.stringify({
+      candidateSha: environment.GITHUB_SHA ?? '',
+      executedBins,
+      interPackageRanges,
+      packages: packedRecords.map((record) => ({
+        bins: typeof record.manifest.bin === 'string'
+          ? [record.manifest.name.replace(/^@[^/]+\//u, '')]
+          : Object.keys(record.manifest.bin ?? {}),
+        digest: record.digest,
+        name: record.manifest.name,
+        tarball: record.filename,
+        version: record.manifest.version,
+      })),
+      testGroups: releasePool ? ['packed', 'packed-release'] : ['packed'],
+      workspaceRefs,
+    }, null, 2)}\n`);
   }
   // Build the synthetic private sibling into a separate package image. The
   // normal dist and shared release tarball above remain the publish candidate.

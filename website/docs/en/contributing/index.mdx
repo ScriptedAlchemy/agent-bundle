@@ -75,6 +75,11 @@ workspace packages, including the examples and this site, are not versioned or t
 
 Nothing is published to npm yet. The current release channel is the pkg.pr.new preview
 tarballs described in [Preview packages](../guide/distribution/preview-packages.mdx).
+Each `Release packages` run writes an explicit outcome to the workflow summary:
+`version-maintenance-only` (Version Packages PR refreshed), `qualified-without-publish`
+(the exact versioned candidate passed `pnpm check:release`), `published`, or `failed`.
+Disabled publication reports **NOT PUBLISHED**; registry verification runs only when
+publication is separately authorized.
 
 ## Native host smokes are opt-in
 

@@ -69,6 +69,10 @@ pnpm changeset
 
 目前还没有任何东西发布到 npm。当前的发布通道是 pkg.pr.new 预览 tarball，见
 [预览包](../guide/distribution/preview-packages.mdx)。
+每次 `Release packages` 运行都会在工作流摘要中写出明确结果：`version-maintenance-only`
+（刷新了 Version Packages PR）、`qualified-without-publish`（精确的版本化候选通过了
+`pnpm check:release`）、`published` 或 `failed`。未启用发布时摘要写明 **NOT PUBLISHED**；
+只有在发布被单独授权时才会做注册表核验。
 
 ## 原生宿主 smoke 需要显式开启
 
