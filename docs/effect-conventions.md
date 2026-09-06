@@ -11,7 +11,7 @@ docs, or examples' user code. The four-concept newcomer ledger is untouched.
 | --- | --- |
 | npm `effect` | **`4.0.0-rc.112`** (exact). Latest published `rc` dist-tag on 2026-09-01. The Wave 3.5 brief named `4.0.0-rc.113`; that version was not on the registry. Re-pin chores take the next published RC. |
 | Vendored tree | `repos/effect` via `git subtree` from [Effect-TS/effect](https://github.com/Effect-TS/effect.git) `main` (v4). Squash commit tracks `packages/effect` version **4.0.0-rc.112**. |
-| `website` `typescript` | **`6.0.3`**, behind the root's TypeScript 7, because `typedoc@0.28` peers on `<= 6.0.x`. TypeDoc compiles the built `packages/agent-bundle/dist` declarations with it, while Twoslash compiles documentation samples against package source. Re-pin chores check whether a newer `typedoc` lifts the ceiling. |
+| `website` TypeScript | Native **`7.0.2`** runs `tsc`; the `typescript-6` alias stays on **`6.0.3`** for TypeDoc, Twoslash, and `rspress.config.ts` compiler-API calls. `.pnpmfile.cjs` turns those plugins' TypeScript peers into dependencies, and the scoped overrides in `pnpm-workspace.yaml` isolate them from TypeScript 7. Re-pin chores update the alias and overrides together. |
 
 Application code imports the npm package. Never import from `repos/**`.
 

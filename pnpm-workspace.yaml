@@ -13,6 +13,11 @@ packages:
 # same reason), and pkg-pr-new rewrites to the sibling preview URL.
 overrides:
   '@agent-bundle/runtime': workspace:*
+  '@rspress/plugin-twoslash>typescript': npm:typescript@6.0.3
+  '@rspress/plugin-typedoc>typescript': npm:typescript@6.0.3
+  '@shikijs/twoslash>typescript': npm:typescript@6.0.3
+  'twoslash>typescript': npm:typescript@6.0.3
+  'typedoc>typescript': npm:typescript@6.0.3
 allowBuilds:
   '@google/genai': false
   msgpackr-extract: false
