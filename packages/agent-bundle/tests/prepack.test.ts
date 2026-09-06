@@ -191,8 +191,13 @@ it('reports package-only compile evidence drift as AB6039', async () => {
   const path = join(projectRoot, 'dist', packageCompileEvidenceFileName);
   const original = await readFile(path, 'utf8');
   try {
-    await writeFile(path, '{"assets":[]}\n');
-    expect(await diagnostics()).toContainEqual(expect.objectContaining({ code: 'AB6039' }));
+    const evidence = JSON.parse(original) as { policy: { revision: number } };
+    evidence.policy.revision += 1;
+    await writeFile(path, `${JSON.stringify(evidence)}\n`);
+    expect(await diagnostics()).toContainEqual(expect.objectContaining({
+      code: 'AB6039',
+      generatedPath: packageCompileEvidenceFileName,
+    }));
   } finally {
     await writeFile(path, original);
   }
