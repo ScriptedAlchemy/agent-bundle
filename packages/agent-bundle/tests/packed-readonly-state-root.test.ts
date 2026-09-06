@@ -212,6 +212,9 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     expect(await readFile(join(installedRoot, 'agent-bundle.manifest.json'), 'utf8')).not.toContain('AGENT_BUNDLE_STATE_ROOT');
 
     await chmodTree(installedRoot, { directory: 0o755, file: 0o644 });
+    for (const file of manifest.files) {
+      if (file.mode !== undefined) await chmod(join(installedRoot, file.path), file.mode);
+    }
     readOnly = false;
     const kept = await execFile(process.execPath, [installer, '--uninstall', '--keep-data'], { cwd: artifact, env });
     expect(kept.stdout).toContain(`Data (keep): kept`);
