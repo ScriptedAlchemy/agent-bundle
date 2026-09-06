@@ -6,9 +6,9 @@ import { libraryAuditHeadline } from '../../../components/headlines.js';
 import { LibraryAnalysis } from '../../../components/library-analysis.js';
 import { AuditFileCards, AuditSummary } from '../../../components/library-shelf.js';
 import type { LibraryAuditReceipt } from '../../../library.js';
-import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
+import { discoveryOperations } from '../../../operations/discovery.js';
 
-const operation = discoveryOperations(defaultDiscoveryOperations).libraryAudit;
+const operation = discoveryOperations.libraryAudit;
 
 export const config = {
   annotations: { readOnlyHint: false },

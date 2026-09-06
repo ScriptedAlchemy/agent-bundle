@@ -1,9 +1,9 @@
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { defaultDiscoveryOperations, discoveryOperations } from '../operations/discovery.js';
+import { discoveryOperations } from '../operations/discovery.js';
 
-const operation = discoveryOperations(defaultDiscoveryOperations).inspect;
+const operation = discoveryOperations.inspect;
 
 export const config = {
   description: 'Inspect a bounded audiobook source tree without changing it.',

@@ -6,9 +6,9 @@ import { z } from 'zod';
 import type { AudibleSearchReceipt } from '../audible.js';
 import { SearchRanking } from '../components/candidate-ranking.js';
 import { audibleSearchHeadline } from '../components/headlines.js';
-import { audibleOperations, audibleRegionList, defaultAudibleOperations } from '../operations/audible.js';
+import { audibleOperations, audibleRegionList } from '../operations/audible.js';
 
-const operation = audibleOperations(defaultAudibleOperations).audibleSearch;
+const operation = audibleOperations.audibleSearch;
 
 export const config = {
   description: 'Search and rank Audible identity candidates across reviewed regions.',

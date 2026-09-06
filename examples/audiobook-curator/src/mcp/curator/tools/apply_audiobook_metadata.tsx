@@ -6,10 +6,10 @@ import { CurationShelf, ShelfUnavailable } from '../../../components/curation-sh
 import { MetadataIntegrityReport } from '../../../components/integrity-report.js';
 import { MetadataMutation } from '../../../components/mutation-receipt.js';
 import type { MetadataReceipt } from '../../../media-mutation.js';
-import { defaultMediaMutationOperations, mediaMutationOperations } from '../../../operations/media-mutation.js';
+import { mediaMutationOperations } from '../../../operations/media-mutation.js';
 import { CurationShelfStateSchema } from '../../../state.js';
 
-const operation = mediaMutationOperations(defaultMediaMutationOperations).applyMetadata;
+const operation = mediaMutationOperations.applyMetadata;
 
 export const config = {
   annotations: { destructiveHint: true, readOnlyHint: false },

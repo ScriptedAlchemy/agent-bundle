@@ -7,10 +7,10 @@ import { CurationShelf, ShelfUnavailable } from '../../../components/curation-sh
 import { ChapterIntegrityReport } from '../../../components/integrity-report.js';
 import { ChapterMutation } from '../../../components/mutation-receipt.js';
 import type { ChapterReceipt } from '../../../media-mutation.js';
-import { defaultMediaMutationOperations, mediaMutationOperations } from '../../../operations/media-mutation.js';
+import { mediaMutationOperations } from '../../../operations/media-mutation.js';
 import { CurationShelfStateSchema } from '../../../state.js';
 
-const operation = mediaMutationOperations(defaultMediaMutationOperations).applyChapters;
+const operation = mediaMutationOperations.applyChapters;
 
 export const config = {
   annotations: { destructiveHint: true, readOnlyHint: false },

@@ -167,7 +167,7 @@ not the Markdown presentation or an intermediate Suspense fallback, so existing
 receipt consumers do not change when a command becomes rendered.
 
 `src/operations/` owns shared operation handlers and schemas;
-`src/cli-command.ts` defines their small typed definition helper. Domain logic
+`src/cli-command.ts` names the `{ signal }` context every handler receives. Domain logic
 remains in `src/` over `foundation.ts` and `media-process.ts`, while
 `src/index.ts` remains the package library entry.
 

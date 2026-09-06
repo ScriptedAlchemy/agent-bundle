@@ -4,9 +4,9 @@ import type { ToolRouteProps } from 'agent-bundle';
 
 import { InspectionShelf } from '../../../components/library-shelf.js';
 import type { InspectionReceipt } from '../../../curator-core.js';
-import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
+import { discoveryOperations } from '../../../operations/discovery.js';
 
-const operation = discoveryOperations(defaultDiscoveryOperations).inspect;
+const operation = discoveryOperations.inspect;
 
 export const config = {
   annotations: { readOnlyHint: true },
