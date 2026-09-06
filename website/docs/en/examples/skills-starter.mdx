@@ -4,27 +4,28 @@ description: 'The Skills Starter example: three engineering-operations Skills di
 
 # Skills Starter
 
-A Skills-only plugin. It proves that a bundle worth installing can be authored without declaring
-anything but its identity and its targets — and that Skill quality can still be backed by
-recorded evidence rather than a claim.
+A static plugin of Skills, resources, one command, and one rule. It proves that useful host
+content needs no MCP server, App route, state owner, or executable renderer.
 
 - **Run from the repository root:** `pnpm example:skills`
 - **Package:** `@agent-bundle-example/skills-starter`
 - **Public dependencies:** `agent-bundle` (`workspace:*`)
-- **Targets:** `portable`, `codex`, `claude`
+- **Targets:** `portable`, `codex`, `cursor`
 - **Credentials:** none — both eval suites are deterministic and read checked-in fixtures
 - **Source:** [`examples/skills-starter`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/skills-starter)
 
 ## What it proves
 
-- **Convention discovery.** `agent-bundle.config.ts` declares the plugin and its three targets
-  and nothing else. Every `src/skills/*/SKILL.md` directory is found by convention, so the config
-  never lists a Skill. That is the authoring model described in
+- **Convention discovery.** `agent-bundle.config.ts` declares the plugin and its three targets.
+  Skills, commands, and rules under `src/` are found by convention. That is the authoring model described in
   [Skills](../guide/authoring/skills.mdx).
 - **One source, three host projections.** The same authored documents are lowered for the
-  portable, Codex, and Claude projections of one composite plugin root — `skills/` is emitted once
+  portable, Codex, and Cursor projections of one composite plugin root — `skills/` is emitted once
   and every selected host reads it. The Workbench's Source and Generated views show whether a
   host copied a document or adapted it.
+- **No invented runtime.** The built artifact has no MCP executable, App runtime, Flight worker,
+  state owner, or notice kernel. The Workbench opens static leaves directly and reports unsupported
+  host projections instead of faking an invocation.
 - **Deterministic eval evidence.** The eval suites run through the deterministic harness against
   checked-in fixtures, so a Skill's coverage is a recorded run rather than an assertion. Coverage
   is labeled *indirect* because a deterministic harness cannot observe host Skill activation.
@@ -36,6 +37,8 @@ recorded evidence rather than a claim.
 | `src/skills/incident-triage/` | A production incident from first signal through containment, evidence collection, and a handoff-ready update. |
 | `src/skills/dependency-upgrade/` | Dependency upgrade planning with API, runtime, rollout, and rollback checks. |
 | `src/skills/release-review/` | The evidence, severity, workflow, and final-report requirements for an explicit release review. |
+| `src/commands/review-release.md` | A Cursor command that starts the release review. |
+| `src/rules/release-safety.mdc` | A Cursor rule that keeps release decisions evidence-based. |
 | `evals/release-readiness.eval.ts` | The `release-readiness` suite and its deterministic `release-artifact-is-ready` case. |
 | `evals/engineering-operations.eval.ts` | The `engineering-operations` suite: `incident-handoff-is-actionable` and `upgrade-plan-has-rollback`. |
 
@@ -48,13 +51,13 @@ it is needed.
 1. **Application → Skills** lists `dependency-upgrade`, `incident-triage`, and `release-review`.
    Select one to render its document, then use the inspector to browse linked checklists and
    report templates or compare Source and Generated output.
-2. **Advanced → Artifact** shows the composite plugin root. Switching the target between
-   portable, Codex, and Claude changes which projection is in focus, but every choice shows the
-   same tree — the one directory all three hosts read; enable details for each file's provenance.
-3. **Advanced → Evals → Runs** defaults to the `release-readiness` suite. Run
+2. **Application → Rules / Commands** opens authored content and each host projection directly.
+   Unsupported hosts show their capability reason; there is no Run action or plugin process.
+3. **Advanced → Artifact** shows the composite plugin root and per-file provenance.
+4. **Advanced → Evals → Runs** defaults to the `release-readiness` suite. Run
    `release-artifact-is-ready` and
    inspect the passing trial; it consumes only the checked-in evidence fixture.
-4. To practice repair, make a reversible edit to the release policy, press **Rebuild**, and wait
+5. To practice repair, make a reversible edit to the release policy, press **Rebuild**, and wait
    for a Failed or Idle result rather than a Building state. On failure, open **Problems** from
    the header count while Application keeps the last-good tree. Restore the checked-in policy
    and rebuild. The earlier eval is now stale for the changed build — rerun `release-readiness`

@@ -920,7 +920,7 @@ export const projectEventDocument = (
  * decision rules as a rendered Agent.Result, without loading the renderer.
  */
 export const projectEventPreflightResult = (
-  result: Exclude<EventPreflightResult, 'execute'>,
+  result: Extract<EventPreflightResult, { readonly outcome: 'continue' | 'deny' }>,
   event: CanonicalAgentEvent,
   target: string,
   nativeEvent: string,

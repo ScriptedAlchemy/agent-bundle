@@ -270,7 +270,7 @@ it('shares imported route contracts across graph, argv, runtime, and generated t
 
   const built = await build({ output: 'artifact', packageOutputs: true, root: importedRoot });
   expect(built.diagnostics).toEqual([]);
-  const binPath = join(importedRoot, 'dist', 'bin', 'route-contract-imported-fixture.js');
+  const binPath = join(importedRoot, 'dist', 'bin', 'route-contract-imported-fixture.mjs');
   const help = await execFile(binPath, ['status', '--help']);
   for (const option of ['--lane-key', '--limit', '--statuses', '--tickets']) {
     expect(help.stdout).toContain(option);

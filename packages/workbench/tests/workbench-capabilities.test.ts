@@ -175,7 +175,11 @@ const clientsFor = ({
     }),
   },
   skillClient: {
-    sourceTree: async () => ({ diagnostics: [], skills: Array.from({ length: skills }, () => skill) }),
+    sourceTree: async () => ({
+      diagnostics: [],
+      skills: Array.from({ length: skills }, () => skill),
+      staticDocuments: [],
+    }),
   },
 });
 

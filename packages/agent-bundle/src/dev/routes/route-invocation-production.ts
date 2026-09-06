@@ -15,6 +15,7 @@ import {
 } from '@agent-bundle/runtime';
 
 import { renderedDocumentExitCode } from '../../cli-entry.ts';
+import type { EventPreflightResult } from '../../events/preflight.ts';
 import type { EventTraceEvent, EventTraceObserver, EventTracer } from '../../events/trace.ts';
 import type { JsonObject, JsonValue } from '../../core/strict-json.ts';
 import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../../core/types.ts';
@@ -38,7 +39,7 @@ interface CompiledCliInvocationModule {
 }
 
 interface CompiledEventPreflight {
-  readonly gate: 'execute' | Readonly<{ readonly outcome: 'continue' | 'deny'; readonly reason?: string }>;
+  readonly gate: EventPreflightResult;
   readonly native: JsonObject;
   readonly projected?: JsonObject;
   readonly props: Readonly<{ readonly canonical: JsonObject }>;
@@ -169,7 +170,13 @@ const prepareInput = async (
   const native = (request.input as { readonly native?: JsonObject }).native ?? {};
   const preflight = await wrapper.prepareRouteInvocation(native, signal, observeTrace);
   return {
-    input: { canonical: preflight.props.canonical, native: preflight.native },
+    input: {
+      canonical: preflight.props.canonical,
+      native: preflight.native,
+      ...(preflight.gate !== 'execute' && preflight.gate.outcome === 'execute'
+        ? { preflight: preflight.gate.data }
+        : {}),
+    },
     preflight,
   };
 };
@@ -415,6 +422,9 @@ const routeProps = (request: ProductionRequest, input: JsonValue): Readonly<Reco
     ? {
         canonical: (input as { readonly canonical?: unknown }).canonical,
         native: (input as { readonly native?: unknown }).native,
+        ...((input as { readonly preflight?: unknown }).preflight === undefined
+          ? {}
+          : { preflight: (input as { readonly preflight: unknown }).preflight }),
       }
     : { input };
 };
@@ -509,7 +519,11 @@ export const renderProductionRoute = async (
   } catch (error) {
     throw preparationFailure(error);
   }
-  if (prepared.preflight !== undefined && prepared.preflight.gate !== 'execute') {
+  if (
+    prepared.preflight !== undefined
+    && prepared.preflight.gate !== 'execute'
+    && prepared.preflight.gate.outcome !== 'execute'
+  ) {
     const value = prepared.preflight.gate as JsonValue;
     return Object.freeze({
       document: completeDocument(value),

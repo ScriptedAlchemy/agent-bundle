@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { errorMessage, isErrno } from '../core/errors.ts';
 
@@ -29,7 +29,13 @@ export const readArtifactManifest = async (from: string): Promise<ArtifactManife
     return Object.freeze({ detail: errorMessage(error), path, root, status: 'invalid' });
   }
   try {
-    return Object.freeze({ manifest: parseArtifactManifest(bytes), path, root, status: 'ok' });
+    const canonicalRoot = await realpath(root);
+    return Object.freeze({
+      manifest: parseArtifactManifest(bytes),
+      path: join(canonicalRoot, artifactManifestName),
+      root: canonicalRoot,
+      status: 'ok',
+    });
   } catch (error) {
     return Object.freeze({ detail: errorMessage(error), path, root, status: 'invalid' });
   }

@@ -396,9 +396,14 @@ const componentProps = (
       // The public event-route contract is `{ canonical, native, signal }`,
       // and the generated Flight worker unwraps the payload into exactly that.
       const payload = (invocation.props as {
-        readonly payload?: { readonly canonical?: unknown; readonly native?: unknown };
+        readonly payload?: { readonly canonical?: unknown; readonly native?: unknown; readonly preflight?: unknown };
       }).payload ?? {};
-      return { canonical: payload.canonical, native: payload.native, signal };
+      return {
+        canonical: payload.canonical,
+        native: payload.native,
+        ...(payload.preflight === undefined ? {} : { preflight: payload.preflight }),
+        signal,
+      };
     }
     case 'cli':
       return { input: options.input ?? {}, signal };

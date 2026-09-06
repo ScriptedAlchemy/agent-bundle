@@ -2,6 +2,16 @@
   "name": "web-surface-fixture",
   "private": true,
   "type": "module",
+  "version": "1.0.0",
+  "bin": {
+    "web-surface-lifecycle": "./dist/bin/web-surface-lifecycle.js"
+  },
+  "scripts": {
+    "postinstall": "node ./dist/bin/web-surface-lifecycle.js"
+  },
+  "dependencies": {
+    "typescript": "7.0.2"
+  },
   "devDependencies": {
     "@modelcontextprotocol/server": "2.0.0"
   }

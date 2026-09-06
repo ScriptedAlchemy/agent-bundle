@@ -118,51 +118,46 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     ]);
   }));
 
-  it.effect('scaffolds publishable package fields for templates with package builds', () => Effect.gen(function* () {
+  it.effect('scaffolds canonical npm-root package commands', () => Effect.gen(function* () {
     const path = yield* Path.Path;
     const [cliTool, mcpServer] = yield* Effect.all([
       scaffoldTemplate('cli-tool', { pluginName: 'greeter' }),
       scaffoldTemplate('mcp-server', { pluginName: 'status-plugin' }),
     ], { concurrency: 'unbounded' });
     const cliManifest = yield* readJson<{
-      readonly bin: Record<string, string>;
-      readonly files: readonly string[];
+      readonly bin?: Record<string, string>;
+      readonly files?: readonly string[];
       readonly scripts: Record<string, string>;
     }>(path.join(cliTool.root, 'package.json'));
-    expect(cliManifest.files).toEqual(['dist', 'artifact', 'README.md']);
-    expect(cliManifest.bin).toEqual({
-      greeter: './dist/bin/greeter.js',
-      'greeter-install': './dist/bin/greeter-install.js',
-    });
-    expect(cliManifest.scripts.prepack).toBe('agent-bundle prepack --json --output artifact');
+    expect(cliManifest.files).toBeUndefined();
+    expect(cliManifest.bin).toBeUndefined();
+    expect(cliManifest.scripts['pack:check']).toBe('agent-bundle prepack --json --output artifact');
 
     const mcpManifest = yield* readJson<{
-      readonly bin: Record<string, string>;
+      readonly bin?: Record<string, string>;
       readonly exports: Record<string, { readonly import: string; readonly types: string }>;
-      readonly files: readonly string[];
+      readonly files?: readonly string[];
       readonly private: boolean;
       readonly scripts: Record<string, string>;
     }>(path.join(mcpServer.root, 'package.json'));
     expect(mcpManifest.private).toBe(true);
-    expect(mcpManifest.files).toEqual(['dist', 'artifact', 'README.md']);
-    expect(mcpManifest.bin).toEqual({ 'status-plugin': './dist/bin/status-plugin.js' });
+    expect(mcpManifest.files).toBeUndefined();
+    expect(mcpManifest.bin).toBeUndefined();
     expect(mcpManifest.exports).toEqual({
       '.': { types: './dist/status.d.ts', import: './dist/status.js' },
     });
-    expect(mcpManifest.scripts.prepack).toBe('agent-bundle prepack --json --output artifact');
+    expect(mcpManifest.scripts['pack:check']).toBe('agent-bundle prepack --json --output artifact');
     expect(yield* readText(path.join(mcpServer.root, 'agent-bundle.config.ts'))).toContain("lib: './src/status.ts'");
   }));
 
-  it.effect('drops generated installer bins when no installable host target is selected', () => Effect.gen(function* () {
+  it.effect('keeps source package metadata independent of selected hosts', () => Effect.gen(function* () {
     const path = yield* Path.Path;
     const [cliTool, mcpServer] = yield* Effect.all([
       scaffoldTemplate('cli-tool', { pluginName: 'greeter', targets: ['portable'] }),
       scaffoldTemplate('mcp-server', { pluginName: 'status-plugin', targets: ['portable'] }),
     ], { concurrency: 'unbounded' });
     const cliManifest = yield* readJson<{ readonly bin?: Record<string, string> }>(path.join(cliTool.root, 'package.json'));
-    expect(cliManifest.bin).toEqual({
-      greeter: './dist/bin/greeter.js',
-    });
+    expect(cliManifest.bin).toBeUndefined();
 
     const mcpManifest = yield* readJson<{ readonly bin?: Record<string, string> }>(path.join(mcpServer.root, 'package.json'));
     expect(mcpManifest.bin).toBeUndefined();
@@ -183,44 +178,32 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     const defaultReadme = yield* readText(path.join(defaults.root, 'README.md'));
     expect(defaultReadme).toContain([
       '# after publishing/installing the package',
-      'npx greeter-install install claude',
-      'npx greeter-install install codex',
+      'npx agent-bundle install claude --from node_modules/status-plugin',
+      'npx agent-bundle install codex --from node_modules/status-plugin',
       '',
     ].join('\n'));
     expect(defaultReadme).not.toContain('install cursor');
-    expect(defaultReadme).toContain('The installer accepts the\nselected host targets only: `claude`, `codex`.');
+    expect(defaultReadme).toContain('The package contains these selected host targets: `claude`, `codex`.');
 
-    // A cursor-only scaffold's installer rejects `claude`, so the README must
-    // not suggest it.
+    // A cursor-only scaffold must not suggest unavailable host roots.
     const cursorReadme = yield* readText(path.join(cursorOnly.root, 'README.md'));
-    expect(cursorReadme).toContain('npx status-plugin install cursor\n');
+    expect(cursorReadme).toContain('npx agent-bundle install cursor --from node_modules/status-plugin\n');
     expect(cursorReadme).not.toContain('install claude');
     expect(cursorReadme).not.toContain('install codex');
 
     // Selecting every host installs into every host.
     const everyHostReadme = yield* readText(path.join(everyHost.root, 'README.md'));
     expect(everyHostReadme).toContain([
-      'npx status-plugin install claude',
-      'npx status-plugin install codex',
-      'npx status-plugin install cursor',
+      'npx agent-bundle install claude --from node_modules/status-plugin',
+      'npx agent-bundle install codex --from node_modules/status-plugin',
+      'npx agent-bundle install cursor --from node_modules/status-plugin',
     ].join('\n'));
 
-    // Portable-only scaffolds ship no installer bin at all.
+    // Portable-only scaffolds name no install command.
     const portableReadme = yield* readText(path.join(portableOnly.root, 'README.md'));
-    expect(portableReadme).not.toMatch(/^npx \S+ install /mu);
+    expect(portableReadme).not.toMatch(/^npx agent-bundle install /mu);
     expect(portableReadme).toContain("no installable host target ('portable')");
-    expect(portableReadme).toContain('add `claude`, `codex`, or `cursor` to `targets`');
-    // Re-enabling installers needs the dropped package.json bin entry back too,
-    // and the README names exactly the mapping the template shipped.
-    const templateManifest = yield* readJson<{ readonly bin: Record<string, string> }>(
-      path.join(templateRoot(path, 'cli-tool'), 'package_json'),
-    );
-    const installerBin = `${placeholderName}-install`;
-    expect(templateManifest.bin[installerBin]).toBeDefined();
-    const droppedEntry = `"greeter-install": "${templateManifest.bin[installerBin]?.replaceAll(placeholderName, 'greeter')}"`;
-    expect(portableReadme).toContain(`# ${droppedEntry} to get one`);
-    expect(portableReadme).toContain(`restore \`${droppedEntry}\` under \`bin\` in`);
-    expect(portableReadme).toContain('never edits the manifest');
+    expect(portableReadme).toContain('Add `claude`, `codex`,');
 
     // The skills-only template has no install section and passes through.
     const minimalReadme = yield* readText(path.join(minimal.root, 'README.md'));
@@ -280,7 +263,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
       expect(contents).not.toContain('workspace:*');
     }
     const manifest = yield* readJson<{
-      readonly bin: Record<string, string>;
+      readonly bin?: Record<string, string>;
       readonly dependencies?: Record<string, string>;
       readonly devDependencies: Record<string, string>;
       readonly name: string;
@@ -290,10 +273,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     expect(files).toContain('src/cli/greet.ts');
     expect(manifest.dependencies).toBeUndefined();
     expect(manifest.devDependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
-    expect(manifest.bin).toEqual({
-      'status-plugin': './dist/bin/status-plugin.js',
-      'status-plugin-install': './dist/bin/status-plugin-install.js',
-    });
+    expect(manifest.bin).toBeUndefined();
     const config = yield* readText(path.join(root, 'agent-bundle.config.ts'));
     expect(config).toContain("name: 'status-plugin'");
     // Routed CLI: no `scripts` or `bin` entry names the executable; the

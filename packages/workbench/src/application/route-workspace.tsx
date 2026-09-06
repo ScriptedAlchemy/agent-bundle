@@ -34,6 +34,24 @@ export const DocumentWorkspace = ({ leaf }: { readonly leaf: ApplicationLeaf }):
         {leaf.event === undefined ? undefined : <div><dt>Event</dt><dd>{leaf.event}</dd></div>}
         {configRows(leaf).map((entry) => <div key={entry.label}><dt>{entry.label}</dt><dd>{entry.value}</dd></div>)}
       </dl>
+      {leaf.document === undefined ? undefined : <>
+        <h2>Authored content</h2>
+        <pre className="skill-source" data-testid="static-authored-document"><code>{leaf.document.markdown}</code></pre>
+        <h2>Host projections</h2>
+        {leaf.document.projections.map((projection) => <section key={projection.target}>
+          <h3>{projection.target}</h3>
+          <dl className="inspector-rows">
+            <div><dt>Capability</dt><dd>{projection.capability.state}</dd></div>
+            {'evidence' in projection.capability && projection.capability.evidence !== undefined
+              ? <div><dt>Host contract</dt><dd>{projection.capability.evidence.observedVersion}</dd></div>
+              : undefined}
+            {projection.path === undefined ? undefined : <div><dt>Generated path</dt><dd>{projection.path}</dd></div>}
+          </dl>
+          {projection.markdown === undefined
+            ? <p className="result-note">{'reason' in projection.capability ? projection.capability.reason : 'The author excluded this host.'}</p>
+            : <pre className="skill-source" data-testid={`static-generated-document-${projection.target}`}><code>{projection.markdown}</code></pre>}
+        </section>)}
+      </>}
       <p className="result-note">This leaf is a document the host reads as written; there is nothing to run. Edit the source and the published build picks it up.</p>
     </section>
   </div>

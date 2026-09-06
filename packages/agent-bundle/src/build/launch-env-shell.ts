@@ -8,10 +8,10 @@
  */
 export const launchEnvRuntimeSpecifier = 'agent-bundle/launch-env';
 
-// This module is imported by the hook contract, which the installer bundle
-// (`install-entry`) also carries and a consumer's own Rspack run re-bundles,
-// so it must stay free of filesystem probing and `new URL(…, import.meta.url)`:
-// `launchEnvRuntimePath` lives in `entry-shell.ts` beside the other paths.
+// This module is imported by the hook contract and may be re-bundled by a
+// consumer, so it stays free of filesystem probing and
+// `new URL(…, import.meta.url)`: `launchEnvRuntimePath` lives in
+// `entry-shell.ts` beside the other paths.
 
 /**
  * The generated module that applies the layer, served virtually to each

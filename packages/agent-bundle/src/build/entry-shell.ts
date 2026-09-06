@@ -169,25 +169,6 @@ export const webHostRuntimeSpecifier = 'agent-bundle/web-host';
 
 export const webHostRuntimePath = (): string => runtimeModulePath('web-host');
 
-export const installEntryRuntimeSpecifier = 'agent-bundle/install-entry';
-
-export const installEntryRuntimePath = (): string => runtimeModulePath('install-entry');
-
-export const generatedInstallBinEntrySource = (options: {
-  readonly artifactRelativeUrl: string;
-  readonly hosts: readonly ('claude' | 'codex' | 'cursor')[];
-  readonly name: string;
-}): string => [
-  `import { runGeneratedInstallProcess } from ${JSON.stringify(installEntryRuntimeSpecifier)};`,
-  '',
-  'process.exitCode = await runGeneratedInstallProcess(process.argv.slice(2), Object.freeze({',
-  `  artifactRoot: new URL(${JSON.stringify(options.artifactRelativeUrl)}, import.meta.url),`,
-  `  hosts: Object.freeze(${stableJson(options.hosts)}),`,
-  `  name: ${JSON.stringify(options.name)},`,
-  '}));',
-  '',
-].join('\n');
-
 /**
  * The code root a generated module falls back to when the host supplies no
  * `AGENT_BUNDLE_PLUGIN_ROOT`, and with it where its state root derives absent
@@ -1186,7 +1167,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     '    }, async () => {',
     '      let validationError;',
     "      const props = message.invocation.kind === 'event'",
-    '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
+    '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), ...(message.invocation.props.payload.preflight === undefined ? {} : { preflight: Object.freeze(message.invocation.props.payload.preflight) }), signal: controller.signal })',
     // The MCP server hands the worker input the SDK already validated; only
     // the Workbench, which bypasses the SDK, asks the worker to validate.
     '        : message.validateInput !== true ? { input: message.invocation.props.input, signal: controller.signal } : (() => {',

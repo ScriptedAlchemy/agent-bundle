@@ -23,7 +23,7 @@ const installVerb = (state: InstallResult['state'], mode: InstallResult['mode'])
   }
 };
 
-/** Human-readable install summary shared by the CLI and generated installer bins. */
+/** Human-readable install summary shared by the CLI and standalone artifact installer. */
 export const formatInstallResult = (result: InstallResult): string => {
   const destination = result.destination ?? result.bundleRoot;
   const mode = result.mode === undefined ? '' : ` (${result.mode} mode)`;
@@ -64,8 +64,8 @@ const registrationLabel = (registration: UninstallResult['registrations'][number
   registration.id ?? registration.name ?? registration.kind;
 
 /**
- * Human-readable uninstall summary shared by the CLI and generated installer
- * bins. `--plan` output lists every exact path the run would remove, so an
+ * Human-readable uninstall summary shared by the CLI and standalone artifact
+ * installer. `--plan` output lists every exact path the run would remove, so an
  * operator can audit the mutation before allowing it.
  */
 export const formatUninstallResult = (result: UninstallResult): string => {

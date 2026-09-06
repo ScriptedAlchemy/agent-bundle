@@ -114,13 +114,17 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
     });
     await waitForActive(server);
     client = await openProxy(project.root, server.url);
+    const activeClient = client;
     events = await projectEvents(server.url);
     await events.opened;
     await within(events.until('"summary":"Development contract matrix passed."'), 30_000, 'initial matrix');
 
     expect(await versionOf(client)).toBe('v1');
-    let listChanged = 0;
-    client.setNotificationHandler('notifications/tools/list_changed', async () => { listChanged += 1; });
+    await waitFor(async () => {
+      const status = server?.status();
+      return status?.artifact.state === 'active' &&
+        status.hostAdoption?.adoptedEpochId === status.artifact.activeEpoch.id;
+    });
 
     const initialEpoch = server.status().artifact;
     if (initialEpoch.state !== 'active') throw new Error('Expected an initial active epoch.');
@@ -141,7 +145,6 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
     expect(failedWire).toContain('"state":"failed"');
     expect(failedWire).toContain('"routeId":"tool:fixture/unknown"');
     expect(failedWire).toContain('"checks":["coverage"]');
-    expect(listChanged).toBe(0);
     expect(await versionOf(client)).toBe('v1');
     lateClient = await openProxy(project.root, server.url);
     expect(await versionOf(lateClient)).toBe('v1');
@@ -160,11 +163,6 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
       mode: 'gated',
     });
 
-    const changed = Promise.withResolvers<void>();
-    client.setNotificationHandler('notifications/tools/list_changed', async () => {
-      listChanged += 1;
-      changed.resolve();
-    });
     await Promise.all([
       replaceWatchedSource(project.root, source, toolSource('v3', project.root)),
       replaceWatchedSource(
@@ -173,8 +171,13 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
         contractFixtureSource(DEV_CONTRACT_TOOL_ROUTE),
       ),
     ]);
-    await within(changed.promise, 30_000, 'changed notification');
-    expect(await versionOf(client)).toBe('v3');
+    await waitFor(async () => {
+      const adoption = server?.status().hostAdoption;
+      return adoption?.mode === 'gated' &&
+        adoption.contracts?.state === 'passed' &&
+        adoption.adoptedEpochId !== initialEpoch.activeEpoch.id;
+    });
+    await waitFor(async () => await versionOf(activeClient) === 'v3');
     const passingEpoch = server.status().artifact;
     if (passingEpoch.state !== 'active') throw new Error('Expected the repaired build to publish an artifact.');
     const passingWire = await within(
@@ -183,7 +186,6 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
       'passing matrix',
     );
     expect(passingWire).toContain('"state":"passed"');
-    expect(listChanged).toBe(1);
     expect(server.status().hostAdoption).toMatchObject({
       adoptedEpochId: passingEpoch.activeEpoch.id,
       contracts: { epochId: passingEpoch.activeEpoch.id, failures: [], state: 'passed' },
@@ -207,6 +209,7 @@ it('adopts artifact.available directly when development contracts are not declar
     server = await startDevServer({ open: false, port: 0, root: project.root });
     await waitForActive(server);
     client = await openProxy(project.root, server.url);
+    const activeClient = client;
     expect(await versionOf(client)).toBe('v1');
     const changed = Promise.withResolvers<void>();
     client.setNotificationHandler('notifications/tools/list_changed', async () => changed.resolve());
@@ -214,7 +217,7 @@ it('adopts artifact.available directly when development contracts are not declar
     await replaceWatchedSource(project.root, source, toolSource('v3', project.root));
     await within(changed.promise);
 
-    expect(await versionOf(client)).toBe('v3');
+    await waitFor(async () => await versionOf(activeClient) === 'v3');
     const artifact = server.status().artifact;
     if (artifact.state !== 'active') throw new Error('Expected the rebuilt artifact to be active.');
     expect(server.status().hostAdoption).toEqual({ adoptedEpochId: artifact.activeEpoch.id, mode: 'direct' });

@@ -19,6 +19,7 @@ import {
   cursorPluginValidator,
 } from '../../src/adapters/cursor.ts';
 import { createAdapterValidator } from '../../src/adapters/types.ts';
+import { parseArtifactManifest } from '../../src/build/manifest.ts';
 import { reindexArtifactManifest } from '../../src/build/manifest-reindex.ts';
 import { isInsideOrEqual } from '../../src/core/paths.ts';
 import { validatePortablePluginFiles } from '../../src/host-contracts/portable-plugin-validation.ts';
@@ -38,9 +39,9 @@ import { DEV_INSTALL_MARKER, DevHostInstallManager } from '../../src/dev/host-in
 import { ProjectEventHub } from '../../src/dev/events.ts';
 import type { ArtifactEpoch } from '../../src/dev/types.ts';
 import { startDevServer } from '../../src/dev/workbench-server.ts';
-import { runDoctor } from '../../src/install/doctor.ts';
+import { runDoctor, type DoctorCommandRunner } from '../../src/install/doctor.ts';
 import { installBundle, type InstallHost } from '../../src/install/install.ts';
-import { readInstallReceipt } from '../../src/install/receipt.ts';
+import { manifestInventory, readInstallReceipt } from '../../src/install/receipt.ts';
 import {
   normalClaudeSettingsAndPluginsUnchanged,
   packedNativeEnvironment,
@@ -184,12 +185,6 @@ export interface DevHostInstallProofReport {
   readonly status: 'passed';
 }
 
-export interface HostInstallCommand {
-  readonly cwd?: string;
-  readonly executable: string;
-  readonly prefixArguments?: readonly string[];
-}
-
 export interface InstalledHostContractMatrixProofOptions {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
@@ -200,7 +195,6 @@ export interface InstalledHostContractMatrixProofOptions {
 
 interface HostInstallProofOptions {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
-  readonly installCommand?: HostInstallCommand;
 }
 
 /** The same-version rebuild round trip every host proof performs after its first install. */
@@ -427,6 +421,20 @@ const run = async (
   }
 };
 
+const doctorCommandRunner = (environment: Readonly<NodeJS.ProcessEnv>): DoctorCommandRunner =>
+  async (request) => {
+    const result = await run(request.executable, request.args, {
+      cwd: request.cwd,
+      environment: isolatedEnvironment(environment, request.environment ?? {}),
+    });
+    return Object.freeze({
+      exitCode: result.exitCode,
+      signal: null,
+      stderr: result.stderr,
+      stdout: result.stdout,
+    });
+  };
+
 const runNodeCli = (
   fixture: BuiltHostInstallFixture,
   args: readonly string[],
@@ -437,7 +445,7 @@ const runNodeCli = (
   { ...options, timeout: 180_000 },
 );
 
-/** Runs `install` or `uninstall` through the source-built CLI (`--from <bundle>`) or the packed package bin. */
+/** Runs `install` or `uninstall` through the source-built CLI with `--from <bundle>`. */
 const runLifecycleCommand = (
   fixture: BuiltHostInstallFixture,
   verb: 'install' | 'uninstall',
@@ -445,29 +453,14 @@ const runLifecycleCommand = (
   bundle: string,
   options: HostInstallProofOptions,
   extraArguments: readonly string[] = [],
-): Promise<CommandResult> => {
-  if (options.installCommand === undefined) {
-    return runNodeCli(fixture, [
-      verb,
-      host,
-      '--from',
-      bundle,
-      ...extraArguments,
-      '--json',
-    ], { cwd: bundle, environment: isolatedEnvironment(options.environment, {}) });
-  }
-  return run(options.installCommand.executable, [
-    ...(options.installCommand.prefixArguments ?? []),
+): Promise<CommandResult> => runNodeCli(fixture, [
     verb,
     host,
+    '--from',
+    bundle,
     ...extraArguments,
     '--json',
-  ], {
-    cwd: options.installCommand.cwd ?? bundle,
-    environment: isolatedEnvironment(options.environment, {}),
-    timeout: 180_000,
-  });
-};
+  ], { cwd: bundle, environment: isolatedEnvironment(options.environment, {}) });
 
 const runInstallCommand = (
   fixture: BuiltHostInstallFixture,
@@ -536,7 +529,7 @@ const assertInstallResult = (
   assertProof(document.host === host, `${host} install result did not identify the host.`);
   assertProof(document.plugin === plugin, `${host} install result did not identify ${plugin}.`);
   assertProof(document.version === version, `${host} install result did not identify version ${version}.`);
-  assertProof(document.state === state, `${host} install result state was not ${state}.`);
+  assertProof(document.state === state, `${host} install result state was ${document.state}, expected ${state}.`);
   assertProof(
     typeof document.contentHash === 'string' && /^[0-9a-f]{64}$/u.test(document.contentHash),
     `${host} install result carried no artifact content hash.`,
@@ -985,6 +978,17 @@ export const runClaudeHostInstallProof = async (
     assertProof(/\bSkills\s+\(1\)/iu.test(details.stdout), 'Claude component inventory did not report Skills (1).');
     assertProof(/\bHooks\s+\(1\)/iu.test(details.stdout), 'Claude component inventory did not report Hooks (1).');
     assertProof(/\bMCP servers\s+\(1\)/iu.test(details.stdout), 'Claude component inventory did not report MCP servers (1).');
+    const doctor = await runDoctor({
+      commandRunner: doctorCommandRunner(environment),
+      environment,
+      from: fixture.artifactRoot,
+      home,
+      hosts: ['claude'],
+    });
+    assertProof(
+      doctor.hosts.find((entry) => entry.host === 'claude')?.bundle?.comparison?.status === 'current',
+      `Doctor did not report the installed Claude npm root as current: ${JSON.stringify(doctor.diagnostics)}`,
+    );
 
     const skillPath = join(expectedInstallPath, 'skills', 'probe', 'SKILL.md');
     await access(skillPath).catch(() => fail('Claude cache did not contain skills/probe/SKILL.md.'));
@@ -1130,6 +1134,17 @@ export const runCodexHostInstallProof = async (
         `Codex installed plugin manifest interface did not advertise ${capability}.`,
       );
     }
+    const doctor = await runDoctor({
+      commandRunner: doctorCommandRunner(environment),
+      environment,
+      from: fixture.artifactRoot,
+      home,
+      hosts: ['codex'],
+    });
+    assertProof(
+      doctor.hosts.find((entry) => entry.host === 'codex')?.bundle?.comparison?.status === 'current',
+      `Doctor did not report the installed Codex npm root as current: ${JSON.stringify(doctor.diagnostics)}`,
+    );
     const sameVersionRebuild = await proveSameVersionRebuild({
       bundle: fixture.bundles.codex,
       host: 'codex',
@@ -1717,14 +1732,28 @@ export const runPortableHostInstallProof = async (
       portableFinding?.state === 'installed' && portableFinding.launch?.state === 'expanded',
       `Doctor inventory did not report the portable install as expanded: ${JSON.stringify(portableFinding)}`,
     );
+    const coreInventory = await manifestInventory(
+      fixture.portableBundle,
+      parseArtifactManifest(await readFile(join(fixture.portableBundle, 'agent-bundle.manifest.json'), 'utf8')),
+    );
+    const emittedReceipt = await readInstallReceipt(destination);
+    assertProof(
+      JSON.stringify(emittedReceipt?.files) === JSON.stringify(coreInventory.files),
+      `The emitted installer file order disagrees with the core manifest inventory: ${JSON.stringify(emittedReceipt?.files)} vs ${JSON.stringify(coreInventory.files)}.`,
+    );
 
     await install('Already installed');
 
     // Same-version rebuild through the emitted install.mjs: owned files replaced in place, then a no-op.
     const marker = join(fixture.portableBundle, sameVersionRebuildMarker);
     await writeFile(marker, '# same-version rebuild\n');
+    let indexed = false;
     let sameVersionRebuild: SameVersionRebuildProof;
     try {
+      await reindexArtifactManifest(fixture.portableBundle, {
+        added: [{ kind: 'generated', path: sameVersionRebuildMarker }],
+      });
+      indexed = true;
       await install('Replaced');
       await access(join(destination, sameVersionRebuildMarker)).catch(() =>
         fail('Portable emitted installer did not refresh the installed copy for the same-version rebuild.'));
@@ -1732,6 +1761,11 @@ export const runPortableHostInstallProof = async (
       sameVersionRebuild = 'replaced';
     } finally {
       await rm(marker, { force: true });
+      if (indexed) {
+        await reindexArtifactManifest(fixture.portableBundle, {
+          removed: [sameVersionRebuildMarker],
+        });
+      }
     }
 
     return Object.freeze({

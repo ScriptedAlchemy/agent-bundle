@@ -15,6 +15,7 @@ import { stageCursorMarketplace } from './cursor-marketplace.ts';
 import {
   bundleInventory,
   failure,
+  installedBundleInventory,
   readBundleIdentity,
   type BundleIdentityHost,
   type PluginIdentity,
@@ -521,7 +522,7 @@ const installPublicCli = async (
     destination = join(dirname(entry.installPath), identity.version);
     let installed: TreeInventory | undefined;
     try {
-      installed = await treeInventory(entry.installPath);
+      installed = await installedBundleInventory(entry.installPath, host);
     } catch (error) {
       // The host says a copy is installed but it cannot be compared: never let that pass as "no drift".
       if (options.replace !== true) {

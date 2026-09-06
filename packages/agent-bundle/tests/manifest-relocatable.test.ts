@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -230,6 +230,7 @@ it('emits a relocatable manifest that survives moving the composite root', async
   const moved = join(destParent, 'nested', 'moved-artifact');
   await mkdir(dirname(moved), { recursive: true });
   await rename(artifactRoot, moved);
+  const canonicalMoved = await realpath(moved);
 
   expect(await validateArtifact({ artifactRoot: moved })).toEqual([]);
   const read = await readArtifactManifest(moved);
@@ -238,10 +239,17 @@ it('emits a relocatable manifest that survives moving the composite root', async
   expect(read.manifest).toEqual(manifest);
   expect(await readFile(read.path, 'utf8')).toBe(manifestBytes);
 
+  const linked = join(destParent, 'node_modules', 'relocated-plugin');
+  await mkdir(dirname(linked), { recursive: true });
+  await symlink(moved, linked, 'dir');
+  const linkedRead = await readArtifactManifest(linked);
+  expect(linkedRead).toMatchObject({ root: canonicalMoved, status: 'ok' });
+
   const registry = createDefaultRegistry();
   for (const host of identityHosts) {
     const identity = await readBundleIdentity(moved, host);
-    expect(identity.bundleRoot).toBe(moved);
+    expect(identity.bundleRoot).toBe(canonicalMoved);
+    expect((await readBundleIdentity(linked, host)).bundleRoot).toBe(canonicalMoved);
     for (const document of Object.values(identity.documents)) {
       expect(isSafeRelativePosix(document)).toBe(true);
       const resolved = resolve(moved, document);

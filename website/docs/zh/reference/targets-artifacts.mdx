@@ -46,7 +46,7 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 只输出一次
 ├── INSTALL.md                            # 选中了任一内置宿主时
 ├── install.mjs                           # 选中了 cursor 或 portable 时
-├── agent-bundle.manifest.json            # 产物索引（manifestVersion 2）
+├── agent-bundle.manifest.json            # 产物索引（manifestVersion 3）
 └── agent-bundle.compile-evidence.json    # 每个已编译文件的编译器记录
 ```
 
@@ -71,8 +71,8 @@ artifact/
 无论选择了哪些宿主，这些路径都是固定的，因此单宿主根目录与四宿主根目录共用同一种布局。Claude Code 与
 portable 的 Agent Plugins 格式从约定的插件根位置加载文档，无法重定向；Codex 与 Cursor 的清单携带显式的
 `hooks` 与 MCP 指针，因此它们的文档紧挨着各自的清单。这两个宿主在指针缺失时还会回退到对约定路径的目录
-发现，因此当另一个所选宿主占用了约定路径时，没有自己文档的 Codex 或 Cursor 投影仍会指向一份空文档——
-Cursor 绝不会加载 Claude Code 的 `hooks/hooks.json`。
+发现，因此当钩子或 MCP 服务器到达另一个所选宿主的约定路径时，没有自己文档的 Codex 或 Cursor 投影仍会
+指向一份空文档——Cursor 绝不会加载 Claude Code 的 `hooks/hooks.json`。
 
 ### 钩子 wrapper
 
@@ -127,14 +127,14 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 
 ## agent-bundle.manifest.json
 
-每个根目录输出一份清单（`manifestVersion: 2`）。它是根目录的**索引**——每个消费者都通过这一份文档了解
+每个根目录输出一份清单（`manifestVersion: 3`）。它是根目录的**索引**——每个消费者都通过这一份文档了解
 根目录包含什么——也是之后每一项完整性检查的输入：`validate --artifact`、`prepack`、`install`、
 `doctor --from`、`serve-app`、`mcp`、`hooks`，以及 packed 与 installed-host 证明级别。完整的字段参考见
 [产物清单](./artifact-manifest.mdx)页；概要如下：
 
 | 分节 | 内容 |
 | --- | --- |
-| `manifestVersion`、`runtime` | `2`，以及 `{ node }`，即面向消费者的生成式可执行文件下限。 |
+| `manifestVersion`、`runtime` | `3`，以及 `{ node }`，即面向消费者的生成式可执行文件下限。 |
 | `application` | 身份，只记录一次且与宿主无关：`id`、`name`、`version`，可选的 `description`。这是 `install`、`doctor` 与 `uninstall` 作用的对象。 |
 | `files[]` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`（`bundle`、`copy`、`generated`、`prebuilt`）、可选的 `mode`。 |
 | `projections[]` | 每个所选宿主一行，按 `host` 排序：`host`、可选的 `builtInHost`、指向该投影输出的宿主插件、市场、MCP 与钩子文档的 `documents` 指针，以及它的 `marketplace` 名。 |

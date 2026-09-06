@@ -236,7 +236,7 @@ export const summarizeEventTraceError = (error: unknown): EventTraceErrorSummary
 };
 
 const preflightOutcomeOf = (result: EventPreflightResult): EventTracePreflightOutcome => {
-  if (result === 'execute') return 'execute';
+  if (result === 'execute' || result.outcome === 'execute') return 'execute';
   switch (result.outcome) {
     case 'continue':
       return 'continue';

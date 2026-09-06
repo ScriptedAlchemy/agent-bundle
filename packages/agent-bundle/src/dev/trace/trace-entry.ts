@@ -1,16 +1,5 @@
 import type { JsonValue } from '../../core/strict-json.ts';
 
-/**
- * One entry on the Workbench's unified live trace (#600 PR 2): the correlated
- * timeline of everything the dev server observes the application doing.
- * Browser-safe and runtime-free; the Workbench and every server-side publisher
- * share it through `contracts/trace.ts`.
- *
- * Each publisher lowers its own record into this shape and keeps its full
- * record behind `href` (the Workbench path that opens it). The trace never
- * becomes a second copy of an invocation, an MCP frame, or a log line.
- */
-
 export const traceSources = Object.freeze([
   /** `RouteInvocation` lifecycle from `/api/routes/invocations`. */
   'invocation',
