@@ -5,7 +5,7 @@ import { expect, it } from '@rstest/core';
 
 import type { TraceClient } from '../src/trace/trace-client.ts';
 import { TracePage, type TracePageProps } from '../src/trace/trace-page.tsx';
-import { sampleTraceEntries } from './support/trace-fixtures.ts';
+import { sampleTraceEntries, traceEntry } from './support/trace-fixtures.ts';
 
 /** The page never opens the feed when a snapshot is supplied; this client fails loudly if it does. */
 const untouched: TraceClient = {
@@ -45,6 +45,18 @@ it('renders the correlated timeline oldest first with one line per entry, nested
   expect(markup).toContain('15 ms');
   expect(markup).toContain('href="/trace/trc_3"');
   expect(markup).toContain('data-group-key="entry:trc_8"');
+});
+
+it('links a group joined on a Workbench host-session id to the Sessions pane', () => {
+  const occurredAt = '2026-09-05T07:00:00.000Z';
+  const markup = render({ entries: [
+    traceEntry(1, { correlation: { host: 'codex', sessionId: 'hs_0123456789abcdef' }, kind: 'session.started', occurredAt, source: 'session', summary: 'Codex session started' }),
+    traceEntry(2, { correlation: { sessionId: 'codex-own-id' }, kind: 'hook.received', occurredAt, source: 'hook', summary: 'SessionStart' }),
+  ] });
+  expect(count(markup, 'data-testid="trace-group-session"')).toBe(1);
+  expect(markup).toContain('href="/sessions?session=hs_0123456789abcdef"');
+  expect(markup).toContain('trace-glyph trace-glyph--session');
+  expect(render()).not.toContain('data-testid="trace-group-session"');
 });
 
 it('shows the empty state that explains what produces entries, and a connecting state before the first replay', () => {

@@ -10,6 +10,8 @@ import {
   groupTraceEntries,
   selectTraceEntry,
   selectTraceGroup,
+  traceGroupKeyValue,
+  traceGroupSessionLocation,
   traceKindLabel,
   traceSourceGlyph,
   type TraceGroup,
@@ -51,11 +53,6 @@ const groupKeyLabel = (kind: TraceGroupKeyKind): string => {
   }
 };
 
-const groupKeyValue = (group: TraceGroup): string => {
-  const separator = group.key.indexOf(':');
-  return separator === -1 ? group.key : group.key.slice(separator + 1);
-};
-
 const splitHref = (href: string): readonly [string, string] => {
   const index = href.indexOf('?');
   return index === -1 ? [href, ''] : [href.slice(0, index), href.slice(index)];
@@ -85,8 +82,9 @@ const GroupView = ({ correlation, group, onNavigate, selected, selectedEntryId, 
   readonly selected: boolean;
   readonly selectedEntryId: string | undefined;
   readonly timeZone: string | undefined;
-}) =>
-  <section
+}) => {
+  const session = traceGroupSessionLocation(group);
+  return <section
     aria-label={group.headline.summary}
     className={`trace-group trace-group--${group.status}`}
     data-group-key={group.key}
@@ -98,7 +96,8 @@ const GroupView = ({ correlation, group, onNavigate, selected, selectedEntryId, 
       <span aria-hidden="true" className={`trace-glyph trace-glyph--${group.headline.source}`}>{traceSourceGlyph(group.headline.source)}</span>
       <span className="trace-group-title">{group.headline.summary}</span>
       <span className="trace-group-meta">
-        <span className="trace-group-key">{groupKeyLabel(group.keyKind)} <span className="identifier">{groupKeyValue(group)}</span></span>
+        <span className="trace-group-key">{groupKeyLabel(group.keyKind)} <span className="identifier">{traceGroupKeyValue(group)}</span></span>
+        {session === undefined ? undefined : <ShellLink className="trace-link trace-group-session" data-testid="trace-group-session" location={session} onNavigate={onNavigate} title="Open this host session in the Sessions pane">Session</ShellLink>}
         <span className="trace-group-count">{String(group.rows.length)} {group.rows.length === 1 ? 'entry' : 'entries'}</span>
         <StatusPill status={group.status} />
       </span>
@@ -132,6 +131,7 @@ const GroupView = ({ correlation, group, onNavigate, selected, selectedEntryId, 
       })}
     </ol>
   </section>;
+};
 
 const DetailDrawer = ({ correlation, entry, onNavigate, timeZone }: {
   readonly correlation: string | undefined;
