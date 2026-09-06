@@ -296,6 +296,17 @@ providers、持久状态、CLI `mapInput` 与确认、事件 preflight 以及渲
 显式的 `unit-render` 表面是组件预览后备模式：它通过 route-unit 测试工具加载实时源码并挂载一次性状态，
 不能作为制品一致性的证明。投影后的 CLI 命令保留规范 `tool:` 路由 id；命令不匹配报告 `AB8253`，
 使用看似重复的 `cli:` id 则报告 `AB8254`，并给出应使用的规范 id 与表面。
+
+生产表面在运行任何代码之前，先从该 epoch 的 `agent-bundle.manifest.json` 绑定其可执行项，绝不通过
+列出制品目录或逐个尝试 worker 来发现：路由 CLI 的 bin 与 worker 取自 `executables.bins[]`，渲染脚本的
+worker 取自 `executables.scripts[]`，所属已编译服务器的 `launch.worker` 取自
+`executables.mcpServers[]`；事件路由则取该宿主在 `executables.hooks[]` 中的包装层行，加上其
+`routes.events[].execution` 选定的 worker（standalone 运行时为 `hooks/hooks-flight.mjs`，否则为
+共享运行时所有者的 worker）。绑定失败即关闭：缺少可读 manifest 的根报告 `AB8250`；manifest 未编译
+的路由、没有包装层行的宿主事件，或有多个候选服务器却未指明所有者的共享运行时事件报告 `AB8251`；
+以 Canonical 方式提交只有宿主包装层才能运行其 preflight 的路由，或绑定到的 bin / 包装层缺少准备导出，
+报告 `AB8252`——所有情况都发生在到达处理函数之前。绑定 worker 内部的失败（包括处理函数抛错）即为
+该次调用的失败；不会再运行其他可执行项。
 生产状态位于 `<project>/.agent-bundle/state`，在 retirement 会移除的已发布 epoch 之外。它通过
 `AGENT_BUNDLE_STATE_ROOT` 与开发期 MCP 会话共享，因此能跨一次成功的重新发布保留；`unit-render`
 仍为每次运行使用新的临时状态根。
