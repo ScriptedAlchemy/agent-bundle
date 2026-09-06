@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-Report package-only compile-evidence failures against `agent-bundle.package-compile-evidence.json` (#672).
+Report `AB6039` package-only compile-evidence failures against `agent-bundle.package-compile-evidence.json` (#672).
