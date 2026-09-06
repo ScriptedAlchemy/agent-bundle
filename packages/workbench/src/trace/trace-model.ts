@@ -4,6 +4,7 @@ import type {
   TraceSource,
   TraceStatus,
 } from '../../../agent-bundle/src/contracts/trace.ts';
+import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 
 /** Matches `TraceHub`'s default retention so the page never holds more than the server does. */
 export const maximumTraceEntries = 4_096;
@@ -94,13 +95,13 @@ const joinToken = (correlation: TraceCorrelation, key: TraceJoinKey): string | u
 };
 
 const headlinePriority: Readonly<Record<TraceSource, number>> = Object.freeze({
-  hook: 0,
   session: 0,
-  invocation: 1,
-  mcp: 2,
-  kernel: 3,
-  diagnostic: 4,
-  log: 5,
+  hook: 1,
+  invocation: 2,
+  mcp: 3,
+  kernel: 4,
+  diagnostic: 5,
+  log: 6,
 });
 
 const isInvocationLevel = (entry: TraceEntry): boolean => {
@@ -260,17 +261,29 @@ export const traceSourceGlyph = (source: TraceSource): string => {
       return '⇄';
     case 'hook':
       return '⚑';
-    case 'session':
-      return '▣';
     case 'log':
       return '≡';
     case 'diagnostic':
       return '⚠';
+    case 'session':
+      return '▣';
     default: {
       const exhaustive: never = source;
       return exhaustive;
     }
   }
+};
+
+/** The join value behind a group key (`sessionId:hs_1` → `hs_1`). */
+export const traceGroupKeyValue = (group: TraceGroup): string => {
+  const separator = group.key.indexOf(':');
+  return separator === -1 ? group.key : group.key.slice(separator + 1);
+};
+
+/** A group joined on a Workbench host-session id (`hs_…`) links back to that session in the Sessions pane. */
+export const traceGroupSessionLocation = (group: TraceGroup): WorkbenchLocation | undefined => {
+  const value = traceGroupKeyValue(group);
+  return group.keyKind === 'sessionId' && value.startsWith('hs_') ? Object.freeze({ area: 'sessions', session: value }) : undefined;
 };
 
 const kindLabels: ReadonlyMap<string, string> = new Map([
@@ -298,6 +311,9 @@ const kindLabels: ReadonlyMap<string, string> = new Map([
   ['hook.failed', 'hook failed'],
   ['session.started', 'session started'],
   ['session.ended', 'session ended'],
+  ['session.attached', 'session attached'],
+  ['session.exited', 'session exited'],
+  ['session.terminated', 'session terminated'],
   ['diagnostic.build.failed', 'build failed'],
   ['diagnostic.contract.failed', 'contract failed'],
   ['diagnostic.host.sync', 'host sync'],

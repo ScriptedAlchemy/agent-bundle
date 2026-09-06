@@ -226,6 +226,8 @@ const InvocationDiagnostics = ({ diagnostics, failure, onNavigate }: {
 </section>;
 
 export interface ExecutableRouteWorkspaceProps {
+  /** Rendered beside Run in the input editor. */
+  readonly actions?: React.ReactNode;
   readonly controller: RouteInvocationController;
   /** Result tabs appended after the core set (the event route's codec panes). */
   readonly extraTabs?: readonly ResultTabDefinition[];
@@ -284,6 +286,7 @@ export const WorkspaceHeader = ({ leaf, surface }: { readonly leaf: ApplicationL
 
 /** Input → Run → result tabs + inspector for one invocable leaf. */
 export const ExecutableRouteWorkspace = ({
+  actions,
   controller,
   extraTabs,
   fixtures,
@@ -393,6 +396,7 @@ export const ExecutableRouteWorkspace = ({
       </div> : undefined}
       {toolbar}
       <RouteInputEditor
+        actions={actions}
         cliSurface={cliSurface}
         disabled={controller.backendKind === undefined}
         fixtures={fixtures}

@@ -8,6 +8,8 @@ import {
   mergeTraceEntries,
   selectTraceEntry,
   selectTraceGroup,
+  traceGroupKeyValue,
+  traceGroupSessionLocation,
   traceKindLabel,
   traceSourceGlyph,
 } from '../src/trace/trace-model.ts';
@@ -119,5 +121,23 @@ it('formats times to the millisecond, durations by magnitude, and kinds to short
   expect(traceKindLabel(sampleTraceEntries[7]!)).toBe('build started');
   expect(traceKindLabel(traceEntry(1, { correlation: {}, kind: 'mcp.tasks.polled', occurredAt: '2026-09-05T07:00:00.000Z', source: 'mcp', summary: 'x' }))).toBe('tasks polled');
   expect(traceKindLabel(traceEntry(1, { correlation: {}, kind: 'session.started', occurredAt: '2026-09-05T07:00:00.000Z', source: 'hook', summary: 'x' }))).toBe('session started');
-  expect(new Set(['invocation', 'kernel', 'mcp', 'hook', 'session', 'log', 'diagnostic'].map((source) => traceSourceGlyph(source as 'mcp'))).size).toBe(7);
+  expect(new Set(['invocation', 'kernel', 'mcp', 'hook', 'log', 'diagnostic', 'session'].map((source) => traceSourceGlyph(source as 'mcp'))).size).toBe(7);
+  expect(traceKindLabel(traceEntry(1, { correlation: {}, kind: 'session.exited', occurredAt: '2026-09-05T07:00:00.000Z', source: 'session', summary: 'x' }))).toBe('session exited');
+});
+
+it('headlines a host-session group by its lifecycle entry and links an hs_ session group to the Sessions pane', () => {
+  const at = '2026-09-05T07:00:00.000Z';
+  const groups = groupTraceEntries([
+    traceEntry(1, { correlation: { host: 'claude', sessionId: 'hs_0123456789abcdef' }, href: '/sessions?session=hs_0123456789abcdef', kind: 'session.started', occurredAt: at, source: 'session', summary: 'Claude session started' }),
+    traceEntry(2, { correlation: { sessionId: 'hs_0123456789abcdef' }, kind: 'hook.received', occurredAt: at, source: 'hook', summary: 'SessionStart' }),
+    traceEntry(3, { correlation: { mcpSessionId: 'm1', sessionId: 'hs_0123456789abcdef' }, kind: 'mcp.request', occurredAt: at, source: 'mcp', summary: 'tools/call' }),
+    traceEntry(4, { correlation: { sessionId: 'claude-own-id' }, kind: 'hook.received', occurredAt: at, source: 'hook', summary: 'other' }),
+  ]);
+  expect(groups.map((group) => group.key)).toEqual(['sessionId:hs_0123456789abcdef', 'sessionId:claude-own-id']);
+  expect(groups[0]?.headline.source).toBe('session');
+  expect(groups[0]?.rows.map((row) => row.depth)).toEqual([0, 0, 1]);
+  expect(traceGroupKeyValue(groups[0]!)).toBe('hs_0123456789abcdef');
+  expect(traceGroupSessionLocation(groups[0]!)).toEqual({ area: 'sessions', session: 'hs_0123456789abcdef' });
+  expect(traceGroupSessionLocation(groups[1]!)).toBeUndefined();
+  expect(traceGroupSessionLocation(groupTraceEntries([traceEntry(1, { correlation: { conversationId: 'hs_x', sessionId: 'hs_y' }, kind: 'hook.received', occurredAt: at, source: 'hook', summary: 'x' })])[0]!)).toBeUndefined();
 });

@@ -8,7 +8,7 @@
  *   /routes/…                           One application leaf (see application-node.ts)
  *   /trace  ·  /trace/<entryId>         Live trace, one selected entry
  *   /problems                           Diagnostics
- *   /sessions  ·  /sessions/<host>      Embedded host sessions (PR 3)
+ *   /sessions  ·  /sessions?session=<id> Host sessions, one selected session
  *   /advanced/<section>                 evals | artifact | protocol | hosts | logs
  *
  * `?invocation=<id>` on a route path opens that route with the named
@@ -48,7 +48,7 @@ export type WorkbenchLocation =
   /** `invocationId` is the selected trace entry id (`/trace/<id>`); the name predates the unified trace and still accepts an `inv_…` id. */
   | Readonly<{ readonly area: 'trace'; readonly correlation?: string; readonly invocationId?: string }>
   | Readonly<{ readonly area: 'problems' }>
-  | Readonly<{ readonly area: 'sessions'; readonly host?: string }>
+  | Readonly<{ readonly area: 'sessions'; readonly session?: string }>
   | Readonly<{ readonly area: 'advanced'; readonly section: AdvancedSection }>;
 
 const segment = (value: string): string => encodeURIComponent(value);
@@ -105,8 +105,8 @@ export const parseWorkbenchLocation = (pathname: string, search = ''): Workbench
     case 'problems':
       return Object.freeze({ area: 'problems' });
     case 'sessions': {
-      const host = rest.length === 1 ? decode(rest[0]!) : undefined;
-      return Object.freeze({ area: 'sessions', ...(host === undefined ? {} : { host }) });
+      const session = nonempty(query.get('session'));
+      return Object.freeze({ area: 'sessions', ...(session === undefined ? {} : { session }) });
     }
     case 'advanced': {
       const section = rest[0];
@@ -135,7 +135,7 @@ export const formatWorkbenchLocation = (location: WorkbenchLocation): string => 
     case 'problems':
       return '/problems';
     case 'sessions':
-      return location.host === undefined ? '/sessions' : `/sessions/${segment(location.host)}`;
+      return location.session === undefined ? '/sessions' : `/sessions?session=${segment(location.session)}`;
     case 'advanced':
       return `/advanced/${location.section}`;
     default: {
