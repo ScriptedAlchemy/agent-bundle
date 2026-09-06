@@ -992,8 +992,9 @@ npx agent-bundle mcp run --artifact artifact --target claude --server curator
 
 该代理通过项目的开发锁发现 loopback 服务器，并连接到位于 `/mcp/host/<serverName>` 的稳定 Streamable
 HTTP 端点。`--target` 默认为 `portable`，`--url` 可覆盖发现过程。重建成功时会保持 stdio 连接不断、
-把新调用路由到当前 epoch、让已受理的调用在其原始 epoch 上完成，并转发 MCP 目录变更通知。若 epoch 或
-开发服务器消失，代理会以 MCP 错误以及 `AB8024` 或 `AB8025` 诊断失败关闭。
+把新调用路由到当前 epoch、让已受理的调用在其原始 epoch 上完成，并转发 MCP 目录变更通知。开发期 MCP
+会话与 Workbench 调用共享项目的 `<project>/.agent-bundle/state` 根目录，它不在会被退役的 epoch
+目录之内。若 epoch 或开发服务器消失，代理会以 MCP 错误以及 `AB8024` 或 `AB8025` 诊断失败关闭。
 
 该端点刻意不做认证，因为开发服务器只绑定 loopback，绝不会暴露到本机之外。
 

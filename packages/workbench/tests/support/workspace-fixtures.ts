@@ -20,6 +20,19 @@ import { SkillClient } from '../../src/skill-client.ts';
 export const neverFetch: typeof fetch = async () => { throw new Error('Effects do not run during server rendering.'); };
 
 export const toolLeaf: ApplicationLeaf = Object.freeze({
+  command: Object.freeze({
+    aliases: Object.freeze([]),
+    exitCode: 'zero' as const,
+    options: Object.freeze([
+      Object.freeze({ key: 'title', kind: 'string' as const, option: 'query', repeated: false, required: true }),
+    ]),
+    path: Object.freeze(['audible', 'search']),
+    projection: Object.freeze({
+      mapInput: true,
+      module: 'src/mcp/curator/tools/search_audible.cli.ts',
+    }),
+    routeId: 'tool:curator/search_audible',
+  }),
   config: Object.freeze([{ key: 'description', kind: 'string' as const, value: 'Search Audible regions.' }]),
   description: 'Search Audible regions and return ranked identity evidence.',
   execution: 'invoke',
@@ -172,6 +185,7 @@ export const invocation: RouteInvocation = {
   input: { title: 'Dune' },
   kind: 'tool',
   manifestDigest: 'digest-1',
+  outcome: { kind: 'success' },
   projection: {
     mcp: { content: [{ text: 'Found 8 candidates for Dune.', type: 'text' }], structuredContent: { candidates: 8 } },
   },
@@ -182,6 +196,7 @@ export const invocation: RouteInvocation = {
   sourceRevision: 'rev-1',
   startedAt: '2026-09-05T08:00:00.000Z',
   status: 'succeeded',
+  surface: { kind: 'mcp' },
   timings: [
     { durationMs: 2, phase: 'providers', startedAt: '2026-09-05T08:00:00.000Z' },
     { durationMs: 400, phase: 'handler', startedAt: '2026-09-05T08:00:00.002Z' },

@@ -34,6 +34,13 @@ const manifest: RouteManifest = {
       options: [],
       path: ['library', 'audit'],
       routeId: 'cli:library/audit',
+    }, {
+      aliases: [],
+      exitCode: 'zero',
+      options: [],
+      path: ['alpha'],
+      projection: { mapInput: true, module: 'src/mcp/alpha/tools/a-tool.cli.ts' },
+      routeId: 'tool:alpha/a-tool',
     }],
     mode: 'generated',
     routes: [route('cli:library/audit', 'cli', 'src/cli/library/audit.ts')],
@@ -41,7 +48,10 @@ const manifest: RouteManifest = {
   diagnostics: [{ code: 'AB4801', message: 'Fixture diagnostic.', severity: 'warning' }],
   digest: 'd'.repeat(64),
   events: [
-    route('event:tool/before', 'event-route', 'src/events/tool/before.ts', { event: 'tool/before' }),
+    route('event:tool/before', 'event-route', 'src/events/tool/before.ts', {
+      event: 'tool/before',
+      execution: { fallback: 'standalone', preflight: 'src/events/tool/before.preflight.ts', runtime: 'standalone' },
+    }),
   ],
   providers: [],
   scripts: [
@@ -104,6 +114,12 @@ const tree = () => applicationTreeForManifest({
 });
 
 describe('application tree derivation', () => {
+  it('carries compiled event preflight metadata to the workspace leaf', () => {
+    expect(applicationLeafForRouteId(tree(), 'event:tool/before')).toMatchObject({
+      preflight: 'src/events/tool/before.preflight.ts',
+    });
+  });
+
   it('covers every route kind in fixed group and subgroup order', () => {
     const result = tree();
 
@@ -120,6 +136,11 @@ describe('application tree derivation', () => {
     expect(mcp.servers[0]!.subgroups[0]!.leaves.map((leaf) => leaf.label)).toEqual([
       'a-tool', 'z-tool',
     ]);
+    expect(mcp.servers[0]!.subgroups[0]!.leaves[0]?.command).toMatchObject({
+      path: ['alpha'],
+      routeId: 'tool:alpha/a-tool',
+    });
+    expect(applicationLeaves(result).filter((leaf) => leaf.ref.kind === 'cli')).toHaveLength(1);
     expect(mcp.servers[0]!.subgroups.map((group) => group.leaves[0]!.execution)).toEqual([
       'invoke', 'invoke', 'invoke', 'preview',
     ]);

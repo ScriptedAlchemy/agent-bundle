@@ -6,6 +6,8 @@
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
 import type {
   RouteInvocation,
+  RouteInvocationOutcome,
+  RouteInvocationStatus,
   RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import {
@@ -107,6 +109,36 @@ export const writeLastInput = (leafKey: string, input: JsonValue): void => {
   }
 };
 
+/** The execution status as the UI words it: the boundary completed or did not; never "succeeded", which the outcome decides. */
+export const statusLabel = (status: RouteInvocationStatus): string => {
+  switch (status) {
+    case 'succeeded':
+      return 'Completed';
+    case 'failed':
+      return 'Failed';
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+};
+
+/** What a completed run meant, in the words every outcome badge shows. */
+export const outcomeLabel = (outcome: RouteInvocationOutcome): string => {
+  switch (outcome.kind) {
+    case 'success':
+      return 'Success';
+    case 'represented-error':
+      return `Represented error · ${outcome.summary}`;
+    case 'process-exit':
+      return `Exit code ${String(outcome.exitCode)}`;
+    default: {
+      const exhaustive: never = outcome;
+      return exhaustive;
+    }
+  }
+};
+
 export const selectBackend = (
   backends: readonly InvocationBackend[],
   leaf: ApplicationLeaf,
@@ -123,10 +155,12 @@ export const invocationSummaryOf = (
   input: invocation.input,
   kind: invocation.kind,
   manifestDigest: invocation.manifestDigest,
+  ...(invocation.outcome === undefined ? {} : { outcome: invocation.outcome }),
   routeId: invocation.routeId,
   source: invocation.source,
   sourceRevision: invocation.sourceRevision,
   startedAt: invocation.startedAt,
   status: invocation.status,
+  surface: invocation.surface,
   timings: invocation.timings,
 });

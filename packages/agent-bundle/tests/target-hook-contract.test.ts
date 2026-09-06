@@ -432,12 +432,16 @@ it('runs event-route preflight in the per-host wrapper before shared IPC', () =>
   expect(staticImportSpecifiers(source).filter((specifier) =>
     specifier === 'react' || specifier.startsWith('react/') || specifier.endsWith('.tsx'))).toEqual([]);
 
+  const prepareBody = source.slice(
+    firstIndex(source, 'export const prepareRouteInvocation'),
+    firstIndex(source, 'const runExecutor'),
+  );
+  expect(firstIndex(prepareBody, 'validateNativeEventEnvelope')).toBeLessThan(firstIndex(prepareBody, 'createCanonicalEventProps'));
+  expect(firstIndex(prepareBody, 'createCanonicalEventProps')).toBeLessThan(firstIndex(prepareBody, 'executeEventPreflight'));
+  expect(firstIndex(prepareBody, 'executeEventPreflight')).toBeLessThan(firstIndex(prepareBody, 'projectEventPreflightResult'));
   const runBody = source.slice(firstIndex(source, 'const run = async () => {'));
-  expect(firstIndex(runBody, 'validateNativeEventEnvelope')).toBeLessThan(firstIndex(runBody, 'createCanonicalEventProps'));
-  expect(firstIndex(runBody, 'createCanonicalEventProps')).toBeLessThan(firstIndex(runBody, 'executeEventPreflight'));
-  expect(firstIndex(runBody, 'executeEventPreflight')).toBeLessThan(runBody.search(/['"]execute['"]/u));
+  expect(firstIndex(runBody, 'await prepareRouteInvocation')).toBeLessThan(runBody.search(/['"]execute['"]/u));
   expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
-  expect(firstIndex(runBody, 'projectEventPreflightResult')).toBeGreaterThan(firstIndex(runBody, 'executeEventPreflight'));
 });
 
 it('crosses the standalone Worker boundary only after preflight returns execute', () => {
@@ -465,8 +469,15 @@ it('crosses the standalone Worker boundary only after preflight returns execute'
   expect(entry.executeVirtualSource).toContain('new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url)');
   expect(entry.executeVirtualSource).toContain('createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal, observation)');
   expect(source).not.toContain('AGENT_BUNDLE_HOOK_HOST');
+  const prepareBody = source.slice(
+    firstIndex(source, 'export const prepareRouteInvocation'),
+    firstIndex(source, 'const runExecutor'),
+  );
+  expect(firstIndex(prepareBody, 'validateNativeEventEnvelope')).toBeLessThan(firstIndex(prepareBody, 'createCanonicalEventProps'));
+  expect(firstIndex(prepareBody, 'createCanonicalEventProps')).toBeLessThan(firstIndex(prepareBody, 'executeEventPreflight'));
+  expect(firstIndex(prepareBody, 'executeEventPreflight')).toBeLessThan(firstIndex(prepareBody, 'projectEventPreflightResult'));
   const runBody = source.slice(firstIndex(source, 'const run = async () => {'));
-  expect(firstIndex(runBody, 'executeEventPreflight')).toBeLessThan(runBody.search(/['"]execute['"]/u));
+  expect(firstIndex(runBody, 'await prepareRouteInvocation')).toBeLessThan(runBody.search(/['"]execute['"]/u));
   expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
 });
 

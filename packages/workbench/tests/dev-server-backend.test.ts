@@ -23,6 +23,7 @@ const invocation = Object.freeze({
   input: Object.freeze({ title: 'Dune' }),
   kind: 'tool' as const,
   manifestDigest: 'manifest-a',
+  outcome: Object.freeze({ kind: 'success' as const }),
   projection: Object.freeze({}),
   providers: Object.freeze([]),
   routeId: 'tool:curator/search_audible',
@@ -30,6 +31,7 @@ const invocation = Object.freeze({
   sourceRevision: 'source-a',
   startedAt: '2026-09-05T07:00:00.000Z',
   status: 'succeeded' as const,
+  surface: Object.freeze({ kind: 'mcp' as const }),
   timings: Object.freeze([]),
 }) satisfies RouteInvocation;
 
@@ -40,11 +42,13 @@ const summary = ({
   input: invocation.input,
   kind: invocation.kind,
   manifestDigest: invocation.manifestDigest,
+  outcome: invocation.outcome,
   routeId: invocation.routeId,
   source: invocation.source,
   sourceRevision: invocation.sourceRevision,
   startedAt: invocation.startedAt,
   status: invocation.status,
+  surface: invocation.surface,
   timings: invocation.timings,
 });
 
