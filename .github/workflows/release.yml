@@ -35,6 +35,10 @@ jobs:
       # release gates (`pnpm check:release`) so the tree stays publishable.
       PUBLISH_ENABLED: ${{ vars.AGENT_BUNDLE_NPM_PUBLISH == 'true' && secrets.NPM_TOKEN != '' }}
       AGENT_BUNDLE_PLAYWRIGHT_CHANNEL: chromium
+      # Packed qualification writes package/digest evidence here when
+      # `pnpm check:release` / `pnpm release` runs. `github.workspace` is
+      # valid at job env; `runner.temp` is not (no runner assigned yet).
+      AGENT_BUNDLE_RELEASE_EVIDENCE: ${{ github.workspace }}/.release-qualification.json
     steps:
       # The action pushes and opens the PR through the GitHub API with the
       # token passed below, so the checkout must not persist GITHUB_TOKEN.
@@ -78,8 +82,43 @@ jobs:
       # changesets, "Version Packages" merge commit), prove the versioned
       # tree still passes the pre-publish gates that `pnpm release` would run.
       - name: Release gates (publish disabled)
+        id: qualify
         if: >-
           env.PUBLISH_ENABLED != 'true' &&
           steps.changesets.outputs.has-changesets == 'false' &&
           startsWith(github.event.head_commit.message, 'Version Packages')
         run: pnpm check:release
+      # Registry proof is a separate authorized-publication step. Disabled
+      # publication is a supported outcome and must not call npm view.
+      - name: Verify published registry artifacts
+        id: registry
+        if: env.PUBLISH_ENABLED == 'true' && steps.changesets.outputs.published == 'true'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for dir in \
+            packages/agent-bundle \
+            packages/rsc-runtime \
+            packages/rsc-markdown-stream \
+            packages/create-agent-bundle
+          do
+            name=$(node -p "JSON.parse(require('node:fs').readFileSync('$dir/package.json','utf8')).name")
+            version=$(node -p "JSON.parse(require('node:fs').readFileSync('$dir/package.json','utf8')).version")
+            published=$(npm view "$name@$version" version)
+            test "$published" = "$version"
+            echo "registry $name@$version"
+          done
+      - name: Release outcome summary
+        if: always()
+        env:
+          HAS_CHANGESETS: ${{ steps.changesets.outputs.has-changesets }}
+          PUBLISHED: ${{ steps.changesets.outputs.published }}
+          QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
+          CHANGESETS_OUTCOME: ${{ steps.changesets.outcome }}
+          REGISTRY_OUTCOME: ${{ steps.registry.outcome }}
+          JOB_STATUS: ${{ job.status }}
+          CANDIDATE_SHA: ${{ github.sha }}
+          EVIDENCE_FILE: ${{ env.AGENT_BUNDLE_RELEASE_EVIDENCE }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release-outcome-summary.sh >> "$GITHUB_STEP_SUMMARY"
