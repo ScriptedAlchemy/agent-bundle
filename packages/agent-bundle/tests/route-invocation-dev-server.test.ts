@@ -113,6 +113,20 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
+      'src/cli/plain.ts': [
+        "import { writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "import { z } from 'zod';",
+        '',
+        'export const inputSchema = z.object({}).strict();',
+        'export const resultSchema = z.object({ ok: z.boolean() }).strict();',
+        '',
+        'export default async function Plain() {',
+        "  writeFileSync(join(process.cwd(), '.agent-bundle', 'plain-cli-handler.marker'), 'ran');",
+        '  return { ok: true };',
+        '}',
+        '',
+      ].join('\n'),
       'src/events/tool/after.preflight.ts': [
         "import { appendFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
@@ -906,6 +920,18 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       status: 'succeeded',
       surface: { args: ['Ada'], command: 'greet', kind: 'cli' },
     });
+
+    const plainCliHandlerMarker = join(project.root, '.agent-bundle', 'plain-cli-handler.marker');
+    const plainCliResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'cli:plain', surface: { args: [], command: 'plain', kind: 'cli' } }),
+      headers,
+      method: 'POST',
+    });
+    expect(plainCliResponse.status).toBe(200);
+    await expect(plainCliResponse.json()).resolves.toMatchObject({
+      invocation: { diagnostics: [{ code: 'AB8251' }], status: 'failed' },
+    });
+    expect(existsSync(plainCliHandlerMarker)).toBe(false);
 
     // A completed run whose bin exits non-zero: `status` stays `succeeded`
     // (the boundary completed), the outcome carries the bin's own exit code,

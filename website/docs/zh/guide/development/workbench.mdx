@@ -297,11 +297,11 @@ providers、持久状态、CLI `mapInput` 与确认、事件 preflight 以及渲
 不能作为制品一致性的证明。投影后的 CLI 命令保留规范 `tool:` 路由 id；命令不匹配报告 `AB8253`，
 使用看似重复的 `cli:` id 则报告 `AB8254`，并给出应使用的规范 id 与表面。
 
-生产表面会在子进程运行前，从已发布 epoch 的 `agent-bundle.manifest.json` 选择可执行项。CLI 与脚本
-路由使用各自的 manifest worker，MCP 路由使用所属已编译服务器的 `launch.worker`，事件路由则使用
-宿主包装层以及 `routes.events[].execution` 选定的 worker：standalone hooks worker，或拥有该宿主
-共享运行时的第一个已编译服务器。绑定失败即关闭：已发布制品不可用报告 `AB8250`；宿主不适用、缺少
-可执行项或缺少准备行报告 `AB8251`；选定的准备模块无法导入或未导出其契约报告 `AB8252`。未指定
+生产表面会在子进程运行前，从已发布 epoch 的 `agent-bundle.manifest.json` 选择可执行项。渲染式 CLI
+与脚本路由使用各自的 manifest worker，MCP 路由使用所属已编译服务器的 `launch.worker`，事件路由则
+使用宿主包装层以及 `routes.events[].execution` 选定的 worker：standalone hooks worker，或拥有该
+宿主共享运行时的第一个已编译服务器。绑定失败即关闭：已发布制品不可用报告 `AB8250`；宿主或表面
+不适用、缺少可执行项或缺少准备行报告 `AB8251`；准备模块无法导入或未导出其契约报告 `AB8252`。未指定
 宿主提交带 preflight 的路由报告 `AB8255`。这些失败绝不会到达处理函数，导入、preflight 或处理函数
 失败也绝不会触发另一个可执行项。
 生产状态位于 `<project>/.agent-bundle/state`，在 retirement 会移除的已发布 epoch 之外。它通过

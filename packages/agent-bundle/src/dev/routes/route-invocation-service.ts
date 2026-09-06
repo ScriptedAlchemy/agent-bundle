@@ -30,6 +30,7 @@ import type {
   RequestProvenanceUnavailableReason,
 } from '../../contracts/request-provenance.ts';
 import { createCanonicalEventProps, projectEventDocument } from '../../events/projection.ts';
+import { isRenderedCliRoute } from '../../routes/cli-commands.ts';
 import {
   eventTraceEventKinds,
   type EventTraceEvent,
@@ -551,7 +552,7 @@ const productionBindingFor = (
       candidate.routeId === route.id && candidate.path.join(' ') === surface.command);
     const bin = manifest.executables.bins.find((candidate) =>
       candidate.name === manifest.application.name && candidate.worker !== undefined);
-    if (command === undefined || bin?.worker === undefined) {
+    if (command === undefined || !isRenderedCliRoute(route) || bin?.worker === undefined) {
       return unavailableBinding(route.id, 'the selected CLI command has no compiled executable; rebuild the project.');
     }
     return Object.freeze({ executable: bin.worker, kind: 'cli', preparation: bin.path });
@@ -1685,6 +1686,8 @@ export class RouteInvocationService {
                 ? 'Route invocation child stopped because the request was cancelled.'
               : controller.signal.aborted
                 ? 'Route invocation child stopped because the service closed.'
+              : error instanceof ProductionRouteInvocationError
+                ? error.message
               : `${plainScript === undefined ? 'Route invocation child' : 'Script run'} failed: ${error instanceof Error ? error.message : String(error)}`,
             request: { ...request, input },
             route,
