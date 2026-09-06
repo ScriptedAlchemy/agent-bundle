@@ -18,8 +18,9 @@ pull request 与每次推送到 `main`。它以 `--previewVersion --peerDeps --n
 发布 `packages/agent-bundle`、`packages/rsc-runtime`、`packages/rsc-markdown-stream`（`@agent-bundle/runtime`
 所依赖的 Markdown 渲染器）与 `packages/create-agent-bundle`。
 
-针对 `main` 推送的运行使用**逐提交**的并发分组，因此相互重叠的推送不会取消彼此，每个 `main` 提交都有
-一份可安装的快照。PR 的运行则会取消同一个 PR 中被取代的构建，因为只有 PR 的最新一次预览才有意义。
+运行按 PR 和按分支分组并启用 `cancel-in-progress`，因此更新的推送会取消被取代的构建：只有 PR 或 `main`
+的最新一次预览才有意义。若某个 `main` 提交在其预览发布之前就被后续提交取代，则它没有可安装的快照；
+请改为固定到最新提交。
 
 PR 或提交上的「Publish pkg.pr.new preview」检查会链接到该次构建的确切 URL。预览包由发布门禁所校验的
 同一份 `pnpm build` 输出构建而来——但它们不是 npm 正式版本，并且携带预览版本号。
