@@ -5,10 +5,10 @@ import type { ToolRouteProps } from 'agent-bundle';
 import type { AudibleSelectionReceipt } from '../../../audible.js';
 import { SelectionRanking } from '../../../components/candidate-ranking.js';
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
-import { defaultAudibleOperations, audibleOperations } from '../../../operations/audible.js';
+import { audibleOperations } from '../../../operations/audible.js';
 import { CurationShelfStateSchema } from '../../../state.js';
 
-const operation = audibleOperations(defaultAudibleOperations).audibleSelect;
+const operation = audibleOperations.audibleSelect;
 
 export const config = {
   annotations: { readOnlyHint: false },

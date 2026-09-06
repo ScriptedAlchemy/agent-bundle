@@ -1,6 +1,5 @@
 import { copyFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
 
 /**
  * Copies the repository's LICENSE and NOTICE into every publishable package so
@@ -16,7 +15,7 @@ export const publishablePackageDirectories = Object.freeze([
   'packages/create-agent-bundle',
 ]);
 
-export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+export const repositoryRoot = resolve(import.meta.dirname, '..');
 
 export const syncLicenseFiles = async (root = repositoryRoot) => {
   await Promise.all(publishablePackageDirectories.flatMap((directory) => (

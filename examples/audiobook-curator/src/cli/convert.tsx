@@ -8,9 +8,9 @@ import { convertHeadline } from '../components/headlines.js';
 import { ConversionIntegrityReport } from '../components/integrity-report.js';
 import { ConversionMutation } from '../components/mutation-receipt.js';
 import type { ConvertReceipt } from '../conversion.js';
-import { defaultOutputOperations, outputOperations } from '../operations/output.js';
+import { outputOperations } from '../operations/output.js';
 
-const operation = outputOperations(defaultOutputOperations).convert;
+const operation = outputOperations.convert;
 
 export const config = {
   description: 'Plan or apply a verified conversion to one chaptered M4B.',

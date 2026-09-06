@@ -15,7 +15,7 @@ export const maximumFlightRenderBytes = 4 * 1024 * 1024;
 export const maximumFlightRenderStderrBytes = 256 * 1024;
 export const maximumFlightRenderMetadataBytes = 128;
 
-const defaultTerminationGraceMs = 100;
+const terminationGraceMs = 100;
 
 export interface FlightRenderResult {
   readonly flight: Uint8Array;
@@ -30,9 +30,7 @@ export interface AgentDocumentFlightRenderResult extends FlightRenderResult {
 
 export interface FlightRenderOptions {
   readonly maximumFlightBytes?: number;
-  readonly maximumStderrBytes?: number;
   readonly signal?: AbortSignal;
-  readonly terminationGraceMs?: number;
 }
 
 const positiveSafeInteger = (value: number, name: string): number => {
@@ -78,8 +76,6 @@ export const requestFlightRenderWithFlight = async (
   options: FlightRenderOptions = {},
 ): Promise<FlightRenderResult> => {
   const maximumFlightBytes = positiveSafeInteger(options.maximumFlightBytes ?? maximumFlightRenderBytes, 'maximumFlightBytes');
-  const maximumStderrBytes = positiveSafeInteger(options.maximumStderrBytes ?? maximumFlightRenderStderrBytes, 'maximumStderrBytes');
-  const terminationGraceMs = positiveSafeInteger(options.terminationGraceMs ?? defaultTerminationGraceMs, 'terminationGraceMs');
 
   return new Promise<FlightRenderResult>((resolveRender, rejectRender) => {
     const currentDirectory = dirname(fileURLToPath(import.meta.url));
@@ -131,11 +127,11 @@ export const requestFlightRenderWithFlight = async (
       stdout.once('error', () => terminate(new Error('RSC worker Flight stream failed.')));
       stderr.on('data', (chunk: Buffer | string) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        const retained = Math.min(buffer.byteLength, Math.max(0, maximumStderrBytes - stderrBytes));
+        const retained = Math.min(buffer.byteLength, Math.max(0, maximumFlightRenderStderrBytes - stderrBytes));
         if (retained > 0) diagnostics.push(buffer.subarray(0, retained));
         stderrBytes += buffer.byteLength;
-        if (stderrBytes > maximumStderrBytes) {
-          terminate(new Error(`RSC worker stderr exceeded ${maximumStderrBytes} bytes.`));
+        if (stderrBytes > maximumFlightRenderStderrBytes) {
+          terminate(new Error(`RSC worker stderr exceeded ${maximumFlightRenderStderrBytes} bytes.`));
         }
       });
       stderr.once('error', () => terminate(new Error('RSC worker stderr stream failed.')));

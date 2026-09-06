@@ -1,9 +1,9 @@
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { defaultMediaMutationOperations, mediaMutationOperations } from '../operations/media-mutation.js';
+import { mediaMutationOperations } from '../operations/media-mutation.js';
 
-const operation = mediaMutationOperations(defaultMediaMutationOperations).applyMetadata;
+const operation = mediaMutationOperations.applyMetadata;
 
 export const config = {
   description: 'Plan or apply verified Audible metadata and artwork without changing encoded audio.',

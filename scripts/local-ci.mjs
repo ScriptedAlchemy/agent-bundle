@@ -52,13 +52,12 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { availableParallelism, homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { removeOwnedRstestWorkerRoots } from './rstest-worker-roots.mjs';
 
 const execFile = promisify(executeFile);
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repositoryRoot = resolve(import.meta.dirname, '..');
 
 const usage = `Usage: pnpm check:local-ci [--current-node-only] [--fresh]
   --current-node-only  Run a single Verify leg on the Node currently on PATH

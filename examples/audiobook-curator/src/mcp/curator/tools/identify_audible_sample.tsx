@@ -5,9 +5,9 @@ import type { ToolRouteProps } from 'agent-bundle';
 import { IdentifyRanking } from '../../../components/candidate-ranking.js';
 import { IdentifyTrail } from '../../../components/evidence-trail.js';
 import type { AcousticIdentifyReceipt } from '../../../evidence.js';
-import { defaultEvidenceOperations, evidenceOperations } from '../../../operations/evidence.js';
+import { evidenceOperations } from '../../../operations/evidence.js';
 
-const operation = evidenceOperations(defaultEvidenceOperations).acousticIdentify;
+const operation = evidenceOperations.acousticIdentify;
 
 export const config = {
   annotations: { openWorldHint: true, readOnlyHint: false },
