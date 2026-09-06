@@ -70,6 +70,14 @@ Before that path is enabled, the release owner has to resolve two things: the fi
 and license, and the repository-wide `"access": "restricted"` policy for `agent-bundle`, which is
 not currently overridden with `publishConfig.access`.
 
+The `Release packages` workflow records one of `version-maintenance-only`,
+`qualified-without-publish`, `published`, or `failed`, with executed and skipped
+stages. Qualification runs against the exact versioned candidate SHA, not the
+pre-version main commit. A successful Version Packages refresh — or a main push that neither
+refreshes that PR nor qualifies a versioned candidate — is
+`version-maintenance-only`. Disabled publication reports **NOT PUBLISHED**;
+registry verification runs only when publication is separately authorized.
+
 `pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release`, and
 `pnpm test:packed:release` — before publishing. `lint:release` runs `attw` with the `esm-only`
 profile on the packed `agent-bundle`, `@agent-bundle/runtime`, `rsc-markdown-stream`, and
