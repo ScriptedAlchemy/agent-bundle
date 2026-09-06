@@ -76,7 +76,7 @@ const chapters: number | undefined = result?.chapters; // no cast
 ```
 
 An event route registers what the harness actually takes and gives back: `input` is the
-`{ canonical, native }` payload (the harness supplies `signal` itself), and `result` is
+`{ canonical, native, preflight? }` payload (the harness supplies `signal` itself), and `result` is
 `undefined`, since event modules export no `resultSchema`. Build that input from a host envelope
 with `createEventRouteInput('tool/after', envelope, { host: 'claude' })` rather than by hand: it
 validates the envelope per host and event and projects `canonical.payload` through the same table

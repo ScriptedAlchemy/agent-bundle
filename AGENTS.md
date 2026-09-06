@@ -201,8 +201,14 @@
   contains current `origin/main`: `pnpm build && pnpm typecheck && pnpm lint
   && pnpm test:unit`, every integration/packed test file the diff touches,
   and `pnpm docs:site:build` when `website/` or public exports changed;
-  paste the commands and their results in the PR body. Do not wait for CI on
-  the PR. CI still runs on `main` after the merge: whoever merged watches
+  paste the commands and their results in the PR body. "Files the diff
+  touches" means every test that imports or exercises a changed module, not
+  the files the author expects to matter — when the change moves an output
+  root, a watcher path, or a public type, run the whole integration pool.
+  Do not wait for CI on the PR, but do not ignore it either: a PR run that
+  has already finished red is a failed gate (#656 merged over six red
+  integration tests its local gate never ran). CI still runs on `main`
+  after the merge: whoever merged watches
   that run and fixes or reverts a red `main` before starting anything else.
   A later push to `main` cancels the superseded `CI` and `Package preview`
   run (`concurrency` in `ci.yml`, `package-preview.yml`), so watch the tip

@@ -309,8 +309,8 @@ export const parseCompileEvidenceRecord = (bytes: string): CompileEvidenceRecord
 /** MCP App views are the only compiled HTML documents (`mcp-apps/<name>.html`). */
 const isViewAsset = (path: string): boolean => path.endsWith('.html');
 
-const evidenceDiagnostic = (message: string): Diagnostic =>
-  artifactDiagnostic('AB6039', `Compile evidence ${message}`, compileEvidenceFileName);
+const evidenceDiagnostic = (message: string, evidencePath: string): Diagnostic =>
+  artifactDiagnostic('AB6039', `Compile evidence ${message}`, evidencePath);
 
 /**
  * Checks a parsed record against the artifact's file table: every compiled
@@ -322,10 +322,12 @@ const evidenceDiagnostic = (message: string): Diagnostic =>
 export const compileEvidenceDiagnostics = (
   record: CompileEvidenceRecord,
   files: ReadonlyMap<string, { readonly kind: string; readonly sha256: string }>,
+  evidencePath: string = compileEvidenceFileName,
 ): readonly Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
+  const reportEvidence = (message: string): Diagnostic => evidenceDiagnostic(message, evidencePath);
   if (record.policy.name !== externalPolicy.name || record.policy.revision !== externalPolicy.revision) {
-    diagnostics.push(evidenceDiagnostic(
+    diagnostics.push(reportEvidence(
       `was judged under policy ${record.policy.name}@${String(record.policy.revision)}; `
       + `this validator applies ${externalPolicy.name}@${String(externalPolicy.revision)}.`,
     ));
@@ -334,18 +336,18 @@ export const compileEvidenceDiagnostics = (
   const compiled = new Set([...files].filter(([, file]) => file.kind === 'bundle').map(([path]) => path));
   for (const path of compiled) {
     const asset = recorded.get(path);
-    if (asset === undefined) diagnostics.push(evidenceDiagnostic(`does not cover compiled file ${JSON.stringify(path)}.`));
-    else if (asset.sha256 !== files.get(path)!.sha256) diagnostics.push(evidenceDiagnostic(`for ${JSON.stringify(path)} describes different bytes.`));
+    if (asset === undefined) diagnostics.push(reportEvidence(`does not cover compiled file ${JSON.stringify(path)}.`));
+    else if (asset.sha256 !== files.get(path)!.sha256) diagnostics.push(reportEvidence(`for ${JSON.stringify(path)} describes different bytes.`));
   }
   // A view (an HTML document) inlines every module it loads; only node bundles may load a sibling, and only another node bundle.
   const nodeBundles = new Set([...compiled].filter((path) => !isViewAsset(path)));
   for (const asset of record.assets) {
     if (!compiled.has(asset.path)) {
-      diagnostics.push(evidenceDiagnostic(`names ${JSON.stringify(asset.path)}, which the file table does not list as a compiled file.`));
+      diagnostics.push(reportEvidence(`names ${JSON.stringify(asset.path)}, which the file table does not list as a compiled file.`));
     }
     for (const external of asset.externals) {
       if (isViewAsset(asset.path)) {
-        diagnostics.push(evidenceDiagnostic(
+        diagnostics.push(reportEvidence(
           `for ${JSON.stringify(asset.path)} records ${JSON.stringify(external.request)} as an external; a view inlines every module it loads.`,
         ));
         continue;
@@ -355,14 +357,14 @@ export const compileEvidenceDiagnostics = (
       switch (external.kind) {
         case 'builtin':
           if (judged !== 'builtin') {
-            diagnostics.push(evidenceDiagnostic(
+            diagnostics.push(reportEvidence(
               `for ${JSON.stringify(asset.path)} records ${JSON.stringify(external.request)} as a built-in; it is not one.`,
             ));
           }
           break;
         case 'artifact-relative':
           if (judged !== 'artifact-relative' || external.target !== posix.join(posix.dirname(asset.path), external.request)) {
-            diagnostics.push(evidenceDiagnostic(
+            diagnostics.push(reportEvidence(
               `for ${JSON.stringify(asset.path)} records sibling ${JSON.stringify(external.request)}, which the artifact does not contain.`,
             ));
           }
