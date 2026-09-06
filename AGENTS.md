@@ -196,10 +196,16 @@
   after each push until none remain. Only then merge.
 - PRs are squash-merged. Review threads left on an already-merged PR must
   still be answered, in a follow-up PR.
-- `main` is protected: PRs land only with every required check green
-  (`gh pr merge --squash --auto`; `gh pr update-branch` only when GitHub
-  reports the branch as conflicting — up-to-date-ness is not enforced, and
-  CI runs again on `main` after the merge); never bypass with `--admin`.
+- `main` requires no status checks (owner decision, 2026-09-06): the local
+  gate is the merge gate. Before `gh pr merge --squash`, run on a branch that
+  contains current `origin/main`: `pnpm build && pnpm typecheck && pnpm lint
+  && pnpm test:unit`, every integration/packed test file the diff touches,
+  and `pnpm docs:site:build` when `website/` or public exports changed;
+  paste the commands and their results in the PR body. Do not wait for CI on
+  the PR. CI still runs on `main` after the merge: whoever merged watches
+  that run and fixes or reverts a red `main` before starting anything else.
+  `gh pr update-branch` only when GitHub reports the branch as conflicting;
+  never `--admin`, never force-push `main`.
 
 ## Vendored repos
 

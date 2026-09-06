@@ -1,5 +1,6 @@
 import { appendFile, readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
 
 /**
  * Hosted CI docs-only allowlist. Nested markdown outside docs/, website/,
@@ -72,45 +73,26 @@ export const classifyDocsOnlyListing = ({
   return { docsOnly: true, reason: 'docs-only' };
 };
 
-const parseArgs = (argv) => {
-  const options = {
-    changedFilesCount: undefined,
-    listing: undefined,
-    listingError: false,
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
-    if (argument === '--listing-error') {
-      options.listingError = true;
-      continue;
-    }
-    if (argument === '--changed-files-count') {
-      options.changedFilesCount = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (argument === '--listing') {
-      options.listing = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${argument}`);
-  }
-  return options;
-};
-
 export const runClassify = async ({
   argv = process.argv.slice(2),
   env = process.env,
 } = {}) => {
-  const options = parseArgs(argv);
+  const { values: options } = parseArgs({
+    args: argv,
+    options: {
+      'changed-files-count': { type: 'string' },
+      listing: { type: 'string' },
+      'listing-error': { type: 'boolean', default: false },
+    },
+    strict: true,
+  });
   const listingText = options.listing === undefined
     ? ''
     : await readFile(options.listing, 'utf8');
   const result = classifyDocsOnlyListing({
-    changedFilesCount: options.changedFilesCount,
+    changedFilesCount: options['changed-files-count'],
     entries: parseGhFilesListing(listingText),
-    listingOk: !options.listingError,
+    listingOk: !options['listing-error'],
   });
 
   const githubOutput = env.GITHUB_OUTPUT;

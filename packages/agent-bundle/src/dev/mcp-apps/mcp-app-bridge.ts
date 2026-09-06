@@ -1,5 +1,6 @@
 import { MCP_APP_ROUTE_ID_META_KEY } from '../../contracts/mcp-app-protocol.ts';
 import { MAX_APP_HTML_BYTES } from '../../core/mcp-app-limits.ts';
+import { isPlainRecord } from '../../core/strict-json.ts';
 import {
   validateMcpAppDownloadRequest,
   validateMcpAppExternalLink,
@@ -13,6 +14,7 @@ import {
   type McpAppJsonValue,
 } from './mcp-app-binding-service.ts';
 import { createMcpAppConsentActionDigest } from './mcp-app-consent.ts';
+import { cloneMcpAppJson, snapshotMcpAppJson, snapshotMcpAppJsonRecord } from './mcp-app-json.ts';
 import type {
   McpAppConsentAuthority,
   McpAppConsentCapability,
@@ -252,33 +254,16 @@ const hostStyleVariables = new Set([
   '--border-radius-xs', '--border-radius-sm', '--border-radius-md', '--border-radius-lg', '--border-radius-xl', '--border-radius-full', '--border-width-regular', '--shadow-hairline', '--shadow-sm', '--shadow-md', '--shadow-lg',
 ]);
 
-const hasOwn = (value: object, key: string): boolean => Object.hasOwn(value, key);
-
 const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
 const isRequestId = (value: unknown): value is McpAppBridgeRequestId =>
   value === null || typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
 
-const isJsonValue = (value: unknown): value is McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  return isRecord(value) && Object.values(value).every(isJsonValue);
-};
+const isJsonValue = (value: unknown): value is McpAppJsonValue => snapshotMcpAppJson(value) !== undefined;
 
-const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
-  if (Array.isArray(value)) return Object.freeze(value.map(cloneJson));
-  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneJson(child)])));
-};
+const cloneJson = cloneMcpAppJson;
 
-const jsonRecord = (value: unknown): McpAppBridgeJsonRecord | undefined => {
-  if (!isRecord(value) || !isJsonValue(value)) return undefined;
-  return cloneJson(value) as McpAppBridgeJsonRecord;
-};
+const jsonRecord = snapshotMcpAppJsonRecord;
 
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 
@@ -330,35 +315,35 @@ const snapshotHost = (host: McpAppBridgeHost): McpAppBridgeHost => {
 };
 
 const messageOf = (value: unknown): McpAppBridgeMessage | undefined => {
-  if (!isRecord(value) || value.jsonrpc !== '2.0') return undefined;
-  const hasMethod = hasOwn(value, 'method');
-  const hasResult = hasOwn(value, 'result');
-  const hasError = hasOwn(value, 'error');
+  if (!isPlainRecord(value) || value.jsonrpc !== '2.0') return undefined;
+  const hasMethod = Object.hasOwn(value, 'method');
+  const hasResult = Object.hasOwn(value, 'result');
+  const hasError = Object.hasOwn(value, 'error');
   if (Number(hasMethod) + Number(hasResult) + Number(hasError) !== 1) return undefined;
-  if (!hasMethod && !hasOwn(value, 'id')) return undefined;
-  if (hasOwn(value, 'id') && !isRequestId(value.id)) return undefined;
-  if (hasOwn(value, 'method') && !nonempty(value.method)) return undefined;
-  if (!hasMethod && hasOwn(value, 'params')) return undefined;
-  if (hasOwn(value, 'params') && !isJsonValue(value.params)) return undefined;
-  if (hasOwn(value, 'result') && !isJsonValue(value.result)) return undefined;
-  if (hasOwn(value, 'error')) {
-    if (!isRecord(value.error) || typeof value.error.code !== 'number' || !Number.isFinite(value.error.code) || !nonempty(value.error.message)) return undefined;
-    if (hasOwn(value.error, 'data') && !isJsonValue(value.error.data)) return undefined;
+  if (!hasMethod && !Object.hasOwn(value, 'id')) return undefined;
+  if (Object.hasOwn(value, 'id') && !isRequestId(value.id)) return undefined;
+  if (Object.hasOwn(value, 'method') && !nonempty(value.method)) return undefined;
+  if (!hasMethod && Object.hasOwn(value, 'params')) return undefined;
+  if (Object.hasOwn(value, 'params') && !isJsonValue(value.params)) return undefined;
+  if (Object.hasOwn(value, 'result') && !isJsonValue(value.result)) return undefined;
+  if (Object.hasOwn(value, 'error')) {
+    if (!isPlainRecord(value.error) || typeof value.error.code !== 'number' || !Number.isFinite(value.error.code) || !nonempty(value.error.message)) return undefined;
+    if (Object.hasOwn(value.error, 'data') && !isJsonValue(value.error.data)) return undefined;
   }
   return Object.freeze({
-    ...(hasOwn(value, 'error') ? { error: Object.freeze({ code: (value.error as Record<string, unknown>).code as number, message: (value.error as Record<string, unknown>).message as string }) } : {}),
-    ...(hasOwn(value, 'id') ? { id: value.id as McpAppBridgeRequestId } : {}),
+    ...(Object.hasOwn(value, 'error') ? { error: Object.freeze({ code: (value.error as Record<string, unknown>).code as number, message: (value.error as Record<string, unknown>).message as string }) } : {}),
+    ...(Object.hasOwn(value, 'id') ? { id: value.id as McpAppBridgeRequestId } : {}),
     jsonrpc: '2.0' as const,
-    ...(hasOwn(value, 'method') ? { method: value.method as string } : {}),
-    ...(hasOwn(value, 'params') ? { params: cloneJson(value.params as McpAppJsonValue) } : {}),
-    ...(hasOwn(value, 'result') ? { result: cloneJson(value.result as McpAppJsonValue) } : {}),
+    ...(Object.hasOwn(value, 'method') ? { method: value.method as string } : {}),
+    ...(Object.hasOwn(value, 'params') ? { params: cloneJson(value.params as McpAppJsonValue) } : {}),
+    ...(Object.hasOwn(value, 'result') ? { result: cloneJson(value.result as McpAppJsonValue) } : {}),
   });
 };
 
-const isInitialize = (message: McpAppBridgeMessage): boolean => message.method === 'ui/initialize' && hasOwn(message, 'id');
+const isInitialize = (message: McpAppBridgeMessage): boolean => message.method === 'ui/initialize' && Object.hasOwn(message, 'id');
 
 const initializedNotification = (message: McpAppBridgeMessage): boolean =>
-  message.method === 'ui/notifications/initialized' && !hasOwn(message, 'id')
+  message.method === 'ui/notifications/initialized' && !Object.hasOwn(message, 'id')
   && (message.params === undefined || jsonRecord(message.params) !== undefined);
 
 const validExperimentalCapabilities = (value: unknown): boolean => {
@@ -663,7 +648,7 @@ const validCancelled = (params: McpAppJsonValue | undefined): Readonly<{
   readonly requestId: McpAppBridgeRequestId;
 }> | undefined => {
   const record = jsonRecord(params);
-  if (record === undefined || !hasOwn(record, 'requestId') || !isRequestId(record.requestId)) return undefined;
+  if (record === undefined || !Object.hasOwn(record, 'requestId') || !isRequestId(record.requestId)) return undefined;
   if (record.reason !== undefined && !nonempty(record.reason)) return undefined;
   return Object.freeze({
     requestId: record.requestId,
@@ -979,7 +964,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
     try {
       return options.send(Object.freeze({
         ...(message.error === undefined ? {} : { error: Object.freeze({ ...message.error }) }),
-        ...(hasOwn(message, 'id') ? { id: message.id } : {}),
+        ...(Object.hasOwn(message, 'id') ? { id: message.id } : {}),
         jsonrpc: '2.0' as const,
         ...(message.method === undefined ? {} : { method: message.method }),
         ...(message.params === undefined ? {} : { params: cloneJson(message.params) }),
@@ -1433,7 +1418,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       const message = messageOf(value);
       if (message === undefined) return false;
       if (lifecycle === 'closing') {
-        if (hasTeardownId && !hasOwn(message, 'method') && hasOwn(message, 'id') && message.id === teardownId
+        if (hasTeardownId && !Object.hasOwn(message, 'method') && Object.hasOwn(message, 'id') && message.id === teardownId
           && (message.result !== undefined || message.error !== undefined)) {
           finishTeardown?.();
           return true;
@@ -1489,12 +1474,12 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         return acceptInitialize(message, true);
       }
       if (message.method === 'notifications/cancelled') {
-        if (hasOwn(message, 'id')) return false;
+        if (Object.hasOwn(message, 'id')) return false;
         const cancelled = validCancelled(message.params);
         return cancelled === undefined ? false : cancelInFlight(cancelled.requestId, cancelled.reason);
       }
       if (message.method === 'notifications/message') {
-        if (hasOwn(message, 'id')) return false;
+        if (Object.hasOwn(message, 'id')) return false;
         const event = validLog(message.params);
         if (event === undefined) return false;
         try {
@@ -1505,7 +1490,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         }
       }
       if (message.method === 'ui/notifications/size-changed') {
-        if (hasOwn(message, 'id')) return false;
+        if (Object.hasOwn(message, 'id')) return false;
         const size = validSize(message.params);
         if (size === undefined) return false;
         try {
@@ -1515,7 +1500,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
           return false;
         }
       }
-      if (!hasOwn(message, 'id')) return false;
+      if (!Object.hasOwn(message, 'id')) return false;
       return receiveRequest(message);
     },
   });

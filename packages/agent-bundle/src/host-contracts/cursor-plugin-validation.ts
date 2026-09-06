@@ -1,4 +1,4 @@
-import { lstat, readdir, realpath } from 'node:fs/promises';
+import { readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
 
 import { Effect, FileSystem, Result } from 'effect';
@@ -15,7 +15,8 @@ import pluginSchema from '../adapters/schemas/cursor/plugin.schema.json' with { 
 import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
-import { isInsideOrEqual } from '../core/paths.ts';
+import { exists, isInsideOrEqual } from '../core/paths.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { isPlatformErrno, readFileString, runWithPlatform } from '../effect/platform.ts';
 import {
   runBoundedChildProcess,
@@ -68,9 +69,6 @@ export type CursorHooksSource =
   | Readonly<{ readonly kind: 'inline'; readonly value: Readonly<Record<string, unknown>> }>
   /** `hooks` is present but neither a string nor an object; the pinned plugin schema already rejects it. */
   | Readonly<{ readonly kind: 'invalid' }>;
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const resolveCursorDocumentSource = (manifest: unknown, field: string, defaultPath: string): CursorHooksSource => {
   const declared = isRecord(manifest) ? manifest[field] : undefined;
@@ -275,16 +273,6 @@ const probeCursor = async (
   }
 };
 
-const pathExists = async (path: string): Promise<boolean> => {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return false;
-    throw error;
-  }
-};
-
 const schemaErrorMessage = (path: string, error: ErrorObject): string => {
   const location = error.instancePath.length === 0 ? '/' : error.instancePath;
   return `${path}${location}: ${error.message ?? 'schema validation failed'}.`;
@@ -458,7 +446,7 @@ const manifestPrecedenceDiagnostics = async (
 ): Promise<readonly Diagnostic[]> => {
   const present = await Promise.all(manifestCandidates.map(async (candidate) => ({
     candidate,
-    exists: await pathExists(join(pluginDirectory, candidate)),
+    exists: await exists(join(pluginDirectory, candidate)),
   })));
   const selected = present.find((entry) => entry.exists)?.candidate;
   if (selected === undefined || selected === manifestCandidates[0]) return Object.freeze([]);

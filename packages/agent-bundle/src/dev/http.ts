@@ -79,6 +79,20 @@ export const responseJson = (
   response.end(JSON.stringify(body));
 };
 
+/** `responseJson` for handlers that may already have answered (streams, cancellation): destroys instead of writing twice. */
+export const responseJsonOrDestroy = (response: ServerResponse, body: unknown, status = 200): void =>
+  responseJson(response, body, { destroyIfEnded: true, status });
+
+/** Builds a thrower for one fixed 400 diagnostic; routes derive `invalidShape`/`pathError` from it. */
+export const badRequest = (code: string, message: string): () => never => () => {
+  throw requestError(diagnostic(code, message, 400));
+};
+
+/** Rejects a request target that carries a query string. */
+export const noQuery = (requestTarget: string | undefined, invalid: () => never): void => {
+  if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) invalid();
+};
+
 export const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
   typeof value === 'string' ? value : undefined;
 

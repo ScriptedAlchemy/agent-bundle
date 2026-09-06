@@ -6,7 +6,7 @@
 // --no-audit --no-fund`. Under pnpm the same proof fails before any host runs
 // ("npm pack --json returned 4 entries", then "Unknown options: 'omit'").
 
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
 const host = process.argv[2];
 const optIn = host === 'claude'
@@ -20,18 +20,15 @@ if (optIn === undefined) {
   process.exitCode = 2;
 } else {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const run = (args, environment = process.env) => new Promise((resolvePromise, reject) => {
-    const child = spawn(npm, args, { env: environment, stdio: 'inherit' });
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      if (code === 0) resolvePromise();
-      else reject(new Error(`npm ${args.join(' ')} failed (${signal ?? code ?? 'unknown'}).`));
-    });
-  });
+  const run = (args, environment = process.env) => {
+    const { error, signal, status } = spawnSync(npm, args, { env: environment, stdio: 'inherit' });
+    if (error !== undefined) throw error;
+    if (status !== 0) throw new Error(`npm ${args.join(' ')} failed (${signal ?? status ?? 'unknown'}).`);
+  };
 
   try {
-    await run(['run', 'build']);
-    await run(['run', 'test:packed:native'], { ...process.env, [optIn]: '1' });
+    run(['run', 'build']);
+    run(['run', 'test:packed:native'], { ...process.env, [optIn]: '1' });
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

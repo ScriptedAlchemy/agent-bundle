@@ -5,9 +5,9 @@ import type { ToolRouteProps } from 'agent-bundle';
 import { selectionHeadline } from '../../../components/headlines.js';
 import { SelectionShelf } from '../../../components/library-shelf.js';
 import type { SelectionReceipt } from '../../../library.js';
-import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
+import { discoveryOperations } from '../../../operations/discovery.js';
 
-const operation = discoveryOperations(defaultDiscoveryOperations).select;
+const operation = discoveryOperations.select;
 
 export const config = {
   annotations: { readOnlyHint: false },

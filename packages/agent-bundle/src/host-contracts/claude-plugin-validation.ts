@@ -8,6 +8,7 @@ import { claudeArtifactValidation } from '../adapters/claude.ts';
 import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { isPlatformErrno, readFileString, runWithPlatform } from '../effect/platform.ts';
 import {
@@ -386,9 +387,6 @@ const findingsFromText = (output: string, pluginDirectory: string): readonly Cla
   }
   return Object.freeze(findings);
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const findingsFromReportEntry = (
   entry: unknown,
