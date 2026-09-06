@@ -21,6 +21,8 @@ import {
   publicHostRegistrations,
   publicHostRoot,
   publicHostUninstallArguments,
+  parsePublicHostMarketplaces,
+  readCodexMarketplaceSource,
   readInstalledManifest,
   readPublicHostInventory,
   readPublicHostMarketplaceState,
@@ -1280,14 +1282,28 @@ const uninstallPublicCli = async (
     version: identity.version,
   } as const;
   const inventory = await readPublicHostInventory(runner, identity, host, scope, environment, home);
-  if (inventory.status === 'unavailable') {
+  const marketplaceOwned = receipt !== undefined &&
+    receipt.registrations.some((registration) => registration.kind === `${host}-marketplace`);
+  let forcedDanglingMarketplace = false;
+  if (inventory.status === 'unavailable' && force && marketplaceOwned) {
+    try {
+      const result = await runner.run(host, ['plugin', 'marketplace', 'list', '--json'], { cwd: identity.bundleRoot });
+      const registered = result.code === 0 ? parsePublicHostMarketplaces(host, result.stdout) : undefined;
+      const root = registered?.find((entry) => entry.name === marketplace)?.root ??
+        (host === 'codex' ? await readCodexMarketplaceSource(hostRoot, marketplace) : undefined);
+      forcedDanglingMarketplace = root !== undefined && !await exists(root);
+    } catch {
+      forcedDanglingMarketplace = false;
+    }
+  }
+  if (inventory.status === 'unavailable' && !forcedDanglingMarketplace) {
     throw failure(
       'AB7004',
       `Cannot uninstall ${id} from ${host} safely: \`${host} plugin list --json\` was unusable (${inventory.detail}).`,
       host,
     );
   }
-  const entry = inventory.entries[0];
+  const entry = inventory.status === 'available' ? inventory.entries[0] : undefined;
   if (entry === undefined && receipt === undefined) {
     return Object.freeze({
       ...base,
@@ -1358,12 +1374,14 @@ const uninstallPublicCli = async (
   // The marketplace is Agent Bundle's to remove only when a receipt records that an install registered it.
   // Without that record (no receipt, or the marketplace pre-existed the install) it is retained and said so.
   const marketplaceRegistration = defaults.find((registration) => registration.kind === `${host}-marketplace`);
-  const marketplaceOwned = receipt !== undefined &&
-    receipt.registrations.some((registration) => registration.kind === `${host}-marketplace`);
-  const marketplaceState = await readPublicHostMarketplaceState(runner, identity, host, marketplace);
+  const marketplaceState = forcedDanglingMarketplace
+    ? 'present'
+    : await readPublicHostMarketplaceState(runner, identity, host, marketplace);
   // Dependents decide both whether the marketplace goes and whether Claude's scope-less durable state may be
   // purged, so they are read whenever either decision is live — and always before any mutation.
-  const dependents = marketplaceState !== 'absent' || (host === 'claude' && policy === 'purge')
+  const dependents = forcedDanglingMarketplace
+    ? Object.freeze({ others: Object.freeze([]), receipts: Object.freeze([]), sameOtherScopes: Object.freeze([]) })
+    : marketplaceState !== 'absent' || (host === 'claude' && policy === 'purge')
     ? await marketplaceDependents(runner, identity, host, marketplace, id, scope, publicHostProjectRoot(host, scope, identity), hostRoot, receiptPath)
     : Object.freeze({ others: Object.freeze([]), receipts: Object.freeze([]), sameOtherScopes: Object.freeze([]) });
   const dependentNames = dependents === 'unknown' ? 'unknown' : [...dependents.others, ...dependents.sameOtherScopes];
@@ -1402,8 +1420,8 @@ const uninstallPublicCli = async (
   if (pluginRegistration !== undefined) {
     registrations.push(Object.freeze({
       ...pluginRegistration,
-      action: entry === undefined ? 'already-absent' : planned ? 'planned' : 'removed',
-      detail: entry === undefined
+      action: entry === undefined && !forcedDanglingMarketplace ? 'already-absent' : planned ? 'planned' : 'removed',
+      detail: entry === undefined && !forcedDanglingMarketplace
         ? `${host} no longer lists ${id}${host === 'claude' ? ` at scope ${scope}` : ''}.`
         : `\`${host} ${publicHostUninstallArguments(host, id, scope).join(' ')}\``,
     }));
@@ -1468,7 +1486,7 @@ const uninstallPublicCli = async (
       state: 'planned',
     });
   }
-  if (entry !== undefined) {
+  if (entry !== undefined || forcedDanglingMarketplace) {
     await runHostCommand(runner, identity, host, publicHostUninstallArguments(host, id, scope), 'removal');
   }
   if (marketplaceState !== 'absent' && !retainMarketplace) {

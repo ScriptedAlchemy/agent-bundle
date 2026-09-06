@@ -410,6 +410,80 @@ export const publicHostProjectRoot = (
   identity: PluginIdentity,
 ): string | undefined => host === 'claude' && scope !== 'user' ? identity.bundleRoot : undefined;
 
+export interface PublicHostMarketplaceEntry {
+  readonly name: string;
+  readonly root?: string;
+}
+
+export const parsePublicHostMarketplaces = (
+  host: Exclude<InstallHost, 'cursor'>,
+  stdout: string,
+): readonly PublicHostMarketplaceEntry[] | undefined => {
+  let document: unknown;
+  try {
+    document = JSON.parse(stdout) as unknown;
+  } catch {
+    return undefined;
+  }
+  const rows = host === 'claude'
+    ? document
+    : isRecord(document) ? document['marketplaces'] : undefined;
+  if (!Array.isArray(rows)) return undefined;
+  const marketplaces: PublicHostMarketplaceEntry[] = [];
+  for (const row of rows) {
+    if (!isRecord(row) || typeof row['name'] !== 'string') continue;
+    const root = typeof row['root'] === 'string'
+      ? row['root']
+      : typeof row['path'] === 'string' ? row['path'] : undefined;
+    marketplaces.push(Object.freeze({
+      name: row['name'],
+      ...(root === undefined ? {} : { root }),
+    }));
+  }
+  return Object.freeze(marketplaces);
+};
+
+export const readCodexMarketplaceSource = async (
+  codexRoot: string,
+  marketplace: string,
+): Promise<string | undefined> => {
+  let config: string;
+  try {
+    config = await readFile(join(codexRoot, 'config.toml'), 'utf8');
+  } catch {
+    return undefined;
+  }
+  const headers = new Set([
+    `[marketplaces.${marketplace}]`,
+    `[marketplaces.${JSON.stringify(marketplace)}]`,
+  ]);
+  let selected = false;
+  let local = false;
+  let source: string | undefined;
+  for (const line of config.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('[')) {
+      if (selected) break;
+      selected = headers.has(trimmed);
+      continue;
+    }
+    if (!selected) continue;
+    if (/^source_type\s*=\s*"local"\s*(?:#.*)?$/u.test(trimmed)) {
+      local = true;
+      continue;
+    }
+    const encoded = /^source\s*=\s*("(?:[^"\\]|\\.)*")\s*(?:#.*)?$/u.exec(trimmed)?.[1];
+    if (encoded === undefined) continue;
+    try {
+      const value = JSON.parse(encoded) as unknown;
+      source = typeof value === 'string' ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return local ? source : undefined;
+};
+
 /** `<host> plugin marketplace list --json`: whether a marketplace of this name is configured; `unknown` when unusable. */
 export const readPublicHostMarketplaceState = async (
   runner: InstallCommandRunner,
@@ -425,17 +499,9 @@ export const readPublicHostMarketplaceState = async (
   } catch {
     return 'unknown';
   }
-  let document: unknown;
-  try {
-    document = JSON.parse(stdout) as unknown;
-  } catch {
-    return 'unknown';
-  }
-  const rows = host === 'claude'
-    ? document
-    : typeof document === 'object' && document !== null ? (document as { readonly marketplaces?: unknown }).marketplaces : undefined;
-  if (!Array.isArray(rows)) return 'unknown';
-  return rows.some((row) => typeof row === 'object' && row !== null && (row as { readonly name?: unknown }).name === marketplace)
+  const rows = parsePublicHostMarketplaces(host, stdout);
+  if (rows === undefined) return 'unknown';
+  return rows.some((row) => row.name === marketplace)
     ? 'present'
     : 'absent';
 };

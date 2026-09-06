@@ -36,8 +36,10 @@ import { OPERATOR_ENV_FILE_NAMES, parseOperatorEnv } from '../launch-env.ts';
 import {
   claudePluginRowErrors,
   parsePublicHostInventory,
+  parsePublicHostMarketplaces,
   publicHostCacheRoot,
   publicHostRoot,
+  readCodexMarketplaceSource,
   treeHash,
   type InstallHost,
   type PublicHostInstalledEntry,
@@ -1223,6 +1225,48 @@ const readPublicHostListing = async (
     };
   }
   return { status: 'available', stdout: result.stdout };
+};
+
+const danglingMarketplaceDiagnostics = async (
+  host: Exclude<DoctorHost, 'cursor'>,
+  run: DoctorCommandRunner,
+  cwd: string,
+  hostRoot: string,
+  receipts: readonly DoctorReceiptFinding[],
+): Promise<readonly Diagnostic[]> => {
+  const owned = new Set(receipts.flatMap((receipt) => receipt.registrations
+    .filter((registration) => registration.kind === `${host}-marketplace`)
+    .map((registration) => registration.name)
+    .filter((name): name is string => name !== undefined)));
+  const result = await run(Object.freeze({
+      args: Object.freeze(['plugin', 'marketplace', 'list', '--json']),
+      cwd,
+      executable: host,
+    })).catch(() => undefined);
+  const listed = result?.exitCode === 0 && result.termination === undefined
+    ? parsePublicHostMarketplaces(host, result.stdout)
+    : undefined;
+  const rows = listed ?? (host === 'codex'
+    ? (await Promise.all([...owned].map(async (name) => {
+        const root = await readCodexMarketplaceSource(hostRoot, name);
+        return root === undefined ? undefined : Object.freeze({ name, root });
+      }))).filter((row) => row !== undefined)
+    : undefined);
+  if (rows === undefined) return Object.freeze([]);
+  const diagnostics: Diagnostic[] = [];
+  for (const row of rows) {
+    if (!owned.has(row.name)) continue;
+    const root = row.root;
+    if (root === undefined || await exists(root)) continue;
+    diagnostics.push(diagnostic(
+      'AB7333',
+      `${host} marketplace ${JSON.stringify(row.name)} is owned by an Agent Bundle receipt but its source directory ${JSON.stringify(root)} no longer exists.`,
+      `Run \`agent-bundle uninstall ${host} --from <bundle-dir> --force\` to remove the stale registration, or run \`${host} plugin marketplace remove ${row.name}\`.`,
+      'error',
+      host,
+    ));
+  }
+  return freezeDiagnostics(diagnostics);
 };
 
 const readWebSurface = async (from: string | undefined): Promise<DoctorWebSurface | undefined> => {
@@ -2731,6 +2775,20 @@ const doctorHost = async (
       async (receipt) => receiptRegistrationState(host, receipt, await listingFor(receipt)),
     );
   diagnostics.push(...receipts.diagnostics);
+  if (
+    host !== 'cursor' &&
+    probed.probe.status === 'available' &&
+    receipts.receipts.some((receipt) =>
+      receipt.registrations.some((registration) => registration.kind === `${host}-marketplace`))
+  ) {
+    diagnostics.push(...await danglingMarketplaceDiagnostics(
+      host,
+      run,
+      listingCwd,
+      publicHostRoot(host, environment, home),
+      receipts.receipts,
+    ));
+  }
   let bundle: DoctorHostReport['bundle'];
   if (options.from !== undefined) {
     try {
