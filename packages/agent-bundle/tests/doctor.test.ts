@@ -2336,6 +2336,96 @@ it('inventories store receipts, diagnoses orphaned ones (AB7328), and reports pr
   }
 });
 
+it('reports a receipt-owned Codex marketplace whose source directory is gone', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(join(fixture.root, 'source'), 'codex');
+    const codexHome = join(fixture.root, 'codex');
+    await installBundle({
+      commandRunner: {
+        run: async (_command, args) => ({
+          code: 0,
+          stderr: '',
+          stdout: args.join(' ') === 'plugin list --json'
+            ? JSON.stringify({ installed: [] })
+            : args.join(' ') === 'plugin marketplace list --json'
+              ? JSON.stringify({ marketplaces: [] })
+              : '',
+        }),
+      },
+      environment: { CODEX_HOME: codexHome },
+      from: bundle,
+      home: fixture.home,
+      host: 'codex',
+    });
+    await writeFile(
+      join(codexHome, 'config.toml'),
+      `[marketplaces.doctor-fixture-marketplace]\nsource_type = "local"\nsource = ${JSON.stringify(bundle)}\n`,
+      'utf8',
+    );
+    await rm(bundle, { force: true, recursive: true });
+
+    const report = await runDoctor({
+      commandRunner: async (request) => {
+        const command = request.args.join(' ');
+        if (command === '--version') return commandResult({ stdout: 'codex 0.147.0' });
+        if (command === 'plugin marketplace list --json') {
+          return commandResult({ exitCode: 1, stderr: 'failed to load marketplace(s)' });
+        }
+        return commandResult({ exitCode: 1, stderr: 'configured marketplace source is missing' });
+      },
+      endpointDirectory: fixture.endpointDirectory,
+      environment: { CODEX_HOME: codexHome },
+      home: fixture.home,
+      hosts: ['codex'],
+    });
+
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7333',
+        message: expect.stringContaining(bundle),
+        severity: 'error',
+        target: 'codex',
+      }),
+    ]));
+
+    const repairBundle = await createBundle(join(fixture.root, 'repair'), 'codex');
+    const commands: string[] = [];
+    await expect(uninstallBundle({
+      commandRunner: {
+        run: async (_command, args) => {
+          const command = args.join(' ');
+          commands.push(command);
+          if (command === 'plugin list --json') {
+            return { code: 1, stderr: 'configured marketplace source is missing', stdout: '' };
+          }
+          if (command === 'plugin marketplace list --json') {
+            return {
+              code: 1,
+              stderr: 'failed to load marketplace(s)',
+              stdout: '',
+            };
+          }
+          return { code: 0, stderr: '', stdout: '' };
+        },
+      },
+      environment: { CODEX_HOME: codexHome },
+      force: true,
+      from: repairBundle,
+      home: fixture.home,
+      host: 'codex',
+    })).resolves.toMatchObject({ state: 'uninstalled' });
+    expect(commands).toEqual([
+      'plugin list --json',
+      'plugin marketplace list --json',
+      'plugin remove doctor-fixture@doctor-fixture-marketplace',
+      'plugin marketplace remove doctor-fixture-marketplace',
+    ]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('cross-checks Claude project-scope receipts from their recorded project root, not the doctor cwd', async () => {
   const fixture = await temporaryDoctor();
   try {

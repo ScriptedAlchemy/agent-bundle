@@ -427,8 +427,8 @@ the selected hosts:
 npx agent-bundle dev --install-host cursor --install-host claude
 ```
 
-The first successful epoch uses the ordinary host installer, so Claude and Codex register the
-plugin normally and read its files from their host-owned
+The first successful epoch uses the ordinary host installer. Claude and Codex register from the
+stable, receipt-owned `<project>/.agent-bundle/dev/<host>` source and read the installed files from their host-owned
 `plugins/cache/<marketplace>/<plugin>/<version>` directory; Cursor reads
 `~/.cursor/plugins/local/<plugin>`. The installed root carries an `.agent-bundle-dev.json` with
 schema version `1`, the project root, the host, and the installed epoch.
@@ -452,9 +452,10 @@ back to the prior generation and emits an `AB7202` diagnostic on `dev.host.sync`
 emits no `artifact.available` at all, so the last-good install is untouched. Re-sync writes the
 host cache directly and does not invoke the Claude or Codex CLI again.
 
-Stopping the dev server leaves the marked development install in place. Hooks and Skills remain
-on disk, while the stable proxy command fails closed until that project's dev server is running
-again.
+Stopping the dev server unregisters and removes its Claude and Codex development installs. A
+later run registers the same stable source path again, so restart does not leave duplicate
+marketplaces. If a receipt-owned marketplace source is removed without teardown, Doctor reports
+`AB7333`; `uninstall <host> --from <bundle-dir> --force` removes the dangling registration.
 
 ## Live host MCP proxy
 

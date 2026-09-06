@@ -26,6 +26,10 @@ import {
   type InstallHost,
   type InstallResult,
 } from '../install/install.ts';
+import {
+  uninstallBundle as defaultUninstallBundle,
+  type UninstallBundleOptions,
+} from '../install/uninstall.ts';
 import { devProxyServerCommand } from './dev-proxy-command.ts';
 import {
   subscribeToEpochAdoption,
@@ -49,6 +53,7 @@ export interface DevHostInstallManagerOptions {
   readonly hosts: readonly InstallHost[];
   readonly installBundle?: (options: InstallBundleOptions) => Promise<InstallResult>;
   readonly projectRoot: string;
+  readonly uninstallBundle?: (options: UninstallBundleOptions) => Promise<unknown>;
   /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
   readonly platformRuntime?: DevPlatformRuntime;
 }
@@ -153,6 +158,25 @@ const prepareDevBundle = async (
   } catch (error) {
     await rm(parent, { force: true, recursive: true });
     throw error;
+  }
+};
+
+const stableDevBundle = (projectRoot: string, host: InstallHost): string =>
+  join(projectRoot, '.agent-bundle', 'dev', host);
+
+const ensureStableDevBundle = async (preparedRoot: string, stableRoot: string): Promise<void> => {
+  const temporary = `${stableRoot}.stage-${process.pid}-${crypto.randomUUID()}`;
+  const previous = `${stableRoot}.previous-${process.pid}-${crypto.randomUUID()}`;
+  try {
+    await cp(preparedRoot, temporary, { errorOnExist: true, force: false, recursive: true, verbatimSymlinks: true });
+    if (await pathExists(stableRoot)) await rename(stableRoot, previous);
+    await rename(temporary, stableRoot);
+  } catch (error) {
+    if (!await pathExists(stableRoot) && await pathExists(previous)) await rename(previous, stableRoot);
+    throw error;
+  } finally {
+    await rm(temporary, { force: true, recursive: true });
+    await rm(previous, { force: true, recursive: true });
   }
 };
 
@@ -314,6 +338,7 @@ export class DevHostInstallManager {
   readonly #installed = new Map<InstallHost, InstalledDevHost>();
   readonly #projectRoot: string;
   readonly #run: PlatformRun;
+  readonly #uninstallBundle: (options: UninstallBundleOptions) => Promise<unknown>;
   #closed = false;
   #pending: Promise<void> = Promise.resolve();
   #subscription: ProjectEventSubscription | undefined;
@@ -328,6 +353,7 @@ export class DevHostInstallManager {
     this.#installBundle = options.installBundle ?? defaultInstallBundle;
     this.#projectRoot = resolve(options.projectRoot);
     this.#run = platformRunOf(options.platformRuntime);
+    this.#uninstallBundle = options.uninstallBundle ?? defaultUninstallBundle;
   }
 
   attached(host: InstallHost): Readonly<{ readonly destination: string; readonly epochId: string }> | undefined {
@@ -407,19 +433,41 @@ export class DevHostInstallManager {
     this.#subscription?.unsubscribe();
     this.#subscription = undefined;
     await this.#pending;
+    const failures: unknown[] = [];
+    for (const host of this.#hosts) {
+      if (host === 'cursor' || !this.#installed.has(host)) continue;
+      const root = stableDevBundle(this.#projectRoot, host);
+      try {
+        await this.#uninstallBundle({
+          environment: this.#environment,
+          force: true,
+          from: root,
+          ...(this.#home === undefined ? {} : { home: this.#home }),
+          host,
+          scope: 'user',
+        });
+        await rm(root, { force: true, recursive: true });
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) throw new AggregateError(failures, 'Failed to remove development host installs.');
   }
 
   async #syncHost(epochRoot: string, epochId: string, host: InstallHost): Promise<void> {
     // Every selected host installs from the composite epoch root (#555).
     const prepared = await prepareDevBundle(epochRoot, host, epochId, this.#projectRoot, this.#run);
     try {
+      const source = host === 'cursor' ? prepared.root : stableDevBundle(this.#projectRoot, host);
       let installed = this.#installed.get(host);
       if (installed === undefined) {
+        if (host !== 'cursor') await ensureStableDevBundle(prepared.root, source);
         const result = await this.#installBundle({
           environment: this.#environment,
-          from: prepared.root,
+          from: source,
           ...(this.#home === undefined ? {} : { home: this.#home }),
           host,
+          ...(host === 'cursor' ? {} : { replace: true }),
           scope: 'user',
         });
         installed = {

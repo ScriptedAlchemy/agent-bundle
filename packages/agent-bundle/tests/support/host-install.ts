@@ -42,6 +42,7 @@ import { startDevServer } from '../../src/dev/workbench-server.ts';
 import { runDoctor, type DoctorCommandRunner } from '../../src/install/doctor.ts';
 import { installBundle, type InstallHost } from '../../src/install/install.ts';
 import { manifestInventory, readInstallReceipt } from '../../src/install/receipt.ts';
+import { uninstallBundle } from '../../src/install/uninstall.ts';
 import {
   normalClaudeSettingsAndPluginsUnchanged,
   packedNativeEnvironment,
@@ -721,8 +722,23 @@ export const runDevHostInstallProof = async (
   });
   const roots = new Map([['epoch-1', fixture.artifactRoot], ['epoch-2', epoch2Root]]);
   const eventHub = new ProjectEventHub();
+  const syncFailures: unknown[] = [];
+  eventHub.subscribe((event) => {
+    if (event.type === 'dev.host.sync' && event.payload.state === 'failed') syncFailures.push(event.payload);
+  });
   let hostCommandCalls = 0;
-  const manager = new DevHostInstallManager({
+  const commandRunner = {
+    run: async (command: string, args: readonly string[], commandOptions: { readonly cwd: string }) => {
+      hostCommandCalls += 1;
+      const result = await run(command, args, {
+        cwd: commandOptions.cwd,
+        environment,
+        timeout: 180_000,
+      });
+      return { code: result.exitCode, stderr: result.stderr, stdout: result.stdout };
+    },
+  };
+  const createManager = (): DevHostInstallManager => new DevHostInstallManager({
     environment,
     epochStore: {
       acquireEpochReference: async (epochId) => {
@@ -734,22 +750,35 @@ export const runDevHostInstallProof = async (
     eventHub,
     home,
     hosts: [host],
-    installBundle: async (installOptions) => installBundle({
-      ...installOptions,
-      commandRunner: {
-        run: async (command, args, commandOptions) => {
-          hostCommandCalls += 1;
-          const result = await run(command, args, {
-            cwd: commandOptions.cwd,
-            environment,
-            timeout: 180_000,
-          });
-          return { code: result.exitCode, stderr: result.stderr, stdout: result.stdout };
-        },
-      },
-    }),
+    installBundle: async (installOptions) => installBundle({ ...installOptions, commandRunner }),
     projectRoot: fixture.root,
+    uninstallBundle: async (uninstallOptions) => uninstallBundle({ ...uninstallOptions, commandRunner }),
   });
+  const manager = createManager();
+  let restarted: DevHostInstallManager | undefined;
+  const assertHostHealthyAfterTeardown = async (): Promise<void> => {
+    if (host === 'cursor') return;
+    const listing = await run(host, ['plugin', 'list', '--json'], {
+      cwd: fixture.root,
+      environment,
+      timeout: 30_000,
+    });
+    assertProof(listing.exitCode === 0, `${host} plugin listing failed after dev teardown: ${commandDetail(listing)}`);
+    const marketplaces = await run(host, ['plugin', 'marketplace', 'list', '--json'], {
+      cwd: fixture.root,
+      environment,
+      timeout: 30_000,
+    });
+    assertProof(marketplaces.exitCode === 0, `${host} marketplace listing failed after dev teardown: ${commandDetail(marketplaces)}`);
+    const document = parseJson<unknown>(marketplaces.stdout, `${host} marketplace listing`);
+    const rows = host === 'claude' ? document : record(document)?.marketplaces;
+    assertProof(Array.isArray(rows), `${host} marketplace listing did not contain an array.`);
+    for (const row of rows) {
+      const fields = record(row);
+      const root = fields?.root ?? fields?.path;
+      if (typeof root === 'string') await access(root);
+    }
+  };
   const marketplaceRoot = host === 'claude' ? claudeConfig : codexHome;
   const destination = host === 'cursor'
     ? join(home, '.cursor', 'plugins', 'local', plugin)
@@ -804,6 +833,20 @@ export const runDevHostInstallProof = async (
       await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8'),
       `${host} dev marker`,
     );
+    await manager.close();
+    await assertHostHealthyAfterTeardown();
+
+    if (host !== 'cursor') {
+      restarted = createManager();
+      restarted.sync(first.id);
+      await restarted.settled();
+      assertProof(
+        restarted.attached(host)?.epochId === first.id,
+        `${host} dev install did not attach after restart: ${JSON.stringify(syncFailures.at(-1))}`,
+      );
+      await restarted.close();
+      await assertHostHealthyAfterTeardown();
+    }
     return Object.freeze({
       hookChanged: true,
       host,
@@ -817,6 +860,7 @@ export const runDevHostInstallProof = async (
       status: 'passed',
     });
   } finally {
+    await restarted?.close();
     await manager.close();
     await rm(root, { force: true, recursive: true });
   }

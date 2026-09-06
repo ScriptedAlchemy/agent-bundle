@@ -361,7 +361,8 @@ export const serve = async (): Promise<void> => {
 npx agent-bundle dev --install-host cursor --install-host claude
 ```
 
-第一个成功的 epoch 使用普通的宿主安装器，因此 Claude 与 Codex 会正常注册插件，并从宿主自有的
+第一个成功的 epoch 使用普通的宿主安装器。Claude 与 Codex 从稳定、由收据归属的
+`<project>/.agent-bundle/dev/<host>` 源注册插件，并从宿主自有的
 `plugins/cache/<marketplace>/<plugin>/<version>` 目录读取它的文件；Cursor 读取
 `~/.cursor/plugins/local/<plugin>`。被安装的根目录带有一份 `.agent-bundle-dev.json`，其中记录 schema
 版本 `1`、项目根目录、宿主以及已安装的 epoch。
@@ -382,8 +383,9 @@ agent-bundle dev proxy --root <projectRoot> --server <serverName> --target <host
 并在 `dev.host.sync` 上发出一条 `AB7202` 诊断；构建失败则根本不会发出 `artifact.available`，因此
 最后一次可用的安装不受影响。重新同步会直接写入宿主缓存，不会再次调用 Claude 或 Codex CLI。
 
-停止开发服务器会把标记为开发用的安装留在原处。钩子与 Skill 仍留在磁盘上，而那条稳定的 proxy 命令会
-失败关闭（fail closed），直到该项目的开发服务器再次运行。
+停止开发服务器会注销并移除 Claude 与 Codex 的开发安装。后续运行会再次注册同一个稳定源路径，因此重启
+不会留下重复的 marketplace。如果由收据归属的 marketplace 源未经清理就被删除，Doctor 会报告
+`AB7333`；`uninstall <host> --from <bundle-dir> --force` 会移除这条悬空注册。
 
 ## 实时宿主 MCP 代理
 

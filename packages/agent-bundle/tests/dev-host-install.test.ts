@@ -16,6 +16,7 @@ import { EpochStore } from '../src/dev/epoch-store.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
 import type { ArtifactEpoch, FailedBuildAttempt } from '../src/dev/types.ts';
 import type { InstallBundleOptions, InstallResult } from '../src/install/install.ts';
+import type { UninstallBundleOptions, UninstallResult } from '../src/install/uninstall.ts';
 import {
   buildHostInstallFixture,
   disposeHostInstallFixture,
@@ -122,7 +123,7 @@ it('defines the stage-1 proxy command shape with an absolute framework CLI entry
   });
 });
 
-it('installs a marked Cursor dev variant and atomically re-points top-level directories on epoch swap', async () => {
+it('installs a marked public-host dev variant from a stable source and removes it on teardown and restart', async () => {
   const root = await createRoot();
   const home = join(root, 'home');
   const projectRoot = join(root, 'project');
@@ -146,17 +147,41 @@ it('installs a marked Cursor dev variant and atomically re-points top-level dire
     ['epoch-3', thirdEpochRoot],
   ]);
   const installs: InstallBundleOptions[] = [];
+  const installedEpochs: string[] = [];
+  const uninstalls: UninstallBundleOptions[] = [];
   const syncEvents: unknown[] = [];
   const installBundle = async (options: InstallBundleOptions): Promise<InstallResult> => {
     installs.push(options);
+    installedEpochs.push(JSON.parse(await readFile(join(options.from, DEV_INSTALL_MARKER), 'utf8')).epochId as string);
     await mkdir(join(destination, '..'), { recursive: true });
     await cp(options.from, destination, { recursive: true });
     return {
       bundleRoot: options.from,
       destination,
-      host: 'cursor',
+      host: 'codex',
       plugin: 'dev-proof',
       state: 'installed',
+      version: '1.0.0',
+    };
+  };
+  const uninstallBundle = async (options: UninstallBundleOptions): Promise<UninstallResult> => {
+    uninstalls.push(options);
+    await rm(destination, { force: true, recursive: true });
+    return {
+      bundleRoot: options.from,
+      data: { detail: 'test', outcome: 'kept', paths: [], policy: 'keep' },
+      destination,
+      forced: options.force === true,
+      host: 'codex',
+      marketplace: 'dev-proof-marketplace',
+      mode: 'host-cli',
+      plugin: 'dev-proof',
+      receipt: { path: join(destination, '.agent-bundle-install.json'), status: 'consumed' },
+      registrations: [],
+      removed: { directories: [destination], files: [] },
+      retained: [],
+      scope: 'user',
+      state: 'uninstalled',
       version: '1.0.0',
     };
   };
@@ -174,9 +199,10 @@ it('installs a marked Cursor dev variant and atomically re-points top-level dire
     },
     eventHub,
     home,
-    hosts: ['cursor'],
+    hosts: ['codex'],
     installBundle,
     projectRoot,
+    uninstallBundle,
   });
   manager.start();
 
@@ -189,18 +215,17 @@ it('installs a marked Cursor dev variant and atomically re-points top-level dire
   expect(syncEvents.at(-1)).toMatchObject({ epochId: 'epoch-1', state: 'succeeded' });
 
   expect(installs).toHaveLength(1);
+  expect(installs[0]).toMatchObject({
+    from: join(projectRoot, '.agent-bundle', 'dev', 'codex'),
+    replace: true,
+  });
   expect(JSON.parse(await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8'))).toMatchObject({
     epochId: 'epoch-1',
-    host: 'cursor',
+    host: 'codex',
     projectRoot,
     schemaVersion: 1,
   });
   const mcpBefore = await readFile(join(destination, '.cursor-plugin', 'mcp.json'), 'utf8');
-  expect(JSON.parse(mcpBefore)).toEqual({
-    mcpServers: {
-      probe: await devProxyServerCommand(projectRoot, 'probe', 'cursor'),
-    },
-  });
   expect((await lstat(join(destination, 'skills'))).isSymbolicLink()).toBe(true);
   expect((await lstat(join(destination, 'hooks'))).isSymbolicLink()).toBe(true);
 
@@ -242,7 +267,47 @@ it('installs a marked Cursor dev variant and atomically re-points top-level dire
   expect(await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).toBe('third skill\n');
 
   await manager.close();
-  await expect(readFile(join(destination, DEV_INSTALL_MARKER), 'utf8')).resolves.toContain('"epochId":"epoch-3"');
+  expect(uninstalls).toEqual([expect.objectContaining({
+    force: true,
+    from: join(projectRoot, '.agent-bundle', 'dev', 'codex'),
+    host: 'codex',
+    scope: 'user',
+  })]);
+  await expect(readFile(join(destination, DEV_INSTALL_MARKER), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(readFile(join(projectRoot, '.agent-bundle', 'dev', 'codex', DEV_INSTALL_MARKER), 'utf8'))
+    .rejects.toMatchObject({ code: 'ENOENT' });
+
+  const staleSource = join(projectRoot, '.agent-bundle', 'dev', 'codex');
+  await cp(firstEpochRoot, staleSource, { recursive: true });
+  await writeFile(
+    join(staleSource, DEV_INSTALL_MARKER),
+    JSON.stringify({ epochId: 'stale', host: 'codex', projectRoot, schemaVersion: 1 }),
+    'utf8',
+  );
+  const restarted = new DevHostInstallManager({
+    epochStore: {
+      acquireEpochReference: async () => ({
+        close: async () => undefined,
+        epoch: epoch(projectRoot, 'epoch-3'),
+        root: thirdEpochRoot,
+      }),
+    },
+    eventHub,
+    home,
+    hosts: ['codex'],
+    installBundle,
+    projectRoot,
+    uninstallBundle,
+  });
+  restarted.sync('epoch-3');
+  await restarted.settled();
+  await restarted.close();
+  expect(installs).toHaveLength(2);
+  expect(new Set(installs.map((install) => install.from))).toEqual(new Set([
+    join(projectRoot, '.agent-bundle', 'dev', 'codex'),
+  ]));
+  expect(installedEpochs).toEqual(['epoch-1', 'epoch-3']);
+  expect(uninstalls).toHaveLength(2);
 });
 
 it('publishes a diagnostic event and preserves the installed generation when re-sync fails', async () => {
@@ -427,7 +492,7 @@ codexIt(
     ? 'installs a Codex dev variant and re-syncs its host-owned cache without another CLI call'
     : 'installs a Codex dev variant and re-syncs its host-owned cache [missing evidence: codex binary unavailable on PATH]',
   async () => {
-    await expect(runDevHostInstallProof(builtFixture(), 'codex', { environment: process.env })).resolves.toEqual({
+    expect(await runDevHostInstallProof(builtFixture(), 'codex', { environment: process.env })).toEqual({
       hookChanged: true,
       host: 'codex',
       marker: expect.objectContaining({ epochId: 'epoch-2', host: 'codex', schemaVersion: 1 }),
