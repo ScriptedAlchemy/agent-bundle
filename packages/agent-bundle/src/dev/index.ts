@@ -100,6 +100,7 @@ export type {
   RouteManifestContract,
   RouteManifestProvider,
   RouteManifestResponse,
+  RouteManifestResultSchemaState,
   RouteManifestRoute,
   RouteManifestServer,
 } from './routes/route-manifest.ts';

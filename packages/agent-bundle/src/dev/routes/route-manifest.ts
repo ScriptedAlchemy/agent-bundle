@@ -12,6 +12,7 @@ import type {
   CompiledRouteGraph,
   CompiledServerMode,
   CompiledServerSurface,
+  RouteResultSchemaState,
 } from '../../routes/types.ts';
 import type {
   ArtifactManifestCliCommand,
@@ -64,7 +65,12 @@ export type RouteManifestContract = ArtifactManifestRouteContract;
  */
 export interface RouteManifestRoute extends ArtifactManifestRoute {
   readonly config: readonly RouteManifestConfigEntry[];
+  /** Static declaration/projection evidence; absent only on manifests from older dev servers. */
+  readonly resultSchemaState?: RouteManifestResultSchemaState;
 }
+
+/** Result schemas execute as authored, so a declaration is known without inventing a static schema projection. */
+export type RouteManifestResultSchemaState = RouteResultSchemaState;
 
 /** One MCP server surface with the routes its packaging mode actually compiles. */
 export interface RouteManifestServer {
@@ -158,6 +164,7 @@ const configSummary = (config: Readonly<Record<string, unknown>>): readonly Rout
 const manifestRoute = (route: CompiledAgentRoute): RouteManifestRoute => ({
   ...artifactRouteFor(route),
   config: configSummary(route.config),
+  ...(route.resultSchemaState === undefined ? {} : { resultSchemaState: route.resultSchemaState }),
 });
 
 const manifestServer = (server: CompiledServerSurface): RouteManifestServer => ({

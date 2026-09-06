@@ -229,6 +229,10 @@ it('projects a compiled graph into the browser manifest with project-relative so
     expect(route.source.startsWith('/')).toBe(false);
     expect(route.provenance).toEqual({ kind: 'conventional' });
   }
+  const echo = manifest.servers.flatMap((server) => server.routes)
+    .find((route) => route.id === 'tool:harness/echo');
+  expect(echo?.resultSchemaState).toBe('unprojectable');
+  expect(manifest.events[0]?.resultSchemaState).toBe('absent');
   expect(manifest.cli?.commands).toContainEqual(expect.objectContaining({
     mcp: { confirm: false, server: 'harness', tool: 'echo' },
     routeId: 'tool:harness/echo',

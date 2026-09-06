@@ -30,6 +30,7 @@ import {
 } from './config-extract.ts';
 import {
   discoverEventRoutePreflight,
+  scanRouteModuleExports,
   type EventRoutePreflightDiscovery,
   validateEventRouteModuleContract,
   validateLayoutModuleContract,
@@ -67,6 +68,7 @@ import {
   type CompiledServerSurface,
   type RouteContract,
   type RouteInputSchema,
+  type RouteResultSchemaState,
 } from './types.ts';
 
 type ProjectIgnoreRules = Awaited<ReturnType<typeof readProjectIgnoreRules>>;
@@ -573,6 +575,7 @@ const inlineContractIdOf = (route: CompiledAgentRoute): string =>
 const compiledRoute = (
   module: DiscoveredRouteModule,
   config: Readonly<Record<string, unknown>>,
+  resultSchemaState: RouteResultSchemaState,
   contract?: ContractBinding,
   preflight?: CompiledEventPreflight,
 ): CompiledAgentRoute => ({
@@ -584,6 +587,7 @@ const compiledRoute = (
   kind: module.kind,
   ...(preflight === undefined ? {} : { preflight }),
   provenance: { kind: 'conventional', relativePath: module.relativePath },
+  resultSchemaState,
   ...(module.serverName === undefined ? {} : { serverId: `mcp:${module.serverName}` }),
   source: module.source,
 });
@@ -612,6 +616,7 @@ interface ExtractedModuleMetadata {
   readonly inputSchema?: ExtractedInputSchema;
   readonly preflight?: CompiledEventPreflight;
   readonly preflightDiagnostics: readonly Diagnostic[];
+  readonly resultSchemaState: RouteResultSchemaState;
 }
 
 const emptyExtractedRouteConfig: ExtractedRouteConfig = deepFreeze({
@@ -627,7 +632,7 @@ const extractedModuleMetadata = (
   preflightDiscovery?: EventRoutePreflightDiscovery,
 ): ExtractedModuleMetadata => {
   if (moduleText === undefined) {
-    return { extracted: emptyExtractedRouteConfig, preflightDiagnostics: [] };
+    return { extracted: emptyExtractedRouteConfig, preflightDiagnostics: [], resultSchemaState: 'unknown' };
   }
   const extracted = extractRouteConfig(moduleText, module.relativePath, module.source, { projectRoot });
   const inputSchema = extractInputSchema(moduleText, module.relativePath, { projectRoot, source: module.source });
@@ -648,6 +653,9 @@ const extractedModuleMetadata = (
     ...(inputSchema === undefined ? {} : { inputSchema }),
     ...(preflight === undefined ? {} : { preflight }),
     preflightDiagnostics: discovery?.diagnostics ?? [],
+    resultSchemaState: scanRouteModuleExports(moduleText, module.relativePath, { source: module.source }).named.has('resultSchema')
+      ? 'unprojectable'
+      : 'absent',
   };
 };
 
@@ -1019,6 +1027,7 @@ export const compileRouteGraph = async (
     const route = compiledRoute(
       module,
       resolved.config,
+      metadata.resultSchemaState,
       metadata.inputSchema === undefined ? undefined : contractBindings.get(contractIdOf(metadata.inputSchema.origin)),
       metadata.preflight,
     );
