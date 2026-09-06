@@ -22,6 +22,10 @@ import {
   type RouteInvocationPreparedProject,
   type RouteInvocationServiceOptions,
 } from '../src/dev/routes/route-invocation-service.ts';
+import {
+  renderEventBytes,
+  routeInvocationRenderHistoryLimits,
+} from '../src/dev/routes/route-invocation-render-history.ts';
 import type { RouteManifest } from '../src/dev/routes/route-manifest.ts';
 import type { CompiledRouteGraph } from '../src/routes/types.ts';
 import { testManifestFromRouteGraph } from '../src/test/manifest.ts';
@@ -228,7 +232,6 @@ it('publishes correlated invocation and kernel entries with slim details', async
       };
       return {
         document,
-        events: [{ document, sequence: 1, type: 'complete' }],
         input: { value: 'echo' },
         mcp: { content: [] },
         renderDurationMs: 4,
@@ -418,7 +421,6 @@ const childResult = (request: RouteInvocationChildRequest, text = 'ok'): RouteIn
     status: 'success',
     version: 1,
   },
-  events: [],
   input: request.input,
   mcp: {},
   renderDurationMs: 1,
@@ -459,10 +461,7 @@ it('publishes render events before the final invocation', async () => {
     rendered.resolve();
     await release.promise;
     publishRender({ document, sequence: 1, type: 'complete' });
-    return { ...childResult(request), events: [
-      { document, sequence: 0, type: 'shell' },
-      { document, sequence: 1, type: 'complete' },
-    ] };
+    return childResult(request);
   });
 
   const started = service.start({ input: {}, routeId: echoRoute.id });
@@ -471,24 +470,30 @@ it('publishes render events before the final invocation', async () => {
   service.subscribe(started.invocation.id, (message) => messages.push(message));
   expect(messages.map((message) => message.type)).toEqual(['render']);
   release.resolve();
-  await started.result;
+  const invocation = await started.result;
   expect(messages.map((message) => message.type)).toEqual(['render', 'render', 'final']);
+  expect(invocation.events).toEqual([
+    { document, sequence: 0, type: 'shell' },
+    { document, sequence: 1, type: 'complete' },
+  ]);
+  expect(invocation).not.toHaveProperty('retention');
 });
+
+const shellDocument = childResult({
+  context: {} as never,
+  input: {},
+  manifest: {} as never,
+  routeId: echoRoute.id,
+  stateRoot: '/project/state',
+  surface: { kind: 'unit-render' },
+}).document;
 
 it('retains only the newest 256 render events and one truncation marker', async () => {
   const release = deferred();
   const rendered = deferred();
-  const document = childResult({
-    context: {} as never,
-    input: {},
-    manifest: {} as never,
-    routeId: echoRoute.id,
-    stateRoot: '/project/state',
-    surface: { kind: 'unit-render' },
-  }).document;
   const service = streamingService(async (request, _signal, _trace, publishRender) => {
     for (let sequence = 0; sequence < 300; sequence += 1) {
-      publishRender({ document, sequence, type: 'shell' });
+      publishRender({ document: shellDocument, sequence, type: 'shell' });
     }
     rendered.resolve();
     await release.promise;
@@ -507,10 +512,134 @@ it('retains only the newest 256 render events and one truncation marker', async 
     event: { sequence: 44 },
   });
   release.resolve();
-  await started.result;
+  const invocation = await started.result;
   expect(messages.findLast((message) => message.type === 'final')).toMatchObject({
-    invocation: { document },
+    invocation: { document: shellDocument },
   });
+  expect(invocation.events).toHaveLength(256);
+  expect(invocation.events[0]).toMatchObject({ sequence: 44 });
+  expect(invocation.retention).toMatchObject({ evictedEvents: 44, producedEvents: 300 });
+});
+
+it('publishes the same bounded history to the final envelope, history reads, and the stream replay', async () => {
+  const shell = { document: shellDocument, sequence: 0, type: 'shell' as const };
+  const progress = (sequence: number) => ({ completed: sequence, sequence, total: 1_000, type: 'progress' as const });
+  const complete = { document: shellDocument, sequence: 1_000, type: 'complete' as const };
+  const service = streamingService(async (request, _signal, _trace, publishRender) => {
+    publishRender(shell);
+    for (let sequence = 1; sequence < 1_000; sequence += 1) publishRender(progress(sequence));
+    publishRender(complete);
+    return childResult(request);
+  });
+
+  const started = service.start({ correlationId: 'browser-7', input: {}, routeId: echoRoute.id });
+  const invocation = await started.result;
+  const messages: Parameters<Parameters<typeof service.subscribe>[1]>[0][] = [];
+  service.subscribe(started.invocation.id, (message) => messages.push(message));
+
+  expect(invocation).toMatchObject({
+    correlationId: 'browser-7',
+    document: shellDocument,
+    outcome: { kind: 'success' },
+    retention: { evictedEvents: 745, producedEvents: 1_001 },
+    status: 'succeeded',
+  });
+  expect(invocation.events).toHaveLength(routeInvocationRenderHistoryLimits.maxEvents);
+  expect(invocation.events.at(-1)).toEqual(complete);
+  expect(invocation.events[0]).toEqual(progress(745));
+  expect(invocation.retention?.retainedBytes).toBe(invocation.events.reduce((sum, event) => sum + renderEventBytes(event), 0));
+  expect(service.read(started.invocation.id)).toBe(invocation);
+  expect(messages[0]).toEqual({ type: 'truncated' });
+  expect(messages.flatMap((message) => message.type === 'render' ? [message.event] : [])).toEqual(invocation.events);
+  expect(messages.at(-1)).toEqual({ invocation, type: 'final' });
+});
+
+it('bounds retained bytes with large intermediate snapshots and pins the latest document', async () => {
+  const rendered = deferred();
+  const snapshot = (sequence: number) => ({
+    boundaryId: 'b',
+    document: { root: { kind: 'text' as const, text: `${String(sequence)}:${'x'.repeat(300 * 1024)}` }, status: 'success' as const, version: 1 as const },
+    sequence,
+    type: 'replace' as const,
+  });
+  const service = streamingService((_request, signal, _trace, publishRender) => new Promise((_resolve, reject) => {
+    publishRender({ document: shellDocument, sequence: 0, type: 'shell' });
+    for (let sequence = 1; sequence <= 12; sequence += 1) publishRender(snapshot(sequence));
+    for (let sequence = 13; sequence <= 20; sequence += 1) publishRender({ completed: sequence, sequence, type: 'progress' });
+    rendered.resolve();
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }));
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await rendered.promise;
+  const messages: Parameters<Parameters<typeof service.subscribe>[1]>[0][] = [];
+  service.subscribe(started.invocation.id, (message) => messages.push(message));
+  const replayed = messages.flatMap((message) => message.type === 'render' ? [message.event] : []);
+  const replayedBytes = replayed.reduce((sum, event) => sum + renderEventBytes(event), 0);
+  expect(replayedBytes).toBeLessThanOrEqual(routeInvocationRenderHistoryLimits.maxBytes);
+  expect(replayed.map((event) => event.sequence)).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  expect(messages.filter((message) => message.type === 'truncated')).toHaveLength(1);
+
+  const cancelled = await service.cancel(started.invocation.id);
+  expect(cancelled.status).toBe('cancelled');
+  expect(cancelled.document).toEqual(snapshot(12).document);
+  expect(cancelled.events.map((event) => event.sequence)).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  expect(cancelled.retention).toMatchObject({ evictedEvents: 7, producedEvents: 21, retainedBytes: replayedBytes });
+  expect(cancelled.retention!.evictedBytes).toBeGreaterThan(6 * 300 * 1024);
+});
+
+it('keeps the retained window and latest document when the child fails after eviction', async () => {
+  const service = streamingService(async (_request, _signal, _trace, publishRender) => {
+    publishRender({ document: shellDocument, sequence: 0, type: 'shell' });
+    for (let sequence = 1; sequence <= 300; sequence += 1) publishRender({ completed: sequence, sequence, type: 'progress' });
+    throw new Error('render exploded');
+  });
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  const failed = await started.result;
+  const replay: Parameters<Parameters<typeof service.subscribe>[1]>[0][] = [];
+  service.subscribe(started.invocation.id, (message) => replay.push(message));
+
+  expect(failed).toMatchObject({
+    diagnostics: [{ code: 'AB8236', message: 'Route invocation child failed: render exploded' }],
+    document: shellDocument,
+    retention: { evictedEvents: 45, producedEvents: 301 },
+    status: 'failed',
+  });
+  expect(failed).not.toHaveProperty('outcome');
+  expect(failed.events).toHaveLength(routeInvocationRenderHistoryLimits.maxEvents);
+  expect(failed.events[0]).toEqual({ document: shellDocument, sequence: 0, type: 'shell' });
+  expect(replay[0]).toEqual({ type: 'truncated' });
+  expect(replay.flatMap((message) => message.type === 'render' ? [message.event] : [])).toEqual(failed.events);
+});
+
+it('cancels after the shell was evicted with the pinned document and the truncation account', async () => {
+  const startedChild = deferred();
+  const rendered = deferred();
+  const service = streamingService((_request, signal, _trace, publishRender) => new Promise((_resolve, reject) => {
+    startedChild.resolve();
+    publishRender({ document: shellDocument, sequence: 0, type: 'shell' });
+    for (let sequence = 1; sequence <= 600; sequence += 1) {
+      publishRender({ completed: sequence, message: `step ${String(sequence)}`, sequence, total: 1_000, type: 'progress' });
+    }
+    rendered.resolve();
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }));
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await startedChild.promise;
+  await rendered.promise;
+  const cancelled = await service.cancel(started.invocation.id);
+
+  expect(cancelled).toMatchObject({ id: started.invocation.id, status: 'cancelled' });
+  expect(cancelled).not.toHaveProperty('outcome');
+  expect(cancelled.document).toEqual(shellDocument);
+  expect(cancelled.events).toHaveLength(routeInvocationRenderHistoryLimits.maxEvents);
+  expect(cancelled.events[0]).toEqual({ document: shellDocument, sequence: 0, type: 'shell' });
+  expect(cancelled.events[1]).toMatchObject({ sequence: 346, type: 'progress' });
+  expect(cancelled.events.at(-1)).toMatchObject({ sequence: 600, type: 'progress' });
+  expect(cancelled.retention).toMatchObject({ evictedEvents: 345, producedEvents: 601 });
+  expect(service.read(started.invocation.id)).toBe(cancelled);
 });
 
 it('cancels a running invocation without an outcome and publishes cancellation', async () => {
@@ -987,6 +1116,69 @@ it('resolves a `.js` import of a `.tsx` sibling without rewriting the same strin
   }
 });
 
+/**
+ * A tool that reports far more progress than the render-history window holds
+ * and streams five Suspense chunks whose `replace` snapshots sum past the byte
+ * bound, while the final document (750 KiB) stays under the runtime's 1 MiB.
+ */
+const burstRouteProject = async (): Promise<RouteProject> => routeProject(
+  await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-burst-')),
+  'burst',
+  {
+    'src/mcp/fixture/tools/burst.tsx': [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { createElement, Suspense } from 'react';",
+      '',
+      'const Chunk = async ({ index }) => {',
+      '  await new Promise((resolve) => setTimeout(resolve, 20 * (index + 1)));',
+      "  return createElement(Agent.Text, null, `${index}:${'x'.repeat(150 * 1024)}`);",
+      '};',
+      '',
+      'export default async function Burst() {',
+      '  const { progress } = await agent();',
+      '  for (let step = 1; step <= 400; step += 1) await progress.report({ completed: step, total: 400 });',
+      '  return createElement(Agent.Result, null, ...Array.from({ length: 5 }, (_, index) =>',
+      '    createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: index, total: 5 }), key: index }, createElement(Chunk, { index }))));',
+      '}',
+      '',
+    ].join('\n'),
+  },
+);
+
+it('bounds a real child\'s long, heavy render stream end to end', { timeout: 60_000 }, async () => {
+  const project = await burstRouteProject();
+  const service = project.service();
+  try {
+    const started = service.start({ correlationId: 'burst-1', input: {}, routeId: 'tool:fixture/burst', surface: { kind: 'unit-render' } });
+    const invocation = await started.result;
+    expect(invocation.status, JSON.stringify(invocation.diagnostics)).toBe('succeeded');
+
+    const complete = invocation.events.at(-1);
+    expect(complete?.type).toBe('complete');
+    expect(invocation.document).toEqual(complete?.type === 'complete' ? complete.document : undefined);
+    expectDocument(invocation.document!).toContainText('4:xxxx');
+    expect(invocation).toMatchObject({ correlationId: 'burst-1', outcome: { kind: 'success' } });
+    expect(invocation.events.length).toBeLessThanOrEqual(routeInvocationRenderHistoryLimits.maxEvents);
+    const retainedBytes = invocation.events.reduce((sum, event) => sum + renderEventBytes(event), 0);
+    expect(retainedBytes).toBeLessThanOrEqual(routeInvocationRenderHistoryLimits.maxBytes);
+    expect(invocation.retention).toMatchObject({ retainedBytes });
+    expect(invocation.retention!.producedEvents).toBeGreaterThan(400);
+    expect(invocation.retention!.producedEvents).toBe(invocation.retention!.evictedEvents + invocation.events.length);
+    expect(invocation.retention!.evictedBytes).toBeGreaterThan(150 * 1024);
+    expect(invocation.events.filter((event) => event.type === 'replace').length).toBeLessThan(5);
+
+    expect(service.read(started.invocation.id)).toBe(invocation);
+    const replay: Parameters<Parameters<typeof service.subscribe>[1]>[0][] = [];
+    service.subscribe(started.invocation.id, (message) => replay.push(message));
+    expect(replay.filter((message) => message.type === 'truncated')).toHaveLength(1);
+    expect(replay.flatMap((message) => message.type === 'render' ? [message.event] : [])).toEqual(invocation.events);
+    expect(replay.at(-1)).toEqual({ invocation, type: 'final' });
+  } finally {
+    await service.close();
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
+
 /** A zombie has exited; only a process still scheduled counts as alive. */
 const alive = (pid: number): boolean => {
   if (isProcessGone(pid)) return false;
@@ -1232,15 +1424,6 @@ const succeededChild = (observed?: RouteInvocationChildResult['observed']): Rout
     status: 'success',
     version: 1,
   },
-  events: [{
-    document: {
-      root: { children: [{ kind: 'text', text: 'ok' }], kind: 'result' },
-      status: 'success',
-      version: 1,
-    },
-    sequence: 1,
-    type: 'complete',
-  }],
   input: {},
   mcp: { content: [] },
   ...(observed === undefined ? {} : { observed }),

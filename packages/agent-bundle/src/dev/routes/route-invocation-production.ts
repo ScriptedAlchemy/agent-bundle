@@ -10,6 +10,9 @@ import {
   createAgentRenderDispatcher,
   documentToCallToolResult,
   type AgentDocument,
+  type AgentProgressReporter,
+  type AgentProgressUpdate,
+  type AgentRenderDispatch,
   type AgentRenderEvent,
   type AgentRenderInvocation,
 } from '@agent-bundle/runtime';
@@ -287,6 +290,7 @@ const streamFromWorker = (
     readonly abort: () => void;
     readonly controller: ReadableStreamDefaultController<Uint8Array>;
     readonly dispatchSignal: AbortSignal;
+    readonly progress: AgentProgressReporter | undefined;
   }>();
   const failAll = (error: Error): void => {
     for (const [id, entry] of pending) {
@@ -302,7 +306,18 @@ const streamFromWorker = (
   worker.on('message', (message: WorkerMessage) => {
     const entry = pending.get(message.id);
     if (entry === undefined) return;
-    if (message.type === 'progress') return;
+    if (message.type === 'progress') {
+      // The route's reported progress becomes `progress` render events through
+      // the dispatcher's reporter, as the generated CLI session forwards it.
+      Promise.resolve()
+        .then(() => entry.progress?.report(message.update as AgentProgressUpdate))
+        .catch((error: unknown) => {
+          pending.delete(message.id);
+          entry.dispatchSignal.removeEventListener('abort', entry.abort);
+          entry.controller.error(error);
+        });
+      return;
+    }
     if (message.type === 'observed-providers-start') {
       trace?.providersStart();
       return;
@@ -373,10 +388,7 @@ const streamFromWorker = (
     entry.controller.error(new Error(message.message ?? 'Compiled route worker failed.'));
   });
   const host = Object.freeze({
-    execute: async (dispatch: Readonly<{
-      readonly invocation: AgentRenderInvocation;
-      readonly signal: AbortSignal;
-    }>): Promise<ReadableStream<Uint8Array>> => {
+    execute: async (dispatch: AgentRenderDispatch): Promise<ReadableStream<Uint8Array>> => {
       const id = ++sequence;
       let controller!: ReadableStreamDefaultController<Uint8Array>;
       const stream = new ReadableStream<Uint8Array>({ start: (opened) => { controller = opened; } });
@@ -384,7 +396,7 @@ const streamFromWorker = (
         worker.postMessage({ id, type: 'cancel' });
         controller.error(new DOMException('Agent render was aborted.', 'AbortError'));
       };
-      pending.set(id, { abort, controller, dispatchSignal: dispatch.signal });
+      pending.set(id, { abort, controller, dispatchSignal: dispatch.signal, progress: dispatch.progress });
       dispatch.signal.addEventListener('abort', abort, { once: true });
       worker.postMessage({
         actor: request.context.actor,
@@ -436,17 +448,21 @@ const missingRouteWorkerError = (error: unknown): boolean =>
     || error.message.includes('Generated rendered route must default-export')
   );
 
+/**
+ * Drives one compiled worker's render stream. Each event is handed to
+ * `publishRender` as it arrives and then dropped; only the `complete` event's
+ * document is kept, so the producer holds one document, not the stream.
+ */
 const renderCompiled = async (
   request: ProductionRequest,
   input: JsonValue,
   signal: AbortSignal,
   env: NodeJS.ProcessEnv,
   trace?: EventTracer,
-  publishRender?: (event: AgentRenderEvent) => void,
+  publishRender?: (event: AgentRenderEvent) => Promise<void> | void,
 ): Promise<Readonly<{
   readonly document: AgentDocument;
   readonly durationMs: number;
-  readonly events: readonly AgentRenderEvent[];
   readonly observed: {
     readonly providers: readonly RouteInvocationProvider[];
     readonly timings: readonly RouteInvocationTiming[];
@@ -457,21 +473,19 @@ const renderCompiled = async (
   for (const workerPath of candidates) {
     const startedAt = performance.now();
     const session = streamFromWorker(workerPath, request, invocation, input, signal, env, trace);
-    const events: AgentRenderEvent[] = [];
+    let document: AgentDocument | undefined;
     try {
       const reader = session.events.getReader();
       for (;;) {
         const next = await reader.read();
         if (next.done) break;
-        events.push(next.value);
-        publishRender?.(next.value);
+        if (next.value.type === 'complete') document = next.value.document;
+        await publishRender?.(next.value);
       }
-      const complete = events.findLast((event) => event.type === 'complete');
-      if (complete === undefined) throw new Error('Compiled route render ended without a complete event.');
+      if (document === undefined) throw new Error('Compiled route render ended without a complete event.');
       return Object.freeze({
-        document: complete.document,
+        document,
         durationMs: performance.now() - startedAt,
-        events: Object.freeze(events),
         observed: {
           providers: Object.freeze([...session.observed.providers]),
           timings: Object.freeze([...session.observed.timings]),
@@ -492,7 +506,7 @@ const renderCompiled = async (
 export const renderProductionRoute = async (
   request: RouteInvocationChildRequest,
   publishTrace?: EventTraceObserver,
-  publishRender?: (event: AgentRenderEvent) => void,
+  publishRender?: (event: AgentRenderEvent) => Promise<void> | void,
 ): Promise<RouteInvocationChildResult> => {
   if (request.artifactEpoch === undefined || request.artifactRoot === undefined) {
     throw new ProductionRouteInvocationError(
@@ -527,7 +541,6 @@ export const renderProductionRoute = async (
     const value = prepared.preflight.gate as JsonValue;
     return Object.freeze({
       document: completeDocument(value),
-      events: Object.freeze([]),
       input: prepared.input,
       result: value,
       trace: Object.freeze(traceEvents),
@@ -557,7 +570,6 @@ export const renderProductionRoute = async (
         : undefined;
     return Object.freeze({
       document: rendered.document,
-      events: rendered.events,
       ...(exitCode === undefined ? {} : { exitCode }),
       input: prepared.input,
       ...(kind === 'tool'
