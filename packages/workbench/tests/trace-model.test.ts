@@ -140,4 +140,8 @@ it('headlines a host-session group by its lifecycle entry and links an hs_ sessi
   expect(traceGroupSessionLocation(groups[0]!)).toEqual({ area: 'sessions', session: 'hs_0123456789abcdef' });
   expect(traceGroupSessionLocation(groups[1]!)).toBeUndefined();
   expect(traceGroupSessionLocation(groupTraceEntries([traceEntry(1, { correlation: { conversationId: 'hs_x', sessionId: 'hs_y' }, kind: 'hook.received', occurredAt: at, source: 'hook', summary: 'x' })])[0]!)).toBeUndefined();
+  const attached = groupTraceEntries([
+    traceEntry(5, { correlation: { conversationId: 'claude-own-id', sessionId: 'claude-own-id' }, href: '/sessions?session=hs_0123456789abcdef', kind: 'session.attached', occurredAt: at, source: 'session', summary: 'Claude session attached' }),
+  ])[0]!;
+  expect(traceGroupSessionLocation(attached)).toEqual({ area: 'sessions', session: 'hs_0123456789abcdef' });
 });

@@ -55,7 +55,9 @@ export const SessionsPage = ({ client, onNavigate, session: selectedId }: Sessio
   }, [onNavigate]);
   const launch = (host: HostSessionHost): void => { client.launch({ host, ...size.current }).then(select, fail); };
   const terminate = (id: string): void => { client.terminate(id).then((session) => dispatch({ session, type: 'session' }), fail); };
-  const restart = (id: string): void => { client.restart(id, size.current).then(select, fail); };
+  const restart = (session: HostSession): void => {
+    client.restart(session.id, { cols: session.cols, rows: session.rows }).then(select, fail);
+  };
   const forget = (id: string): void => {
     client.forget(id).then(() => {
       dispatch({ id, type: 'forget' });
@@ -127,7 +129,7 @@ export const SessionsPage = ({ client, onNavigate, session: selectedId }: Sessio
             <span className="sessions-toolbar-actions">
               <ShellLink className="sessions-trace-link" data-testid="sessions-trace" location={{ area: 'trace', correlation: selected.traceSessionId ?? selected.id }} onNavigate={onNavigate}>Trace</ShellLink>
               <button className="route-cancel" data-testid="sessions-terminate" disabled={selected.state !== 'running'} onClick={() => terminate(selected.id)} type="button">Terminate</button>
-              <button className="sessions-action" data-testid="sessions-restart" onClick={() => restart(selected.id)} type="button">Restart</button>
+              <button className="sessions-action" data-testid="sessions-restart" onClick={() => restart(selected)} type="button">Restart</button>
               <button className="sessions-action" data-testid="sessions-forget" disabled={selected.state === 'running'} onClick={() => forget(selected.id)} type="button">Forget</button>
             </span>
           </div>
