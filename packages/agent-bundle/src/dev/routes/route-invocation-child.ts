@@ -134,10 +134,12 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
     trace?.failure('render', error);
     throw error;
   }
+  // The harness drains the stream before returning, so the unit surface's
+  // events reach the service after the render rather than live.
+  for (const event of rendered.events) forwardRenderEvent(event);
   const exitCode = unitRenderExitCode(request, rendered.document, rendered.result ?? rendered.document.value);
   return Object.freeze({
     document: rendered.document,
-    events: rendered.events,
     ...(exitCode === undefined ? {} : { exitCode }),
     input,
     ...(request.manifest.routes[request.routeId]?.kind === 'tool'
@@ -152,15 +154,10 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
   });
 };
 
-const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
-  const result = request.surface.kind === 'unit-render'
-    ? await renderUnitRoute(request)
-    : await renderProductionRoute(request, forwardEventTrace, forwardRenderEvent);
-  if (request.surface.kind === 'unit-render') {
-    for (const event of result.events) forwardRenderEvent(event);
-  }
-  return result;
-};
+const render = (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> =>
+  request.surface.kind === 'unit-render'
+    ? renderUnitRoute(request)
+    : renderProductionRoute(request, forwardEventTrace, forwardRenderEvent);
 
 process.once('message', (request: RouteInvocationChildRequest) => {
   const disposeTraceObserver = installEventTraceObserver(forwardEventTrace);
