@@ -991,6 +991,10 @@ export const runClaudeHostInstallProof = async (
 
     const skillPath = join(expectedInstallPath, 'skills', 'probe', 'SKILL.md');
     await access(skillPath).catch(() => fail('Claude cache did not contain skills/probe/SKILL.md.'));
+    const claudeHooks = await readText(join(expectedInstallPath, 'hooks', 'hooks.json'), 'Claude installed hooks');
+    const codexHooks = await readText(join(expectedInstallPath, codexArtifactPaths.hooksManifest), 'Codex hooks beside Claude install');
+    assertProof(claudeHooks !== codexHooks, 'Claude and Codex installed hook bindings unexpectedly resolved to the same document.');
+    assertProof(!claudeHooks.includes('.codex.mjs'), 'Claude auto-discovered a Codex-only hook wrapper.');
     const sameVersionRebuild = await proveSameVersionRebuild({
       bundle: fixture.bundles.claude,
       host: 'claude',
@@ -1088,6 +1092,18 @@ export const runCodexHostInstallProof = async (
     const manifestDocument = parseJson<unknown>(installedManifestText, 'Codex installed plugin manifest');
     const manifest = record(manifestDocument);
     assertProof(manifest !== undefined, 'Codex installed plugin manifest was not a JSON object.');
+    assertProof(
+      manifest.hooks === `./${codexArtifactPaths.hooksManifest}`,
+      'Codex installed plugin manifest did not replace hooks/hooks.json fallback discovery.',
+    );
+    assertProof(
+      manifest.mcpServers === `./${codexArtifactPaths.mcp}`,
+      'Codex installed plugin manifest did not replace the root .mcp.json fallback.',
+    );
+    const codexHooks = await readText(join(cachePath, codexArtifactPaths.hooksManifest), 'Codex installed hooks');
+    const claudeHooks = await readText(join(cachePath, 'hooks', 'hooks.json'), 'Claude hooks beside Codex install');
+    assertProof(codexHooks !== claudeHooks, 'Codex and Claude installed hook bindings unexpectedly resolved to the same document.');
+    assertProof(!codexHooks.includes('.claude.mjs'), 'Codex auto-discovered a Claude-only hook wrapper.');
     const manifestIssues = validateCodexPluginManifest(manifestDocument);
     assertProof(
       manifestIssues.length === 0,
@@ -1404,7 +1420,10 @@ export const runCursorHostInstallProof = async (
 
     const pluginDocument = await readJson(join(destination, '.cursor-plugin', 'plugin.json'), 'Cursor plugin manifest');
     assertProof(cursorPluginValidator(pluginDocument), `Cursor plugin manifest failed its pinned schema: ${JSON.stringify(cursorPluginValidator.errors)}`);
-    const logo = record(pluginDocument)?.logo;
+    const cursorPlugin = record(pluginDocument);
+    assertProof(cursorPlugin?.hooks === './.cursor-plugin/hooks.json', 'Cursor installed manifest did not replace hooks/hooks.json fallback discovery.');
+    assertProof(cursorPlugin.mcpServers === './.cursor-plugin/mcp.json', 'Cursor installed manifest did not replace root mcp.json fallback discovery.');
+    const logo = cursorPlugin.logo;
     assertProof(typeof logo === 'string' && logo.length > 0, 'Cursor plugin manifest did not emit a logo path.');
     assertProof(!logo.includes('..'), `Cursor plugin logo ${JSON.stringify(logo)} escapes the deploy tree.`);
     const logoRelative = logo.replace(/^\.\//u, '');
@@ -1417,6 +1436,9 @@ export const runCursorHostInstallProof = async (
     const hooksText = await readText(join(destination, '.cursor-plugin', 'hooks.json'), 'Cursor hooks document');
     const hooksDocument = parseJson<unknown>(hooksText, 'Cursor hooks document');
     assertProof(cursorHooksValidator(hooksDocument), `Cursor hooks document failed its pinned schema: ${JSON.stringify(cursorHooksValidator.errors)}`);
+    const claudeHooks = await readText(join(destination, 'hooks', 'hooks.json'), 'Claude hooks beside Cursor install');
+    assertProof(hooksText !== claudeHooks, 'Cursor and Claude installed hook bindings unexpectedly resolved to the same document.');
+    assertProof(!hooksText.includes('.claude.mjs'), 'Cursor auto-discovered a Claude-only hook wrapper.');
     const mcpText = await readText(join(destination, '.cursor-plugin', 'mcp.json'), 'Cursor MCP document');
     const mcpDocument = parseJson<unknown>(mcpText, 'Cursor MCP document');
     assertProof(cursorMcpValidator(mcpDocument), `Cursor MCP document failed its pinned schema: ${JSON.stringify(cursorMcpValidator.errors)}`);

@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Stream } from 'effect';
+import { Cause, Effect, Stream } from 'effect';
 import { describe, expect, it } from '@rstest/core';
 
 import { AgentContractError } from '../src/agent-document.js';
@@ -12,8 +12,6 @@ import {
   isTypedRuntimeError,
   mapCause,
   runPromise,
-  runPromiseExit,
-  runSync,
   streamToReadableStream,
   toRuntimeError,
 } from '../src/effect/boundary.js';
@@ -22,13 +20,11 @@ import * as runtime from '../src/index.js';
 describe('effect boundary', () => {
   it('is not part of the public runtime export', () => {
     expect('runPromise' in runtime).toBe(false);
-    expect('runSync' in runtime).toBe(false);
     expect('interruptWhenAborted' in runtime).toBe(false);
   });
 
   it('resolves a successful effect', async () => {
     await expect(runPromise(Effect.succeed(41))).resolves.toBe(41);
-    expect(runSync(Effect.succeed('ok'))).toBe('ok');
   });
 
   it('rethrows AgentRequestError and AgentContractError from the fail channel', async () => {
@@ -72,15 +68,6 @@ describe('effect boundary', () => {
     await Promise.resolve();
     controller.abort();
     await expect(pending).rejects.toSatisfy(isAbortError);
-  });
-
-  it('preserves Exit on runPromiseExit', async () => {
-    const success = await runPromiseExit(Effect.succeed(7));
-    expect(Exit.isSuccess(success)).toBe(true);
-    if (Exit.isSuccess(success)) expect(success.value).toBe(7);
-
-    const failure = await runPromiseExit(Effect.fail('nope'));
-    expect(Exit.isFailure(failure)).toBe(true);
   });
 
   it('wraps non-Error fail values', () => {
