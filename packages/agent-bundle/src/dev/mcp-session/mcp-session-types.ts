@@ -114,6 +114,8 @@ export interface RemoteTransportOptions {
 }
 
 export interface OpenMcpSessionOptions extends McpSessionBinding {
+  /** Lazy join key for MCP trace frames; resolved per frame. */
+  readonly sessionId?: () => string;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly workspaceRoot?: string;

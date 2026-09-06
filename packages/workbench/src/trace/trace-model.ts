@@ -95,6 +95,7 @@ const joinToken = (correlation: TraceCorrelation, key: TraceJoinKey): string | u
 
 const headlinePriority: Readonly<Record<TraceSource, number>> = Object.freeze({
   hook: 0,
+  session: 0,
   invocation: 1,
   mcp: 2,
   kernel: 3,
@@ -106,6 +107,7 @@ const isInvocationLevel = (entry: TraceEntry): boolean => {
   switch (entry.source) {
     case 'hook':
     case 'invocation':
+    case 'session':
       return true;
     case 'kernel':
     case 'mcp':
@@ -258,6 +260,8 @@ export const traceSourceGlyph = (source: TraceSource): string => {
       return '⇄';
     case 'hook':
       return '⚑';
+    case 'session':
+      return '▣';
     case 'log':
       return '≡';
     case 'diagnostic':

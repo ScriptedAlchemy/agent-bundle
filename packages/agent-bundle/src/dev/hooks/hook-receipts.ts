@@ -1,3 +1,4 @@
+import { isHostSessionId } from '../../contracts/host-sessions.ts';
 import type { RequestLineageProvenance, RequestProvenanceAxis } from '../../contracts/request-provenance.ts';
 import { hasOnlyOwnKeys, isRecord, type JsonObject, type JsonValue } from '../../core/strict-json.ts';
 import {
@@ -19,6 +20,7 @@ import type { TraceCorrelation, TraceEntryInput } from '../trace/trace-entry.ts'
 export const HOOK_RECEIPT_UNAUTHORIZED_CODE = 'AB8247';
 export const HOOK_RECEIPT_MALFORMED_CODE = 'AB8248';
 export const HOOK_RECEIPT_TOO_LARGE_CODE = 'AB8249';
+export const HOOK_RECEIPT_SESSION_CODE = 'AB8266';
 
 const hookReceiptMaxEvents = 32;
 const MAX_ID_LENGTH = 256;
@@ -28,6 +30,15 @@ export class HookReceiptDecodeError extends TypeError {
   constructor(readonly path: string) {
     super(`Hook receipt field ${path} is not valid.`);
     this.name = 'HookReceiptDecodeError';
+  }
+}
+
+export class HookReceiptSessionError extends TypeError {
+  readonly code = HOOK_RECEIPT_SESSION_CODE;
+
+  constructor(readonly path = 'devSession') {
+    super('AGENT_BUNDLE_DEV_SESSION must be a host-session id (hs_ + 16 lowercase characters).');
+    this.name = 'HookReceiptSessionError';
   }
 }
 
@@ -121,6 +132,12 @@ const decodeLineage = (value: unknown): RequestProvenanceAxis<RequestLineageProv
       ...(input.subagent === undefined ? {} : { subagent: decodeSubagent(input.subagent, 'lineage.value.subagent') }),
     }),
   });
+};
+
+const decodeDevSession = (value: unknown): string | undefined => {
+  if (value === undefined) return undefined;
+  if (!isHostSessionId(value)) throw new HookReceiptSessionError();
+  return value;
 };
 
 const decodeIdentity = (value: unknown): EventTraceReceiptIdentity => {
@@ -224,7 +241,7 @@ const decodeEvent = (value: unknown, index: number): EventTraceReceiptEvent => {
  */
 export const decodeHookReceipt = (value: unknown): EventTraceReceipt => {
   const input = record(value, 'receipt');
-  onlyKeys(input, ['events', 'execution', 'identity', 'lineage', 'startedAt', 'version'], 'receipt');
+  onlyKeys(input, ['devSession', 'events', 'execution', 'identity', 'lineage', 'startedAt', 'version'], 'receipt');
   if (input.version !== EVENT_TRACE_RECEIPT_VERSION) fail('version');
   const execution = record(input.execution, 'execution');
   onlyKeys(execution, ['event', 'executionId', 'host', 'nativeEvent'], 'execution');
@@ -234,7 +251,9 @@ export const decodeHookReceipt = (value: unknown): EventTraceReceipt => {
   for (let index = 1; index < events.length; index += 1) {
     if (events[index]!.sequence <= events[index - 1]!.sequence) fail(`events[${index}].sequence`);
   }
+  const devSession = decodeDevSession(input.devSession);
   return Object.freeze({
+    ...(devSession === undefined ? {} : { devSession }),
     events: Object.freeze(events),
     execution: Object.freeze({
       event: oneOf(execution.event, canonicalAgentEvents, 'execution.event'),
