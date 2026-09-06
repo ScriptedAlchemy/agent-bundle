@@ -461,7 +461,7 @@ const installPublicCli = async (
   const environment = options.environment ?? process.env;
   const home = options.home ?? homedir();
   const id = `${identity.plugin}@${marketplace}`;
-  const artifact = await bundleInventory(identity);
+  const artifact = await bundleInventory(identity, { restoreModes: true });
   const inventory = await readPublicHostInventory(runner, identity, host, scope, environment, home);
   if (inventory.status === 'unavailable' && options.replace === true) {
     throw failure(
@@ -749,7 +749,7 @@ const installCursorMarketplace = async (
 ): Promise<InstallResult> => {
   const cursorRoot = await resolveCursorRoot(options);
   try {
-    const artifact = await bundleInventory(identity);
+    const artifact = await bundleInventory(identity, { restoreModes: true });
     const staged = await stageCursorMarketplace({
       artifact,
       cursorRoot,
@@ -911,7 +911,7 @@ const installCursor = Effect.fnUntraced(function*(
     version: identity.version,
   } as const;
   const program = Effect.gen(function*() {
-    const artifact = yield* liftPromise(() => bundleInventory(identity));
+    const artifact = yield* liftPromise(() => bundleInventory(identity, { restoreModes: true }));
     // The receipt records which host directories this installer created on the way to the plugin root
     // (a fresh Cursor home has no `plugins/local`), so uninstall can prune exactly those and no more.
     const hostDirectories: string[] = [];

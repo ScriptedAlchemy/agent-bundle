@@ -236,6 +236,27 @@ it('reports source-relative or unpacked package bins as AB7012', () => withPacka
   },
 ));
 
+it('reports bins missing from the package npm will publish as AB7012', async () => {
+  const packagePath = join(projectRoot, 'package.json');
+  const original = await readFile(packagePath, 'utf8');
+  const document = JSON.parse(original) as Record<string, unknown>;
+  document.bin = {
+    'installer-fixture': './dist/bin/installer-fixture.js',
+    'installer-fixture-install': './dist/bin/installer-fixture-install.js',
+  };
+  await writeFile(packagePath, `${JSON.stringify(document, null, 2)}\n`);
+  try {
+    await expect(prepack({ root: projectRoot })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7012',
+        message: expect.stringContaining('"installer-fixture-install" -> "./dist/bin/installer-fixture-install.js"'),
+      })],
+    });
+  } finally {
+    await writeFile(packagePath, original);
+  }
+});
+
 it('reports package, model, host, and provenance version disagreement as AB7013', () => withPackageDocument(
   (document) => { document.version = '9.0.0'; },
   async () => {
@@ -681,7 +702,6 @@ const createSiblingProject = async (
 
 it('accepts a dependency a prebuilt payload declares in runtimeDependencies: prepack passes, the payload stays opaque', async () => {
   const root = await createSiblingProject('prebuilt-project', {
-    bin: { 'prebuilt-fixture': './dist/bin/prebuilt-fixture.js' },
     dependencies: { 'body-parser': '^2.0.0', cors: '^2.8.5', express: '^5.0.0' },
     files: ['dist', 'host-packs', 'README.md'],
     name: 'prebuilt-fixture',
