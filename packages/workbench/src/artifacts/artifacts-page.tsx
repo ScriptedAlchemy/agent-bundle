@@ -64,18 +64,29 @@ export const compareArtifactEpochs = async (
   return client.diff(base, epochId);
 };
 
-const provenanceFor = (view: ArtifactView, path: string): readonly string[] =>
-  view.provenance.find((entry) => entry.outputPath === path)?.sourceInputs.map((input) => input.path) ?? [];
+/**
+ * An empty record is the manifest's own statement (a reindexed copy carries
+ * rows with no source inputs), so it reads as such rather than as an absent
+ * value.
+ */
+const provenanceLabel = (sourceInputs: readonly string[] | undefined): string => {
+  if (sourceInputs === undefined) return '—';
+  return sourceInputs.length === 0 ? 'No source inputs recorded' : sourceInputs.join(', ');
+};
+
+export const ArtifactFileDetails = ({ row }: { readonly row: ArtifactTreeRow }) => <dl className="artifact-detail-rows">
+  <div><dt>SHA-256</dt><dd className="artifact-digest">{row.sha256 ?? '—'}</dd></div>
+  <div><dt>Mode</dt><dd>{row.mode ?? '—'}</dd></div>
+  <div><dt>Provenance</dt><dd>{provenanceLabel(row.sourceInputs)}</dd></div>
+</dl>;
 
 const TreeRow = ({
   detailsOpen,
   onToggle,
-  provenance,
   row,
 }: {
   readonly detailsOpen: boolean;
   readonly onToggle: () => void;
-  readonly provenance: readonly string[];
   readonly row: ArtifactTreeRow;
 }) => {
   if (row.entry === 'directory') {
@@ -108,14 +119,7 @@ const TreeRow = ({
     {detailsOpen
       ? <tr className="artifact-file-details">
           <td colSpan={4} style={{ paddingLeft: `${30 + row.depth * 18}px` }}>
-            <dl className="artifact-detail-rows">
-              <div><dt>SHA-256</dt><dd className="artifact-digest">{row.sha256 ?? '—'}</dd></div>
-              <div><dt>Mode</dt><dd>{row.mode ?? '—'}</dd></div>
-              <div>
-                <dt>Provenance</dt>
-                <dd>{provenance.length === 0 ? '—' : provenance.join(', ')}</dd>
-              </div>
-            </dl>
+            <ArtifactFileDetails row={row} />
           </td>
         </tr>
       : undefined}
@@ -144,7 +148,6 @@ const ArtifactTree = ({ view }: { readonly view: ArtifactView }) => {
           detailsOpen={openPaths.has(row.path)}
           key={row.key}
           onToggle={() => toggle(row.path)}
-          provenance={provenanceFor(view, row.path)}
           row={row}
         />)}</tbody>
       </table>}

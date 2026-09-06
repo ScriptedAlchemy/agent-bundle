@@ -223,7 +223,9 @@ Problems 收集当前诊断。失败的构建不会发布新的 epoch，因此�
 
 - **Evals** 具有 **Runs** 与 **Compare** 视图，用于受理、取消、检视与对比 eval 运行。
 - **Artifact** 默认是一棵简单的输出文件树。选中一个文件并启用其详情，即可看到哈希、模式与
-  provenance。
+  provenance。Provenance 就是该文件在 `agent-bundle.manifest.json` 中自己的
+  `compiler.provenance` 行：它所派生自的项目源输入。编译器为每个输出文件至少记录一个源输入；
+  没有任何源输入的行显示为 **No source inputs recorded**。不会从路径或文件内容推断任何内容。
 - **Protocol** 是底层的 MCP 会话检查器。它保留协议轨迹、任务控件、同意、重启/取消操作，以及独立的
   [MCP Inspector](https://github.com/modelcontextprotocol/inspector) 启动器。
 - **Host diagnostics** 仅限于已安装状态、版本、路径、当前插件是否已附加、可操作的错误，以及一个

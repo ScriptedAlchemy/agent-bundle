@@ -176,7 +176,7 @@ export class ArtifactInspectionService {
     );
 
     const files = Object.freeze(manifest.files
-      .map((file) => this.#file(file, sourceInputs, provenanceByPath.get(file.path) ?? []))
+      .map((file) => this.#file(file, sourceInputs, provenanceByPath.get(file.path)))
       .sort(comparePaths));
     const filesByPath = new Map(files.map((file) => [file.path, file]));
     const project = this.#project(manifest.compiler.project, sourceInputs);
@@ -224,8 +224,15 @@ export class ArtifactInspectionService {
   #file(
     file: ArtifactManifest['files'][number],
     sourceInputs: ReadonlyMap<string, ArtifactInspectionSourceInput>,
-    provenanceInputs: readonly string[],
+    provenanceInputs: readonly string[] | undefined,
   ): ArtifactInspectionFile {
+    if (provenanceInputs === undefined) {
+      throw inspectionError(
+        'ARTIFACT_INSPECTION_INVALID',
+        'Artifact inspection requires a manifest provenance record for every output file.',
+        inspectionDiagnostic('AB6200', 'Artifact file has no manifest provenance record.', file.path),
+      );
+    }
     const inputs = provenanceInputs.map((path) => sourceInputs.get(path));
     if (inputs.some((input) => input === undefined)) {
       throw inspectionError(
