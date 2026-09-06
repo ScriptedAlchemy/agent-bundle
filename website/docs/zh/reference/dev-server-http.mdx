@@ -27,9 +27,8 @@ Document、结果、投影、诊断与计时。Trace 条目链接到这份完整
 ## 开发运行时运行
 
 `POST /api/runtime/runs` 接受一份 `DevRuntimeInvocationRequest`，其中包含 `surfaceId`、`target`、
-`input`，以及可选的 `fixtureId`、`expectedGenerationId` 与 `correlationId`。前台会把
-`correlationId` 传给运行时 provider，并复制到此次运行的 Trace 条目；运行时事件也可以直接携带它。
-`GET /api/runtime/runs` 列出最近的运行，`GET /api/runtime/runs/<id>` 读取一次运行。
+`input`，以及可选的 `fixtureId` 与 `expectedGenerationId`。`GET /api/runtime/runs` 列出最近的运行，
+`GET /api/runtime/runs/<id>` 读取一次运行。
 
 ## MCP 操作与关联
 

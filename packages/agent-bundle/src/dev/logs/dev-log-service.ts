@@ -142,11 +142,9 @@ const loweredProjectEventMirrors: ReadonlySet<string> = new Set([
   'diagnostic:dev.contract.status.diagnostic',
   'diagnostic:dev.host.sync.diagnostic',
   'diagnostic:route.invocation.diagnostic',
-  'diagnostic:runtime.event.diagnostic',
   'project:dev.contract.status',
   'project:dev.host.sync',
   'project:route.invocation',
-  'project:runtime.event',
 ]);
 
 // Records and gap messages are deep-frozen, so their encoded size never goes

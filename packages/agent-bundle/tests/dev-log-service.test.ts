@@ -161,7 +161,6 @@ it('does not republish project event mirrors already lowered by dedicated trace 
     { context: { epochId: 'epoch-1' }, kind: 'dev.contract.status', level: 'error', producer: 'project', summary: 'Contract failed.' },
     { context: { epochId: 'epoch-1' }, kind: 'dev.host.sync', level: 'error', producer: 'project', summary: 'Host sync failed.' },
     { context: { invocationId: 'inv-1' }, kind: 'route.invocation', level: 'error', producer: 'project', summary: 'Invocation failed.' },
-    { context: { runId: 'run-1' }, kind: 'runtime.event', level: 'warning', producer: 'project', summary: 'Runtime failed.' },
     { context: { diagnosticCode: 'BUILD_FAILED' }, kind: 'build.failed.diagnostic', level: 'error', producer: 'diagnostic', summary: 'Build diagnostic.' },
     { context: { diagnosticCode: 'CONTRACT_FAILED' }, kind: 'dev.contract.status.diagnostic', level: 'error', producer: 'diagnostic', summary: 'Contract diagnostic.' },
     { context: { diagnosticCode: 'HOST_SYNC_FAILED' }, kind: 'dev.host.sync.diagnostic', level: 'error', producer: 'diagnostic', summary: 'Host diagnostic.' },

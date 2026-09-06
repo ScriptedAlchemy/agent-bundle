@@ -31,10 +31,8 @@ already-final invocation returns `AB8256` (409).
 ## Development runtime runs
 
 `POST /api/runtime/runs` accepts a `DevRuntimeInvocationRequest` with `surfaceId`, `target`,
-`input`, and optional `fixtureId`, `expectedGenerationId`, and `correlationId`. The foreground
-passes `correlationId` to the runtime provider and copies it onto the run's trace entries; runtime
-events can also carry it directly. `GET /api/runtime/runs` lists recent runs and
-`GET /api/runtime/runs/<id>` reads one run.
+`input`, and optional `fixtureId` and `expectedGenerationId`. `GET /api/runtime/runs` lists recent
+runs and `GET /api/runtime/runs/<id>` reads one run.
 
 ## MCP operations and correlation
 
