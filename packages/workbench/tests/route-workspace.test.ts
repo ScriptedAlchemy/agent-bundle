@@ -507,6 +507,28 @@ describe('RouteInspector', () => {
     expect(markup).not.toContain('Succeeded · execution recorded');
   });
 
+  it('reports a failed unit-render validation without inventing a parsed result', () => {
+    const {
+      outcome: _outcome,
+      result: _result,
+      ...failedBase
+    } = invocation;
+    const markup = renderSchemaInspector(schemaLeaf('unprojectable'), {
+      ...failedBase,
+      diagnostics: [{
+        code: 'AB8236',
+        message: "The route's own resultSchema rejected the rendered document value.",
+        severity: 'error',
+      }],
+      status: 'failed',
+      surface: { kind: 'unit-render' },
+    });
+
+    expect(markup).toContain('Not recorded · the invocation did not complete with a parsed result.');
+    expect(markup).toContain('Unavailable · this invocation recorded no structured result.');
+    expect(markup).not.toContain('Succeeded · execution recorded');
+  });
+
   it('keeps validation neutral when a successful production invocation carries a structured result', () => {
     const markup = renderSchemaInspector(schemaLeaf('unprojectable'), invocation);
 
