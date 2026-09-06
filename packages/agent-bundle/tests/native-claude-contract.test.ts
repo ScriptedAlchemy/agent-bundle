@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from '@rstest/core';
 
-const loadNativeClaudeContract = async () => import('../src/host-contracts/native-claude-contract.ts').catch(() => undefined);
+const loadNativeClaudeContract = async () => import('./support/native-claude-smoke.ts').catch(() => undefined);
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE === '1' ? it : it.skip;
 const candidatePluginName = 'agent-bundle-native-smoke';
 const candidateSkillName = 'agent-bundle-native-smoke';
