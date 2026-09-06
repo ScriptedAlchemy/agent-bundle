@@ -140,7 +140,7 @@ interface PreparedInput {
 
 const prepareInput = async (
   request: ProductionRequest,
-  traceEvents: EventTraceEvent[],
+  observeTrace: EventTraceObserver,
   signal: AbortSignal,
 ): Promise<PreparedInput> => {
   const route = request.manifest.routes[request.routeId];
@@ -168,7 +168,7 @@ const prepareInput = async (
   const wrapper = await importedModule<CompiledEventWrapperModule>(wrapperPath);
   if (typeof wrapper.prepareRouteInvocation !== 'function') return { input: request.input };
   const native = (request.input as { readonly native?: JsonObject }).native ?? {};
-  const preflight = await wrapper.prepareRouteInvocation(native, signal, (event) => traceEvents.push(event));
+  const preflight = await wrapper.prepareRouteInvocation(native, signal, observeTrace);
   return {
     input: {
       canonical: preflight.props.canonical,
@@ -442,6 +442,7 @@ const renderCompiled = async (
   signal: AbortSignal,
   env: NodeJS.ProcessEnv,
   trace?: EventTracer,
+  publishRender?: (event: AgentRenderEvent) => void,
 ): Promise<Readonly<{
   readonly document: AgentDocument;
   readonly durationMs: number;
@@ -463,6 +464,7 @@ const renderCompiled = async (
         const next = await reader.read();
         if (next.done) break;
         events.push(next.value);
+        publishRender?.(next.value);
       }
       const complete = events.findLast((event) => event.type === 'complete');
       if (complete === undefined) throw new Error('Compiled route render ended without a complete event.');
@@ -489,6 +491,8 @@ const renderCompiled = async (
 
 export const renderProductionRoute = async (
   request: RouteInvocationChildRequest,
+  publishTrace?: EventTraceObserver,
+  publishRender?: (event: AgentRenderEvent) => void,
 ): Promise<RouteInvocationChildResult> => {
   if (request.artifactEpoch === undefined || request.artifactRoot === undefined) {
     throw new ProductionRouteInvocationError(
@@ -504,10 +508,14 @@ export const renderProductionRoute = async (
   };
   applyOperatorEnv({ env, pluginRoot: productionRequest.artifactRoot });
   const traceEvents: EventTraceEvent[] = [];
+  const observeTrace: EventTraceObserver = (event) => {
+    traceEvents.push(event);
+    publishTrace?.(event);
+  };
   const controller = new AbortController();
   let prepared: PreparedInput;
   try {
-    prepared = await prepareInput(productionRequest, traceEvents, controller.signal);
+    prepared = await prepareInput(productionRequest, observeTrace, controller.signal);
   } catch (error) {
     throw preparationFailure(error);
   }
@@ -535,6 +543,7 @@ export const renderProductionRoute = async (
       controller.signal,
       env,
       prepared.preflight?.trace,
+      publishRender,
     );
     const result = rendered.document.value;
     const kind = request.manifest.routes[request.routeId]?.kind;

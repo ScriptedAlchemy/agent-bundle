@@ -14,7 +14,7 @@ import {
   responseJson,
   type RequestDiagnostic,
 } from '../http.ts';
-import { McpSessionStaleEpochError } from './mcp-session-service.ts';
+import { McpSessionStaleEpochError, mcpCorrelationMetaKey } from './mcp-session-service.ts';
 import type {
   McpSessionBinding,
   McpSessionConnectionState,
@@ -23,6 +23,7 @@ import type {
   McpSessionTraceReplay,
   McpSessionTraceSubscription,
 } from './mcp-session-service.ts';
+import type { McpRequestMeta } from './mcp-session-types.ts';
 import { createBackpressuredWriter, encodedNdjsonFrame, writeKeepAliveStreamHead } from '../route-streams.ts';
 
 interface CreateRoute {
@@ -38,17 +39,22 @@ type Route = CreateRoute | SessionRoute;
 
 type JsonObject = Record<string, unknown>;
 
+export interface McpSessionRouteToolCall {
+  /** Only the route stamps this: the Workbench `correlationId` under `agent-bundle/correlationId`. */
+  readonly _meta?: McpRequestMeta;
+  readonly arguments: Readonly<Record<string, unknown>>;
+  readonly name: string;
+  readonly requestId?: string;
+}
+
 export interface McpSessionRouteSession {
   readonly binding: McpSessionBinding;
   readonly connection: McpSessionConnectionState;
   readonly id: string;
   readonly timeoutMs: number;
-  callTool(options: { readonly arguments: Readonly<Record<string, unknown>>; readonly name: string; readonly requestId?: string }): Promise<unknown>;
+  callTool(options: McpSessionRouteToolCall): Promise<unknown>;
   /** A task-augmented `tools/call` (#369): answered by a `CreateTaskResult` handle. */
-  callToolTask(options: {
-    readonly arguments: Readonly<Record<string, unknown>>;
-    readonly name: string;
-    readonly requestId?: string;
+  callToolTask(options: McpSessionRouteToolCall & {
     readonly task: Readonly<{ readonly pollInterval?: number; readonly ttl?: number }>;
   }): Promise<unknown>;
   cancel(requestId: string): boolean;
@@ -112,6 +118,9 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return Object.freeze({ id, kind });
 };
 
+/** The same bound `RouteInvocationRequest.correlationId` carries. */
+const maxCorrelationIdLength = 256;
+
 const stringRecord = (value: unknown): value is Record<string, string> =>
   isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string');
 
@@ -142,6 +151,8 @@ type Operation =
   | Readonly<{ readonly operation: 'resources/read'; readonly uri: string }>
   | Readonly<{
     readonly arguments: Readonly<Record<string, unknown>>;
+    /** The route workspace's run id (`RouteInvocationRequest.correlationId`), stamped into `params._meta` for the trace. */
+    readonly correlationId?: string;
     readonly name: string;
     readonly operation: 'tools/call';
     readonly requestId?: string;
@@ -191,14 +202,19 @@ const operationRequest = (value: JsonObject): Operation => {
     return Object.freeze({ operation, uri });
   }
   if (operation === 'tools/call') {
-    if (!hasOnly(value, ['arguments', 'name', 'operation', 'requestId', 'task'])) return invalidShape();
+    if (!hasOnly(value, ['arguments', 'correlationId', 'name', 'operation', 'requestId', 'task'])) return invalidShape();
     const argumentsValue = value.arguments;
+    const correlationId = value.correlationId;
     const name = value.name;
     const requestId = value.requestId;
     if (!nonemptyString(name) || !isRecord(argumentsValue)) return invalidShape();
     if (requestId !== undefined && !nonemptyString(requestId)) return invalidShape();
+    if (correlationId !== undefined && (!nonemptyString(correlationId) || correlationId.length > maxCorrelationIdLength)) {
+      return invalidShape();
+    }
     return Object.freeze({
       arguments: argumentsValue,
+      ...(correlationId === undefined ? {} : { correlationId }),
       name,
       operation,
       ...(requestId === undefined ? {} : { requestId }),
@@ -398,7 +414,8 @@ export class McpSessionRoutes {
     }
     if (operation.operation === 'resources/read') return session.readResource({ uri: operation.uri });
     if (operation.operation === 'tools/call') {
-      const call = {
+      const call: McpSessionRouteToolCall = {
+        ...(operation.correlationId === undefined ? {} : { _meta: { [mcpCorrelationMetaKey]: operation.correlationId } }),
         arguments: operation.arguments,
         name: operation.name,
         ...(operation.requestId === undefined ? {} : { requestId: operation.requestId }),

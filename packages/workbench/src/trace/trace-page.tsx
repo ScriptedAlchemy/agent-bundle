@@ -1,227 +1,243 @@
-/** Route invocations from the current dev session, newest first. */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
-import type { RouteInvocation, RouteInvocationSummary } from '../../../agent-bundle/src/contracts/invocations.ts';
-import { applicationLeaves, type ApplicationTree } from '../application/application-tree-model.ts';
-import type { InvocationBackend } from '../application/invocation-backend.ts';
-import { errorMessage, isAbortError } from '../client-helpers.ts';
-import { applicationNodeRefForRouteId, formatWorkbenchLocation, type WorkbenchLocation } from '../shell/workbench-location.ts';
+import { type TraceEntry, type TraceStatus } from '../../../agent-bundle/src/contracts/trace.ts';
+import { ShellLink } from '../shell/shell-link.tsx';
+import { parseWorkbenchLocation, type WorkbenchLocation } from '../shell/workbench-location.ts';
+import { openTraceFeed, type TraceClient, type TraceFeedState } from './trace-client.ts';
+import {
+  formatTraceDuration,
+  formatTraceTime,
+  groupTraceEntries,
+  selectTraceEntry,
+  selectTraceGroup,
+  traceKindLabel,
+  traceSourceGlyph,
+  type TraceGroup,
+  type TraceGroupKeyKind,
+} from './trace-model.ts';
+import './trace-page.css';
 
 export interface TracePageProps {
-  readonly backends: readonly InvocationBackend[];
-  /** `/trace/<id>`: show this one entry instead of the table. */
-  readonly invocationId?: string;
+  readonly client: TraceClient;
+  readonly correlation?: string;
+  readonly entries?: readonly TraceEntry[];
+  readonly entryId?: string;
   readonly onNavigate: (location: WorkbenchLocation) => void;
-  readonly tree: ApplicationTree;
+  /** Row timestamps' zone; the browser's when absent. Tests pass `UTC`. */
+  readonly timeZone?: string;
 }
 
-const completedAtMillis = (summary: RouteInvocationSummary): number => {
-  const completed = Date.parse(summary.completedAt);
-  return Number.isNaN(completed) ? Date.parse(summary.startedAt) : completed;
+const groupKeyLabel = (kind: TraceGroupKeyKind): string => {
+  switch (kind) {
+    case 'conversationId':
+      return 'conversation';
+    case 'sessionId':
+    case 'mcpSessionId':
+      return 'session';
+    case 'invocationId':
+      return 'invocation';
+    case 'executionId':
+      return 'execution';
+    case 'mcpRequestId':
+      return 'MCP request';
+    case 'correlationId':
+      return 'correlation';
+    case 'entry':
+      return 'entry';
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
 };
 
-/** Newest first; ties keep the id order stable. */
-export const sortTraceEntries = (entries: readonly RouteInvocationSummary[]): readonly RouteInvocationSummary[] =>
-  Object.freeze([...entries].sort((left, right) => completedAtMillis(right) - completedAtMillis(left) || left.id.localeCompare(right.id)));
-
-/** Merges by id (a later summary for the same id wins) and re-sorts. */
-export const mergeTraceEntries = (
-  existing: readonly RouteInvocationSummary[],
-  incoming: readonly RouteInvocationSummary[],
-): readonly RouteInvocationSummary[] => {
-  const byId = new Map(existing.map((entry) => [entry.id, entry]));
-  for (const entry of incoming) byId.set(entry.id, entry);
-  return sortTraceEntries([...byId.values()]);
+const groupKeyValue = (group: TraceGroup): string => {
+  const separator = group.key.indexOf(':');
+  return separator === -1 ? group.key : group.key.slice(separator + 1);
 };
 
-/** Wall-clock duration of an invocation, falling back to its recorded phase timings. */
-export const traceDurationMs = (summary: RouteInvocationSummary): number => {
-  const started = Date.parse(summary.startedAt);
-  const completed = Date.parse(summary.completedAt);
-  if (!Number.isNaN(started) && !Number.isNaN(completed) && completed >= started) return completed - started;
-  return summary.timings.reduce((total, timing) => total + timing.durationMs, 0);
+const splitHref = (href: string): readonly [string, string] => {
+  const index = href.indexOf('?');
+  return index === -1 ? [href, ''] : [href.slice(0, index), href.slice(index)];
 };
 
-/** The workspace deep link for an entry, or undefined when its route id is not an application node. */
-export const traceEntryLocation = (summary: RouteInvocationSummary): WorkbenchLocation | undefined => {
-  const node = applicationNodeRefForRouteId(summary.routeId);
-  return node === undefined ? undefined : Object.freeze({ area: 'application', invocationId: summary.id, node });
-};
+const initialFeedState = (entries: readonly TraceEntry[] | undefined): TraceFeedState =>
+  Object.freeze({ connected: false, entries: entries ?? [], loaded: entries !== undefined });
 
-const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-const formatTime = (value: string): string => {
-  const millis = Date.parse(value);
-  return Number.isNaN(millis) ? value : timeFormat.format(new Date(millis));
-};
-
-const formatDuration = (millis: number): string => millis < 1000 ? `${String(Math.round(millis))} ms` : `${(millis / 1000).toFixed(2)} s`;
-
-interface TraceState {
-  readonly entries: readonly RouteInvocationSummary[];
-  readonly error?: string;
-  readonly loading: boolean;
-}
-
-export interface TraceHistory {
-  readonly entries: readonly RouteInvocationSummary[];
-  /** The first non-abort failure among the per-leaf history reads, when any. */
-  readonly error?: string;
-}
-
-/**
- * Every invocable leaf's history from the backends that accept it, merged by
- * id so a leaf with history on both backends lists each invocation once. One
- * failed read degrades to a message rather than hiding the rest.
- */
-export const loadTraceHistory = async (
-  backends: readonly InvocationBackend[],
-  tree: ApplicationTree,
-  signal?: AbortSignal,
-): Promise<TraceHistory> => {
-  const leaves = applicationLeaves(tree).filter((leaf) => leaf.execution === 'invoke');
-  const loads = leaves.flatMap((leaf) => backends.filter((backend) => backend.accepts(leaf)).map((backend) => backend.history(leaf, signal)));
-  const results = await Promise.allSettled(loads);
-  const entries = mergeTraceEntries([], results.flatMap((result) => result.status === 'fulfilled' ? [...result.value] : []));
-  const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected' && !isAbortError(result.reason));
-  return Object.freeze({
-    entries,
-    ...(failure === undefined ? {} : { error: errorMessage(failure.reason, 'Some invocation history could not be read.') }),
-  });
-};
-
-/** Loads history once per backend set and tree, then folds live completions in. */
-const useTraceEntries = (backends: readonly InvocationBackend[], tree: ApplicationTree): TraceState => {
-  const [state, setState] = useState<TraceState>({ entries: [], loading: true });
+const useTraceFeed = (client: TraceClient, supplied: readonly TraceEntry[] | undefined): TraceFeedState => {
+  const [state, setState] = useState<TraceFeedState>(() => initialFeedState(supplied));
   useEffect(() => {
-    const request = new AbortController();
-    setState({ entries: [], loading: true });
-    const unsubscribes = backends.map((backend) => backend.subscribe((summary) => {
-      if (request.signal.aborted) return;
-      setState((current) => ({ ...current, entries: mergeTraceEntries(current.entries, [summary]) }));
-    }));
-    void loadTraceHistory(backends, tree, request.signal).then((history) => {
-      if (request.signal.aborted) return;
-      setState((current) => ({
-        entries: mergeTraceEntries(current.entries, history.entries),
-        ...(history.error === undefined ? {} : { error: history.error }),
-        loading: false,
-      }));
-    });
-    return () => {
-      request.abort();
-      for (const unsubscribe of unsubscribes) unsubscribe();
-    };
-  }, [backends, tree]);
-  return state;
+    if (supplied !== undefined) return undefined;
+    setState(initialFeedState(undefined));
+    const feed = openTraceFeed({ client, onState: setState });
+    return () => feed.close();
+  }, [client, supplied]);
+  return supplied === undefined ? state : initialFeedState(supplied);
 };
 
-const EntryLink = ({ children, onNavigate, summary }: {
-  readonly children: string;
+const StatusPill = ({ status }: { readonly status: TraceStatus }) =>
+  <span className={`trace-status trace-status--${status}`}>{status}</span>;
+
+const GroupView = ({ correlation, group, onNavigate, selected, selectedEntryId, timeZone }: {
+  readonly correlation: string | undefined;
+  readonly group: TraceGroup;
   readonly onNavigate: (location: WorkbenchLocation) => void;
-  readonly summary: RouteInvocationSummary;
-}) => {
-  const location = traceEntryLocation(summary);
-  return location === undefined
-    ? <span className="identifier">{children}</span>
-    : <a className="trace-link identifier" href={formatWorkbenchLocation(location)} onClick={(event) => { event.preventDefault(); onNavigate(location); }}>{children}</a>;
-};
-
-const TraceTable = ({ entries, onNavigate }: { readonly entries: readonly RouteInvocationSummary[]; readonly onNavigate: (location: WorkbenchLocation) => void }) =>
-  <div className="table-wrap trace-table"><table>
-    <thead><tr><th>Time</th><th>Kind</th><th>Route</th><th>Status</th><th>Duration</th><th>Correlation</th></tr></thead>
-    <tbody>{entries.map((entry) => {
-      const traceLocation: WorkbenchLocation = Object.freeze({ area: 'trace', invocationId: entry.id });
-      return <tr data-invocation-id={entry.id} key={entry.id}>
-        <td><a className="trace-link" href={formatWorkbenchLocation(traceLocation)} onClick={(event) => { event.preventDefault(); onNavigate(traceLocation); }}>{formatTime(entry.completedAt)}</a></td>
-        <td>{entry.kind}</td>
-        <td><EntryLink onNavigate={onNavigate} summary={entry}>{entry.routeId}</EntryLink></td>
-        <td><span className={`trace-status trace-status--${entry.status}`}>{entry.status}</span></td>
-        <td>{formatDuration(traceDurationMs(entry))}</td>
-        <td className="identifier">{entry.correlationId ?? '—'}</td>
-      </tr>;
-    })}</tbody>
-  </table></div>;
-
-const useTraceEntry = (
-  backends: readonly InvocationBackend[],
-  entries: readonly RouteInvocationSummary[],
-  invocationId: string | undefined,
-): Readonly<{ entry?: RouteInvocationSummary; error?: string; loading: boolean }> => {
-  const known = entries.find((entry) => entry.id === invocationId);
-  const [loaded, setLoaded] = useState<Readonly<{ entry?: RouteInvocation; error?: string; id: string }>>();
-  useEffect(() => {
-    if (invocationId === undefined || known !== undefined) return undefined;
-    const request = new AbortController();
-    void (async () => {
-      let lastError: unknown = new Error('No backend knows this invocation.');
-      for (const backend of backends) {
-        try {
-          const entry = await backend.read(invocationId, request.signal);
-          if (!request.signal.aborted) setLoaded({ entry, id: invocationId });
-          return;
-        } catch (reason) {
-          if (isAbortError(reason)) return;
-          lastError = reason;
-        }
-      }
-      if (!request.signal.aborted) setLoaded({ error: errorMessage(lastError, 'The invocation could not be read.'), id: invocationId });
-    })();
-    return () => request.abort();
-  }, [backends, invocationId, known]);
-  if (invocationId === undefined) return { loading: false };
-  if (known !== undefined) return { entry: known, loading: false };
-  if (loaded?.id !== invocationId) return { loading: true };
-  return { ...(loaded.entry === undefined ? {} : { entry: loaded.entry }), ...(loaded.error === undefined ? {} : { error: loaded.error }), loading: false };
-};
-
-const TraceEntry = ({ entry, onNavigate }: { readonly entry: RouteInvocationSummary; readonly onNavigate: (location: WorkbenchLocation) => void }) =>
-  <section className="trace-entry" data-testid="trace-entry">
-    <dl>
-      <div><dt>Route</dt><dd><EntryLink onNavigate={onNavigate} summary={entry}>{entry.routeId}</EntryLink></dd></div>
-      <div><dt>Kind</dt><dd>{entry.kind}</dd></div>
-      <div><dt>Status</dt><dd><span className={`trace-status trace-status--${entry.status}`}>{entry.status}</span></dd></div>
-      <div><dt>Started</dt><dd>{formatTime(entry.startedAt)}</dd></div>
-      <div><dt>Duration</dt><dd>{formatDuration(traceDurationMs(entry))}</dd></div>
-      <div><dt>Correlation id</dt><dd className="identifier">{entry.correlationId ?? '—'}</dd></div>
-      <div><dt>Invocation id</dt><dd className="identifier">{entry.id}</dd></div>
-      <div><dt>Source</dt><dd className="identifier">{entry.source}</dd></div>
-      <div><dt>Manifest</dt><dd className="identifier">{entry.manifestDigest.slice(0, 12)}</dd></div>
-    </dl>
-    {entry.diagnostics.length === 0 ? undefined : <ul className="trace-diagnostics">
-      {entry.diagnostics.map((diagnostic, index) => <li key={`${diagnostic.code}-${String(index)}`}>
-        <span className={`severity severity--${diagnostic.severity}`}>{diagnostic.severity}</span> <span className="identifier">{diagnostic.code}</span> {diagnostic.message}
-      </li>)}
-    </ul>}
-    {entry.timings.length === 0 ? undefined : <div className="table-wrap"><table>
-      <thead><tr><th>Phase</th><th>Duration</th></tr></thead>
-      <tbody>{entry.timings.map((timing) => <tr key={`${timing.phase}-${timing.startedAt}`}><td>{timing.phase}</td><td>{formatDuration(timing.durationMs)}</td></tr>)}</tbody>
-    </table></div>}
+  readonly selected: boolean;
+  readonly selectedEntryId: string | undefined;
+  readonly timeZone: string | undefined;
+}) =>
+  <section
+    aria-label={group.headline.summary}
+    className={`trace-group trace-group--${group.status}`}
+    data-group-key={group.key}
+    data-selected={selected ? 'true' : undefined}
+    data-testid="trace-group"
+  >
+    <header className="trace-group-head">
+      <span className="trace-time">{formatTraceTime(group.startedAt, timeZone)}</span>
+      <span aria-hidden="true" className={`trace-glyph trace-glyph--${group.headline.source}`}>{traceSourceGlyph(group.headline.source)}</span>
+      <span className="trace-group-title">{group.headline.summary}</span>
+      <span className="trace-group-meta">
+        <span className="trace-group-key">{groupKeyLabel(group.keyKind)} <span className="identifier">{groupKeyValue(group)}</span></span>
+        <span className="trace-group-count">{String(group.rows.length)} {group.rows.length === 1 ? 'entry' : 'entries'}</span>
+        <StatusPill status={group.status} />
+      </span>
+      <span className="trace-duration">{formatTraceDuration(group.spanMs)}</span>
+    </header>
+    <ol className="trace-rows">
+      {group.rows.map(({ depth, entry }) => {
+        const status = entry.status ?? 'ok';
+        return <li className={`trace-row trace-row--depth-${String(depth)} trace-row--${status}`} key={entry.id}>
+          <ShellLink
+            aria-current={entry.id === selectedEntryId ? 'true' : undefined}
+            className="trace-line"
+            data-entry-id={entry.id}
+            data-kind={entry.kind}
+            data-source={entry.source}
+            data-status={status}
+            data-testid="trace-entry"
+            location={{ area: 'trace', ...(correlation === undefined ? {} : { correlation }), invocationId: entry.id }}
+            onNavigate={onNavigate}
+          >
+            <span className="trace-time">{formatTraceTime(entry.occurredAt, timeZone)}</span>
+            <span className={`trace-kind trace-kind--${entry.source}`}>
+              <span aria-hidden="true" className={`trace-glyph trace-glyph--${entry.source}`}>{traceSourceGlyph(entry.source)}</span>
+              {traceKindLabel(entry)}
+            </span>
+            <span className="trace-summary">{entry.summary}</span>
+            {status === 'error' ? <span className="trace-row-flag" role="img" aria-label="error">!</span> : undefined}
+            <span className="trace-duration">{entry.durationMs === undefined ? '' : formatTraceDuration(entry.durationMs)}</span>
+          </ShellLink>
+        </li>;
+      })}
+    </ol>
   </section>;
 
-export const TracePage = ({ backends, invocationId, onNavigate, tree }: TracePageProps) => {
-  const trace = useTraceEntries(backends, tree);
-  const selected = useTraceEntry(backends, trace.entries, invocationId);
-  const traceRoot: WorkbenchLocation = Object.freeze({ area: 'trace' });
-  return <main className="shell-page trace-page">
-    <div className="shell-page-heading">
+const DetailDrawer = ({ correlation, entry, onNavigate, timeZone }: {
+  readonly correlation: string | undefined;
+  readonly entry: TraceEntry;
+  readonly onNavigate: (location: WorkbenchLocation) => void;
+  readonly timeZone: string | undefined;
+}) => {
+  const status = entry.status ?? 'ok';
+  const keys = Object.entries(entry.correlation).filter((pair): pair is [string, string] => typeof pair[1] === 'string');
+  const [pathname, search] = entry.href === undefined ? ['', ''] : splitHref(entry.href);
+  return <aside aria-label="Trace entry" className="trace-detail" data-entry-id={entry.id} data-testid="trace-detail">
+    <header className="trace-detail-head">
       <div>
-        <h1>Trace</h1>
-        <p>{invocationId === undefined
-          ? `Route invocations from this dev session, newest first${trace.loading ? ' — loading history…' : ` (${String(trace.entries.length)})`}.`
-          : <>One invocation. <a className="trace-link" href={formatWorkbenchLocation(traceRoot)} onClick={(event) => { event.preventDefault(); onNavigate(traceRoot); }}>All invocations</a></>}
-        </p>
+        <p className="trace-detail-eyebrow"><span aria-hidden="true" className={`trace-glyph trace-glyph--${entry.source}`}>{traceSourceGlyph(entry.source)}</span> {entry.source} · <span className="identifier">{entry.kind}</span></p>
+        <h2>{entry.summary}</h2>
+      </div>
+      <ShellLink aria-label="Close entry" className="trace-detail-close" location={{ area: 'trace', ...(correlation === undefined ? {} : { correlation }) }} onNavigate={onNavigate}>×</ShellLink>
+    </header>
+    <div className="trace-detail-actions">
+      {entry.href === undefined
+        ? <span className="trace-detail-no-route">No route record behind this entry.</span>
+        : <a
+            className="trace-primary-action"
+            href={entry.href}
+            onClick={(event) => { event.preventDefault(); onNavigate(parseWorkbenchLocation(pathname, search)); }}
+          >Open route</a>}
+    </div>
+    <dl className="trace-detail-facts">
+      <div><dt>Time</dt><dd>{formatTraceTime(entry.occurredAt, timeZone)}</dd></div>
+      <div><dt>Status</dt><dd><StatusPill status={status} /></dd></div>
+      <div><dt>Duration</dt><dd>{entry.durationMs === undefined ? '—' : formatTraceDuration(entry.durationMs)}</dd></div>
+      <div><dt>Sequence</dt><dd className="identifier">{String(entry.sequence)}</dd></div>
+      <div><dt>Entry id</dt><dd className="identifier">{entry.id}</dd></div>
+    </dl>
+    <h3>Correlation</h3>
+    {keys.length === 0 ? <p className="empty-row">This entry carries no correlation key.</p> : <dl className="trace-detail-keys">
+      {keys.map(([key, value]) => <div key={key}>
+        <dt>{key}</dt>
+        <dd><ShellLink className="trace-link identifier" location={{ area: 'trace', correlation: value, invocationId: entry.id }} onNavigate={onNavigate} title={`Show entries correlated by ${key}`}>{value}</ShellLink></dd>
+      </div>)}
+    </dl>}
+    <h3>Details</h3>
+    {entry.details === undefined
+      ? <p className="empty-row">No details were published with this entry.</p>
+      : <pre className="trace-detail-json">{JSON.stringify(entry.details, null, 2)}</pre>}
+  </aside>;
+};
+
+const emptyMessage = (feed: TraceFeedState): string => {
+  if (!feed.loaded) return 'Connecting to the trace…';
+  return 'Nothing has been traced in this dev session yet. Run a route, call a tool in Advanced → Protocol, or invoke the plugin from a host, and it appears here.';
+};
+
+export const TracePage = ({ client, correlation, entries: suppliedEntries, entryId, onNavigate, timeZone }: TracePageProps) => {
+  const feed = useTraceFeed(client, suppliedEntries);
+  const groups = useMemo(() => groupTraceEntries(feed.entries), [feed.entries]);
+  const selectedEntry = entryId === undefined ? undefined : selectTraceEntry(feed.entries, entryId);
+  const correlatedGroup = correlation === undefined ? undefined : selectTraceGroup(groups, correlation);
+  const selectedGroup = correlatedGroup ?? (selectedEntry === undefined ? undefined : selectTraceGroup(groups, selectedEntry.id));
+  const scope = correlation === undefined ? groups : correlatedGroup === undefined ? [] : [correlatedGroup];
+
+  const heading = !feed.loaded
+    ? 'Connecting…'
+    : `${String(feed.entries.length)} ${feed.entries.length === 1 ? 'entry' : 'entries'} in ${String(groups.length)} ${groups.length === 1 ? 'group' : 'groups'}${feed.connected ? ' · live' : feed.error === undefined ? '' : ' · reconnecting'}`;
+
+  return <main className={`shell-page trace-page${selectedEntry === undefined ? '' : ' trace-page--detail'}`}>
+    <div className="trace-main">
+      <div className="shell-page-heading trace-heading">
+        <div>
+          <h1>Trace</h1>
+          <p>{heading}</p>
+        </div>
+        {correlation === undefined ? undefined : <p className="trace-scope" role="status">
+          Correlated by <span className="identifier">{correlation}</span> · <ShellLink className="trace-link" location={{ area: 'trace', ...(entryId === undefined ? {} : { invocationId: entryId }) }} onNavigate={onNavigate}>Show all</ShellLink>
+        </p>}
+      </div>
+      {feed.error === undefined ? undefined : <p className="request-error" role="alert">{feed.error}</p>}
+      {feed.gap === undefined ? undefined : <p className="trace-gap" role="status">{String(feed.gap.droppedCount)} earlier {feed.gap.droppedCount === 1 ? 'entry is' : 'entries are'} no longer retained.</p>}
+      <div className="trace-timeline-wrap">
+        <div className="trace-timeline" data-testid="trace-timeline">
+          {feed.entries.length === 0
+            ? <p className="empty-row trace-empty" data-testid="trace-empty">{emptyMessage(feed)}</p>
+            : scope.length === 0
+              ? <p className="empty-row">{`No entry carries ${correlation}.`}</p>
+              : scope.map((group) => <GroupView
+                  correlation={correlation}
+                  group={group}
+                  key={group.key}
+                  onNavigate={onNavigate}
+                  selected={group.key === selectedGroup?.key}
+                  selectedEntryId={selectedEntry?.id}
+                  timeZone={timeZone}
+                />)}
+        </div>
       </div>
     </div>
-    {trace.error === undefined ? undefined : <p className="request-error" role="alert">{trace.error}</p>}
-    {invocationId === undefined
-      ? trace.entries.length === 0
-        ? <p className="empty-row" data-testid="trace-empty">{trace.loading ? 'Loading invocation history…' : 'No route has been invoked in this dev session yet. Run one from the application tree and it appears here.'}</p>
-        : <TraceTable entries={trace.entries} onNavigate={onNavigate} />
-      : selected.entry !== undefined
-        ? <TraceEntry entry={selected.entry} onNavigate={onNavigate} />
-        : selected.loading
-          ? <p className="empty-row">Loading invocation {invocationId}…</p>
-          : <p className="request-error" role="alert">{selected.error ?? `Invocation ${invocationId} is not known to this dev session.`}</p>}
+    {selectedEntry !== undefined
+      ? <DetailDrawer correlation={correlation} entry={selectedEntry} onNavigate={onNavigate} timeZone={timeZone} />
+      : entryId === undefined
+        ? undefined
+        : <aside aria-label="Trace entry" className="trace-detail" data-testid="trace-detail">
+            <header className="trace-detail-head">
+              <div><p className="trace-detail-eyebrow">entry</p><h2>Not in this trace</h2></div>
+              <ShellLink aria-label="Close entry" className="trace-detail-close" location={{ area: 'trace', ...(correlation === undefined ? {} : { correlation }) }} onNavigate={onNavigate}>×</ShellLink>
+            </header>
+            <p className="empty-row">{feed.loaded ? `No retained entry is ${entryId}. It may have been published before this dev server started, or evicted from the retained window.` : 'Connecting to the trace…'}</p>
+          </aside>}
   </main>;
 };

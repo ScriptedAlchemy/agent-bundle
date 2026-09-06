@@ -16,6 +16,7 @@ import type { JsonObject } from '../../../agent-bundle/src/contracts/strict-json
 import { errorMessage } from '../client-helpers.ts';
 import type { Lifecycle, LifecycleClient, LifecycleTarget } from '../lifecycles/lifecycle-client.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
+import type { TraceClient } from '../trace/trace-client.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
 import { ExecutableRouteWorkspace } from './executable-route-workspace.tsx';
 import { outcomeLabel, statusLabel } from './invocation-model.ts';
@@ -213,9 +214,11 @@ const ReplayTab = ({ controller, defaultHost, lifecycle }: {
 export interface EventRouteWorkspaceProps {
   readonly clients: Pick<WorkspaceClients, 'lifecycleClient'>;
   readonly controller: RouteInvocationController;
+  readonly invocationId?: string;
   readonly leaf: ApplicationLeaf;
   readonly onNavigate: (location: WorkbenchLocation) => void;
   readonly tab?: string;
+  readonly trace?: TraceClient;
 }
 
 const useLifecycle = (client: LifecycleClient, leaf: ApplicationLeaf): LifecycleState => {
@@ -233,7 +236,7 @@ const useLifecycle = (client: LifecycleClient, leaf: ApplicationLeaf): Lifecycle
 };
 
 /** Host selector → executable body with the event codec tabs. */
-export const EventRouteWorkspace = ({ clients, controller, leaf, onNavigate, tab }: EventRouteWorkspaceProps): React.ReactNode => {
+export const EventRouteWorkspace = ({ clients, controller, invocationId, leaf, onNavigate, tab, trace }: EventRouteWorkspaceProps): React.ReactNode => {
   const lifecycleState = useLifecycle(clients.lifecycleClient, leaf);
   const lifecycle = lifecycleState.state === 'ready' ? lifecycleState.lifecycle : undefined;
   const fixtures = useMemo(() => eventFixturesFor(lifecycle), [lifecycle]);
@@ -301,11 +304,13 @@ export const EventRouteWorkspace = ({ clients, controller, leaf, onNavigate, tab
     fixtures={hostFixtures}
     inputKey={host === 'canonical' ? leaf.key : `${leaf.key}#${host}`}
     inputLeaf={host === 'canonical' ? leaf : nativeLeaf}
+    invocationId={invocationId}
     key={host}
     leaf={leaf}
     onNavigate={onNavigate}
     requestFor={(draft) => eventRequestFor(host, draft)}
     tab={tab}
+    trace={trace}
     toolbar={toolbar}
   />;
 };

@@ -6,6 +6,7 @@ import { sleep } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { publishFileByLink } from '../core/durable-fs.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
+import { isLoopbackHttpOrigin } from '../core/loopback-origin.ts';
 import { acquireOwnerLockFile, isProcessAlive, ownerLockRaceLost } from '../core/owner-lock.ts';
 
 export interface DevLockOwner {
@@ -57,25 +58,13 @@ interface RecoveryRecord {
   readonly owner: DevLockOwner;
 }
 
-const isLoopbackServerUrl = (value: unknown): value is string => {
-  if (typeof value !== 'string') return false;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'http:' &&
-      (parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]') &&
-      parsed.origin === value;
-  } catch {
-    return false;
-  }
-};
-
 const parseOwnerValue = (value: unknown, projectRoot: string): DevLockOwner | undefined => {
   try {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
     const parsed = value as Partial<DevLockOwner>;
     const pid = parsed.pid;
     const hasUrl = Object.hasOwn(parsed, 'url');
-    const url = hasUrl && isLoopbackServerUrl(parsed.url) ? parsed.url : undefined;
+    const url = hasUrl && isLoopbackHttpOrigin(parsed.url) ? parsed.url : undefined;
     if (
       Object.keys(parsed).length !== (hasUrl ? 5 : 4) ||
       !Object.hasOwn(parsed, 'createdAt') ||
@@ -134,7 +123,7 @@ const parseServerUrl = (contents: string, owner: DevLockOwner): string | undefin
     if (
       Object.keys(record).length !== 2 ||
       record.nonce !== owner.nonce ||
-      !isLoopbackServerUrl(record.url)
+      !isLoopbackHttpOrigin(record.url)
     ) return undefined;
     const canonical = `${stableJson({ nonce: record.nonce, url: record.url })}\n`;
     return contents === canonical ? record.url : undefined;
@@ -317,7 +306,7 @@ export class DevLock {
   }
 
   publishServerUrl(url: string): Promise<void> {
-    if (!isLoopbackServerUrl(url)) return Promise.reject(new TypeError('Development server URL must be a loopback HTTP origin.'));
+    if (!isLoopbackHttpOrigin(url)) return Promise.reject(new TypeError('Development server URL must be a loopback HTTP origin.'));
     if (this.#closed || this.#closePromise !== undefined) return Promise.reject(new Error('Development lock is closing.'));
     if (this.#owner.url === url) return Promise.resolve();
     if (this.#owner.url !== undefined) return Promise.reject(new Error('Development lock already published a different server URL.'));

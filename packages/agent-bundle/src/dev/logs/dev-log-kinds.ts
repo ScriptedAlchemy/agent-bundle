@@ -50,10 +50,17 @@ export type DevLogKindFor<TProducer extends DevLogProducer> = DevLogKindMap[TPro
 /** The closed set of context keys a producer may attach; everything else is dropped at the boundary. */
 export const safeContextKeys: ReadonlySet<string> = new Set([
   'buildId',
+  'conversationId',
+  'correlationId',
   'diagnosticCode',
   'epochId',
+  'executionId',
   'hookId',
+  'invocationId',
+  'mcpRequestId',
+  'mcpSessionId',
   'projectId',
+  'requestId',
   'routeId',
   'runId',
   'sessionId',

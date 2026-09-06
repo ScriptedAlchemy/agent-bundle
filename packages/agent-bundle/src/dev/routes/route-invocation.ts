@@ -13,7 +13,9 @@
  * invocation summaries without requiring the optional runtime peer.
  */
 import type { Diagnostic } from '../../core/diagnostics.ts';
+import { deepFreeze } from '../../core/freeze.ts';
 import type { JsonObject, JsonValue } from '../../core/strict-json.ts';
+import type { RequestContextProvenance } from '../../contracts/request-provenance.ts';
 
 /** The route kinds the invocation service renders; `app` routes are browser surfaces previewed through the MCP App preview instead. */
 export type RouteInvocationKind = 'cli' | 'event-route' | 'prompt' | 'resource' | 'script' | 'tool';
@@ -44,13 +46,21 @@ export interface RouteInvocationRequest {
   readonly surface?: RouteInvocationSurface;
 }
 
+export interface RunningRouteInvocation {
+  readonly id: string;
+  readonly routeId: string;
+  readonly startedAt: string;
+  readonly status: 'running';
+  readonly surface: RouteInvocationSurface;
+}
+
 /**
  * Whether the execution boundary completed. `succeeded` means the route ran
  * to a final document (or a plain script exited) and the envelope carries
  * what it produced; what the run *meant* is `outcome`. `failed` means the
  * boundary never completed — child crash, timeout, abort, `AB825x`.
  */
-export type RouteInvocationStatus = 'failed' | 'succeeded';
+export type RouteInvocationStatus = 'cancelled' | 'failed' | 'succeeded';
 
 /**
  * The application result of a completed run, judged by the surface the route
@@ -158,7 +168,72 @@ export interface RouteInvocationListResponse {
   readonly invocations: readonly RouteInvocationSummary[];
 }
 
-/** The `route.invocation` project event payload published on `/api/project/events` when an invocation completes. */
+/** The running record and final summary published as `route.invocation` on `/api/project/events`. */
 export interface RouteInvocationEventPayload {
-  readonly invocation: RouteInvocationSummary;
+  readonly invocation: RouteInvocationSummary | RunningRouteInvocation;
 }
+
+const nativeText = (native: JsonObject, key: string): string | undefined => {
+  const value = native[key];
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+};
+
+const nativeEventLineage = (
+  native: JsonObject,
+  target: string,
+): RequestContextProvenance['lineage'] => {
+  if (target !== 'claude' && target !== 'codex' && target !== 'cursor') {
+    return { reason: 'no-subagent-events', state: 'unavailable' };
+  }
+  if (target === 'cursor') return { reason: 'no-shared-runtime', state: 'unavailable' };
+  const root = nativeText(native, 'session_id');
+  const agentId = nativeText(native, 'agent_id');
+  if (root === undefined || agentId !== undefined) return { reason: 'no-shared-runtime', state: 'unavailable' };
+  const generation = target === 'codex' ? nativeText(native, 'turn_id') : nativeText(native, 'prompt_id');
+  return {
+    source: 'receipt',
+    state: 'available',
+    value: {
+      conversation: root,
+      depth: 0,
+      ...(generation === undefined ? {} : { generation }),
+      resolution: 'native',
+      root,
+    },
+  };
+};
+
+/** Lowers one native event receipt into the request provenance shared by replay and invocation surfaces. */
+export const nativeEventRequestContext = (input: Readonly<{
+  readonly event: string;
+  readonly hostContractRevision: string;
+  readonly native: JsonObject;
+  readonly routeId: string;
+  readonly target: string;
+}>): RequestContextProvenance => {
+  const sessionId = nativeText(input.native, 'session_id') ?? nativeText(input.native, 'conversation_id');
+  const workspaceRoots = input.native.workspace_roots;
+  const firstWorkspaceRoot = Array.isArray(workspaceRoots)
+    && typeof workspaceRoots[0] === 'string'
+    && workspaceRoots[0].trim() !== ''
+    ? workspaceRoots[0]
+    : undefined;
+  const workspaceRoot = nativeText(input.native, 'cwd') ?? firstWorkspaceRoot;
+  return deepFreeze({
+    actor: { reason: 'not-provided', state: 'unavailable' },
+    host: { source: 'receipt', state: 'available', value: { name: input.target } },
+    invocation: {
+      hostContractRevision: input.hostContractRevision,
+      kind: 'event',
+      operationId: input.routeId,
+      surface: input.event,
+    },
+    lineage: nativeEventLineage(input.native, input.target),
+    session: sessionId === undefined
+      ? { reason: 'not-provided', state: 'unavailable' }
+      : { source: 'receipt', state: 'available', value: { sessionId } },
+    workspace: workspaceRoot === undefined
+      ? { reason: 'not-provided', state: 'unavailable' }
+      : { source: 'receipt', state: 'available', value: { root: workspaceRoot } },
+  });
+};

@@ -7,12 +7,13 @@ import {
   type TransportSendOptions,
 } from '@modelcontextprotocol/client';
 
-import { isMcpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
+import { isMcpSessionTarget, mcpCorrelationMetaKey } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type {
   McpSessionBinding,
   McpSessionInspectorConfig,
   McpSessionOperation,
   McpSessionTraceEntry,
+  McpSessionTraceMeta,
   McpSessionTraceReplayGap,
 } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type {
@@ -32,6 +33,7 @@ import { AgentBundleRemoteTransport, dispatchAgentBundleMcpRequest, type AgentBu
 import {
   invocationHistoryFor,
   createMcpBrowserSessionModel,
+  mcpFrameMetaKeys,
   reduceMcpBrowserSession,
   type McpBrowserSessionConnection,
   type McpBrowserSessionDiagnostic,
@@ -65,6 +67,8 @@ export type McpSessionControllerBinding =
 export type McpSessionControllerOperation = Exclude<McpSessionOperation, 'cancel' | 'close' | 'restart'>;
 
 export interface McpSessionControllerRequest {
+  /** The Workbench correlation id for a tool call; reaches the route as the top-level `correlationId`. */
+  readonly correlationId?: string;
   readonly id: string;
   readonly operation: McpSessionControllerOperation;
   readonly request: Readonly<Record<string, unknown>>;
@@ -386,6 +390,27 @@ const validSequence = (value: unknown): value is number =>
 
 const validCursor = (value: unknown): value is number => validSequence(value) && value > 0;
 
+/** The server bounds every lifted frame key at 256 characters; anything else on the wire is a corrupt frame. */
+const maxFrameKeyLength = 256;
+
+const frameKey = (value: unknown): string | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0 || value.length > maxFrameKeyLength) throw invalidTrace();
+  return value;
+};
+
+const knownFrameMetaKeys: ReadonlySet<string> = new Set(mcpFrameMetaKeys);
+
+const frameMeta = (value: unknown): McpSessionTraceMeta | undefined => {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Object.keys(value).some((key) => !knownFrameMetaKeys.has(key))) throw invalidTrace();
+  const meta: McpSessionTraceMeta = Object.fromEntries(mcpFrameMetaKeys.flatMap((key) => {
+    const text = frameKey(value[key]);
+    return text === undefined ? [] : [[key, text]];
+  }));
+  return Object.keys(meta).length === 0 ? undefined : meta;
+};
+
 const traceEntry = (value: unknown): McpSessionTraceEntry | McpSessionTraceReplayGap => {
   if (!isRecord(value)) throw invalidTrace();
   if (value.type === 'replay.gap') {
@@ -403,7 +428,19 @@ const traceEntry = (value: unknown): McpSessionTraceEntry | McpSessionTraceRepla
   }
   if (!validCursor(value.sequence) || typeof value.occurredAt !== 'number' || !Number.isFinite(value.occurredAt)) throw invalidTrace();
   if (value.kind === 'frame' && (value.direction === 'client' || value.direction === 'server')) {
-    return { direction: value.direction, kind: 'frame', message: value.message, occurredAt: value.occurredAt, sequence: value.sequence };
+    const id = frameKey(value.id);
+    const meta = frameMeta(value.meta);
+    const method = frameKey(value.method);
+    return {
+      direction: value.direction,
+      ...(id === undefined ? {} : { id }),
+      kind: 'frame',
+      message: value.message,
+      ...(meta === undefined ? {} : { meta }),
+      ...(method === undefined ? {} : { method }),
+      occurredAt: value.occurredAt,
+      sequence: value.sequence,
+    };
   }
   if (value.kind === 'stderr' && typeof value.text === 'string') {
     return { kind: 'stderr', occurredAt: value.occurredAt, sequence: value.sequence, text: value.text };
@@ -459,9 +496,18 @@ interface ControllerWireRequest {
   readonly resultSchema?: StandardSchemaV1;
 }
 
+/** The SDK sees the correlation as MCP `_meta`; the remote transport lowers it to the route's top-level field. */
+const correlatedParams = (
+  params: Readonly<Record<string, unknown>>,
+  correlationId: string | undefined,
+): Readonly<Record<string, unknown>> => correlationId === undefined
+  ? params
+  : { ...params, _meta: { ...(isRecord(params._meta) ? params._meta : {}), [mcpCorrelationMetaKey]: correlationId } };
+
 const requestFor = (
   operation: McpSessionControllerOperation,
   params: Readonly<Record<string, unknown>>,
+  correlationId: string | undefined,
 ): ControllerWireRequest => {
   if (operation === 'initialize') return { method: 'initialize' };
   if (operation === 'listTools') return { method: 'tools/list' };
@@ -470,12 +516,16 @@ const requestFor = (
   if (operation === 'listPrompts') return { method: 'prompts/list' };
   if (operation === 'getPrompt') return { method: 'prompts/get', params };
   if (operation === 'readResource') return { method: 'resources/read', params };
-  if (operation === 'callTool') return { method: 'tools/call', params };
+  if (operation === 'callTool') return { method: 'tools/call', params: correlatedParams(params, correlationId) };
   // The 2025-11-25 Tasks utility (#369): a task-augmented call carries
   // `params.task`; the task operations are outside the SDK's typed method
   // surface, so each names the SDK schema its result is validated against.
   if (operation === 'callToolTask') {
-    return { method: 'tools/call', params: { ...params, task: isRecord(params.task) ? params.task : {} }, resultSchema: specTypeSchemas.CreateTaskResult };
+    return {
+      method: 'tools/call',
+      params: correlatedParams({ ...params, task: isRecord(params.task) ? params.task : {} }, correlationId),
+      resultSchema: specTypeSchemas.CreateTaskResult,
+    };
   }
   if (operation === 'getTask') return { method: 'tasks/get', params, resultSchema: specTypeSchemas.GetTaskResult };
   if (operation === 'getTaskResult') return { method: 'tasks/result', params, resultSchema: specTypeSchemas.CallToolResult };
@@ -488,12 +538,19 @@ const runtimeRouteOperationFor = (
   operation: McpSessionControllerOperation,
   request: Readonly<Record<string, unknown>>,
   requestId: string,
+  correlationId: string | undefined,
 ): McpRouteOperation => {
   if (operation === 'listTools') return { operation: 'tools/list' };
   if (operation === 'listResources') return { operation: 'resources/list' };
   if (operation === 'readResource' && typeof request.uri === 'string') return { operation: 'resources/read', uri: request.uri };
   if (operation === 'callTool' && typeof request.name === 'string' && (request.arguments === undefined || isRecord(request.arguments))) {
-    return { arguments: request.arguments ?? {}, name: request.name, operation: 'tools/call', requestId };
+    return {
+      arguments: request.arguments ?? {},
+      ...(correlationId === undefined ? {} : { correlationId }),
+      name: request.name,
+      operation: 'tools/call',
+      requestId,
+    };
   }
   throw new McpSessionControllerError(`MCP operation ${JSON.stringify(operation)} is not routed for runtime App access.`);
 };
@@ -1444,7 +1501,7 @@ export class McpSessionController {
     if (this.#requests.has(input.id)) throw new McpSessionControllerError(`MCP invocation ${JSON.stringify(input.id)} is already active.`);
     let operation: ControllerWireRequest;
     try {
-      operation = requestFor(input.operation, input.request);
+      operation = requestFor(input.operation, input.request, input.correlationId);
     } catch (reason) {
       this.#publish({ diagnostic: diagnosticFor('mcp.operation.unsupported', reason), type: 'failed' });
       throw reason;
@@ -1485,7 +1542,7 @@ export class McpSessionController {
     }
     let operation: McpRouteOperation;
     try {
-      operation = runtimeRouteOperationFor(input.operation, input.request, input.id);
+      operation = runtimeRouteOperationFor(input.operation, input.request, input.id, input.correlationId);
     } catch (reason) {
       this.#publish({ diagnostic: diagnosticFor('mcp.operation.unsupported', reason), type: 'failed' });
       throw reason;

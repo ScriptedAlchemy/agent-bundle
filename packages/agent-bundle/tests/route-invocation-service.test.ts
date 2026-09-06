@@ -2,12 +2,16 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { expect, it } from '@rstest/core';
+import { expect, it, rs } from '@rstest/core';
 
+import type { TraceEntry, TraceEntryInput } from '../src/dev/trace/trace-entry.ts';
+import type { TracePublisher } from '../src/dev/trace/trace-hub.ts';
 import type { RouteInvocation } from '../src/dev/routes/route-invocation-result.ts';
 import {
   InvocationRingBuffer,
+  ROUTE_INVOCATION_ALREADY_FINAL_CODE,
   ROUTE_INVOCATION_STALE_REVISION_CODE,
   RouteInvocationService,
   RouteInvocationRequestError,
@@ -46,6 +50,7 @@ const invocation = (id: string, completedAt: string): RouteInvocation => ({
   input: {},
   kind: 'tool',
   manifestDigest: 'digest',
+  outcome: { kind: 'success' },
   projection: {},
   providers: [],
   routeId: 'tool:fixture/echo',
@@ -68,6 +73,27 @@ const invocation = (id: string, completedAt: string): RouteInvocation => ({
     sequence: 0,
   }],
 });
+
+const collectingTrace = (): Readonly<{
+  readonly entries: TraceEntryInput[];
+  readonly publisher: TracePublisher;
+}> => {
+  const entries: TraceEntryInput[] = [];
+  return {
+    entries,
+    publisher: {
+      publish: (input): TraceEntry => {
+        entries.push(input);
+        return {
+          ...input,
+          id: `trace-${String(entries.length)}`,
+          occurredAt: input.occurredAt ?? '2026-09-05T00:00:00.000Z',
+          sequence: entries.length,
+        };
+      },
+    },
+  };
+};
 
 it('strictly validates invocation request fields and event options', () => {
   expect(parseRouteInvocationRequest({
@@ -104,6 +130,7 @@ it('strictly validates invocation request fields and event options', () => {
     { routeId: '' },
     { routeId: 'tool:x/y', unknown: true },
     { args: ['ok', 1], routeId: 'cli:x' },
+    { requestId: '', routeId: 'tool:x/y' },
     { event: { host: 'claude' }, routeId: 'event:tool/after' },
     { mode: 'preview', routeId: 'tool:x/y' },
     { routeId: 'event:tool/after', surface: { host: 'other', kind: 'event' } },
@@ -146,6 +173,226 @@ it('retains a bounded newest-first invocation history', () => {
   expect(history.read('inv_two')?.id).toBe('inv_two');
 });
 
+it('publishes correlated invocation and kernel entries with slim details', async () => {
+  const route = {
+    config: [],
+    id: 'tool:fixture/echo',
+    kind: 'tool',
+    provenance: { kind: 'conventional' },
+    serverId: 'mcp:fixture',
+    source: 'src/mcp/fixture/tools/echo.tsx',
+  } as const;
+  const trace = collectingTrace();
+  let currentTime = Date.parse('2026-09-05T00:00:00.000Z');
+  const service = new RouteInvocationService({
+    manifest: {
+      manifest: () => ({
+        diagnostics: [],
+        digest: 'digest',
+        events: [],
+        providers: [{ id: 'provider:clock', name: 'clock', source: 'src/providers/clock.ts' }],
+        scripts: [],
+        servers: [{ id: 'mcp:fixture', mode: 'generated', name: 'fixture', routes: [route] }],
+        sourceRevision: 'revision',
+      }),
+    },
+    now: () => new Date(currentTime += 5),
+    prepared: async () => ({
+      project: {
+        artifact: { epochId: 'epoch-1', target: 'claude' },
+        manifest: { plugin: { name: 'fixture', version: '1.0.0' }, projectRoot: '/project' } as never,
+        stateRoot: '/project/.agent-bundle/state',
+        targets: ['claude'],
+      },
+      release: () => undefined,
+    }),
+    renderChild: async (_request, _signal, publishKernelEvent) => {
+      publishKernelEvent({
+        at: 8,
+        count: 1,
+        durationMs: 3,
+        execution: {
+          event: 'tool/before',
+          executionId: 'execution-1',
+          host: 'claude',
+          nativeEvent: 'PreToolUse',
+        },
+        kind: 'providers.finish',
+        phase: 'providers',
+        sequence: 0,
+      });
+      const document = {
+        root: { kind: 'text' as const, text: 'Echo' },
+        status: 'success' as const,
+        version: 1 as const,
+      };
+      return {
+        document,
+        events: [{ document, sequence: 1, type: 'complete' }],
+        input: { value: 'echo' },
+        mcp: { content: [] },
+        renderDurationMs: 4,
+      };
+    },
+    trace: trace.publisher,
+  });
+
+  const result = await service.invoke({
+    correlationId: 'correlation-1',
+    input: { value: 'echo' },
+    routeId: route.id,
+  });
+
+  expect(result.timings.map((entry) => entry.phase)).toEqual(['render', 'projection']);
+  expect(trace.entries).toEqual([
+    expect.objectContaining({
+      correlation: {
+        correlationId: 'correlation-1',
+        epochId: 'epoch-1',
+        invocationId: result.id,
+        routeId: route.id,
+      },
+      details: { status: 'running' },
+      href: `/routes/mcp/fixture/tool/echo?invocation=${result.id}`,
+      kind: 'invocation.started',
+      source: 'invocation',
+      status: 'running',
+      summary: 'MCP tool fixture/echo · running',
+    }),
+    expect.objectContaining({
+      correlation: {
+        correlationId: 'correlation-1',
+        epochId: 'epoch-1',
+        executionId: 'execution-1',
+        host: 'claude',
+        invocationId: result.id,
+        routeId: route.id,
+      },
+      details: {
+        count: 1,
+        event: 'tool/before',
+        nativeEvent: 'PreToolUse',
+        phase: 'providers',
+        sequence: 0,
+      },
+      durationMs: 3,
+      kind: 'kernel.providers.finish',
+      source: 'kernel',
+      status: 'ok',
+      summary: 'event tool/before (claude) · providers finished',
+    }),
+    expect.objectContaining({
+      correlation: {
+        correlationId: 'correlation-1',
+        epochId: 'epoch-1',
+        invocationId: result.id,
+        routeId: route.id,
+      },
+      details: {
+        diagnosticCodes: [],
+        projectionKind: 'mcp',
+        providers: [{ name: 'clock' }],
+        status: 'succeeded',
+      },
+      durationMs: 10,
+      href: `/routes/mcp/fixture/tool/echo?invocation=${result.id}`,
+      kind: 'invocation.completed',
+      source: 'invocation',
+      status: 'ok',
+      summary: 'MCP tool fixture/echo · 10.0 ms',
+    }),
+  ]);
+});
+
+it('publishes failed event invocations with native provenance', async () => {
+  const route = {
+    config: [],
+    event: 'tool/after',
+    id: 'event:tool/after',
+    kind: 'event-route',
+    provenance: { kind: 'conventional' },
+    source: 'src/events/tool/after.tsx',
+  } as const;
+  const trace = collectingTrace();
+  let currentTime = Date.parse('2026-09-05T00:00:00.000Z');
+  const service = new RouteInvocationService({
+    manifest: {
+      manifest: () => ({
+        diagnostics: [],
+        digest: 'digest',
+        events: [route],
+        providers: [],
+        scripts: [],
+        servers: [],
+        sourceRevision: 'revision',
+      }),
+    },
+    now: () => new Date(currentTime += 5),
+    prepared: async () => ({
+      project: {
+        artifact: { epochId: 'epoch-1', target: 'claude' },
+        manifest: { projectRoot: '/project' } as never,
+        stateRoot: '/project/.agent-bundle/state',
+        targets: ['claude'],
+      },
+      release: () => undefined,
+    }),
+    renderChild: async () => {
+      throw new Error('render exploded');
+    },
+    trace: trace.publisher,
+  });
+
+  const result = await service.invoke({
+    input: {
+      cwd: '/workspace',
+      hook_event_name: 'PostToolUse',
+      session_id: 'session-1',
+      tool_input: {},
+      tool_name: 'Write',
+      tool_response: { ok: true },
+      tool_use_id: 'use-1',
+      transcript_path: '/workspace/transcript.json',
+    },
+    routeId: route.id,
+    surface: { host: 'claude', kind: 'event' },
+  });
+
+  expect(result.context.session).toEqual({
+    source: 'receipt',
+    state: 'available',
+    value: { sessionId: 'session-1' },
+  });
+  expect(result.context.lineage).toMatchObject({
+    source: 'receipt',
+    state: 'available',
+    value: { conversation: 'session-1', root: 'session-1' },
+  });
+  expect(trace.entries).toHaveLength(2);
+  expect(trace.entries[1]).toMatchObject({
+    correlation: {
+      conversationId: 'session-1',
+      epochId: 'epoch-1',
+      host: 'claude',
+      invocationId: result.id,
+      routeId: route.id,
+      sessionId: 'session-1',
+    },
+    details: {
+      diagnosticCodes: ['AB8236'],
+      projectionKind: 'none',
+      providers: [],
+      status: 'failed',
+    },
+    durationMs: 5,
+    href: `/routes/events/tool/after?invocation=${result.id}`,
+    kind: 'invocation.failed',
+    source: 'invocation',
+    status: 'error',
+    summary: 'event tool/after (claude) · failed',
+  });
+});
+
 const echoRoute = {
   config: [],
   id: 'tool:fixture/echo',
@@ -180,6 +427,158 @@ const childResult = (request: RouteInvocationChildRequest, text = 'ok'): RouteIn
 const preparedLease = async (project: RouteInvocationPreparedProject) => ({
   project,
   release: () => undefined,
+});
+
+const streamingService = (
+  renderChild: NonNullable<RouteInvocationServiceOptions['renderChild']>,
+  trace?: TracePublisher,
+): RouteInvocationService => new RouteInvocationService({
+  manifest: { manifest: () => catalog('digest', 'revision') },
+  prepared: () => preparedLease({
+    manifest: { projectRoot: '/project' } as never,
+    stateRoot: '/project/.agent-bundle/state',
+    targets: ['claude'],
+  }),
+  renderChild,
+  ...(trace === undefined ? {} : { trace }),
+});
+
+it('publishes render events before the final invocation', async () => {
+  const release = deferred();
+  const rendered = deferred();
+  const document = childResult({
+    context: {} as never,
+    input: {},
+    manifest: {} as never,
+    routeId: echoRoute.id,
+    stateRoot: '/project/state',
+    surface: { kind: 'unit-render' },
+  }).document;
+  const service = streamingService(async (request, _signal, _trace, publishRender) => {
+    publishRender({ document, sequence: 0, type: 'shell' });
+    rendered.resolve();
+    await release.promise;
+    publishRender({ document, sequence: 1, type: 'complete' });
+    return { ...childResult(request), events: [
+      { document, sequence: 0, type: 'shell' },
+      { document, sequence: 1, type: 'complete' },
+    ] };
+  });
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await rendered.promise;
+  const messages: Parameters<Parameters<typeof service.subscribe>[1]>[0][] = [];
+  service.subscribe(started.invocation.id, (message) => messages.push(message));
+  expect(messages.map((message) => message.type)).toEqual(['render']);
+  release.resolve();
+  await started.result;
+  expect(messages.map((message) => message.type)).toEqual(['render', 'render', 'final']);
+});
+
+it('retains only the newest 256 render events and one truncation marker', async () => {
+  const release = deferred();
+  const rendered = deferred();
+  const document = childResult({
+    context: {} as never,
+    input: {},
+    manifest: {} as never,
+    routeId: echoRoute.id,
+    stateRoot: '/project/state',
+    surface: { kind: 'unit-render' },
+  }).document;
+  const service = streamingService(async (request, _signal, _trace, publishRender) => {
+    for (let sequence = 0; sequence < 300; sequence += 1) {
+      publishRender({ document, sequence, type: 'shell' });
+    }
+    rendered.resolve();
+    await release.promise;
+    return childResult(request);
+  });
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await rendered.promise;
+  const messages: Parameters<Parameters<typeof service.subscribe>[1]>[0][] = [];
+  service.subscribe(started.invocation.id, (message) => messages.push(message));
+  expect(messages.filter((message) => message.type === 'render')).toHaveLength(256);
+  expect(messages.filter((message) => message.type === 'truncated')).toEqual([
+    { type: 'truncated' },
+  ]);
+  expect(messages.find((message) => message.type === 'render')).toMatchObject({
+    event: { sequence: 44 },
+  });
+  release.resolve();
+  await started.result;
+  expect(messages.findLast((message) => message.type === 'final')).toMatchObject({
+    invocation: { document },
+  });
+});
+
+it('cancels a running invocation without an outcome and publishes cancellation', async () => {
+  const startedChild = deferred();
+  const trace = collectingTrace();
+  let childAborted = false;
+  const service = streamingService((_request, signal) => new Promise((_resolve, reject) => {
+    startedChild.resolve();
+    signal.addEventListener('abort', () => {
+      childAborted = true;
+      reject(signal.reason);
+    }, { once: true });
+  }), trace.publisher);
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await startedChild.promise;
+  const cancelled = await service.cancel(started.invocation.id);
+
+  expect(childAborted).toBe(true);
+  expect(cancelled).toMatchObject({ id: started.invocation.id, status: 'cancelled' });
+  expect(cancelled).not.toHaveProperty('outcome');
+  expect(await started.result).toBe(cancelled);
+  expect(trace.entries.at(-1)).toMatchObject({
+    kind: 'invocation.cancelled',
+    status: 'error',
+  });
+});
+
+it('rejects cancellation after an invocation is final', async () => {
+  const service = streamingService(async (request) => childResult(request));
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await started.result;
+
+  await expect(service.cancel(started.invocation.id)).rejects.toMatchObject({
+    code: ROUTE_INVOCATION_ALREADY_FINAL_CODE,
+    status: 409,
+  });
+});
+
+it('rejects cancellation when completion wins the race', async () => {
+  const childCompleted = deferred();
+  const release = deferred();
+  const service = new RouteInvocationService({
+    manifest: { manifest: () => catalog('digest', 'revision') },
+    prepared: async () => ({
+      project: {
+        manifest: { projectRoot: '/project' } as never,
+        stateRoot: '/project/.agent-bundle/state',
+        targets: ['claude'],
+      },
+      release: () => release.promise,
+    }),
+    renderChild: async (request) => {
+      childCompleted.resolve();
+      return childResult(request);
+    },
+  });
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await childCompleted.promise;
+  const cancelled = service.cancel(started.invocation.id);
+  release.resolve();
+
+  await expect(cancelled).rejects.toMatchObject({
+    code: ROUTE_INVOCATION_ALREADY_FINAL_CODE,
+    status: 409,
+  });
+  await expect(started.result).resolves.toMatchObject({ status: 'succeeded' });
 });
 
 it('aborts and drains a running render when the service closes', async () => {
@@ -272,6 +671,45 @@ it('rejects a queued invocation when the published revision moves before the slo
   });
   expect(executed).toHaveLength(1);
   expect(releases).toBe(2);
+});
+
+it('removes a rejecting invocation from the stream registry', async () => {
+  const encoded = rs.spyOn(Buffer.prototype, 'toString')
+    .mockReturnValueOnce('0101010101010101')
+    .mockReturnValueOnce('0202020202020202');
+  const hold = deferred();
+  const firstStarted = deferred();
+  let digest = 'digest-1';
+  const service = new RouteInvocationService({
+    concurrency: 1,
+    manifest: { manifest: () => catalog(digest, 'revision') },
+    now: () => new Date(0),
+    prepared: async () => ({
+      project: {
+        manifest: { projectRoot: '/project' } as never,
+        stateRoot: '/project/.agent-bundle/state',
+        targets: ['claude'],
+      },
+      release: () => undefined,
+    }),
+    renderChild: async (request) => {
+      firstStarted.resolve();
+      await hold.promise;
+      return childResult(request);
+    },
+  });
+
+  const first = service.invoke({ input: { n: 1 }, routeId: echoRoute.id });
+  await firstStarted.promise;
+  const second = service.invoke({ input: { n: 2 }, routeId: echoRoute.id });
+  digest = 'digest-2';
+  hold.resolve();
+  await first;
+  await expect(second).rejects.toMatchObject({ code: ROUTE_INVOCATION_STALE_REVISION_CODE });
+  encoded.mockRestore();
+
+  const id = 'inv_00202020202020202';
+  expect(() => service.subscribe(id, () => undefined)).toThrow(RouteInvocationRequestError);
 });
 
 it('does not spawn a child for an invocation aborted while queued', async () => {
@@ -602,6 +1040,25 @@ it('reaps the render child and its descendants when the invocation times out', {
   }
 });
 
+it('reaps the render child and its descendants when the invocation is cancelled', { timeout: 30_000 }, async () => {
+  const project = await leakingRouteProject('hang');
+  try {
+    const service = project.service();
+    const started = service.start({ input: {}, routeId: 'tool:fixture/leak', surface: { kind: 'unit-render' } });
+    const pids = await recordedPids(project);
+    expect(alive(pids.child)).toBe(true);
+    expect(alive(pids.descendant)).toBe(true);
+
+    const cancelled = await service.cancel(started.invocation.id);
+    expect(cancelled.status).toBe('cancelled');
+    expect(alive(pids.child)).toBe(false);
+    expect(alive(pids.descendant)).toBe(false);
+    expect(await started.result).toBe(cancelled);
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
+
 it('reaps the render child and its descendants when the service closes mid-render', { timeout: 30_000 }, async () => {
   const project = await leakingRouteProject('hang');
   try {
@@ -620,6 +1077,136 @@ it('reaps the render child and its descendants when the service closes mid-rende
     });
   } finally {
     await rm(project.root, { force: true, recursive: true });
+  }
+});
+
+it('forwards kernel events from tool and event routes rendered in the real child', { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-trace-'));
+  const toolSource = join(root, 'src/mcp/fixture/tools/traced.tsx');
+  const eventSource = join(root, 'src/events/tool/before.tsx');
+  const traceModule = fileURLToPath(new URL('../src/events/trace.ts', import.meta.url));
+  await Promise.all([
+    mkdir(dirname(toolSource), { recursive: true }),
+    mkdir(dirname(eventSource), { recursive: true }),
+  ]);
+  const routeSource = (executionId: string, event: string, nativeEvent: string): string => [
+    "import { Agent } from '@agent-bundle/runtime';",
+    "import { createElement } from 'react';",
+    `import { createEventTracer, eventTraceExecution } from ${JSON.stringify(traceModule)};`,
+    '',
+    'export default async function Traced() {',
+    `  const trace = createEventTracer({ execution: eventTraceExecution({ event: ${JSON.stringify(event)}, executionId: ${JSON.stringify(executionId)}, host: 'claude', nativeEvent: ${JSON.stringify(nativeEvent)} }) });`,
+    '  trace.renderStart();',
+    '  trace.renderFinish();',
+    "  return createElement(Agent.Result, null, createElement(Agent.Text, null, 'traced'));",
+    '}',
+    '',
+  ].join('\n');
+  await Promise.all([
+    writeFile(toolSource, routeSource('execution-tool', 'tool/before', 'PreToolUse')),
+    writeFile(eventSource, routeSource('execution-event', 'tool/before', 'PreToolUse')),
+  ]);
+  const toolRoute = {
+    config: {},
+    id: 'tool:fixture/traced',
+    kind: 'tool',
+    provenance: { kind: 'conventional', relativePath: 'src/mcp/fixture/tools/traced.tsx' },
+    serverId: 'mcp:fixture',
+    source: toolSource,
+  } as const;
+  const eventRoute = {
+    config: { runtime: 'standalone' },
+    event: 'tool/before',
+    id: 'event:tool/before',
+    kind: 'event-route',
+    provenance: { kind: 'conventional', relativePath: 'src/events/tool/before.tsx' },
+    source: eventSource,
+  } as const;
+  const graph = {
+    diagnostics: [],
+    digest: 'digest',
+    events: [eventRoute],
+    providers: [],
+    scripts: [],
+    servers: [{ id: 'mcp:fixture', mode: 'generated', name: 'fixture', routes: [toolRoute] }],
+  } satisfies CompiledRouteGraph;
+  const manifest: RouteManifest = {
+    diagnostics: [],
+    digest: 'digest',
+    events: [{
+      config: [],
+      event: eventRoute.event,
+      id: eventRoute.id,
+      kind: eventRoute.kind,
+      provenance: { kind: 'conventional' },
+      source: eventRoute.provenance.relativePath,
+    }],
+    providers: [],
+    scripts: [],
+    servers: [{
+      id: 'mcp:fixture',
+      mode: 'generated',
+      name: 'fixture',
+      routes: [{
+        config: [],
+        id: toolRoute.id,
+        kind: toolRoute.kind,
+        provenance: { kind: 'conventional' },
+        serverId: toolRoute.serverId,
+        source: toolRoute.provenance.relativePath,
+      }],
+    }],
+    sourceRevision: 'revision',
+  };
+  const trace = collectingTrace();
+  const service = new RouteInvocationService({
+    manifest: { manifest: () => manifest },
+    prepared: () => preparedLease({
+      manifest: testManifestFromRouteGraph({ graph, projectRoot: root }),
+      stateRoot: join(root, '.agent-bundle', 'state'),
+      targets: ['claude'],
+    }),
+    trace: trace.publisher,
+  });
+  try {
+    const tool = await service.invoke({ routeId: toolRoute.id, surface: { kind: 'unit-render' } });
+    const event = await service.invoke({ input: {}, routeId: eventRoute.id, surface: { kind: 'unit-render' } });
+    const kernel = trace.entries.filter((entry) => entry.source === 'kernel');
+    const manualKernel = kernel.filter((entry) =>
+      entry.correlation.executionId === 'execution-tool'
+      || entry.correlation.executionId === 'execution-event');
+
+    expect(manualKernel.map((entry) => entry.correlation)).toEqual([
+      expect.objectContaining({
+        executionId: 'execution-tool',
+        invocationId: tool.id,
+        routeId: toolRoute.id,
+      }),
+      expect.objectContaining({
+        executionId: 'execution-tool',
+        invocationId: tool.id,
+        routeId: toolRoute.id,
+      }),
+      expect.objectContaining({
+        executionId: 'execution-event',
+        invocationId: event.id,
+        routeId: eventRoute.id,
+      }),
+      expect.objectContaining({
+        executionId: 'execution-event',
+        invocationId: event.id,
+        routeId: eventRoute.id,
+      }),
+    ]);
+    expect(manualKernel.map((entry) => entry.kind)).toEqual([
+      'kernel.render.start',
+      'kernel.render.finish',
+      'kernel.render.start',
+      'kernel.render.finish',
+    ]);
+  } finally {
+    await service.close();
+    await rm(root, { force: true, recursive: true });
   }
 });
 

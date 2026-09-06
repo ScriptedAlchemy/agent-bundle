@@ -3,11 +3,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { describe, expect, it } from '@rstest/core';
 
-import { appResourceUriFor, catalogToolsFor, orderedToolsForApp } from '../src/application/app-route-workspace.tsx';
+import type { TraceEntry } from '../../agent-bundle/src/contracts/trace.ts';
+import { appResourceUriFor, appToolCallRequest, catalogToolsFor, orderedToolsForApp } from '../src/application/app-route-workspace.tsx';
 import { defaultEventHostSelection } from '../src/application/event-route-workspace.tsx';
 import { ExecutableRouteWorkspace, resultTabFor } from '../src/application/executable-route-workspace.tsx';
 import { idleInvocationState, reduceInvocationState, selectBackend } from '../src/application/invocation-model.ts';
-import { ResultTabs } from '../src/application/result-tabs.tsx';
+import { ResultTabs, TraceTimeline } from '../src/application/result-tabs.tsx';
 import { requestContextRows, RouteInspector } from '../src/application/route-inspector.tsx';
 import { RouteWorkspace } from '../src/application/route-workspace.tsx';
 import type { RouteInvocationController } from '../src/application/workspace-contracts.ts';
@@ -30,6 +31,7 @@ const noop = (): void => undefined;
 
 const controllerWith = (overrides: Partial<RouteInvocationController> = {}): RouteInvocationController => ({
   backendKind: 'dev-server',
+  cancel: noop,
   history: [summaryOf(invocation)],
   load: noop,
   run: noop,
@@ -60,6 +62,45 @@ describe('invocation state contract', () => {
     const loaded = reduceInvocationState(idleInvocationState, { invocation, type: 'load' });
     expect(loaded).toEqual({ invocation, phase: 'succeeded' });
     expect(reduceInvocationState(loaded, { type: 'reset' })).toBe(idleInvocationState);
+  });
+
+  it('streams render progress, exposes cancellation, and settles cancelled without an outcome', () => {
+    const running = reduceInvocationState(idleInvocationState, { correlationId: 'c', startedAt: 1_000, type: 'start' });
+    const identified = reduceInvocationState(running, { invocationId: 'inv-live', type: 'stream.start' });
+    const rendered = reduceInvocationState(identified, {
+      event: invocation.events[0]!,
+      type: 'render',
+    });
+    const progressed = reduceInvocationState(rendered, {
+      event: invocation.events[1]!,
+      type: 'render',
+    });
+    expect(progressed).toMatchObject({
+      events: [expect.objectContaining({ type: 'shell' }), expect.objectContaining({ type: 'progress' })],
+      invocationId: 'inv-live',
+      phase: 'running',
+    });
+
+    const { outcome: _outcome, ...withoutOutcome } = invocation;
+    const cancelled = { ...withoutOutcome, status: 'cancelled' as const };
+    expect(reduceInvocationState(progressed, {
+      completedAt: 1_200,
+      invocation: cancelled,
+      type: 'settle',
+    })).toMatchObject({
+      invocation: { status: 'cancelled' },
+      phase: 'failed',
+    });
+
+    const markup = renderToStaticMarkup(createElement(ExecutableRouteWorkspace, {
+      controller: controllerWith({ state: progressed }),
+      leaf: toolLeaf,
+      onNavigate: noop,
+    }));
+    expect(markup).toContain('data-testid="route-running-status"');
+    expect(markup).toContain('data-testid="route-cancel"');
+    expect(markup).toContain('data-testid="rendered-document-progress"');
+    expect(markup).toContain('Searching us');
   });
 
   it('selects the first backend that accepts the leaf', () => {
@@ -322,10 +363,66 @@ describe('ResultTabs', () => {
     expect(raw).toContain('Progress · #1 · Searching us · 1 / 2');
     expect(raw).toContain('Complete · #2 · success');
     expect(render('mcp')).toContain('structuredContent');
-    const trace = render('trace');
-    expect(trace).toContain('aria-label="Invocations of this route"');
-    expect(trace).toContain('inv-1');
-    expect(trace).toContain('result-trace-entry--current');
+    expect(render('trace')).toContain('Loading correlated trace…');
+  });
+
+  it('filters unified trace entries by invocation correlation and nests kernel phases', () => {
+    const entries: readonly TraceEntry[] = [
+      {
+        correlation: { correlationId: 'corr-1', invocationId: 'inv-1' },
+        id: 'trace-invocation',
+        kind: 'invocation.completed',
+        occurredAt: '2026-09-05T08:00:00.432Z',
+        sequence: 4,
+        source: 'invocation',
+        status: 'ok',
+        summary: 'search_audible completed',
+      },
+      {
+        correlation: { correlationId: 'corr-1', executionId: 'exec-1', invocationId: 'inv-1' },
+        durationMs: 5,
+        id: 'trace-render',
+        kind: 'kernel.render.finish',
+        occurredAt: '2026-09-05T08:00:00.407Z',
+        sequence: 3,
+        source: 'kernel',
+        status: 'ok',
+        summary: 'Rendered AgentDocument',
+      },
+      {
+        correlation: { correlationId: 'other' },
+        id: 'trace-other',
+        kind: 'mcp.request',
+        occurredAt: '2026-09-05T08:00:00.100Z',
+        sequence: 2,
+        source: 'mcp',
+        summary: 'Unrelated request',
+      },
+    ];
+    const markup = renderToStaticMarkup(createElement(TraceTimeline, {
+      correlationId: invocation.correlationId,
+      entries,
+      invocationId: invocation.id,
+    }));
+
+    expect(markup).toContain('search_audible completed');
+    expect(markup).toContain('Rendered AgentDocument');
+    expect(markup).toContain('result-trace-kernel');
+    expect(markup).toContain('href="/trace/trace-render"');
+    expect(markup).not.toContain('Unrelated request');
+  });
+
+  it('offers Open in Trace for a settled correlated invocation', () => {
+    const markup = renderToStaticMarkup(createElement(ResultTabs, {
+      controller: succeeded,
+      leaf: toolLeaf,
+      onNavigate: noop,
+      onTabChange: noop,
+      tab: 'rendered',
+    }));
+
+    expect(markup).toContain('href="/trace?correlation=corr-1"');
+    expect(markup).toContain('Open in Trace');
   });
 
   it('marks the rendered pane pending while the backend is running', () => {
@@ -340,6 +437,23 @@ describe('ResultTabs', () => {
     expect(markup).toContain('aria-busy="true"');
     expect(markup).toContain('Waiting for the first render event…');
   });
+});
+
+it('shows an explicit state when a deep-linked invocation is not in this session', () => {
+  const markup = renderToStaticMarkup(createElement(ExecutableRouteWorkspace, {
+    controller: controllerWith({
+      state: {
+        diagnostics: [],
+        failure: { code: 'AB8231', message: 'Invocation was not found.' },
+        phase: 'failed',
+      },
+    }),
+    invocationId: 'inv-missing',
+    leaf: toolLeaf,
+    onNavigate: noop,
+  }));
+
+  expect(markup).toContain('Invocation inv-missing is not in this session.');
 });
 
 describe('RouteInspector', () => {
@@ -431,5 +545,12 @@ describe('App leaf tool binding', () => {
     expect(tools.map((tool) => tool.name)).toEqual(['inventory_sources', 'browse_library']);
     expect(orderedToolsForApp(tools, 'ui://curator/library.html').map((tool) => tool.name)).toEqual(['browse_library', 'inventory_sources']);
     expect(orderedToolsForApp(tools, undefined).map((tool) => tool.name)).toEqual(['inventory_sources', 'browse_library']);
+  });
+
+  it('carries the browser correlation id beside plain MCP params, never as a browser-sent _meta', () => {
+    expect(appToolCallRequest('browse_library', { query: 'Dune' }, 'corr-app')).toEqual({
+      correlationId: 'corr-app',
+      request: { arguments: { query: 'Dune' }, name: 'browse_library' },
+    });
   });
 });

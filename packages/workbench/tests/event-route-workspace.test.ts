@@ -48,6 +48,7 @@ const hostInvocation: RouteInvocation = {
 
 const controller = (state: RouteInvocationController['state']): RouteInvocationController => ({
   backendKind: 'dev-server',
+  cancel: noop,
   history: [summaryOf(hostInvocation), summaryOf(invocation)],
   load: noop,
   run: noop,

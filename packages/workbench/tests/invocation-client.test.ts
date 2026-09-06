@@ -2,6 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import type { RouteInvocation } from '../../agent-bundle/src/contracts/invocations.ts';
 import { InvocationClient, InvocationClientError } from '../src/application/invocation-client.ts';
+import { invocationSummaryOf } from '../src/application/invocation-model.ts';
 import type { ForegroundRequestAuthority } from '../src/mcp/mcp-route-client.ts';
 
 const unavailable = () => Object.freeze({
@@ -116,6 +117,24 @@ it('strictly decodes invoke, list, and read responses', async () => {
     headers: { 'content-type': 'application/json' },
     method: 'POST',
   });
+});
+
+it('sends and decodes the optional correlationId on invocations and summaries', async () => {
+  const requests: Array<readonly [string, RequestInit]> = [];
+  const correlated = { ...invocation, correlationId: 'corr-1' } satisfies RouteInvocation;
+  const client = new InvocationClient({ foreground: foreground((path, init) => {
+    requests.push([path, init]);
+    return Response.json(path.includes('?limit=')
+      ? { invocations: [{ ...invocationSummaryOf(correlated) }] }
+      : { invocation: correlated });
+  }) });
+
+  await expect(client.invoke({ correlationId: 'corr-1', input: { title: 'Dune' }, routeId: invocation.routeId })).resolves.toEqual(correlated);
+  await expect(client.list(1)).resolves.toEqual([expect.objectContaining({ correlationId: 'corr-1', id: invocation.id })]);
+  expect(JSON.parse(String(requests[0]?.[1].body))).toEqual({ correlationId: 'corr-1', input: { title: 'Dune' }, routeId: invocation.routeId });
+
+  const rejecting = new InvocationClient({ foreground: foreground(() => Response.json({ invocation: { ...invocation, requestId: 7 } })) });
+  await expect(rejecting.invoke({ routeId: invocation.routeId })).rejects.toMatchObject({ code: 'AB8230' });
 });
 
 it('preserves coded HTTP diagnostics', async () => {

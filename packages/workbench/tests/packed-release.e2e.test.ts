@@ -438,7 +438,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const epochBMarker = 'Epoch B changed the packed review guidance.';
       await replaceSourceAndAwaitWatcherRebuild('epoch B', skillSource, `${originalSkill}\n\n${epochBMarker}\n`);
       await openPrimaryArea('problems');
-      await expect(page.getByRole('heading', { name: /^Problems/u })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: /^Problems(?: \([0-9]+\))?$/u })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromProblems('epoch B');
       const epochBStatus = activeEpochFrom(await call('project_status'), 'epoch B');
       expect(epochBStatus.artifactStatus.state).toBe('active');
@@ -472,7 +472,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       if (invalidConfig === originalConfig) throw new Error('The packed fixture did not contain the resource URI used for the invalid rebuild.');
       await replaceSourceAndAwaitWatcherRebuild('invalid epoch B', configSource, invalidConfig);
       await openPrimaryArea('problems');
-      await expect(page.getByRole('heading', { name: /^Problems/u })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: /^Problems(?: \([0-9]+\))?$/u })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromProblems('invalid epoch B');
       const staleStatus = activeEpochFrom(await call('project_status'), 'stale epoch B');
       expect(staleStatus.artifactStatus.state).toBe('stale');
@@ -855,7 +855,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         const openedIndex = browserRequests.length;
         await page.getByTestId('workbench-nav').locator(`[data-area="${route.label.toLowerCase()}"]`).click();
         if (route.heading !== undefined) {
-          await expect(page.getByRole('heading', { name: new RegExp(`^${route.heading}`, 'u') })).toBeVisible({ timeout: browserTimeout });
+          await expect(page.getByRole('heading', {
+            name: route.heading === 'Problems' ? /^Problems(?: \([0-9]+\))?$/u : new RegExp(`^${route.heading}$`, 'u'),
+          })).toBeVisible({ timeout: browserTimeout });
         }
         if (route.testId !== undefined) {
           await expect(page.getByTestId(route.testId)).toBeVisible({ timeout: browserTimeout });

@@ -518,6 +518,62 @@ it('delivers synchronous runtime events once in FIFO order and refreshes after a
   expect(requests).toEqual(['/api/project/status', '/api/project/status', '/api/project/status']);
 });
 
+it('delivers route.invocation events to subscribers without refreshing project status', async () => {
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  const received: string[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async (input) => {
+      requests.push(String(input));
+      return Response.json({ status: status() });
+    }),
+  });
+  await client.connect(() => undefined, undefined, (event) => received.push(`legacy:${event.type}`));
+  client.subscribeEvents((event) => {
+    if (event.type !== 'route.invocation') return;
+    received.push(`${event.type}:${String(event.sequence)}:${event.payload.invocation.id}:${String(Object.isFrozen(event.payload.invocation))}`);
+  });
+  expect(stream.listeners.some((listener) => listener.type === 'route.invocation')).toBe(true);
+
+  const invocation = (sequence: number): { readonly data: string; readonly lastEventId: string } => ({
+    data: JSON.stringify({
+      occurredAt: '2026-09-05T07:00:01.000Z',
+      payload: {
+        invocation: {
+          completedAt: '2026-09-05T07:00:01.000Z',
+          correlationId: 'corr-1',
+          diagnostics: [],
+          id: `inv_${String(sequence)}`,
+          input: {},
+          kind: 'tool',
+          manifestDigest: 'a'.repeat(64),
+          routeId: 'tool:curator/search',
+          source: 'src/mcp/curator/tools/search.tsx',
+          sourceRevision: 'r',
+          startedAt: '2026-09-05T07:00:00.000Z',
+          status: 'succeeded',
+          timings: [],
+        },
+      },
+      sequence,
+      type: 'route.invocation',
+    }),
+    lastEventId: String(sequence),
+  });
+  stream.emit('route.invocation', invocation(1));
+  stream.emit('route.invocation', invocation(2));
+  await flushEvents();
+
+  expect(received).toEqual([
+    'legacy:route.invocation', 'route.invocation:1:inv_1:true',
+    'legacy:route.invocation', 'route.invocation:2:inv_2:true',
+  ]);
+  expect(client.lastEventId).toBe(2);
+  expect(requests).toEqual(['/api/project/status']);
+  client.close();
+});
+
 it('preserves a synchronous runtime event after replay gap delivery', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];

@@ -28,11 +28,31 @@ interface McpSessionTraceEntryBase {
   readonly kind: McpSessionTraceKind;
 }
 
+/**
+ * Correlation keys lifted from a request's `params._meta`, lowered to the
+ * vocabulary `docs/entry-conventions.md` gives each host: Claude's
+ * `claudecode/toolUseId` is the `requestId`; Codex's `x-codex-turn-metadata`
+ * names the `conversationId` (`thread_id`) and `sessionId` (`session_id`);
+ * `agent-bundle/correlationId` is the Workbench-minted `correlationId`.
+ */
+export interface McpSessionTraceMeta {
+  readonly correlationId?: string;
+  readonly conversationId?: string;
+  readonly requestId?: string;
+  readonly sessionId?: string;
+}
+
 export interface McpSessionFrameTraceEntry extends McpSessionTraceEntryBase {
   readonly direction: 'client' | 'server';
+  /** The JSON-RPC `id` as a string; absent on notifications. */
+  readonly id?: string;
   readonly kind: 'frame';
   /** The exact object observed by the MCP transport; it is never translated. */
   readonly message: unknown;
+  /** Lifted from a request's `params._meta`; absent when it carries no known key. */
+  readonly meta?: McpSessionTraceMeta;
+  /** The JSON-RPC `method`; absent on responses. */
+  readonly method?: string;
 }
 
 export interface McpSessionStderrTraceEntry extends McpSessionTraceEntryBase {

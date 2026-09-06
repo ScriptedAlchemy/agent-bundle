@@ -8,6 +8,7 @@
   "events",
   "notices",
   "diagnostics",
+  "dev-server-http",
   "runtime-environment",
   "security",
   "limitations",

@@ -9,18 +9,19 @@ import {
   type DevLogReplay,
   type DevLogReplayGap,
 } from '../../../agent-bundle/src/contracts/dev-logs.ts';
+import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
 import {
   parseJsonWithoutDuplicateKeys,
   type JsonValue,
 } from '../../../agent-bundle/src/contracts/strict-json.ts';
 import { exactKeys, isRecord, parseStrictResponseJson, strictJsonSnapshot } from '../client-helpers.ts';
-import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
 import {
   awaitWithAbort,
   ForegroundRouteClientError,
   type ForegroundRequestAuthority,
 } from '../mcp/mcp-route-client.ts';
 import { deepFreeze } from '../freeze.ts';
+import { hasControlCharacters, pathLikeText } from '../shell/wire-text.ts';
 
 
 export interface LogClientOptions {
@@ -56,12 +57,9 @@ const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isDate = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
-const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
 const isSafeWireText = (value: unknown, maximum = maximumLogFrameBytes): value is string => {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || redactEvalCredentialText(value) !== value) return false;
-  const withoutProjectPaths = value.replace(safeProjectRelativePath, '');
-  return !hasControlOrSeparators(withoutProjectPaths) &&
-    !/(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu.test(withoutProjectPaths);
+  return !hasControlCharacters(value) && !pathLikeText.test(value);
 };
 const isSafeDetailKey = (value: string): boolean =>
   !isCredentialKey(value) && !hasControlOrSeparators(value);

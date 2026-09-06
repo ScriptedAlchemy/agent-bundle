@@ -108,6 +108,8 @@ const allowedUnmountCancellation = ({ error, request }: FailedRequest, origin: s
   }
   return url.pathname === '/api/logs/stream'
     || url.pathname === '/api/logs/replay'
+    || url.pathname === '/api/trace'
+    || url.pathname === '/api/trace/stream'
     // The MCP page's server-catalog effect (main.tsx) inspects the active
     // epoch under an AbortController it aborts on unmount, so leaving the page
     // while that GET is in flight is a designed cancellation. Whether the

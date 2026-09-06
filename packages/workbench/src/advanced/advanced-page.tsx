@@ -74,9 +74,10 @@ const downloadMcpFile = ({ blob, filename }: McpDownload): void => downloadBlob(
  * published epoch's servers as advisory defaults. Unmounting closes any App
  * preview the page opened; the session controller itself outlives the section.
  */
-const ProtocolSection = ({ appClient, artifactClient, protocol, status }: {
+const ProtocolSection = ({ appClient, artifactClient, onNavigate, protocol, status }: {
   readonly appClient: McpAppClient;
   readonly artifactClient: Pick<ArtifactClient, 'inspect'>;
+  readonly onNavigate: (location: WorkbenchLocation) => void;
   readonly protocol: AdvancedProtocolSession;
   readonly status: ProjectStatus;
 }) => {
@@ -110,6 +111,7 @@ const ProtocolSection = ({ appClient, artifactClient, protocol, status }: {
       inspectorLaunch={protocol.inspectorLaunch}
       onDownloadConfig={downloadMcpFile}
       onDownloadTrace={downloadMcpFile}
+      onNavigate={onNavigate}
       onResetSession={protocol.onResetSession}
       presentationActive={true}
       serverCatalogState={serverCatalogState}
@@ -119,14 +121,14 @@ const ProtocolSection = ({ appClient, artifactClient, protocol, status }: {
   </div>;
 };
 
-const AdvancedSectionContent = ({ clients, manifestSourceRevision, protocol, section, status }: Omit<AdvancedPageProps, 'onNavigate'>) => {
+const AdvancedSectionContent = ({ clients, manifestSourceRevision, onNavigate, protocol, section, status }: AdvancedPageProps) => {
   switch (section) {
     case 'evals':
       return <EvalsPage client={clients.evalClient} comparisonClient={clients.comparisonClient} />;
     case 'artifact':
       return <ArtifactsPage client={clients.artifactClient} epochId={activeEpochFor(status)?.id} />;
     case 'protocol':
-      return <ProtocolSection appClient={clients.appClient} artifactClient={clients.artifactClient} protocol={protocol} status={status} />;
+      return <ProtocolSection appClient={clients.appClient} artifactClient={clients.artifactClient} onNavigate={onNavigate} protocol={protocol} status={status} />;
     case 'hosts':
       return <DiscoveryPage client={clients.discoveryClient} manifestDigest={manifestSourceRevision} />;
     case 'logs':

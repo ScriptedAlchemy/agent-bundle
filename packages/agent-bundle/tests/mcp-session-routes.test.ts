@@ -396,6 +396,31 @@ it('exposes the frozen operation and catalog surface without a generic launch or
       options: { arguments: { city: 'Paris' }, name: 'forecast', requestId: 'request-a' },
     });
 
+    // The Workbench's run id rides `params._meta` so the frame joins the route
+    // workspace's invocation on the unified trace; the browser never writes `_meta` itself.
+    const correlated = await fetch(`${started.url}/api/mcp/sessions/session-a/operations`, {
+      body: JSON.stringify({ arguments: {}, correlationId: 'corr-1', name: 'forecast', operation: 'tools/call' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(correlated.status).toBe(200);
+    expect(service.session.calls).toContainEqual({
+      kind: 'callTool',
+      options: { _meta: { 'agent-bundle/correlationId': 'corr-1' }, arguments: {}, name: 'forecast' },
+    });
+    for (const malformed of [
+      { arguments: {}, correlationId: '', name: 'forecast', operation: 'tools/call' },
+      { arguments: {}, correlationId: 'c'.repeat(257), name: 'forecast', operation: 'tools/call' },
+      { _meta: { 'agent-bundle/correlationId': 'corr-1' }, arguments: {}, name: 'forecast', operation: 'tools/call' },
+    ]) {
+      const invalid = await fetch(`${started.url}/api/mcp/sessions/session-a/operations`, {
+        body: JSON.stringify(malformed),
+        headers: { ...headers(), 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      expect(invalid.status).toBe(400);
+    }
+
     const rejected = await fetch(`${started.url}/api/mcp/sessions/session-a/operations`, {
       body: JSON.stringify({ command: '/tmp/untrusted', operation: 'initialize' }),
       headers: { ...headers(), 'content-type': 'application/json' },

@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import type { InstallHost } from '../install/install.ts';
+import { HookService } from '../services/hook-service.ts';
 import { AgentApi } from './agent-api.ts';
 import { ArtifactInspectionService } from './artifacts/artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
@@ -15,6 +16,7 @@ import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogge
 import { EpochStore, EpochStoreError } from './epoch-store.ts';
 import { EvalService } from './eval/eval-service.ts';
 import { ProjectEventHub } from './events.ts';
+import { attachHookReceipts } from './hooks/hook-receipt-endpoint.ts';
 import { createInspectorLauncher } from './inspector-launcher.ts';
 import { HookPlaygroundService } from './playground/hook-playground-service.ts';
 import { DevHostInstallManager } from './host-install-manager.ts';
@@ -79,6 +81,8 @@ import {
 } from './runtime-provider.ts';
 import { ScriptPlaygroundService } from './playground/script-playground-service.ts';
 import { SkillDocumentService } from './skill-document-service.ts';
+import { TraceHub } from './trace/trace-hub.ts';
+import { attachProjectEventTrace } from './trace/trace-project-events.ts';
 import { createWorkbenchAssetSource } from './workbench-assets.ts';
 import type { Invalidation, ProjectStatus } from './types.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -444,6 +448,7 @@ export interface DevServerRuntimeLifecycleResources {
 export interface DevServerLifecycleOptions {
   readonly coordinator: Closeable;
   readonly detachProjectLogs?: () => void;
+  readonly detachProjectTrace?: () => void;
   readonly epochAdoption?: Closeable;
   readonly hostInstalls?: Closeable;
   readonly logs?: DevLogService;
@@ -452,12 +457,14 @@ export interface DevServerLifecycleOptions {
   readonly mcpSessions: Closeable;
   readonly playground?: Closeable;
   readonly runtimeResources?: DevServerRuntimeLifecycleResources;
+  readonly trace?: TraceHub;
 }
 
 /** Closes persistent MCP state alongside the coordinator, preserving all cleanup failures. */
 export const closeDevServerLifecycle = async ({
   coordinator,
   detachProjectLogs,
+  detachProjectTrace,
   epochAdoption,
   hostInstalls,
   inspector,
@@ -466,6 +473,7 @@ export const closeDevServerLifecycle = async ({
   mcpSessions,
   playground,
   runtimeResources,
+  trace,
 }: DevServerLifecycleOptions): Promise<void> => {
   // ForegroundServer owns the Agent API admission gate. This lifecycle owns
   // only the shared services that are released after foreground routing ends.
@@ -498,6 +506,8 @@ export const closeDevServerLifecycle = async ({
   }
   try { detachProjectLogs?.(); }
   catch { /* The subscription is observability-only and cannot hold shutdown. */ }
+  try { detachProjectTrace?.(); }
+  catch { /* The subscription is observability-only and cannot hold shutdown. */ }
   logs?.log({
     details: { failures: failures.length },
     kind: 'dev.shutdown.completed',
@@ -506,6 +516,7 @@ export const closeDevServerLifecycle = async ({
     summary: failures.length === 0 ? 'Development workbench shutdown completed.' : 'Development workbench shutdown completed with failures.',
   });
   if (logs !== undefined) await closeResource('logs', logs);
+  trace?.close();
   if (failures.length > 0) throw new DevServerLifecycleCloseError(failures);
 };
 
@@ -519,8 +530,12 @@ const withMcpSessionLifecycle = (
   playground: Closeable,
   logs: DevLogService,
   detachProjectLogs: () => void,
+  trace: TraceHub,
+  detachProjectTrace: () => void,
   inspector: Closeable,
   epochAdoption: EpochAdoptionPolicy,
+  hookReceipts: ReturnType<typeof attachHookReceipts>,
+  publishHookReceiptUrl: (url: string) => void,
   hostInstalls?: DevHostInstallManager,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
@@ -528,6 +543,7 @@ const withMcpSessionLifecycle = (
     return closeDevServerLifecycle({
       coordinator,
       detachProjectLogs,
+      detachProjectTrace,
       epochAdoption,
       hostInstalls,
       inspector,
@@ -536,9 +552,14 @@ const withMcpSessionLifecycle = (
       mcpSessions,
       playground,
       runtimeResources: { clientSurfaces, runtime },
+      trace,
     });
   },
-  publishServerUrl: (url: string) => coordinator.publishServerUrl(url),
+  publishServerUrl: async (url: string) => {
+    await coordinator.publishServerUrl(url);
+    publishHookReceiptUrl(url);
+    await hookReceipts.publishEndpoint(url);
+  },
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: async () => {
     hostInstalls?.start();
@@ -599,8 +620,12 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   const openBrowser = options.openBrowser ?? openInBrowser;
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
-  const logs = new DevLogService({ projectRoot: root });
+  const traceHub = new TraceHub({ projectRoot: root });
+  const hookReceipts = attachHookReceipts({ projectRoot: root, trace: traceHub });
+  let hookReceiptUrl: string | undefined;
+  const logs = new DevLogService({ projectRoot: root, trace: traceHub });
   const detachProjectLogs = attachProjectEventLogs(logs, eventHub);
+  const detachProjectTrace = attachProjectEventTrace(traceHub, eventHub);
   const projectService = new ProjectService({
     includeDevRuntime: true,
     logger: createProjectDevLogger(logs),
@@ -776,6 +801,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     projectRoot: root,
     registry,
     platformRuntime,
+    trace: traceHub,
     traceSink: createMcpDevLogTraceSink(logs),
   });
   const epochAdoption = new EpochAdoptionPolicy({
@@ -806,7 +832,16 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         platformRuntime,
       });
   const hostMcp = new HostMcpRoutes({ adoption: epochAdoption, epochStore, eventHub, mcpSessions });
-  const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry, platformRuntime });
+  const hookPlayground = new HookPlaygroundService({
+    epochStore,
+    hookService: new HookService({
+      environment: () => hookReceiptUrl === undefined ? {} : hookReceipts.environment(hookReceiptUrl),
+      registry,
+    }),
+    logger: logs,
+    registry,
+    platformRuntime,
+  });
   const preparedBundle = () => {
     const prepared = latestValidPreparedProject;
     if (prepared?.model === undefined) return undefined;
@@ -849,7 +884,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   const artifacts = new ArtifactInspectionService(epochStore, registry);
   const evals = new EvalService({ logger: logs, projectRoot: root, registry, platformRuntime });
   // The resolved root is the project's stable identity: a store copied elsewhere must not reopen.
-  const trace = new PlaygroundService({
+  const playgroundTrace = new PlaygroundService({
     logger: logs,
     projectId: root,
     projectRoot: root,
@@ -864,7 +899,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     native: new NativePlaygroundService({ projectRoot: root, platformRuntime }),
     scripts: scriptPlayground,
     skillDocuments,
-    trace,
+    trace: playgroundTrace,
   });
   const inspector = createInspectorLauncher({ projectRoot: root });
   // The manifest is a projection of the prepared project's own compiler pass;
@@ -961,6 +996,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     },
     registry,
     scripts: scriptPlayground,
+    trace: traceHub,
   });
   const agentApi = agentApiEnabled
     ? new AgentApi({
@@ -994,8 +1030,12 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       playground,
       logs,
       detachProjectLogs,
+      traceHub,
+      detachProjectTrace,
       inspector,
       epochAdoption,
+      hookReceipts,
+      (url) => { hookReceiptUrl = url; },
       hostInstalls,
     ),
     evals,
@@ -1003,6 +1043,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     epochs: epochStore,
     eventHub,
     hookPlayground,
+    hookReceipts: hookReceipts.routes,
     hostDiscovery,
     hostMcp,
     inspector,
@@ -1018,6 +1059,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     routeInvocations,
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments,
+    trace: traceHub,
     webHostLaunch: { projectRoot: root, registry },
     ...(options.workbenchDevOrigins === undefined || options.workbenchDevOrigins.length === 0
       ? {}
@@ -1045,7 +1087,11 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     void mcpApps?.prepareClose().catch(() => undefined);
     clientSurfaces.beginClose();
     try {
-      await foreground.close();
+      try {
+        await hookReceipts.close();
+      } finally {
+        await foreground.close();
+      }
     } finally {
       // Probe transports whose teardown outlived their response boundary own
       // their plugin-data removal; joining them here (bounded by the probe's

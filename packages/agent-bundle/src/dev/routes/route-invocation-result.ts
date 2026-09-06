@@ -4,6 +4,7 @@ import type { JsonValue } from '../../core/strict-json.ts';
 import type { RequestContextProvenance } from '../../contracts/request-provenance.ts';
 import type { EventTraceEvent } from '../../events/trace.ts';
 import type {
+  RunningRouteInvocation,
   RouteInvocationProjection,
   RouteInvocationProvider,
   RouteInvocationSummary,
@@ -21,6 +22,21 @@ export interface RouteInvocation extends RouteInvocationSummary {
   readonly result?: JsonValue;
   /** Event-kernel phase events emitted by a compiled preflight execution. */
   readonly trace?: readonly EventTraceEvent[];
+}
+
+export type RouteInvocationStreamMessage =
+  | Readonly<{ readonly event: AgentRenderEvent; readonly type: 'render' }>
+  | Readonly<{ readonly event: EventTraceEvent; readonly type: 'trace' }>
+  | Readonly<{ readonly type: 'truncated' }>
+  | Readonly<{ readonly invocation: RouteInvocation; readonly type: 'final' }>;
+
+export interface RouteInvocationStart {
+  readonly invocation: RunningRouteInvocation;
+  readonly result: Promise<RouteInvocation>;
+}
+
+export interface RunningRouteInvocationResponse {
+  readonly invocation: RunningRouteInvocation;
 }
 
 /** `GET /api/routes/invocations/<id>` and `POST /api/routes/invocations`. */

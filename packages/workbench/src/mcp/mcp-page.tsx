@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
-import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/contracts/mcp-session.ts';
+import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation, McpSessionTraceMeta } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type { DevRuntimeMcpAppRunBinding } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isRecord } from '../client-helpers.ts';
 import type {
@@ -27,13 +27,18 @@ import {
 } from './mcp-app-client.ts';
 import { createMcpAppFrameRelay } from '../../../agent-bundle/src/web-host/browser/frame-relay.ts';
 import { mcpInspectorDeepLink, type McpInspectorLaunchModel } from './mcp-inspector-launch-model.ts';
-import type {
-  McpBrowserSessionInvocation,
-  McpBrowserSessionModel,
-  McpBrowserSessionTimelineEntry,
+import {
+  isMcpFrameEntry,
+  mcpFrameMetaKeys,
+  type McpBrowserSessionFrameEntry,
+  type McpBrowserSessionInvocation,
+  type McpBrowserSessionModel,
+  type McpBrowserSessionTimelineEntry,
 } from './mcp-session-model.ts';
 import type { McpSessionControllerBinding, McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
 import type { McpToolPrefill } from '../routes/routes-model.ts';
+import { ShellLink } from '../shell/shell-link.tsx';
+import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 import {
   mcpProtocolTraceDownload,
   type McpDownload,
@@ -72,6 +77,8 @@ interface McpPageCommonProps {
   readonly inspectorLaunch?: McpPageInspectorLaunch;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
   readonly onDownloadTrace?: (download: McpDownload) => void;
+  /** The shell router; a frame's lifted `correlationId` links to the unified Trace through it. */
+  readonly onNavigate?: (location: WorkbenchLocation) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
   readonly onResetSession?: () => void;
   /** Lets the host serialize a Runtime departure through this Page's existing preview lifecycle. */
@@ -158,6 +165,7 @@ export type McpConfigDownload = McpDownload;
 
 export interface McpProtocolEvidenceProps {
   readonly ariaLabel: string;
+  readonly onNavigate?: (location: WorkbenchLocation) => void;
   readonly protocol?: unknown;
   readonly trace: readonly unknown[];
 }
@@ -933,11 +941,41 @@ export const mcpAppConsentDetailsSummary = (request: unknown): string => {
   return boundedConsentSummary(`${summary}${fingerprint === undefined ? '' : `; action reference: ${fingerprint}`}`);
 };
 
+const frameMetaLabels: Readonly<Record<keyof McpSessionTraceMeta, string>> = Object.freeze({
+  conversationId: 'conversation',
+  correlationId: 'correlation',
+  requestId: 'request',
+  sessionId: 'session',
+});
+
+/** The keys the server lifted beside a raw frame; the correlation opens the unified Trace filtered to it. */
+const McpFrameFacts = ({ frame, onNavigate }: {
+  readonly frame: McpBrowserSessionFrameEntry;
+  readonly onNavigate?: (location: WorkbenchLocation) => void;
+}): React.ReactNode => {
+  const meta = frame.meta ?? {};
+  return <p className="mcp-page-frame-facts" data-testid="mcp-frame-facts">
+    <span className={`mcp-page-frame-direction mcp-page-frame-direction--${frame.direction}`}>{frame.direction === 'client' ? 'client → server' : 'server → client'}</span>
+    {frame.method === undefined ? undefined : <span>method <code>{frame.method}</code></span>}
+    {frame.id === undefined ? undefined : <span>id <code>{frame.id}</code></span>}
+    {mcpFrameMetaKeys.map((key) => {
+      const value = meta[key];
+      if (value === undefined) return undefined;
+      return <span key={key}>{frameMetaLabels[key]} {key === 'correlationId'
+        ? <ShellLink className="mcp-page-frame-link" location={{ area: 'trace', correlation: value }} onNavigate={onNavigate} title="Show correlated trace entries">{value}</ShellLink>
+        : <code>{value}</code>}</span>;
+    })}
+  </p>;
+};
+
 /** Read-only provider evidence shared by the live MCP page and Runtime Inspector. */
-export const McpProtocolEvidence = ({ ariaLabel, protocol, trace }: McpProtocolEvidenceProps): React.ReactNode => <section aria-label={ariaLabel} className="mcp-page-trace">
+export const McpProtocolEvidence = ({ ariaLabel, onNavigate, protocol, trace }: McpProtocolEvidenceProps): React.ReactNode => <section aria-label={ariaLabel} className="mcp-page-trace">
   <h3>{ariaLabel}</h3>
   {protocol === undefined ? undefined : <details open><summary>Protocol</summary><pre><code>{display(protocol)}</code></pre></details>}
-  {trace.length === 0 ? <p className="mcp-page-empty">No protocol evidence yet.</p> : <ol>{trace.map((entry, index) => <li key={index}><pre><code>{display(entry)}</code></pre></li>)}</ol>}
+  {trace.length === 0 ? <p className="mcp-page-empty">No protocol evidence yet.</p> : <ol>{trace.map((entry, index) => <li key={index}>
+    {isMcpFrameEntry(entry) ? <McpFrameFacts frame={entry} onNavigate={onNavigate} /> : undefined}
+    <pre><code>{display(entry)}</code></pre>
+  </li>)}</ol>}
 </section>;
 
 const errorMessage = (reason: unknown): string => reason instanceof Error ? reason.message : 'The MCP session action failed.';
@@ -1250,7 +1288,7 @@ const mcpPageInspectorStatusLine = (
 };
 
 export const McpPage = (props: McpPageProps) => {
-  const { controller, initialBinding, initialPreview, initialToolPrefill, inspectorLaunch, onDownloadConfig, onDownloadTrace, onResetSession, registerPreviewClose } = props;
+  const { controller, initialBinding, initialPreview, initialToolPrefill, inspectorLaunch, onDownloadConfig, onDownloadTrace, onNavigate, onResetSession, registerPreviewClose } = props;
   const runtimeProps: McpPageRuntimeProps | undefined = 'runtimePreviewDependencies' in props ? props : undefined;
   const artifactProps: McpPageArtifactProps | undefined = 'runtimePreviewDependencies' in props ? undefined : props;
   const [runtimeAdmission] = useState<RuntimePageAdmission | undefined>(() => runtimeProps === undefined
@@ -1851,7 +1889,7 @@ export const McpPage = (props: McpPageProps) => {
       </div>
       <section aria-labelledby={`mcp-trace-tab-${traceTab}`} className="mcp-page-trace" id={tracePanelId} role="tabpanel" tabIndex={0}>
         {traceTab === 'raw'
-          ? <McpProtocolEvidence ariaLabel={traceLabel} trace={rawTrace.map(traceValue)} />
+          ? <McpProtocolEvidence ariaLabel={traceLabel} onNavigate={onNavigate} trace={rawTrace.map(traceValue)} />
           : <><h3>{traceLabel}</h3>{traceEntries.length === 0 ? <p className="mcp-page-empty">No {traceLabel.toLowerCase()} entries yet.</p> : <ol>{traceEntries.map((entry, index) => <li key={`${traceTab}-${'sequence' in entry ? entry.sequence : 'local'}-${index}`}>
             <pre><code>{display(traceValue(entry))}</code></pre>
           </li>)}</ol>}</>}

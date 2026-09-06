@@ -19,6 +19,7 @@ import type { McpAppClient } from '../mcp/mcp-app-client.ts';
 import type { ForegroundRouteClient, McpRouteClient } from '../mcp/mcp-route-client.ts';
 import type { SkillClient } from '../skill-client.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
+import type { TraceClient } from '../trace/trace-client.ts';
 import type { ApplicationLeaf, ApplicationTree } from './application-tree-model.ts';
 import type { InvocationBackend, InvocationBackendKind } from './invocation-backend.ts';
 import type { InvocationState } from './invocation-model.ts';
@@ -63,6 +64,8 @@ export interface RouteWorkspaceProps {
   readonly status: ProjectStatus;
   /** Deep-linked result tab (`?tab=<tab>`); the workspace falls back to `rendered`. */
   readonly tab?: string;
+  /** Unified trace transport; supplied by the Workbench root once connected. */
+  readonly trace?: TraceClient;
   readonly tree: ApplicationTree;
 }
 
@@ -93,6 +96,8 @@ export type RouteInvocationDraft = Omit<RouteInvocationRequest, 'correlationId' 
 export interface RouteInvocationController {
   /** Names the backend that runs this leaf; undefined when none accepts it. */
   readonly backendKind?: InvocationBackendKind;
+  /** Cancels the active dev-server invocation, when it has received its server id. */
+  readonly cancel: () => void;
   /** Recent invocations of this leaf, newest first (the Trace tab). */
   readonly history: readonly RouteInvocationSummary[];
   /** Loads one snapshot by id into `state` (trace entries, deep links). */

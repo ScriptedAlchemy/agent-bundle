@@ -279,7 +279,7 @@ notices、lineage 存储、渲染式布局、应用 provider、React/RSC 辅助�
 都携带同一份 `EventTraceExecution` 身份、单调时间戳和序号，并且只包含该阶段的元数据。
 生成的 preflight shell 当前会发出 preflight 与 execute 边界及这两个阶段的失败；provider
 和 render 边界保留给统一 trace 消费方在延迟 worker 内连接。失败使用有长度上限且不含堆栈的
-`EventTraceErrorSummary`。没有 observer 时 `createEventTracer` 是空操作；observer 抛错也不会改变执行。
+`EventTraceErrorSummary`。`createEventTracer` 会发送到显式 observer，没有时则发送到每次发出时当前的进程级 observer（尚未安装时为空操作）；observer 抛错也不会改变执行。
 开发工具通过 `installEventTraceObserver` 安装进程级 sink；返回的 disposer 会恢复之前的 sink。
 相关类型与辅助函数从 `agent-bundle` 和 `agent-bundle/api` 导出。
 

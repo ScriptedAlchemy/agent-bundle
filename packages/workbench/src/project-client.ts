@@ -106,10 +106,14 @@ const projectEventTypes = [
   'dev.host.sync',
   'invalidation',
   'replay.gap',
+  'route.invocation',
   'runtime.event',
   'source.changed',
   'source.status',
 ] as const;
+
+/** Activity events: they never change project status, so they do not trigger a status refresh. */
+const activityEventTypes: ReadonlySet<string> = new Set(['route.invocation', 'runtime.event']);
 
 const browserEvents: EventSourceFactory = (url) => new EventSource(url);
 const retryDelay = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -692,7 +696,7 @@ export class ProjectClient {
         this.#publishEvent(queued.event);
         if (this.#closed) return;
         if (queued.sequence !== undefined) this.#lastEventId = queued.sequence;
-        if (queued.event.type !== 'runtime.event' && !synthesizedGap) this.#queueEventRefresh();
+        if (!activityEventTypes.has(queued.event.type) && !synthesizedGap) this.#queueEventRefresh();
       }
     }).finally(() => {
       this.#eventDrainPromise = undefined;

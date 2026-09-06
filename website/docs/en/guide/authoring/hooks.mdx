@@ -336,7 +336,9 @@ boundaries, including failures in either phase; provider and render boundaries a
 the unified trace consumer to connect inside the deferred worker.
 Each frozen event carries one `EventTraceExecution` identity, a monotonic timestamp and sequence,
 and only phase-specific metadata; failures use a bounded, stack-free `EventTraceErrorSummary`.
-`createEventTracer` is a no-op without an observer and isolates observer errors from execution.
+`createEventTracer` emits to its explicit observer or, without one, to the process-local observer
+current at each emission (a no-op while none is installed), and isolates observer errors from
+execution.
 Developer tooling installs the process-local sink with `installEventTraceObserver`; the returned
 disposer restores the previous sink. The trace types and helpers are exported from
 `agent-bundle` and `agent-bundle/api`.

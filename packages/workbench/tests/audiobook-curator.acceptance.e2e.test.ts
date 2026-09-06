@@ -13,7 +13,27 @@ import {
   expectHealthyExamplePage,
   writeExampleReport,
 } from './support/example-acceptance.ts';
-import { editWatchedSource, expectApplicationTree, expectHeading, expectPrimaryNav, expectRenderedDocument, expectUnknownRouteMessage, fillRouteInput, openWorkbench, readBuildEpoch, readInvocationId, rebuildTimeout, runSelectedRoute, selectApplicationLeaf, waitForBuildEpochAdvance, workbenchTestId } from './support/workbench-acceptance.ts';
+import {
+  editWatchedSource,
+  expectApplicationTree,
+  expectHeading,
+  expectPrimaryNav,
+  expectRenderedDocument,
+  expectToolInvocationTraceGroup,
+  expectUnknownRouteMessage,
+  fillRouteInput,
+  invokeRouteFromWorkbench,
+  openWorkbench,
+  readBuildEpoch,
+  readCorrelationId,
+  readInvocationId,
+  rebuildTimeout,
+  runSelectedRoute,
+  selectApplicationLeaf,
+  traceEntryRow,
+  waitForBuildEpochAdvance,
+  workbenchTestId,
+} from './support/workbench-acceptance.ts';
 import { buildWorkbench, e2e, waitForWorkbenchIdle, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 import { inspectWorkbenchSurface, workbenchLeafPath } from '../../agent-bundle/src/test/index.ts';
 import { applicationLeafForRouteId, applicationLeaves } from '../src/application/application-tree-model.ts';
@@ -30,9 +50,19 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
   await mkdir(acceptanceLibrary);
   await writeFile(join(acceptanceLibrary, 'invalid.mp3'), 'not an audio stream');
   const conversionSource = join(project.root, 'src', 'conversion.ts');
+  const analysisSource = join(project.root, 'src', 'components', 'library-analysis.tsx');
   const searchSource = join(project.root, 'src', 'mcp', 'curator', 'tools', 'search_audible.tsx');
   const healthyConversion = await readFile(conversionSource, 'utf8');
+  const healthyAnalysis = await readFile(analysisSource, 'utf8');
   const healthySearch = await readFile(searchSource, 'utf8');
+  const delayedAnalysis = healthyAnalysis.replace(
+    '  const measuredGroups = await Promise.all(',
+    '  await new Promise((resolve) => setTimeout(resolve, 1_500));\n  const measuredGroups = await Promise.all(',
+  );
+  if (delayedAnalysis === healthyAnalysis) {
+    throw new Error('library-analysis.tsx no longer contains the measured-groups anchor for the acceptance delay.');
+  }
+  await writeFile(analysisSource, delayedAnalysis);
   const server = await startDevServer({
     assets: createWorkbenchAssetSource({ root: workbenchAssets }),
     open: false,
@@ -51,10 +81,11 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
       throw new Error(`search_audible leaf was ${searchLeaf.ref.kind}, expected tool.`);
     }
     const inventoryLeaf = applicationLeafForRouteId(surface.application, 'tool:curator/inventory_sources');
+    const auditLeaf = applicationLeafForRouteId(surface.application, 'tool:curator/audit_library');
     const inventoryCliLeaf = applicationLeaves(surface.application).find((leaf) =>
       leaf.routeId === 'cli:inventory' && leaf.ref.kind === 'cli');
-    if (inventoryLeaf?.ref.kind !== 'tool' || inventoryCliLeaf?.ref.kind !== 'cli') {
-      throw new Error('inspectWorkbenchSurface did not project the inventory tool and CLI routes.');
+    if (auditLeaf?.ref.kind !== 'tool' || inventoryLeaf?.ref.kind !== 'tool' || inventoryCliLeaf?.ref.kind !== 'cli') {
+      throw new Error('inspectWorkbenchSurface did not project the audit, inventory, and CLI routes.');
     }
     expect(searchLeaf.ref.server).toBe('curator');
     const searchPath = workbenchLeafPath(searchLeaf);
@@ -66,6 +97,51 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expectApplicationTree(page, surface.application);
     await captureExampleState(page, 'audiobook-curator', 'application-populated');
 
+    await selectApplicationLeaf(page, server.url, auditLeaf);
+    await workbenchTestId(page, 'routeInputEditor').getByRole('button', { name: 'Raw JSON' }).click();
+    await workbenchTestId(page, 'routeInputEditor').locator('textarea').fill(JSON.stringify({
+      sources: [acceptanceLibrary],
+    }));
+    await workbenchTestId(page, 'routeRun').click();
+    await expect(workbenchTestId(page, 'routeRunningStatus')).toBeVisible({ timeout: browserTimeout });
+    await expect(workbenchTestId(page, 'routeCancel')).toBeVisible({ timeout: browserTimeout });
+    const liveDocument = workbenchTestId(page, 'renderedDocument');
+    await expect(liveDocument).toHaveAttribute('aria-busy', 'true');
+    await expect(liveDocument.locator('.rendered-document-body')).toBeVisible({ timeout: browserTimeout });
+    await expect(liveDocument.locator('.rendered-document-body')).not.toBeEmpty();
+    const liveInvocationId = await readInvocationId(page);
+    const liveCorrelationId = await readCorrelationId(page);
+    const tracePage = await page.context().newPage();
+    await openWorkbench(tracePage, server.url, `/trace?correlation=${encodeURIComponent(liveCorrelationId)}`);
+    await expectHeading(tracePage, 'Trace');
+    const runningGroup = workbenchTestId(tracePage, 'traceGroup').filter({ hasText: liveInvocationId });
+    await expect(runningGroup).toBeVisible({ timeout: browserTimeout });
+    await expect(runningGroup.locator('[data-kind="invocation.started"][data-status="running"]')).toBeVisible();
+    await expect(runningGroup.locator('[data-testid="trace-entry"]')).not.toHaveCount(0);
+    await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(/route-status--succeeded/u, { timeout: runTimeout });
+
+    await workbenchTestId(page, 'routeRun').click();
+    await expect(workbenchTestId(page, 'routeRunningStatus')).toBeVisible({ timeout: browserTimeout });
+    await workbenchTestId(page, 'routeCancel').click();
+    await expect(workbenchTestId(page, 'routeStatus')).toContainText('Cancelled', { timeout: runTimeout });
+    const cancelledInvocationId = await readInvocationId(page);
+    const cancelledCorrelationId = await readCorrelationId(page);
+    await expect(workbenchTestId(page, 'routeOutcome')).toHaveCount(0);
+    await openWorkbench(tracePage, server.url, `/trace?correlation=${encodeURIComponent(cancelledCorrelationId)}`);
+    const cancelledGroup = workbenchTestId(tracePage, 'traceGroup').filter({ hasText: cancelledInvocationId });
+    await expect(cancelledGroup.locator('[data-kind="invocation.cancelled"]')).toBeVisible({ timeout: browserTimeout });
+    const cancelledEnvelope = await page.evaluate(async (invocationId) => {
+      const session = await fetch('/api/project/session').then(async (response) => response.json()) as { token: string };
+      const response = await fetch(`/api/routes/invocations/${encodeURIComponent(invocationId)}`, {
+        headers: { 'x-agent-bundle-session': session.token },
+      });
+      return response.json() as Promise<{ invocation: { outcome?: unknown; status: string } }>;
+    }, cancelledInvocationId);
+    expect(cancelledEnvelope.invocation.status).toBe('cancelled');
+    expect(cancelledEnvelope.invocation).not.toHaveProperty('outcome');
+    await tracePage.close();
+
+    await selectApplicationLeaf(page, server.url, inventoryLeaf);
     await fillRouteInput(page, { source: acceptanceLibrary });
     await workbenchTestId(page, 'routeInputEditor').getByLabel('Strict').selectOption('true');
     await runSelectedRoute(page, runTimeout);
@@ -111,6 +187,33 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(workbenchTestId(page, 'resultTabTrace')).toBeVisible();
     await captureExampleState(page, 'audiobook-curator', 'tool-rendered');
     const invocationId = await readInvocationId(page);
+    const correlationId = await readCorrelationId(page);
+    const finalEnvelope = await page.evaluate(async (id) => {
+      const session = await fetch('/api/project/session').then(async (response) => response.json()) as { token: string };
+      const response = await fetch(`/api/routes/invocations/${encodeURIComponent(id)}`, {
+        headers: { 'x-agent-bundle-session': session.token },
+      });
+      return response.json() as Promise<{ invocation: {
+        outcome?: { kind: string };
+        providers: readonly { name: string; status: string }[];
+        status: string;
+        timings: readonly { durationMs: number; phase: string }[];
+      } }>;
+    }, invocationId);
+    expect(finalEnvelope.invocation.providers.length).toBeGreaterThan(0);
+    expect(finalEnvelope.invocation.timings.length).toBeGreaterThan(0);
+    expect(finalEnvelope.invocation.outcome).toBeDefined();
+    const finalOutcome = finalEnvelope.invocation.outcome!;
+    await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(new RegExp(`route-status--${finalEnvelope.invocation.status}`, 'u'));
+    await expect(workbenchTestId(page, 'routeOutcome')).toContainText(new RegExp(finalOutcome.kind, 'iu'));
+    const finalProvider = finalEnvelope.invocation.providers[0]!;
+    await workbenchTestId(page, 'inspectorToggle').click();
+    await page.getByRole('tab', { name: 'Providers' }).click();
+    await expect(page.getByRole('row').filter({ hasText: finalProvider.name })).toContainText(finalProvider.status);
+    const finalTiming = finalEnvelope.invocation.timings[0]!;
+    await page.getByRole('tab', { name: 'Timings' }).click();
+    const timingRow = page.locator('.inspector-timings li').filter({ hasText: finalTiming.phase });
+    await expect(timingRow).toContainText(`${String(finalTiming.durationMs)} ms`);
 
     const epochBeforeEdit = await readBuildEpoch(page);
     const markedSearch = healthySearch.replace(
@@ -133,17 +236,123 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(workbenchTestId(page, 'routeWorkspace')).toBeVisible({ timeout: browserTimeout });
     await expectRenderedDocument(page, runTimeout);
     expect(await readInvocationId(page)).toBe(invocationId);
+    await page.reload();
+    await waitForWorkbenchIdle(page);
+    await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(new RegExp(`route-status--${finalEnvelope.invocation.status}`, 'u'));
+    await expect(workbenchTestId(page, 'routeOutcome')).toContainText(new RegExp(finalOutcome.kind, 'iu'));
+    await expect(workbenchTestId(page, 'routeStatus')).toContainText(correlationId);
 
+    const routeId = searchLeaf.routeId ?? 'tool:curator/search_audible';
     await openWorkbench(page, server.url, '/trace');
     await expect(page.getByRole('heading', { name: 'Trace', exact: true })).toBeVisible({ timeout: browserTimeout });
-    const traceRow = page.locator(`.trace-table tr[data-invocation-id=${JSON.stringify(invocationId)}]`);
-    await expect(traceRow).toBeVisible({ timeout: browserTimeout });
-    await expect(traceRow).toContainText(searchLeaf.routeId ?? 'tool:curator/search_audible');
+    await expectToolInvocationTraceGroup(page, { invocationId, routeId });
     await captureExampleState(page, 'audiobook-curator', 'trace-populated');
-    await traceRow.getByRole('link').first().click();
+
+    await openWorkbench(page, server.url, `/trace?correlation=${encodeURIComponent(correlationId)}`);
+    await expect(page.getByRole('heading', { name: 'Trace', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.trace-scope')).toContainText(correlationId, { timeout: browserTimeout });
+    const scopedGroup = await expectToolInvocationTraceGroup(page, { invocationId, routeId });
+    await expect(workbenchTestId(page, 'traceGroup')).toHaveCount(1);
+    const scopedCompleted = scopedGroup.locator(`[data-testid="trace-entry"][data-kind="invocation.completed"]`);
+    await expect(scopedCompleted).toHaveCount(1);
+
+    await scopedCompleted.click();
     await waitForWorkbenchIdle(page);
-    expect(new URL(page.url()).pathname).toBe(`/trace/${encodeURIComponent(invocationId)}`);
-    await expect(page.getByTestId('trace-entry')).toBeVisible({ timeout: browserTimeout });
+    const detailPath = new URL(page.url()).pathname;
+    expect(detailPath).toMatch(/^\/trace\/trc_\d+$/u);
+    await expect(workbenchTestId(page, 'traceDetail')).toBeVisible({ timeout: browserTimeout });
+    await expect(workbenchTestId(page, 'traceDetail')).toContainText(routeId, { timeout: browserTimeout });
+    const entryId = detailPath.slice('/trace/'.length);
+
+    await page.goto(workbenchUrl(server.url, `/trace/${encodeURIComponent(entryId)}`));
+    await waitForWorkbenchIdle(page);
+    expect(new URL(page.url()).pathname).toBe(`/trace/${entryId}`);
+    await expect(workbenchTestId(page, 'traceDetail')).toBeVisible({ timeout: browserTimeout });
+    await expect(workbenchTestId(page, 'traceDetail')).toHaveAttribute('data-entry-id', entryId);
+    await expect(workbenchTestId(page, 'traceDetail')).toContainText(correlationId);
+    await page.reload();
+    await waitForWorkbenchIdle(page);
+    await expect(workbenchTestId(page, 'traceDetail')).toHaveAttribute('data-entry-id', entryId);
+    await expect(workbenchTestId(page, 'traceDetail')).toContainText(correlationId);
+
+    await workbenchTestId(page, 'traceDetail').getByRole('link', { name: 'Open route', exact: true }).click();
+    await waitForWorkbenchIdle(page);
+    expect(new URL(page.url()).pathname).toBe(searchPath);
+    expect(new URL(page.url()).searchParams.get('invocation')).toBe(invocationId);
+    await expect(workbenchTestId(page, 'routeWorkspace')).toBeVisible({ timeout: browserTimeout });
+    await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(/route-status--succeeded/u, { timeout: browserTimeout });
+    expect(await readInvocationId(page)).toBe(invocationId);
+    await expectRenderedDocument(page, runTimeout);
+    await page.reload();
+    await waitForWorkbenchIdle(page);
+    await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(new RegExp(`route-status--${finalEnvelope.invocation.status}`, 'u'));
+    await expect(workbenchTestId(page, 'routeOutcome')).toContainText(new RegExp(finalOutcome.kind, 'iu'));
+    await expect(workbenchTestId(page, 'routeStatus')).toContainText(correlationId);
+
+    await openWorkbench(page, server.url, '/trace');
+    const completedBeforeLive = await traceEntryRow(page, 'invocation.completed').count();
+    const liveUrl = page.url();
+    const traceLiveInvocationId = await invokeRouteFromWorkbench(page, { input: { title: searchTitle }, routeId });
+    expect(traceLiveInvocationId).not.toBe(invocationId);
+    await expect.poll(
+      async () => traceEntryRow(page, 'invocation.completed').count(),
+      { timeout: browserTimeout },
+    ).toBeGreaterThan(completedBeforeLive);
+    await expectToolInvocationTraceGroup(page, { invocationId: traceLiveInvocationId, routeId });
+    expect(page.url()).toBe(liveUrl);
+
+    await openWorkbench(page, server.url, '/advanced/protocol');
+    await expectHeading(page, 'MCP playground');
+    await page.locator('#mcp-target').selectOption('claude');
+    await page.locator('#mcp-server-name').fill('curator');
+    const openedMcp = page.waitForResponse((response) =>
+      response.url() === `${server.url}/api/mcp/sessions` && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Open MCP session' }).click();
+    const mcpSession = await (await openedMcp).json() as { session: { id: string } };
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+    await page.getByRole('button', { name: 'search_audible', exact: true }).click();
+    const mcpArguments = page.locator('#mcp-tool-arguments-raw');
+    if (await mcpArguments.count() === 0) await page.getByLabel('Raw JSON').check();
+    await mcpArguments.fill(JSON.stringify({ title: searchTitle }));
+    await page.getByRole('button', { name: 'Call search_audible' }).click();
+    await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText(searchTitle, { timeout: runTimeout });
+    const receiptEndpoint = JSON.parse(
+      await readFile(join(project.root, '.agent-bundle', 'hook-receipts.json'), 'utf8'),
+    ) as { token: string; url: string };
+    const receiptResponse = await fetch(`${receiptEndpoint.url}/api/trace/receipts`, {
+      body: JSON.stringify({
+        events: [
+          { at: 0, kind: 'execute.start', phase: 'execute', runtime: 'standalone', sequence: 0 },
+          { at: 1, durationMs: 1, kind: 'render.finish', phase: 'render', sequence: 1 },
+        ],
+        execution: {
+          event: 'tool/before',
+          executionId: `execution-${mcpSession.session.id}`,
+          host: 'claude',
+          nativeEvent: 'PreToolUse',
+        },
+        identity: {
+          conversationId: mcpSession.session.id,
+          requestId: 'request-browser-correlation',
+          sessionId: mcpSession.session.id,
+        },
+        lineage: { reason: 'not-provided', state: 'unavailable' },
+        startedAt: new Date().toISOString(),
+        version: 1,
+      }),
+      headers: {
+        authorization: `Bearer ${receiptEndpoint.token}`,
+        'content-type': 'application/json',
+      },
+      method: 'POST',
+    });
+    expect(receiptResponse.status).toBe(204);
+    await openWorkbench(page, server.url, `/trace?correlation=${encodeURIComponent(mcpSession.session.id)}`);
+    await expectHeading(page, 'Trace');
+    const sessionGroup = workbenchTestId(page, 'traceGroup');
+    await expect(sessionGroup).toHaveCount(1, { timeout: browserTimeout });
+    await expect(sessionGroup.locator('[data-kind="mcp.request"]').filter({ hasText: 'tools/call search_audible' })).toBeVisible({ timeout: browserTimeout });
+    await expect(sessionGroup.locator('[data-kind="hook.received"]').first()).toBeVisible({ timeout: browserTimeout });
 
     await editWatchedSource(server, project.root, conversionSource, `${healthyConversion}\nconst = ;\n`, 'failed');
     await page.reload();

@@ -53,3 +53,42 @@ it('records project service events and derives build, artifact, and diagnostic r
   expect(records[2]?.context).toEqual({ buildId: 'build-1', diagnosticCode: 'BUILD_FAILED' });
   expect(records[3]?.context).toEqual({ epochId: 'epoch-1' });
 });
+
+it('stamps route invocation records with their trace join keys', () => {
+  const logs = new DevLogService({ projectRoot: '/work/project' });
+  const events = new ProjectEventHub();
+  const detach = attachProjectEventLogs(logs, events);
+
+  events.publish({
+    payload: {
+      invocation: {
+        completedAt: '2026-08-18T12:01:00.000Z',
+        correlationId: 'correlation-1',
+        diagnostics: [],
+        id: 'invocation-1',
+        input: {},
+        kind: 'tool',
+        manifestDigest: 'manifest-1',
+        outcome: { kind: 'success' },
+        routeId: 'tool:curator/search',
+        source: 'src/tools/search.tsx',
+        sourceRevision: 'source-1',
+        startedAt: '2026-08-18T12:00:00.000Z',
+        status: 'succeeded',
+        surface: { kind: 'mcp' },
+        timings: [],
+      },
+    },
+    type: 'route.invocation',
+  });
+  detach();
+
+  expect(logs.replay().records).toMatchObject([{
+    context: {
+      correlationId: 'correlation-1',
+      invocationId: 'invocation-1',
+      routeId: 'tool:curator/search',
+    },
+    kind: 'route.invocation',
+  }]);
+});

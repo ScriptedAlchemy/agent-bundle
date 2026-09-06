@@ -26,9 +26,12 @@ import {
   McpSessionService,
   type McpSessionTraceSubscription,
 } from '../src/dev/mcp-session/mcp-session-service.ts';
+import type { TraceEntry, TraceEntryInput } from '../src/dev/trace/trace-entry.ts';
+import type { TracePublisher } from '../src/dev/trace/trace-hub.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { pathTokens, type NormalizationTargetRegistry } from '../src/core/types.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { eventually } from './support/eventually.ts';
 import { mcpCatalogStub, stdioTransportStub } from './support/mcp-client-stub.ts';
 import { loadedProject } from './support/loaded-project.ts';
 
@@ -307,6 +310,118 @@ it('keeps one generated server and plugin-data directory bound to the selected e
     } else {
       process.env[inheritedKey] = previousInherited;
     }
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('lowers every session trace entry onto the unified trace with request/response pairing and host correlation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-trace-'));
+  const published: TraceEntryInput[] = [];
+  const trace: TracePublisher = {
+    publish(input) {
+      published.push(input);
+      return { ...input, id: `trc_${published.length}`, occurredAt: input.occurredAt ?? '', sequence: published.length } as TraceEntry;
+    },
+  };
+  const ofKind = (kind: string) => published.filter((entry) => entry.kind === kind);
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    const service = new McpSessionService({ epochStore, projectRoot: root, trace });
+    const session = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+    const href = (path: string) => `${path}?session=${encodeURIComponent(session.id)}`;
+
+    expect(ofKind('mcp.session.started')).toMatchObject([{
+      correlation: { epochId: 'epoch-1', host: 'portable', mcpSessionId: session.id },
+      href: href('/advanced/protocol'),
+      source: 'mcp',
+      status: 'ok',
+      summary: 'MCP session fixture (portable) started',
+    }]);
+    expect(ofKind('mcp.request').map((entry) => entry.summary)).toEqual(['initialize']);
+    expect(ofKind('mcp.notification').map((entry) => entry.summary)).toEqual(['notifications/initialized']);
+
+    await session.callTool({
+      _meta: { 'agent-bundle/correlationId': 'corr-1', 'claudecode/toolUseId': 'toolu_01' },
+      arguments: {},
+      name: 'inspect',
+    });
+    await session.getPrompt({ name: 'fixture' });
+    await session.readResource({ uri: 'ui://fixture/resource.txt' });
+    await eventually(() => ofKind('mcp.stderr').length > 0, 2_000);
+
+    const requests = ofKind('mcp.request');
+    const responses = ofKind('mcp.response');
+    expect(requests.map((entry) => entry.summary)).toEqual([
+      'initialize',
+      'tools/call inspect',
+      'prompts/get fixture',
+      'resources/read',
+    ]);
+    expect(responses.map((entry) => entry.summary)).toEqual([
+      'initialize ok',
+      'tools/call inspect ok',
+      'prompts/get fixture ok',
+      'resources/read ok',
+    ]);
+    for (const [index, request] of requests.entries()) {
+      const response = responses[index];
+      expect(request.correlation.mcpRequestId).toBeDefined();
+      expect(response?.correlation).toEqual(request.correlation);
+      expect(response?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(request.status).toBe('running');
+      expect(response?.status).toBe('ok');
+      expect(request.href).toBe(response?.href);
+    }
+    expect(requests[1]).toMatchObject({
+      correlation: {
+        correlationId: 'corr-1',
+        epochId: 'epoch-1',
+        host: 'portable',
+        mcpSessionId: session.id,
+        requestId: 'toolu_01',
+        routeId: 'tool:fixture/inspect',
+      },
+      details: { method: 'tools/call', name: 'inspect' },
+      href: href('/routes/mcp/fixture/tool/inspect'),
+    });
+    expect(requests[2]).toMatchObject({
+      correlation: { routeId: 'prompt:fixture/fixture' },
+      href: href('/routes/mcp/fixture/prompt/fixture'),
+    });
+    expect(requests[3]?.correlation).not.toHaveProperty('routeId');
+    expect(requests[3]?.href).toBe(href('/advanced/protocol'));
+    expect(session.trace().entries.find((entry) => entry.kind === 'frame' && entry.method === 'tools/call')).toMatchObject({
+      id: requests[1]?.correlation.mcpRequestId,
+      meta: { correlationId: 'corr-1', requestId: 'toolu_01' },
+      method: 'tools/call',
+    });
+
+    expect(ofKind('mcp.stderr')).toMatchObject([{
+      correlation: { epochId: 'epoch-1', host: 'portable', mcpSessionId: session.id },
+      details: { bytes: Buffer.byteLength('fixture stderr\n') },
+      href: href('/advanced/protocol'),
+      summary: 'stderr: fixture stderr',
+    }]);
+    expect(JSON.stringify(published)).not.toContain(root);
+
+    await session.close();
+    expect(ofKind('mcp.session.closed')).toMatchObject([{ status: 'ok', summary: 'MCP session fixture (portable) closed' }]);
+    expect(published.at(-1)?.kind).toBe('mcp.session.closed');
+    expect(published.every((entry) => entry.source === 'mcp' && entry.correlation.mcpSessionId === session.id)).toBe(true);
+    await service.close();
+
+    // A failing publisher is the trace's problem, never the session's.
+    const throwing = new McpSessionService({
+      epochStore,
+      projectRoot: root,
+      trace: { publish: () => { throw new Error('trace hub is closed'); } },
+    });
+    const isolated = await throwing.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+    await expect(isolated.callTool({ arguments: {}, name: 'inspect' })).resolves.toMatchObject({ structuredContent: { answer: 42 } });
+    expect(isolated.trace().entries.some((entry) => entry.kind === 'frame' && entry.method === 'tools/call')).toBe(true);
+    await isolated.close();
+    await throwing.close();
+  } finally {
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);

@@ -27,7 +27,7 @@ npx agent-bundle dev --root . --port 3100 --no-open
 本版本的主导航有四个目的地：
 
 - **Application** — 已编译的应用树，以及所选叶子的工作区。
-- **Trace** — 本次前台开发会话中观察到的调用。
+- **Trace** — 本次前台开发会话中观察到的应用活动关联时间线。
 - **Problems** — 当前的编译器、运行时与契约诊断。
 - **Advanced** — Evals、Artifact、Protocol、Host diagnostics 与 Raw logs。
 
@@ -64,7 +64,8 @@ Rules / Commands
 选中一个叶子会打开同一个工作区，而不是把你送到某个表面专用的页面。对于可执行路由，输入编辑器由其
 schema 生成，并提供适用的夹具以及为该叶子保留的上次输入。**Run** 在前台服务器上执行生产路由路径。
 
-结果首先打开 **Rendered**，即生产 Agent Document 及其流式进度或 Suspense 替换的浏览器渲染。次要结果
+结果首先打开 **Rendered**，即生产 Agent Document 的浏览器渲染。路由运行期间，流式进度与 Suspense
+替换会就地更新该视图；**Cancel** 会停止子进程，被取消的调用不带 `outcome`。次要结果
 标签是 **Structured result**、**Raw AgentDocument**、**MCP projection**、可用时的 **CLI projection**，
 以及 **Trace**。检查器仅在请求时打开，其中包含 **Source**、**Schema**、**Context**、**Providers**、
 **Execution timings**、**Projection** 与 **Raw protocol**。本次运行未测量的 provider 显示
@@ -106,9 +107,70 @@ Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 保持惰性。
 
 ## Trace
 
-Trace 列出本次前台开发会话的路由调用，并在收到 `route.invocation` 项目事件时更新。选中一条记录即可
-检视它，或跟随其路由链接，在路由工作区中加载该调用快照。本版本不声称提供跨会话的持久轨迹，也不嵌入
-宿主会话。
+Trace 是前台服务器所观察到的应用活动的实时有序时间线。例如，运行
+[钩子与脚本](../../examples/hooks-and-scripts.mdx)中的 `sessionStart` 事件路由可能产生如下序列：
+
+```text
+22:41:04.101 invocation.started       event:session/start
+22:41:04.118 kernel.preflight.start   session/start · claude
+22:41:04.121 kernel.execute.start     event:session/start
+22:41:04.126 kernel.providers.start
+22:41:04.129 kernel.providers.finish
+22:41:04.132 kernel.render.start
+22:41:04.146 kernel.render.finish
+22:41:04.149 invocation.completed     sessionStart succeeded
+```
+
+通过 Protocol 检查器发起的调用还会向同一时间线加入 `mcp.request`、进度或日志通知，以及
+`mcp.response`。由已附加宿主投递的钩子会加入 `hook.received` 以及 `hook.completed` 或
+`hook.failed`；其不含载荷的内核阶段保留在终止行的详情中。
+
+### 条目、关联与分组
+
+时间线是对已有记录的降级表示，不会再次复制调用、协议帧、钩子收据、日志记录或诊断。
+每一行都包含发生时间、`source`、由生产者所有的点分 `kind`、单行摘要、已知关联键、可选状态与耗时；
+当完整记录可用时，还包含指向它的 `href`：
+
+| 来源 | Kind | 关联键 | 目的地 |
+| --- | --- | --- | --- |
+| `invocation` | `invocation.started`、`invocation.completed`、`invocation.failed`、`invocation.cancelled` | `correlationId`、`invocationId`、`routeId`、`epochId`，以及可用时的会话/对话标识 | 带 `?invocation=<id>` 的 Application 路由 |
+| `kernel` | `kernel.preflight.start`、`kernel.preflight.outcome`、`kernel.execute.start`、provider 与 render 的开始/结束，以及 `kernel.failure` | `executionId`、路由、宿主，以及可用时的会话与对话标识 | 对应的路由调用 |
+| `mcp` | request、response、notification、progress、logging、session 与 stderr kind | `mcpSessionId`、JSON-RPC `mcpRequestId`、`requestId`，以及已知的路由与宿主元数据 | 带 `?session=<id>` 的路由工作区，或绑定的 Protocol 会话 |
+| `hook` | 收据/完成/失败与宿主会话开始/结束 | `requestId`、`executionId`、`sessionId`、`conversationId`、`routeId`、`host` | 事件路由与捕获的收据 |
+| `log` | 具有共享键的记录对应的 `log.<producer>.<kind>` | 安全日志投影保留的任意关联键 | Advanced → Raw logs |
+| `diagnostic` | 构建、契约与宿主同步失败 | 已知的构建、epoch、路由与共享请求标识 | Problems 或受影响的路由 |
+
+Trace 会根据共享标识传递式地分组条目。组标签按以下顺序采用最强的可用键：对话、会话、调用、内核执行、
+MCP 请求，最后是浏览器生成的关联 id。MCP 请求 id 只在其 MCP 会话内参与关联。分组以证据
+为依据：不会仅因活动发生时间相近就把无关活动合并。`/trace?correlation=<value>` 会选中包含具有该精确
+关联值条目的组。
+
+### 检视与深度链接
+
+选择一行会在 `/trace/<entry-id>` 打开其详情。**Open route** 会沿该行的 `href` 前往 Application
+工作区并加载不可变的调用快照，而不是重新运行路由。路由工作区的 **Open in Trace** 操作会返回匹配的
+关联组。Advanced → Raw logs 中的记录若带有 `correlationId`、`invocationId` 或 `mcpSessionId`，
+也会提供同一操作。
+
+Trace 重放从 `GET /api/trace?after=<sequence>` 加载，实时视图再从
+`GET /api/trace/stream?after=<sequence>` 继续。重放窗口丢失会被明确表示为 gap；浏览器不会暗示剩余
+行是完整记录。Trace 属于当前前台开发会话，服务器重启后不会持久保留。
+
+### 宿主钩子收据
+
+已附加的生成式钩子包装器可以向 `POST /api/trace/receipts` 提交一份最多 16 KiB 的收据。包装器通过
+开发安装标记与项目中仅所有者可读的收据文件发现当前 loopback 端点及每次开发服务器随机生成的 bearer
+token；模拟调用直接从前台服务器取得这对值，服务器关闭时会移除该文件。这个只写路由拒绝非 loopback
+对端以及任何带 `Origin` 标头的请求；Workbench cookie 与会话标头均不能授权它。收据包含执行标识、
+不含载荷的内核事件、宿主/会话/请求 id 与解析后的 lineage，绝不包含原生钩子载荷。提交预算为 750 ms，
+失败会被忽略，因此 Workbench 观察不会改变钩子结果。包装器会在写入 stdout 后等待该提交，因此同一个
+750 ms 超时也限定了新增的钩子退出延迟。这是范围严格且经过认证的遥测，而不是远程控制或通用摄取端点。
+
+### 刻意排除的数据
+
+Trace 绝不包含请求或响应载荷正文、渲染后的 Agent Document、原生事件信封、环境变量、凭据、绝对路径或
+错误堆栈。需要更多详情时，请打开已链接的调用、路由、Protocol 会话、Raw log 记录或 Problem 中可用的
+有界完整记录。
 
 ## Problems 与过期目录修复
 
@@ -131,7 +193,9 @@ Problems 收集当前诊断。失败的构建不会发布新的 epoch，因此�
   [MCP Inspector](https://github.com/modelcontextprotocol/inspector) 启动器。
 - **Host diagnostics** 仅限于已安装状态、版本、路径、当前插件是否已附加、可操作的错误，以及一个
   MCP 握手指示。
-- **Raw logs** 包含用于框架级诊断的生产者流。Trace 才是常规的路由执行视图。
+- **Raw logs** 保留为完整且经过脱敏的生产者流，用于不属于类型化时间线的框架级细节。Trace 是常规的
+  可观测性视图；带有 `correlationId`、`invocationId` 或 `mcpSessionId` 的日志记录会提供
+  **Open in Trace**。
 
 MCP 协议会话仍然固定到 `{ epochId, target, serverName }`。重启它会在所选 epoch 上重新拉起该生成式
 服务器；要使用新发布的 epoch，请打开一个新会话。兼容的 App 通过同一个已绑定会话预览。见
@@ -156,7 +220,8 @@ Workbench 使用路径与浏览器历史，而不是 `#page` 哈希：
 /routes/skills/<id>
 /routes/commands/<id>
 /routes/rules/<id>
-/trace/<invocation-id>
+/trace/<entry-id>
+/trace?correlation=<correlation-value>
 /problems
 /advanced/<section>
 ```
@@ -169,10 +234,18 @@ Workbench 外壳，因此路由、trace、Problems 与 Advanced 的深度链接�
 
 路由工作区使用一套经过认证、受 origin 守卫的前台 API：
 
-- `POST /api/routes/invocations` 接受一条路由调用请求，并返回其已完成的调用信封。
+- `POST /api/routes/invocations` 接受一条路由调用请求，并返回其已完成的调用信封。传入
+  `stream: true` 时会立即以 `202` 返回运行中的 id。
+- `GET /api/routes/invocations/<id>/stream` 通过服务器发送事件重放并实时发送 `render`、`trace`、
+  `truncated` 与终止 `final` 消息。它保留最新 256 条 render 事件，并用一条标记表示发生了截断。
+- `POST /api/routes/invocations/<id>/cancel` 停止运行中或排队中的调用并返回取消后的最终信封；取消已经
+  终止的调用会报告 `AB8256`（409）。
 - `GET /api/routes/invocations?limit=50` 为 Trace 返回按最新优先的摘要。
 - `GET /api/routes/invocations/<id>` 返回一次调用。
-- `/api/project/events` 以 `route.invocation` 事件发布已完成的摘要。
+- `/api/project/events` 以 `route.invocation` 事件发布运行中记录与最终摘要。
+- `GET /api/trace?after=<sequence>` 返回一份关联的 Trace 重放。
+- `GET /api/trace/stream?after=<sequence>` 以 NDJSON 流式传输 Trace 条目与重放 gap。
+- `POST /api/trace/receipts` 接受来自开发包装器的一份有界且经过 bearer 认证的钩子收据；它不是浏览器路由。
 
 请求以 `routeId` 标识一个规范操作，并可选择一种有固定形状的 `surface`：
 `{ kind: "mcp" }`、`{ kind: "cli", command, args }`、
@@ -203,22 +276,29 @@ invocation id（`AB8231`）、不可用的 epoch（`AB8232`）、渲染超时或
 （`AB8237`）、未知 fixture id（`AB8238`）、在获得并发槽位前发布修订已变更的排队调用（`AB8239`）、不可用的编译制品
 （`AB8250`）、缺失的已编译路由可执行项（`AB8251`）、已编译投影或 preflight 失败（`AB8252`）、
 CLI 命令/操作不匹配（`AB8253`）、投影形成的重复 CLI id（`AB8254`），以及未指定具体宿主的 preflight
-路由（`AB8255`）会作为诊断报告。
+路由（`AB8255`），以及取消已终止调用（`AB8256`）会作为诊断报告。
 各条触发条件与恢复指引见[诊断参考](../../reference/diagnostics.md)。
 
 信封、`route.invocation` 事件载荷与路由工作区报告两个彼此独立的事实。`status` 表示执行边界是否完成；
 `outcome` 表示一次已完成的运行意味着什么，由该路由所经过的表面来判定。失败的边界不带 `outcome`，
 已完成的运行总是带有一个，因此被表示的错误或非零退出码永远不会被报告为普通成功。
+`route.invocation` 也会在调用开始时触发，此时记录的 `status` 为 `"running"`，且没有
+`completedAt` 或 `outcome`；读取完成字段前请先按 `status` 缩小类型。
 
 | 字段 | 值 | 含义 |
 | --- | --- | --- |
 | `status` | `succeeded` | 子进程完成了最终文档（或普通脚本已退出）。 |
-| `status` | `failed` | 边界从未完成：崩溃、超时、中止，或 `AB825x` 诊断。 |
+| `status` | `failed` | 边界从未完成：崩溃、超时，或 `AB825x` 诊断。 |
+| `status` | `cancelled` | 操作者取消了运行中或排队中的调用；不带 `outcome`。 |
 | `outcome` | `{ kind: "success" }` | 按该路由的表面判定，投影结果为成功。 |
 | `outcome` | `{ kind: "represented-error", summary }` | MCP 投影带有 `isError: true`（非 `success` 的 Agent Document，例如 `Agent.Error`），或事件路由的决策为 `deny`。`summary` 列出 `Agent.Error` 的代码与消息，或 deny 的原因。 |
 | `outcome` | `{ kind: "process-exit", exitCode }` | CLI 或脚本路由已完成，且其生成的可执行文件设置了非零退出码——即该 bin 自己的 `exitCode` 策略作用于已校验结果，或非 `success` 文档对应的 `1`。零退出码报告为 `success`。 |
 
-Workbench 状态行在执行状态（`Completed` / `Failed`）旁展示 outcome 徽章，Trace 为每个条目同时列出两者。
+Workbench 状态行在执行状态（`Running` / `Completed` / `Failed` / `Cancelled`）旁展示 outcome
+徽章，Trace 为每个条目同时列出两者。
+
+完整的浏览器侧 HTTP 形状（包括 Trace 条目与重放契约）见
+[开发服务器 HTTP 参考](../../reference/dev-server-http.mdx)。
 
 ## 以编程方式使用同一个会话
 

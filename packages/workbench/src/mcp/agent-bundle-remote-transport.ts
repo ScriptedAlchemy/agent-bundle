@@ -1,5 +1,6 @@
 import type { JSONRPCMessage, Transport, TransportSendOptions } from '@modelcontextprotocol/client';
 
+import { mcpCorrelationMetaKey } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type { RuntimeVector } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isRecord, parseStrictResponseJson } from '../client-helpers.ts';
 import { readNdjsonResponseFrames } from '../ndjson.ts';
@@ -97,8 +98,12 @@ const operationFor = (message: JsonRpcRequest): OperationResolution => {
     // MCP 2025-11-25 Tasks (#369): `params.task` asks the server to answer with a task handle.
     const task = params.task === undefined ? undefined : taskCreation(params.task);
     if (task === 'invalid') return { kind: 'invalid' };
+    // The route refuses a browser `_meta` (AB8016) and stamps the correlation itself
+    // from the top-level field; the rest of `_meta` (the SDK's progress token) stays behind.
+    const correlationId = asRecord(params._meta)?.[mcpCorrelationMetaKey];
     return { kind: 'operation', operation: {
       arguments: params.arguments ?? {},
+      ...(typeof correlationId === 'string' && correlationId.length > 0 ? { correlationId } : {}),
       name: params.name,
       operation: 'tools/call',
       requestId: requestKey(message.id),

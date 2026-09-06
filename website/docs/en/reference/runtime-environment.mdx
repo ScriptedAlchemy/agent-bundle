@@ -45,6 +45,8 @@ Cursor's pinned loader has its own substituted-field table, and a token outside 
 | `AGENT_BUNDLE_ENV_FILE` | Generated executables | The operator env file(s) an installed pack reads at launch instead of `<plugin root>/.env` and `.env.local`: one path, or several joined by the platform path delimiter, later files winning; `none` disables the layer. `mcp run` sets it for its child from `--env-file` / `--no-env`. |
 | `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | The bearer token the Agent API requires before it can be enabled. |
 | `AGENT_BUNDLE_HOOK_SIMULATION` | Generated hook wrappers | `1` marks a simulated invocation; the Workbench event route workspace sets it. |
+| `AGENT_BUNDLE_DEV_TRACE_URL` | Generated hook wrappers in development | Internal loopback origin for posting a payload-free hook trace receipt. The foreground server sets it for simulations; host-invoked development wrappers normally discover the same endpoint from the development install marker. |
+| `AGENT_BUNDLE_DEV_TRACE_TOKEN` | Generated hook wrappers in development | Internal bearer token paired with `AGENT_BUNDLE_DEV_TRACE_URL`. It authenticates `POST /api/trace/receipts` and must not be logged or persisted outside the private development endpoint record. |
 | `AGENT_BUNDLE_NATIVE_HOST_CONTRACTS` | Contributor test suites | `1` compares the installed host CLI contract. |
 | `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE` | Contributor test suites | `1` runs the signed-in Claude native smoke. |
 | `AGENT_BUNDLE_NATIVE_CODEX_SMOKE` | Contributor test suites | `1` runs the signed-in Codex native smoke. |

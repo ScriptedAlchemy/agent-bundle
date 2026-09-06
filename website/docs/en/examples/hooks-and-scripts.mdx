@@ -58,8 +58,10 @@ an authored script.
    packaging.
 3. Switch the target to portable and select `detect-risk`. It reads `release/risk-register.json`,
    reports high-severity `REL-204`, exits with code 2, and finalizes a durable blocking trace.
-4. Follow the runs in **Trace**. Use **Advanced → Raw logs** for uncorrelated producer details,
-   **Advanced → Artifact** for emitted files and provenance, and
+4. Follow the runs in **Trace** to see each invocation and kernel phase; an attached host's real
+   hook delivery adds its correlated receipt there too. Use **Open route** to restore a recorded
+   snapshot. Use **Advanced → Raw logs** for
+   uncorrelated producer details, **Advanced → Artifact** for emitted files and provenance, and
    **Advanced → Evals → Compare** after two eval runs exist.
 
 ## The reversible diagnostic walkthrough

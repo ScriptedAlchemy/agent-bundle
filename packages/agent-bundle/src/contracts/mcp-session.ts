@@ -8,8 +8,12 @@ export type {
   McpSessionInspectorConfig,
   McpSessionOperation,
   McpSessionTraceEntry,
+  McpSessionTraceMeta,
   McpSessionTraceReplayGap,
 } from '../dev/mcp-session/mcp-session-protocol.ts';
+
+/** MCP `params._meta` key used to correlate a tool call with its Workbench invocation. */
+export const mcpCorrelationMetaKey = 'agent-bundle/correlationId';
 
 /** The host targets a Workbench MCP session may bind. */
 export const MCP_SESSION_TARGETS = Object.freeze(['claude', 'codex', 'cursor', 'portable'] as const);

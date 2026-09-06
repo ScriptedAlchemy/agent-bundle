@@ -41,7 +41,9 @@ import type {
   McpSessionId,
 } from './mcp-session-protocol.ts';
 import { McpSession, requestOptions } from './mcp-session.ts';
-import type { McpSessionTraceSink } from './mcp-session-trace.ts';
+import { composeMcpSessionTraceSinks, type McpSessionTraceSink } from './mcp-session-trace.ts';
+import { createMcpSessionTraceSink } from './mcp-session-trace-publisher.ts';
+import type { TracePublisher } from '../trace/trace-hub.ts';
 import {
   canonicalMcpAppJson,
   canonicalMcpAppResource,
@@ -80,6 +82,8 @@ export type {
   OpenMcpSessionOptions,
 } from './mcp-session-types.ts';
 export type { McpSessionTraceSink } from './mcp-session-trace.ts';
+export { mcpCorrelationMetaKey } from '../../contracts/mcp-session.ts';
+export { createMcpSessionTraceSink, liftMcpFrame } from './mcp-session-trace-publisher.ts';
 
 export type {
   McpSessionBinding,
@@ -90,6 +94,7 @@ export type {
   McpSessionTraceEntry,
   McpSessionTraceListener,
   McpSessionTraceMessage,
+  McpSessionTraceMeta,
   McpSessionTraceReplay,
   McpSessionTraceReplayGap,
   McpSessionTraceSubscription,
@@ -259,6 +264,7 @@ export class McpSessionService {
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
   readonly #run: PlatformRun;
+  readonly #trace: TracePublisher | undefined;
   readonly #traceSink: McpSessionTraceSink | undefined;
   readonly #openingSessions = new Set<OpeningSession>();
   readonly #sessions = new Map<string, ActiveSession>();
@@ -278,6 +284,7 @@ export class McpSessionService {
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
     this.#run = platformRunOf(options.platformRuntime);
+    this.#trace = options.trace;
     this.#traceSink = options.traceSink;
   }
 
@@ -385,12 +392,19 @@ export class McpSessionService {
           () => releaseUnlessTransferred(releasePluginData),
         );
         const sessionId = randomUUID();
+        const binding: McpSessionBinding = { epochId: options.epochId, serverName: options.serverName, target };
+        const traceSink = composeMcpSessionTraceSinks(
+          this.#traceSink,
+          this.#trace === undefined
+            ? undefined
+            : createMcpSessionTraceSink({ binding, projectRoot: this.#projectRoot, sessionId, trace: this.#trace }),
+        );
         const session = yield* liftTry(() => new McpSession({
           assertEpochAvailable: async () => {
             const probe = await this.#epochStore.acquireEpochReference(options.epochId);
             await probe.close();
           },
-          binding: { epochId: options.epochId, serverName: options.serverName, target },
+          binding,
           createClient: this.#createClient,
           createStdioTransport: this.#createStdioTransport,
           createStreamableHttpTransport: this.#createStreamableHttpTransport,
@@ -402,7 +416,7 @@ export class McpSessionService {
           releasePluginData,
           resolved: { runtime, server, target, targetRoot },
           timeoutMs: options.timeoutMs,
-          ...(this.#traceSink === undefined ? {} : { traceSink: this.#traceSink }),
+          ...(traceSink === undefined ? {} : { traceSink }),
           workspaceRoot: resolve(options.workspaceRoot ?? this.#projectRoot),
         }));
         constructed = session;

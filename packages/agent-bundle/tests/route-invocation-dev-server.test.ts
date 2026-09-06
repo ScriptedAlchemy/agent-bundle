@@ -9,6 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import type { RouteInvocationResponse } from '../src/dev/routes/route-invocation-result.ts';
 import type { RouteInvocationListResponse } from '../src/dev/routes/route-invocation.ts';
 import type { RouteManifestResponse } from '../src/dev/routes/route-manifest.ts';
+import type { TraceReplay } from '../src/dev/trace/trace-entry.ts';
 import { confirmationRequiredMessage } from '../src/cli-entry.ts';
 import { stableJson } from '../src/core/digest.ts';
 import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../src/core/types.ts';
@@ -19,7 +20,11 @@ import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 import { replaceWatchedSourceAndAwaitRebuild } from './support/watched-files.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 
-const readEvent = async (response: Response, type: string): Promise<Record<string, unknown>> => {
+const readEvent = async (
+  response: Response,
+  type: string,
+  matches: (event: Record<string, unknown>) => boolean = () => true,
+): Promise<Record<string, unknown>> => {
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
   let buffered = '';
   for (;;) {
@@ -31,7 +36,30 @@ const readEvent = async (response: Response, type: string): Promise<Record<strin
     for (const frame of frames) {
       if (!frame.includes(`event: ${type}\n`)) continue;
       const data = frame.split('\n').find((line) => line.startsWith('data: '));
-      if (data !== undefined) return JSON.parse(data.slice('data: '.length)) as Record<string, unknown>;
+      if (data !== undefined) {
+        const event = JSON.parse(data.slice('data: '.length)) as Record<string, unknown>;
+        if (matches(event)) return event;
+      }
+    }
+  }
+};
+
+const readInvocationStream = async (response: Response): Promise<readonly Record<string, unknown>[]> => {
+  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+  const messages: Record<string, unknown>[] = [];
+  let buffered = '';
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) throw new Error('Invocation stream ended before final.');
+    buffered += next.value;
+    const frames = buffered.split('\n\n');
+    buffered = frames.pop() ?? '';
+    for (const frame of frames) {
+      const data = frame.split('\n').find((line) => line.startsWith('data: '));
+      if (data === undefined) continue;
+      const message = JSON.parse(data.slice('data: '.length)) as Record<string, unknown>;
+      messages.push(message);
+      if (message.type === 'final') return messages;
     }
   }
 };
@@ -194,6 +222,23 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
+      'src/mcp/status/tools/live.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement, Suspense } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        'export const inputSchema = z.object({}).strict();',
+        'export const resultSchema = z.object({ done: z.boolean() }).strict();',
+        'const Slow = async () => {',
+        '  await new Promise((resolve) => setTimeout(resolve, 1_000));',
+        "  return createElement(Agent.Text, null, 'stream complete');",
+        '};',
+        '',
+        'export default async function Live() {',
+        "  return createElement(Agent.Result, { value: { done: true } }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'streaming', total: 1 }) }, createElement(Slow)));",
+        '}',
+        '',
+      ].join('\n'),
       'src/mcp/status/tools/report.cli.ts': [
         "export const config = { command: ['report'], confirm: true, flags: { service: { name: 'name' }, source: { required: false } } };",
         "export const mapInput = (input) => ({ ...input, source: input.source ?? 'cli-projection' });",
@@ -264,10 +309,54 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const stream = await fetch(`${server.url}/api/project/events`, {
       headers: { cookie, origin: server.url },
     });
+    const stateRoot = join(project.root, '.agent-bundle', 'state');
+    const startLive = async () => {
+      const response = await fetch(`${server!.url}/api/routes/invocations`, {
+        body: JSON.stringify({ routeId: 'tool:status/live', stream: true }),
+        headers,
+        method: 'POST',
+      });
+      expect(response.status).toBe(202);
+      return response.json() as Promise<{ readonly invocation: { readonly id: string; readonly status: string } }>;
+    };
+    const live = await startLive();
+    expect(live.invocation.status).toBe('running');
+    const liveStreamResponse = await fetch(`${server.url}/api/routes/invocations/${live.invocation.id}/stream`, { headers });
+    expect(liveStreamResponse.status).toBe(200);
+    const liveMessages = await readInvocationStream(liveStreamResponse);
+    expect(liveMessages.findIndex((message) => message.type === 'render')).toBeGreaterThanOrEqual(0);
+    expect(liveMessages.at(-1)).toMatchObject({
+      invocation: { status: 'succeeded' },
+      type: 'final',
+    });
+
+    const cancelling = await startLive();
+    const cancellingStream = await fetch(`${server.url}/api/routes/invocations/${cancelling.invocation.id}/stream`, { headers });
+    const cancellingMessages = readInvocationStream(cancellingStream);
+    const cancelResponse = await fetch(`${server.url}/api/routes/invocations/${cancelling.invocation.id}/cancel`, {
+      headers,
+      method: 'POST',
+    });
+    expect(cancelResponse.status).toBe(202);
+    const cancelled = await cancelResponse.json() as RouteInvocationResponse;
+    expect(cancelled.invocation).toMatchObject({ status: 'cancelled' });
+    expect(cancelled.invocation).not.toHaveProperty('outcome');
+    expect((await cancellingMessages).at(-1)).toMatchObject({
+      invocation: { status: 'cancelled' },
+      type: 'final',
+    });
+    const finalCancelResponse = await fetch(`${server.url}/api/routes/invocations/${cancelling.invocation.id}/cancel`, {
+      headers,
+      method: 'POST',
+    });
+    expect(finalCancelResponse.status).toBe(409);
+    await expect(finalCancelResponse.json()).resolves.toMatchObject({ diagnostic: { code: 'AB8256' } });
+    const unknownStream = await fetch(`${server.url}/api/routes/invocations/inv_missing/stream`, { headers });
+    expect(unknownStream.status).toBe(404);
+
     const activeEpoch = server.status().artifact;
     if (activeEpoch.state !== 'active') throw new Error('Expected an active compiled epoch.');
     const artifactRoot = join(project.root, '.agent-bundle', 'epochs', activeEpoch.activeEpoch.id);
-    const stateRoot = join(project.root, '.agent-bundle', 'state');
     const toolResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 'catalog', source: 'api' }, routeId: 'tool:status/report' }),
       headers,
@@ -315,6 +404,31 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     }
     expect(tool.invocation.providers).toEqual([
       expect.objectContaining({ durationMs: expect.any(Number), id: 'provider:clock', name: 'clock', status: 'mounted' }),
+    ]);
+    const toolTraceResponse = await fetch(`${server.url}/api/trace?after=0`, { headers });
+    expect(toolTraceResponse.status).toBe(200);
+    const toolTrace = await toolTraceResponse.json() as TraceReplay;
+    const toolEntries = toolTrace.entries.filter((entry) =>
+      entry.correlation.invocationId === tool.invocation.id && entry.source === 'invocation');
+    expect(toolEntries.map((entry) => entry.kind)).toEqual([
+      'invocation.started',
+      'invocation.completed',
+    ]);
+    expect(toolEntries).toEqual([
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          invocationId: tool.invocation.id,
+          routeId: 'tool:status/report',
+        }),
+        href: expect.stringMatching(new RegExp(`\\?invocation=${tool.invocation.id}$`, 'u')),
+      }),
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          invocationId: tool.invocation.id,
+          routeId: 'tool:status/report',
+        }),
+        href: expect.stringMatching(new RegExp(`\\?invocation=${tool.invocation.id}$`, 'u')),
+      }),
     ]);
     expect(tool.invocation.timings.map((entry) => entry.phase)).toEqual([
       'provider:clock',
@@ -376,6 +490,46 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(await readFile(join(project.root, '.agent-bundle', 'defer-gate.marker'), 'utf8')).toBe('gate\n');
     expect(await readFile(join(project.root, '.agent-bundle', 'defer-handler.marker'), 'utf8')).toBe('run\n');
     expect(event.invocation.projection.hosts?.[0]).toMatchObject({ host: 'claude' });
+    expect(event.invocation.context.session).toEqual({
+      source: 'receipt',
+      state: 'available',
+      value: { sessionId: 'session-1' },
+    });
+    expect(event.invocation.context.lineage).toMatchObject({
+      source: 'receipt',
+      state: 'available',
+      value: { conversation: 'session-1', root: 'session-1' },
+    });
+    const eventTraceResponse = await fetch(`${server.url}/api/trace?after=0`, { headers });
+    expect(eventTraceResponse.status).toBe(200);
+    const eventTrace = await eventTraceResponse.json() as TraceReplay;
+    const eventEntries = eventTrace.entries.filter((entry) =>
+      entry.correlation.invocationId === event.invocation.id);
+    expect(eventEntries.filter((entry) => entry.source === 'invocation').map((entry) => entry.kind)).toEqual([
+      'invocation.started',
+      'invocation.completed',
+    ]);
+    expect(eventEntries.filter((entry) => entry.source === 'invocation')).toEqual([
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          invocationId: event.invocation.id,
+          routeId: 'event:tool/after',
+        }),
+        href: expect.stringMatching(new RegExp(`\\?invocation=${event.invocation.id}$`, 'u')),
+      }),
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          invocationId: event.invocation.id,
+          routeId: 'event:tool/after',
+        }),
+        href: expect.stringMatching(new RegExp(`\\?invocation=${event.invocation.id}$`, 'u')),
+      }),
+    ]);
+    const kernelEntries = eventEntries.filter((entry) => entry.source === 'kernel');
+    expect(kernelEntries.length).toBeGreaterThan(0);
+    expect(kernelEntries.every((entry) => entry.kind.startsWith('kernel.'))).toBe(true);
+    expect(new Set(kernelEntries.map((entry) => entry.correlation.executionId)).size).toBe(1);
+    expect(kernelEntries[0]?.correlation.executionId).toBeDefined();
     expect(event.invocation.trace?.map((trace) => trace.kind)).toEqual([
       'preflight.start',
       'preflight.outcome',
@@ -622,6 +776,21 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(secondCounter.invocation.result).toEqual({ count: 2 });
     expect(isolatedCounter.invocation.result).toEqual({ count: 1 });
 
+    const nonStreamingCounter = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        input: { key: 'stream-false' },
+        routeId: 'tool:status/counter',
+        stream: false,
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(nonStreamingCounter.status).toBe(200);
+    const nonStreaming = await nonStreamingCounter.json() as RouteInvocationResponse;
+    expect(nonStreaming).toMatchObject({
+      invocation: { status: 'succeeded' },
+    });
+
     const scriptResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ routeId: 'script:summary' }),
       headers,
@@ -644,14 +813,17 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const listed = await listedResponse.json() as RouteInvocationListResponse;
     expect(listed.invocations.map((invocation) => invocation.id)).toEqual([
       script.invocation.id,
+      nonStreaming.invocation.id,
       isolatedCounter.invocation.id,
       secondCounter.invocation.id,
-      firstCounter.invocation.id,
     ]);
     const read = await fetch(`${server.url}/api/routes/invocations/${tool.invocation.id}`, { headers });
     await expect(read.json()).resolves.toEqual(tool);
 
-    const published = await readEvent(stream, 'route.invocation');
+    const published = await readEvent(stream, 'route.invocation', (event) => {
+      const invocation = (event.payload as { readonly invocation?: { readonly routeId?: string; readonly status?: string } } | undefined)?.invocation;
+      return invocation?.routeId === 'tool:status/report' && invocation.status === 'succeeded';
+    });
     expect(published).toMatchObject({
       payload: { invocation: { outcome: { kind: 'success' }, routeId: 'tool:status/report', status: 'succeeded' } },
       type: 'route.invocation',
@@ -744,7 +916,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(republishedEpoch.activeEpoch.id).not.toBe(activeEpoch.activeEpoch.id);
     const republishedCounter = await counter();
     const republishedIsolatedCounter = await counter(true);
-    expect(republishedCounter.invocation.result).toEqual({ count: 3 });
+    expect(republishedCounter.invocation.result).toEqual({ count: 4 });
     expect(republishedIsolatedCounter.invocation.result).toEqual({ count: 1 });
 
     const missingApi = await fetch(`${server.url}/api/nope`);
@@ -819,9 +991,6 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
       async () => fetch(`${server!.url}/api/routes/manifest`, { headers }).then((response) => response.status),
       { timeout: 10_000 },
     ).toBe(200);
-    const artifact = server.status().artifact;
-    if (artifact.state !== 'active') throw new Error('Expected an active compiled epoch.');
-    await writeFile(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id, '.env'), 'OPERATOR_VALUE=layered\n');
 
     const invalidResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 1 }, routeId: 'tool:status/report' }),
@@ -839,6 +1008,9 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
     });
     expect(await readdir(join(project.root, '.agent-bundle'))).not.toContain('handler-ran');
 
+    const artifact = server.status().artifact;
+    if (artifact.state !== 'active') throw new Error('Expected an active compiled epoch.');
+    await writeFile(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id, '.env'), 'OPERATOR_VALUE=layered\n');
     const invoke = async (surface: { readonly args: readonly string[]; readonly command: string; readonly kind: 'cli' } | { readonly kind: 'mcp' }) => {
       const response = await fetch(`${server!.url}/api/routes/invocations`, {
         body: JSON.stringify({

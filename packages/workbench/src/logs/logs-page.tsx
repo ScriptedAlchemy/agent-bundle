@@ -20,22 +20,29 @@ const isCursorAhead = (reason: unknown): boolean => {
   catch { return false; }
 };
 
+const traceCorrelationFor = (record: DevLogRecord): string | undefined =>
+  record.context.correlationId ?? record.context.invocationId ?? record.context.mcpSessionId;
+
 export const LogsView = ({ view }: { readonly view: LogsViewModel }) => <div className="logs-trace">
   {view.gap === undefined ? undefined : <p className="logs-gap" role="status">Earlier records are no longer retained.</p>}
   <p className="logs-summary" role="status">{view.summary}</p>
   {view.records.length === 0 ? <p className="empty-row">No production log record matches this filter.</p> : <ol className="logs-entries">
-    {view.records.map((record) => <li key={record.sequence}>
-      <div className="logs-entry-head">
-        <span className="logs-entry-sequence">#{record.sequence}</span>
-        <time className="logs-entry-timestamp">{record.occurredAt}</time>
-        <span className="logs-entry-source">{record.producer}</span>
-        <span className={`logs-entry-level logs-entry-level--${record.level}`}>{record.level}</span>
-        <span className="logs-entry-kind">{record.kind}</span>
-      </div>
-      <p className="logs-entry-summary">{record.summary}</p>
-      <p className="logs-entry-binding">{Object.entries(record.context).map(([key, value]) => <span className="identifier" key={key}>{key} {value}</span>)}</p>
-      <details className="logs-details"><summary>Details</summary><pre>{JSON.stringify({ context: record.context, details: record.details }, null, 2)}</pre></details>
-    </li>)}
+    {view.records.map((record) => {
+      const traceCorrelation = traceCorrelationFor(record);
+      return <li key={record.sequence}>
+        <div className="logs-entry-head">
+          <span className="logs-entry-sequence">#{record.sequence}</span>
+          <time className="logs-entry-timestamp">{record.occurredAt}</time>
+          <span className="logs-entry-source">{record.producer}</span>
+          <span className={`logs-entry-level logs-entry-level--${record.level}`}>{record.level}</span>
+          <span className="logs-entry-kind">{record.kind}</span>
+        </div>
+        <p className="logs-entry-summary">{record.summary}</p>
+        <p className="logs-entry-binding">{Object.entries(record.context).map(([key, value]) => <span className="identifier" key={key}>{key} {value}</span>)}</p>
+        {traceCorrelation === undefined ? undefined : <a href={`/trace?correlation=${encodeURIComponent(traceCorrelation)}`}>Open in Trace</a>}
+        <details className="logs-details"><summary>Details</summary><pre>{JSON.stringify({ context: record.context, details: record.details }, null, 2)}</pre></details>
+      </li>;
+    })}
   </ol>}
 </div>;
 

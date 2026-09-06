@@ -90,6 +90,8 @@ export type McpRouteOperation =
   | Readonly<{ readonly operation: 'resources/read'; readonly uri: string }>
   | Readonly<{
     readonly arguments: Readonly<Record<string, unknown>>;
+    /** The Workbench correlation id; the route stamps it into `params._meta` itself and refuses a browser-sent `_meta` (`AB8016`). */
+    readonly correlationId?: string;
     readonly name: string;
     readonly operation: 'tools/call';
     readonly requestId?: string;

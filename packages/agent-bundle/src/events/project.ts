@@ -40,3 +40,6 @@ export {
   type EventTraceRenderStart,
   type EventTraceRuntime,
 } from './trace.ts';
+export {
+  openEventTraceReceipt,
+} from './trace-receipt.ts';

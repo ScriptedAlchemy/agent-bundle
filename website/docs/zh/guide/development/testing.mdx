@@ -195,6 +195,11 @@ try {
 形状，因此测试断言的是叶子与路径，而不是一份固定的页面列表。
 `WorkbenchPageName` 与 `workbenchPageLabel` 不再导出。
 
+对实时 Workbench 做浏览器验收时，应运行一条真实路由并断言已填充的 Trace，而不只是检查空状态。
+`data-testid="trace-timeline"` 标识时间线，`trace-entry` 标识每个可选择行，`trace-group` 标识关联组，
+`trace-detail` 标识所选条目的详情视图。断言行的来源、kind 与关联证据，然后使用 **Open route**，
+并验证路由工作区已加载记录下来的 `?invocation=<id>` 快照。
+
 在这九个级别之外还有两个并列级别，共十一个。`agent-bundle/test/browser` 为浏览器安全的 `browser-app` 级别
 提供 `mountBrowserApp`，用于在真实浏览器页面中把生产编译的 MCP App HTML 挂载到产品桥接层之上；
 而 `simulated` 复用不带 `sessionEvidence` 的已安装宿主辅助函数 `openInstalledHostMcpServer`

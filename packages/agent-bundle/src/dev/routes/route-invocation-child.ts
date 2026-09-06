@@ -1,7 +1,15 @@
 import * as AgentRuntime from '@agent-bundle/runtime';
+import type { AgentRenderEvent } from '@agent-bundle/runtime';
 
 import { renderedDocumentExitCode } from '../../cli-entry.ts';
-import type { JsonObject } from '../../core/strict-json.ts';
+import { isJsonRecord, type JsonObject } from '../../core/strict-json.ts';
+import {
+  createEventTracer,
+  eventTraceExecution,
+  installEventTraceObserver,
+  type EventTraceEvent,
+} from '../../events/trace.ts';
+import { canonicalAgentEvents } from '../../routes/public.ts';
 import {
   AGENT_TEST_REGISTRY_VERSION,
   registerTestRoutes,
@@ -56,6 +64,14 @@ const respond = (response: RouteInvocationChildResponse): Promise<void> => new P
   });
 });
 
+const forwardEventTrace = (event: EventTraceEvent): void => {
+  process.send?.({ event, type: 'trace' } satisfies RouteInvocationChildResponse);
+};
+
+const forwardRenderEvent = (event: AgentRenderEvent): void => {
+  process.send?.({ event, type: 'render' } satisfies RouteInvocationChildResponse);
+};
+
 /**
  * The exit code a generated executable would set for this unit render. There
  * is no compiled bin to ask in `unit-render`, so the same `cli-entry.ts`
@@ -86,18 +102,38 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
   installManifest(request);
   const startedAt = performance.now();
   const input = request.input;
-  const rendered = await renderRouteEvents(request.routeId, {
-    context: {
-      actor: request.context.actor,
-      host: request.context.host,
-      invocation: request.context.invocation,
-      lineage: request.context.lineage,
-      session: request.context.session,
-      workspace: request.context.workspace,
-    },
-    input,
-    manifest: request.manifest,
-  });
+  const eventName = request.routeId.startsWith('event:')
+    ? canonicalAgentEvents.find((event) => event === request.routeId.slice('event:'.length))
+    : undefined;
+  const nativeInput = isJsonRecord(input) ? input.native : undefined;
+  const nativeEvent = nativeInput !== undefined && isJsonRecord(nativeInput) && typeof nativeInput.hook_event_name === 'string'
+    ? nativeInput.hook_event_name
+    : eventName;
+  const host = request.context.host.state === 'available' ? request.context.host.value.name : 'workbench';
+  const trace = eventName === undefined || nativeEvent === undefined
+    ? undefined
+    : createEventTracer({ execution: eventTraceExecution({ event: eventName, host, nativeEvent }) });
+  trace?.executeStart('standalone');
+  trace?.renderStart();
+  let rendered: Awaited<ReturnType<typeof renderRouteEvents>>;
+  try {
+    rendered = await renderRouteEvents(request.routeId, {
+      context: {
+        actor: request.context.actor,
+        host: request.context.host,
+        invocation: request.context.invocation,
+        lineage: request.context.lineage,
+        session: request.context.session,
+        workspace: request.context.workspace,
+      },
+      input,
+      manifest: request.manifest,
+    });
+    trace?.renderFinish();
+  } catch (error) {
+    trace?.failure('render', error);
+    throw error;
+  }
   const exitCode = unitRenderExitCode(request, rendered.document, rendered.result ?? rendered.document.value);
   return Object.freeze({
     document: rendered.document,
@@ -116,24 +152,31 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
   });
 };
 
-const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> =>
-  request.surface.kind === 'unit-render'
-    ? renderUnitRoute(request)
-    : renderProductionRoute(request);
+const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
+  const result = request.surface.kind === 'unit-render'
+    ? await renderUnitRoute(request)
+    : await renderProductionRoute(request, forwardEventTrace, forwardRenderEvent);
+  if (request.surface.kind === 'unit-render') {
+    for (const event of result.events) forwardRenderEvent(event);
+  }
+  return result;
+};
 
 process.once('message', (request: RouteInvocationChildRequest) => {
+  const disposeTraceObserver = installEventTraceObserver(forwardEventTrace);
   void render(request)
-    .then((result) => respond({ result, type: 'result' }))
-    .catch((error: unknown) => respond({
-      error: {
-        ...(error instanceof ProductionRouteInvocationError
-          ? { code: error.code }
-          : {}),
-        message: error instanceof Error ? error.message : String(error),
-        name: error instanceof Error ? error.name : 'Error',
-      },
-      type: 'error',
-    }))
+    .then(
+      (result) => respond({ result, type: 'result' }),
+      (error: unknown) => respond({
+        error: {
+          ...(error instanceof ProductionRouteInvocationError ? { code: error.code } : {}),
+          message: error instanceof Error ? error.message : String(error),
+          name: error instanceof Error ? error.name : 'Error',
+        },
+        type: 'error',
+      }),
+    )
+    .finally(disposeTraceObserver)
     .then(() => process.disconnect?.())
     .catch((error: unknown) => {
       console.error(error);

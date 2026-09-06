@@ -423,7 +423,18 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(preCloseFreshStreamCancellation)).toThrow(/fresh B MCP stream cancellation is not action-induced/u);
   expect(() => validateOutageLedger(postCloseFreshStreamCancellation)).toThrow(/fresh B MCP stream cancellation is not action-induced/u);
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
+  const postRecoveryTraceStreamCancellation = Object.freeze({
+    ...validPostRecovery,
+    requests: Object.freeze([
+      ...validPostRecovery.requests,
+      ledgerRequest({
+        at: 1_345, completedAt: 1_351, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/trace/stream',
+        respondedAt: 1_346, status: 200, url: `${valid.origin}/api/trace/stream?after=29`,
+      }),
+    ]),
+  });
   expect(() => validateOutageLedger(navigationLiveStreamCancellation)).not.toThrow();
+  expect(() => validateOutageLedger(postRecoveryTraceStreamCancellation)).not.toThrow();
   expect(() => validateOutageLedger(navigationRespondedCatalogCancellation)).not.toThrow();
   expect(() => validateOutageLedger(sameMillisecondDepartedRequest)).not.toThrow();
   expect(() => validateOutageLedger(sameMillisecondNextPageRequest)).toThrow(/unknown post-recovery failure/u);

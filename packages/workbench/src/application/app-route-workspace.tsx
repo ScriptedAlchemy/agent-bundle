@@ -17,11 +17,11 @@ import { workbenchMcpAppHostContext, type McpAppJsonValue, type McpAppPreviewPro
 import { McpAppPreview } from '../mcp/mcp-app-preview.tsx';
 import { McpJsonInput } from '../mcp/mcp-json-input.tsx';
 import { supportedMcpAppPreviewProfiles } from '../mcp/mcp-page.tsx';
-import { createMcpSessionController, type McpSessionController } from '../mcp/mcp-session-controller.ts';
+import { createMcpSessionController, type McpSessionController, type McpSessionControllerRequest } from '../mcp/mcp-session-controller.ts';
 import type { McpBrowserSessionModel } from '../mcp/mcp-session-model.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
-import { WorkspaceHeader } from './executable-route-workspace.tsx';
+import { newCorrelationId, WorkspaceHeader } from './executable-route-workspace.tsx';
 import { displayAgentDocumentValue } from './rendered-document.tsx';
 import { publishedEpochFor, type WorkspaceClients } from './workspace-contracts.ts';
 import './workspace.css';
@@ -67,6 +67,20 @@ export const orderedToolsForApp = (tools: readonly McpCatalogTool[], resourceUri
   ...tools.filter((tool) => resourceUri !== undefined && tool.resourceUri === resourceUri),
   ...tools.filter((tool) => resourceUri === undefined || tool.resourceUri !== resourceUri),
 ]);
+
+/**
+ * The tool call the App workspace hands the session controller: plain MCP params
+ * plus the Workbench correlation, which the route stamps into `_meta` itself
+ * (a browser-sent `_meta` is refused with `AB8016`).
+ */
+export const appToolCallRequest = (
+  name: string,
+  input: JsonObject,
+  correlationId: string,
+): Pick<McpSessionControllerRequest, 'correlationId' | 'request'> => Object.freeze({
+  correlationId,
+  request: Object.freeze({ arguments: input, name }),
+});
 
 interface ToolCall {
   readonly input: JsonObject;
@@ -138,10 +152,11 @@ export const AppRouteWorkspace = ({ clients, leaf, onNavigate, status }: AppRout
     setCalling(true);
     setCallError(undefined);
     const sessionId = model.sessionId;
+    const correlationId = newCorrelationId();
     void controller.invoke({
       id: `app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       operation: 'callTool',
-      request: { arguments: input, name: tool.name },
+      ...appToolCallRequest(tool.name, input, correlationId),
     }).then(
       (result) => { setCall(Object.freeze({ input, result: result as McpAppJsonValue, sessionId, toolName: tool.name })); },
       (reason: unknown) => { setCallError(errorMessage(reason, 'The tool call failed.')); },

@@ -50,6 +50,7 @@ import { applicationNodePath, type WorkbenchLocation } from './shell/workbench-l
 import { createWorkbenchRouter, type WorkbenchRouter } from './shell/workbench-router.ts';
 import { ApplicationArea, SelectRouteState, UnknownRouteState, WorkbenchShell } from './shell/workbench-shell.tsx';
 import { SkillClient } from './skill-client.ts';
+import { ForegroundTraceClient, type TraceClient } from './trace/trace-client.ts';
 import { TracePage } from './trace/trace-page.tsx';
 import {
   applicationTreeSourcesFor,
@@ -119,17 +120,19 @@ const createClients = () => {
     routeManifestClient: new RouteManifestClient({ foreground }),
     runtimeClient: new RuntimeClient(foreground),
     skillClient: new SkillClient(),
+    traceClient: new ForegroundTraceClient({ foreground }),
   });
 };
 
 type WorkbenchClients = ReturnType<typeof createClients>;
 
-const ApplicationExplorer = ({ backends, clients, location, onNavigate, status, tree }: {
+const ApplicationExplorer = ({ backends, clients, location, onNavigate, status, trace, tree }: {
   readonly backends: readonly InvocationBackend[];
   readonly clients: WorkspaceClients;
   readonly location: Extract<WorkbenchLocation, { readonly area: 'application' }>;
   readonly onNavigate: (location: WorkbenchLocation) => void;
   readonly status: ProjectStatus;
+  readonly trace: TraceClient;
   readonly tree: ApplicationTree | undefined;
 }) => {
   const [query, setQuery] = useState('');
@@ -146,6 +149,7 @@ const ApplicationExplorer = ({ backends, clients, location, onNavigate, status, 
           onNavigate={onNavigate}
           status={status}
           tab={location.tab}
+          trace={trace}
           tree={tree}
         />;
   return <ApplicationArea tree={tree === undefined
@@ -442,11 +446,9 @@ const Workbench = () => {
   const area = ((): ReactNode => {
     switch (location.area) {
       case 'application':
-        return <ApplicationExplorer backends={backends} clients={workspaceClients} location={location} onNavigate={navigate} status={status} tree={tree} />;
+        return <ApplicationExplorer backends={backends} clients={workspaceClients} location={location} onNavigate={navigate} status={status} trace={clients.traceClient} tree={tree} />;
       case 'trace':
-        return tree === undefined
-          ? <main className="shell-page"><p className="empty-row">No build has published yet; invocations appear once a route can run.</p></main>
-          : <TracePage backends={backends} invocationId={location.invocationId} onNavigate={navigate} tree={tree} />;
+        return <TracePage client={clients.traceClient} correlation={location.correlation} entryId={location.invocationId} onNavigate={navigate} />;
       case 'problems':
         return <ProblemsPage onNavigate={navigate} onRepair={repair} problems={problems} status={status} />;
       case 'sessions':

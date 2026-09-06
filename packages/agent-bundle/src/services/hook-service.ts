@@ -35,6 +35,12 @@ export interface HookSimulationOptions {
 }
 
 export interface HookServiceOptions {
+  /**
+   * Extra environment for the wrapper child, read at each simulation: the dev
+   * server passes its hook receipt endpoint (`HookReceiptAttachment.environment`)
+   * so a simulated hook lands on the trace like a host-invoked one (#600).
+   */
+  readonly environment?: () => Readonly<Record<string, string>>;
   /** Internal test seam; production uses the current host platform. */
   readonly platform?: NodeJS.Platform;
   /** Target contracts that own and validate the artifact. */
@@ -82,6 +88,7 @@ class HookSimulationTerminationError extends YieldableFrameworkError {
 
 const runWrapper = async (options: {
   readonly cwd: string;
+  readonly environment: Readonly<Record<string, string>>;
   readonly input: Record<string, unknown>;
   readonly platform: NodeJS.Platform;
   readonly signal?: AbortSignal;
@@ -108,7 +115,7 @@ const runWrapper = async (options: {
   const child = spawn(process.execPath, [options.wrapper], {
     cwd: options.cwd,
     detached: options.platform !== 'win32',
-    env: { ...process.env, AGENT_BUNDLE_HOOK_SIMULATION: '1' },
+    env: { ...process.env, ...options.environment, AGENT_BUNDLE_HOOK_SIMULATION: '1' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stdout = '';
@@ -235,11 +242,13 @@ const runWrapper = async (options: {
 });
 
 export class HookService {
+  readonly #environment: () => Readonly<Record<string, string>>;
   readonly #platform: NodeJS.Platform;
   readonly #registry: TargetRegistry;
   readonly #taskkill: ProcessTreeTaskkill;
 
   constructor(options: HookServiceOptions = {}) {
+    this.#environment = options.environment ?? (() => ({}));
     this.#platform = options.platform ?? process.platform;
     this.#registry = options.registry ?? createDefaultRegistry();
     this.#taskkill = options.taskkill ?? taskkill;
@@ -282,6 +291,7 @@ export class HookService {
     const wrapper = joinArtifact(artifact, hook.path);
     return runWrapper({
       cwd: artifact,
+      environment: this.#environment(),
       input: options.input,
       platform: this.#platform,
       ...(options.signal === undefined ? {} : { signal: options.signal }),

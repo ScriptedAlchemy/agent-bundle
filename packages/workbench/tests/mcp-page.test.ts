@@ -564,6 +564,42 @@ describe('MCP page', () => {
     expect(markup).toContain('Trace delivery is delayed.');
   });
 
+  it('shows a raw frame\'s lifted id, method, and _meta keys and links its correlation to the unified Trace', () => {
+    const frame = {
+      direction: 'client',
+      id: 'number:7',
+      kind: 'frame',
+      message: { id: 7, jsonrpc: '2.0', method: 'tools/call', params: { arguments: {}, name: 'weather' } },
+      meta: { correlationId: 'corr-1', requestId: 'req/1', sessionId: 'sess-1' },
+      method: 'tools/call',
+      occurredAt: 1_700_000_000_001,
+      sequence: 1,
+    };
+    const response = { direction: 'server', kind: 'frame', message: { id: 7, jsonrpc: '2.0', result: {} }, occurredAt: 1_700_000_000_002, sequence: 2 };
+    const withFrames = {
+      ...model,
+      conciseTrace: [frame, response],
+      timeline: { droppedThroughSequence: 0, entries: [frame, response], lastSequence: 2 },
+    } as unknown as McpBrowserSessionModel;
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: { ...controller(), model: withFrames },
+      epochOptions: ['epoch-1'],
+      onNavigate: () => undefined,
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('data-testid="mcp-frame-facts"');
+    expect(markup).toContain('client → server');
+    expect(markup).toContain('server → client');
+    expect(markup).toContain('method <code>tools/call</code>');
+    expect(markup).toContain('id <code>number:7</code>');
+    expect(markup).toContain('href="/trace?correlation=corr-1"');
+    expect(markup).toContain('request <code>req/1</code>');
+    expect(markup).toContain('session <code>sess-1</code>');
+    expect(markup).not.toContain('conversation <code>');
+    expect(markup.match(/data-testid="mcp-frame-facts"/gu)).toHaveLength(2);
+  });
+
   it('builds a detached export of the complete current protocol trace without launch credentials', async () => {
     const mutableHistory = [{
       binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },

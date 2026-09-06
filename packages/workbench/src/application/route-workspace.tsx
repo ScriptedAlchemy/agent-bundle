@@ -57,11 +57,11 @@ export const DocumentWorkspace = ({ leaf }: { readonly leaf: ApplicationLeaf }):
   </div>
 </div>;
 
-const InvokeWorkspace = ({ backends, clients, invocationId, leaf, onNavigate, tab }: RouteWorkspaceProps): React.ReactNode => {
+const InvokeWorkspace = ({ backends, clients, invocationId, leaf, onNavigate, tab, trace }: RouteWorkspaceProps): React.ReactNode => {
   const controller = useRouteInvocation({ backends, ...(invocationId === undefined ? {} : { invocationId }), leaf });
   return leaf.ref.kind === 'event'
-    ? <EventRouteWorkspace clients={clients} controller={controller} leaf={leaf} onNavigate={onNavigate} tab={tab} />
-    : <ExecutableRouteWorkspace controller={controller} leaf={leaf} onNavigate={onNavigate} tab={tab} />;
+    ? <EventRouteWorkspace clients={clients} controller={controller} invocationId={invocationId} leaf={leaf} onNavigate={onNavigate} tab={tab} trace={trace} />
+    : <ExecutableRouteWorkspace controller={controller} invocationId={invocationId} leaf={leaf} onNavigate={onNavigate} tab={tab} trace={trace} />;
 };
 
 /** Mounts the workspace body the selected leaf's execution kind calls for. */

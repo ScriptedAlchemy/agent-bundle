@@ -14,6 +14,7 @@ import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { InspectorRoutes, type InspectorRouteService } from './inspector-routes.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playground/hook-playground-routes.ts';
 import { HostDiscoveryRoutes, type HostDiscoveryRouteService } from './playground/host-discovery-routes.ts';
+import type { HookReceiptRoutes } from './hooks/hook-receipt-endpoint.ts';
 import type { HostMcpRoutes } from './host-mcp-routes.ts';
 import { LifecycleReplayRoutes, type LifecycleReplayRouteService } from './playground/lifecycle-replay-routes.ts';
 import { McpProbeRoutes, type McpProbeRouteService } from './playground/mcp-probe-routes.ts';
@@ -27,6 +28,8 @@ import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/play
 import { RouteInvocationRoutes, type RouteInvocationRouteService } from './routes/route-invocation-routes.ts';
 import { RouteManifestRoutes, type RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
+import type { TraceHub } from './trace/trace-hub.ts';
+import { TraceRoutes } from './trace/trace-routes.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 import { WebHostRoutes, type WebHostEpochSource, type WebHostLaunchOptions } from './web-host-routes.ts';
 import { workbenchAssetCacheControl } from './workbench-assets.ts';
@@ -86,7 +89,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'mcp-apps' | 'route-invocations' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'mcp-apps' | 'route-invocations' | 'server' | 'trace';
 }
 
 export interface ForegroundServerStartFailure {
@@ -172,6 +175,7 @@ export interface ForegroundServerOptions {
   readonly mcpAppSandboxOrigin?: () => string | undefined;
   /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
   readonly hookPlayground?: HookPlaygroundRouteService;
+  readonly hookReceipts?: HookReceiptRoutes;
   /** Read-only host probes, install inventory, bundle drift, and runtime endpoint health. */
   readonly hostDiscovery?: HostDiscoveryRouteService;
   /** Stateful MCP surface used only by stable development host proxies. */
@@ -197,6 +201,8 @@ export interface ForegroundServerOptions {
   readonly routeInvocations?: RouteInvocationRouteService;
   /** Optional runtime session; its lifecycle remains Workbench-owned. */
   readonly runtime?: DevRuntimeSession;
+  /** Correlated application activity retained for authenticated replay and streaming. */
+  readonly trace?: TraceHub;
   /** Read-only Skill document/resource service for the workbench. */
   readonly skillDocuments?: SkillDocumentService;
   /** Injectable only to make integration contracts deterministic. */
@@ -408,6 +414,7 @@ export class ForegroundServer {
   readonly #evalRoutes: EvalRoutes;
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
+  readonly #hookReceiptRoutes: HookReceiptRoutes | undefined;
   readonly #hostDiscoveryRoutes: HostDiscoveryRoutes;
   readonly #hostMcpRoutes: HostMcpRoutes | undefined;
   readonly #host: string;
@@ -429,6 +436,7 @@ export class ForegroundServer {
   readonly #sockets = new Set<Socket>();
   readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
   readonly #testing: ForegroundServerTesting | undefined;
+  readonly #traceRoutes: TraceRoutes;
   readonly #webHostEpochSubscription: ProjectEventSubscription | undefined;
   readonly #webHostRoutes: WebHostRoutes;
   readonly #workbenchDevOrigins: ReadonlySet<string>;
@@ -467,6 +475,7 @@ export class ForegroundServer {
     this.#eventHub = options.eventHub;
     this.#host = host;
     this.#hostMcpRoutes = options.hostMcp;
+    this.#hookReceiptRoutes = options.hookReceipts;
     this.instanceId = instanceId;
     this.#mcpAppPreviews = options.mcpAppPreviews;
     this.#now = options.now ?? (() => new Date());
@@ -569,6 +578,10 @@ export class ForegroundServer {
     this.#devLogRoutes = new DevLogRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.logs === undefined ? {} : { service: options.logs }),
+    });
+    this.#traceRoutes = new TraceRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.trace === undefined ? {} : { hub: options.trace }),
     });
     this.#server = createServer((request, response) => {
       void this.#handle(request, response).catch((error: unknown) => {
@@ -730,6 +743,8 @@ export class ForegroundServer {
     // aggregation below can report it with its fixed resource label.
     const releaseLogs = this.#devLogRoutes.close();
     void releaseLogs.catch(() => undefined);
+    const releaseTrace = this.#traceRoutes.close();
+    void releaseTrace.catch(() => undefined);
     // The Agent API owns admissions over every shared foreground service. It
     // must publish closure and drain active handlers before those services or
     // the epoch-owning coordinator begin their own shutdown.
@@ -757,7 +772,7 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    const [server, coordinator, evalRoutes, evalService, hookPlayground, logs, routeInvocations] = await Promise.allSettled([
+    const [server, coordinator, evalRoutes, evalService, hookPlayground, logs, routeInvocations, trace] = await Promise.allSettled([
       releaseServer,
       releaseCoordinator,
       releaseEvals,
@@ -765,6 +780,7 @@ export class ForegroundServer {
       releaseHookPlayground,
       releaseLogs,
       releaseRouteInvocations,
+      releaseTrace,
     ]);
     const failures: ForegroundServerCloseFailure[] = [];
     if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
@@ -782,6 +798,7 @@ export class ForegroundServer {
     if (routeInvocations.status === 'rejected') {
       failures.push(Object.freeze({ error: routeInvocations.reason, resource: 'route-invocations' }));
     }
+    if (trace.status === 'rejected') failures.push(Object.freeze({ error: trace.reason, resource: 'trace' }));
     return Object.freeze(failures);
   }
 
@@ -792,6 +809,7 @@ export class ForegroundServer {
     const pathname = new URL(request.url ?? '/', this.url).pathname;
     const method = request.method ?? 'GET';
     if (await this.#hostMcpRoutes?.handle(request, response)) return;
+    if (await this.#hookReceiptRoutes?.handle(request, response)) return;
     if (pathname === '/mcp') {
       if (this.#agentApi === undefined) return responseDiagnostic(response, diagnostic('AB8007', 'Route was not found.', 404));
       this.#assertAgentApiOrigin(request);
@@ -812,6 +830,7 @@ export class ForegroundServer {
     if (this.#routeManifestRoutes.handle(request, response)) return;
     if (await this.#evalRoutes.handle(request, response)) return;
     if (await this.#devLogRoutes.handle(request, response)) return;
+    if (await this.#traceRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);
     if (route !== undefined) return this.#serveSkill(route, response, method);
     if (pathname === '/api/project/status') {
