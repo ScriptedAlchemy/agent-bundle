@@ -62,7 +62,6 @@ const publicEntries = {
   api: './src/api.ts',
   cli: './src/cli.ts',
   config: './src/config/index.ts',
-  'contracts/host-sessions': './src/contracts/host-sessions.ts',
   eval: './src/eval/index.ts',
   index: './src/index.ts',
   'lifecycle-render-child': './src/dev/playground/lifecycle-render-child.ts',

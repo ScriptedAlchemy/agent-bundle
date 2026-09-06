@@ -26,6 +26,7 @@ import {
 import {
   HOST_SESSION_MALFORMED_CODE,
   HOST_SESSION_UNAVAILABLE_CODE,
+  HOST_SESSION_UNKNOWN_CODE,
   HostSessionError,
   type HostSessionStreamMessage,
 } from './host-session-service.ts';
@@ -149,7 +150,7 @@ export class HostSessionRoutes {
       }
       if (path.kind === 'item' && method === 'GET') {
         const session = service.read(path.id);
-        if (session === undefined) throw new HostSessionError('AB8262', `Host session ${JSON.stringify(path.id)} was not found.`, 404);
+        if (session === undefined) throw new HostSessionError(HOST_SESSION_UNKNOWN_CODE, `Host session ${JSON.stringify(path.id)} was not found.`, 404);
         responseJson(response, { session });
         return true;
       }
@@ -226,15 +227,12 @@ export class HostSessionRoutes {
       if (stream.keepAlive !== undefined) clearInterval(stream.keepAlive);
       stream.unsubscribe?.();
     });
-    const replay: HostSessionStreamMessage[] = [];
-    let replaying = true;
-    stream.unsubscribe = service.subscribe(id, (message) => replaying ? replay.push(message) : deliver(message));
+    if (service.read(id) === undefined) throw new HostSessionError(HOST_SESSION_UNKNOWN_CODE, `Host session ${JSON.stringify(id)} was not found.`, 404);
     writeKeepAliveStreamHead(response, {
       cacheControl: 'no-cache',
       contentType: 'text/event-stream; charset=utf-8',
     });
-    replaying = false;
-    for (const message of replay) deliver(message);
+    stream.unsubscribe = service.subscribe(id, deliver);
     stream.keepAlive = terminal ? undefined : setInterval(() => writer.enqueue(': keep-alive\n\n'), 15_000);
     finish();
   }

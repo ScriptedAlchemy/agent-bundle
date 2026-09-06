@@ -61,10 +61,6 @@
       "types": "./dist/config/index.d.ts",
       "import": "./dist/config.js"
     },
-    "./contracts/host-sessions": {
-      "types": "./dist/contracts/host-sessions.d.ts",
-      "import": "./dist/contracts/host-sessions.js"
-    },
     "./eval": {
       "types": "./dist/eval/index.d.ts",
       "import": "./dist/eval.js"

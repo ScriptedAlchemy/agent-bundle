@@ -17,13 +17,11 @@ class FakePty implements PtyProcess {
     for (const listener of this.#exit) listener({ exitCode, ...(signal === undefined ? {} : { signal }) });
   }
   kill(): void {}
-  onData(listener: (data: string) => void): () => void {
+  onData(listener: (data: string) => void): void {
     this.#data.add(listener);
-    return () => this.#data.delete(listener);
   }
-  onExit(listener: (event: { readonly exitCode: number; readonly signal?: number }) => void): () => void {
+  onExit(listener: (event: { readonly exitCode: number; readonly signal?: number }) => void): void {
     this.#exit.add(listener);
-    return () => this.#exit.delete(listener);
   }
   resize(): void {}
   write(): void {}

@@ -11,8 +11,8 @@ export interface PtySpawnOptions {
 
 export interface PtyProcess {
   readonly pid: number;
-  onData(listener: (data: string) => void): () => void;
-  onExit(listener: (event: { readonly exitCode: number; readonly signal?: number }) => void): () => void;
+  onData(listener: (data: string) => void): void;
+  onExit(listener: (event: { readonly exitCode: number; readonly signal?: number }) => void): void;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(signal?: NodeJS.Signals): void;
@@ -22,37 +22,9 @@ export interface PtyAdapter {
   spawn(file: string, args: readonly string[], options: PtySpawnOptions): PtyProcess;
 }
 
-interface NativeDisposable {
-  dispose(): void;
-}
-
-interface NativePty {
-  readonly pid: number;
-  onData(listener: (data: string) => void): NativeDisposable;
-  onExit(listener: (event: { readonly exitCode: number; readonly signal?: number }) => void): NativeDisposable;
-  write(data: string): void;
-  resize(cols: number, rows: number): void;
-  kill(signal?: NodeJS.Signals): void;
-}
-
 interface NativePtyModule {
-  spawn(file: string, args: string[], options: PtySpawnOptions): NativePty;
+  spawn(file: string, args: string[], options: PtySpawnOptions): PtyProcess;
 }
-
-const wrap = (process: NativePty): PtyProcess => ({
-  pid: process.pid,
-  kill: (signal) => process.kill(signal),
-  onData: (listener) => {
-    const subscription = process.onData(listener);
-    return () => subscription.dispose();
-  },
-  onExit: (listener) => {
-    const subscription = process.onExit(listener);
-    return () => subscription.dispose();
-  },
-  resize: (cols, rows) => process.resize(cols, rows),
-  write: (data) => process.write(data),
-});
 
 export const loadPtyAdapter = (projectRoot: string): PtyAdapter => {
   let native: NativePtyModule;
@@ -62,5 +34,5 @@ export const loadPtyAdapter = (projectRoot: string): PtyAdapter => {
     native = createRequire(import.meta.url)('@lydell/node-pty') as NativePtyModule;
   }
   if (typeof native.spawn !== 'function') throw new TypeError('@lydell/node-pty does not export spawn.');
-  return { spawn: (file, args, options) => wrap(native.spawn(file, [...args], options)) };
+  return { spawn: (file, args, options) => native.spawn(file, [...args], options) };
 };

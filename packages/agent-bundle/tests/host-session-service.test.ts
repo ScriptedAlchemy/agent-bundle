@@ -34,14 +34,12 @@ class FakePty implements PtyProcess {
     this.kills.push(signal);
   }
 
-  onData(listener: (data: string) => void): () => void {
+  onData(listener: (data: string) => void): void {
     this.#data.add(listener);
-    return () => this.#data.delete(listener);
   }
 
-  onExit(listener: (event: { readonly exitCode: number; readonly signal?: number }) => void): () => void {
+  onExit(listener: (event: { readonly exitCode: number; readonly signal?: number }) => void): void {
     this.#exit.add(listener);
-    return () => this.#exit.delete(listener);
   }
 
   resize(cols: number, rows: number): void {
