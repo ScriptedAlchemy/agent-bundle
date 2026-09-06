@@ -264,8 +264,8 @@ it('wires output.sourceMap into the lowered generated-executable config', async 
   expect(result.state).toBe('ready');
   const script = entryOf(bundlerEntries(result as ReadyInspectResult), 'script', 'tool');
   expect(script.config).toMatchObject({
-    output: { sourceMap: { js: 'inline-source-map' } },
-    syntax: 'es2022',
+    devtool: 'inline-source-map',
+    target: expect.arrayContaining(['es2022', 'node']),
   });
 });
 
