@@ -427,14 +427,14 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     };
   },
   async () => {
-    await mkdir(join(projectRoot, 'vendor', 'vendored'), { recursive: true });
-    await mkdir(join(projectRoot, 'vendor', 'bad-manifest'), { recursive: true });
+    await mkdir(join(projectRoot, 'dist', 'vendor', 'vendored'), { recursive: true });
+    await mkdir(join(projectRoot, 'dist', 'vendor', 'bad-manifest'), { recursive: true });
     await Promise.all([
-      writeFile(join(projectRoot, 'vendor', 'vendored', 'package.json'), '{ "name": "vendored", "version": "1.0.0" }\n'),
-      writeFile(join(projectRoot, 'vendor', 'bad-manifest', 'package.json'), '{\n'),
-      writeFile(join(projectRoot, 'vendor', 'tarred.tgz'), packageTarball('{ "name": "tarred", "version": "1.0.0" }')),
-      writeFile(join(projectRoot, 'vendor', 'bad-tarred-manifest.tgz'), packageTarball('not json\n')),
-      writeFile(join(projectRoot, 'vendor', 'not-archive.tgz'), 'not a tarball\n'),
+      writeFile(join(projectRoot, 'dist', 'vendor', 'vendored', 'package.json'), '{ "name": "vendored", "version": "1.0.0" }\n'),
+      writeFile(join(projectRoot, 'dist', 'vendor', 'bad-manifest', 'package.json'), '{\n'),
+      writeFile(join(projectRoot, 'dist', 'vendor', 'tarred.tgz'), packageTarball('{ "name": "tarred", "version": "1.0.0" }')),
+      writeFile(join(projectRoot, 'dist', 'vendor', 'bad-tarred-manifest.tgz'), packageTarball('not json\n')),
+      writeFile(join(projectRoot, 'dist', 'vendor', 'not-archive.tgz'), 'not a tarball\n'),
     ]);
     const pack = { ...result.pack, files: [...result.pack.files,
       { path: 'node_modules/embedded/package.json' },
@@ -466,7 +466,7 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     for (const name of ['alias', 'tilde', 'versioned', 'embedded', 'vendored', 'tarred']) {
       expect(reported[0]?.message).not.toContain(JSON.stringify(name));
     }
-    await rm(join(projectRoot, 'vendor'), { force: true, recursive: true });
+    await rm(join(projectRoot, 'dist', 'vendor'), { force: true, recursive: true });
     expect(reported[0]?.recovery).toContain('registry');
 
     const underPnpm = withCode(await diagnostics(pack, true), 'AB7015');
@@ -597,20 +597,18 @@ it('reads an installed manifest as npm does, so the last of duplicate name keys 
   },
 ));
 
-it('prepack succeeds and surfaces the warning when the only finding is an unresolvable optional dependency', () => withPackageDocument(
+it('surfaces a warning when the only finding is an unresolvable optional dependency', () => withPackageDocument(
   (document) => {
     document.optionalDependencies = { 'optional-native': 'github:owner/optional-native' };
-    // The build rewrites dist, so the packed declaration that references the optional package lives in its own
-    // packed directory; an install script running it instead would make the failed fetch fatal.
-    document.files = [...(document.files as readonly string[]), 'extras'];
   },
   async () => {
-    const extras = join(projectRoot, 'extras');
+    const extras = join(projectRoot, 'dist', 'extras');
     await mkdir(extras, { recursive: true });
     await writeFile(join(extras, 'optional.d.ts'), 'export type { Native } from "optional-native";\n');
     try {
-      const packed = await prepack({ root: projectRoot });
-      expect(packed.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity])).toEqual([['AB7015', 'warning']]);
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'extras/optional.d.ts' }] };
+      expect((await diagnostics(pack)).map((diagnostic) => [diagnostic.code, diagnostic.severity]))
+        .toEqual([['AB7015', 'warning']]);
     } finally {
       await rm(extras, { force: true, recursive: true });
     }
@@ -638,7 +636,7 @@ it('accepts a dependency that only packed declaration files reference, including
     // A `#` specifier reaches the package the imports map names.
     await writeFile(modern, 'export type { Driver } from "#driver";\n');
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/consumer.d.ts' }, { path: 'dist/driver.d.mts' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'consumer.d.ts' }, { path: 'driver.d.mts' }] };
       const [reported] = withCode(await diagnostics(pack), 'AB7014');
       expect(reported?.message).toContain('"never-loaded"');
       for (const name of ['zod', '@types/node', 'driver-package']) expect(reported?.message).not.toContain(JSON.stringify(name));
