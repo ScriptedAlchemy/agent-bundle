@@ -1,5 +1,6 @@
 import { isCallToolResult } from '@modelcontextprotocol/client';
 
+import { isPlainRecord } from '../core/strict-json.ts';
 import type { McpAppJsonValue, McpAppToolDefinition } from './mcp-apps/mcp-app-binding-service.ts';
 
 export interface McpAppResultInspection {
@@ -40,9 +41,6 @@ const setOwnData = <Value>(target: Record<string, Value>, key: string, value: Va
     writable: false,
   });
 };
-
-const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
 const ownData = (value: object, key: string): unknown => {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -93,8 +91,6 @@ const jsonRecord = (value: unknown, label: string): JsonRecord => {
   return cloned;
 };
 
-const hasOwn = (value: object, key: string): boolean => Object.hasOwn(value, key);
-
 const uiUri = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   try {
@@ -110,7 +106,7 @@ const deepEqual = (left: McpAppJsonValue, right: McpAppJsonValue): boolean => JS
 const metadataRecord = (value: unknown): JsonRecord => {
   if (value === undefined) return Object.freeze({});
   if (!isPlainRecord(value)) return jsonRecord(value, 'MCP App metadata');
-  if (hasOwn(value, '_meta')) {
+  if (Object.hasOwn(value, '_meta')) {
     const metadata = ownData(value, '_meta');
     return metadata === undefined ? Object.freeze({}) : jsonRecord(metadata, 'MCP App metadata');
   }
@@ -239,14 +235,14 @@ export const projectMcpAppResult = (value: unknown): McpAppResultInspection => {
   if (!hasProtocolCallToolResult(appVisible) || !hasExactProtocolContent(appVisible.content)) {
     throw new TypeError('MCP CallToolResult content must use valid protocol content blocks.');
   }
-  if (hasOwn(appVisible, 'isError') && typeof appVisible.isError !== 'boolean') {
+  if (Object.hasOwn(appVisible, 'isError') && typeof appVisible.isError !== 'boolean') {
     throw new TypeError('MCP CallToolResult isError must be a boolean.');
   }
-  if (hasOwn(appVisible, 'structuredContent') && !isPlainRecord(appVisible.structuredContent)) {
+  if (Object.hasOwn(appVisible, 'structuredContent') && !isPlainRecord(appVisible.structuredContent)) {
     throw new TypeError('MCP CallToolResult structuredContent must be a finite JSON object.');
   }
   const modelVisible: Record<string, McpAppJsonValue> = { content: appVisible.content };
-  if (hasOwn(appVisible, 'structuredContent')) modelVisible.structuredContent = appVisible.structuredContent!;
+  if (Object.hasOwn(appVisible, 'structuredContent')) modelVisible.structuredContent = appVisible.structuredContent!;
   return Object.freeze({
     appVisible,
     isError: appVisible.isError === true,
@@ -258,7 +254,7 @@ export const projectMcpAppResult = (value: unknown): McpAppResultInspection => {
 export const isMcpAppToolVisible = (tool: unknown): boolean => {
   if (!isPlainRecord(tool) || typeof tool.name !== 'string' || tool.name.length === 0) return false;
   const metadata = tool._meta;
-  if (!isPlainRecord(metadata) || !isPlainRecord(metadata.ui) || !hasOwn(metadata.ui, 'visibility')) return true;
+  if (!isPlainRecord(metadata) || !isPlainRecord(metadata.ui) || !Object.hasOwn(metadata.ui, 'visibility')) return true;
   const visibility = metadata.ui.visibility;
   return Array.isArray(visibility) && visibility.every((value) => typeof value === 'string') && visibility.includes('app');
 };

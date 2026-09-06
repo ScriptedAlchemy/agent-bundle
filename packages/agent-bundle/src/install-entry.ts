@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { stableJson } from './core/digest.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
+import { errorMessage } from './core/errors.ts';
 import { formatInstallResult, formatUninstallResult } from './install/format.ts';
 import {
   installBundle,
@@ -41,7 +42,7 @@ const diagnosticsFor = (error: unknown): readonly Diagnostic[] =>
     ? error.diagnostics
     : Object.freeze([Object.freeze({
       code: 'AB7004',
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
       severity: 'error' as const,
     })]);
 

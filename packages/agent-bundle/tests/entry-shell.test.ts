@@ -9,7 +9,7 @@ import ts from 'typescript-5';
 import { claudeAdapter } from '../src/adapters/claude.ts';
 import { cursorHookWrapperSource, nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
 import type { NoticeDeliveryAdvertisement } from '../src/adapters/notice-delivery.ts';
-import { scanEntryExportsSource, stripCommentsAndStrings } from '../src/build/entry-exports.ts';
+import { scanEntryExportsSource } from '../src/build/entry-exports.ts';
 import * as entryShellModule from '../src/build/entry-shell.ts';
 import { launchEnvLayerSpecifier, operatorEnvLayerImport, operatorEnvLayerModuleSource, operatorEnvLayerVirtualModule } from '../src/build/launch-env-shell.ts';
 import { stableJson } from '../src/core/digest.ts';
@@ -68,10 +68,21 @@ describe('entry export scanning', () => {
     expect(scanEntryExportsSource('const t = `a ${`b ${1} export default c`} d`;').hasDefaultExport).toBe(false);
   });
 
+  it('parses JSX by file name and ignores ambient declarations', () => {
+    const tsx = 'const view = <main>export default nothing</main>;\nexport default () => view;';
+    expect(scanEntryExportsSource(tsx, '/app/entry.tsx').hasDefaultExport).toBe(true);
+    expect(scanEntryExportsSource('const n = <number>1; export const main = n;', '/app/entry.ts').hasMainExport).toBe(true);
+    expect(scanEntryExportsSource('export declare const main: number;')).toEqual({
+      hasDefaultExport: false,
+      hasMainExport: false,
+    });
+    expect(scanEntryExportsSource('export declare function main(): void;').hasMainExport).toBe(false);
+  });
+
   it('survives regex literals containing slashes', () => {
     const source = "const re = /https:\\/\\//u; export default re;";
     expect(scanEntryExportsSource(source).hasDefaultExport).toBe(true);
-    expect(stripCommentsAndStrings('const division = a / b / c; export const main = 1;')).toContain('export const main');
+    expect(scanEntryExportsSource('const division = a / b / c; export const main = 1;').hasMainExport).toBe(true);
   });
 
   it('handles TypeScript syntax the JS lexers cannot parse', () => {

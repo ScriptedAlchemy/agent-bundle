@@ -16,11 +16,11 @@ import { execFile as executeFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFile, readFile } from 'node:fs/promises';
 import { delimiter, dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const execFile = promisify(executeFile);
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repositoryRoot = resolve(import.meta.dirname, '..');
 
 export const hostCliHosts = Object.freeze(['claude', 'codex']);
 

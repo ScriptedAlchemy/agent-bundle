@@ -1,9 +1,9 @@
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { audibleOperations, defaultAudibleOperations } from '../operations/audible.js';
+import { audibleOperations } from '../operations/audible.js';
 
-const operation = audibleOperations(defaultAudibleOperations).audibleCache;
+const operation = audibleOperations.audibleCache;
 
 export const config = {
   description: 'Cache one reviewed Audible product, chapters, artwork, and source URLs.',
