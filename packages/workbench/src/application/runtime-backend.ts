@@ -3,12 +3,17 @@ import type {
   DevRuntimeRun,
   DevRuntimeSurface,
 } from '../../../agent-bundle/src/contracts/runtime.ts';
-import type {
-  RouteInvocation,
-  RouteInvocationKind,
-  RouteInvocationOutcome,
-  RouteInvocationRequest,
-  RouteInvocationSummary,
+import {
+  emptyRetainedRenderEvents,
+  renderRetention,
+  retainedLatestDocument,
+  retainedRenderEvents,
+  retainRenderEvent,
+  type RouteInvocation,
+  type RouteInvocationKind,
+  type RouteInvocationOutcome,
+  type RouteInvocationRequest,
+  type RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import type { AgentRenderEvent } from '../runtime/agent-document-client.ts';
 import type {
@@ -129,28 +134,6 @@ const diagnosticFor = (
   target: diagnostic.phase,
 });
 
-const documentFor = (
-  events: readonly AgentRenderEvent[],
-): RouteInvocation['document'] => {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]!;
-    switch (event.type) {
-      case 'shell':
-      case 'replace':
-      case 'complete':
-        return event.document;
-      case 'progress':
-      case 'error':
-        break;
-      default: {
-        const exhaustive: never = event;
-        return exhaustive;
-      }
-    }
-  }
-  return undefined;
-};
-
 const invocationKind = (kind: RouteInvocationKind) => {
   switch (kind) {
     case 'tool':
@@ -216,7 +199,11 @@ const invocationForRun = (
   const diagnostics = run.status === 'failed'
     ? Object.freeze(run.diagnostics.map(diagnosticFor))
     : Object.freeze([]);
-  const document = documentFor(events);
+  // The run document arrives whole from the runtime; hold it under the same
+  // window every other RouteInvocation applies.
+  const history = events.reduce((retained, event) => retainRenderEvent(retained, event).retained, emptyRetainedRenderEvents);
+  const document = retainedLatestDocument(history);
+  const retention = renderRetention(history);
   const timings = run.status === 'succeeded'
     ? Object.freeze(run.result.trace.flatMap((span) => span.durationMs === undefined
       ? []
@@ -244,7 +231,7 @@ const invocationForRun = (
     ...(correlationId === undefined ? {} : { correlationId }),
     diagnostics,
     ...(document === undefined ? {} : { document }),
-    events,
+    events: retainedRenderEvents(history),
     id: run.id,
     input: run.input,
     kind,
@@ -253,6 +240,7 @@ const invocationForRun = (
     projection: Object.freeze({}),
     providers: Object.freeze([]),
     ...(result === undefined ? {} : { result }),
+    ...(retention === undefined ? {} : { retention }),
     routeId: leaf.routeId,
     source: leaf.source ?? '',
     sourceRevision: run.vector.sourceRevision,

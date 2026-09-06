@@ -123,6 +123,12 @@ const eventTraceWireSchema = z.strictObject({
 const eventTraceSchema = z.custom<EventTraceEvent>(
   (value) => eventTraceWireSchema.safeParse(value).success,
 );
+const retentionSchema = z.strictObject({
+  evictedBytes: z.number().int().nonnegative(),
+  evictedEvents: z.number().int().positive(),
+  producedEvents: z.number().int().positive(),
+  retainedBytes: z.number().int().nonnegative(),
+});
 const outcomeSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('success') }),
   z.strictObject({ kind: z.literal('represented-error'), summary: z.string() }),
@@ -152,6 +158,9 @@ const outcomeMatchesStatus = (value: Pick<RouteInvocationSummary, 'outcome' | 's
   (value.status === 'succeeded') === (value.outcome !== undefined);
 const invocationSummarySchema: z.ZodType<RouteInvocationSummary> =
   z.strictObject(invocationSummaryFields).refine(outcomeMatchesStatus);
+// A retention account must describe exactly the events it sits beside.
+const retentionMatchesEvents = (value: Pick<RouteInvocation, 'events' | 'retention'>): boolean =>
+  value.retention === undefined || value.retention.producedEvents === value.retention.evictedEvents + value.events.length;
 const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   ...invocationSummaryFields,
   context: requestContextProvenanceSchema,
@@ -160,8 +169,9 @@ const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   projection: projectionSchema,
   providers: z.array(providerSchema),
   result: z.json().optional(),
+  retention: retentionSchema.optional(),
   trace: z.array(eventTraceSchema).optional(),
-}).refine(outcomeMatchesStatus);
+}).refine(outcomeMatchesStatus).refine(retentionMatchesEvents);
 const invocationResponseSchema = z.strictObject({ invocation: invocationSchema });
 const runningInvocationSchema: z.ZodType<RunningRouteInvocation> = z.strictObject({
   id: textSchema,
