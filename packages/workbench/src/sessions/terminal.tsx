@@ -51,7 +51,8 @@ export const SessionTerminal = ({ client, live, onError, onSession, onSize, sess
     const input = term.onData((data) => {
       if (callbacks.current.live) client.input(sessionId, data).catch(fail);
     });
-    const resized = term.onResize((size) => {
+    const resized = term.onResize(({ cols, rows }) => {
+      const size = { cols, rows };
       callbacks.current.onSize(size);
       if (callbacks.current.live) client.resize(sessionId, size).catch(fail);
     });
