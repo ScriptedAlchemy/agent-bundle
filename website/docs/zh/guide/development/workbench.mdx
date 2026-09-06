@@ -302,11 +302,12 @@ providers、持久状态、CLI `mapInput` 与确认、事件 preflight 以及渲
 worker 取自 `executables.scripts[]`，所属已编译服务器的 `launch.worker` 取自
 `executables.mcpServers[]`；事件路由则取该宿主在 `executables.hooks[]` 中的包装层行，加上其
 `routes.events[].execution` 选定的 worker（standalone 运行时为 `hooks/hooks-flight.mjs`，否则为
-共享运行时所有者的 worker）。绑定失败即关闭：缺少可读 manifest 的根报告 `AB8250`；manifest 未编译
-的路由、没有包装层行的宿主事件，或有多个候选服务器却未指明所有者的共享运行时事件报告 `AB8251`；
-以 Canonical 方式提交只有宿主包装层才能运行其 preflight 的路由，或绑定到的 bin / 包装层缺少准备导出，
-报告 `AB8252`——所有情况都发生在到达处理函数之前。绑定 worker 内部的失败（包括处理函数抛错）即为
-该次调用的失败；不会再运行其他可执行项。
+到达该宿主的第一个已编译服务器的 worker——也就是编译器交付共享事件运行时的那台服务器）。绑定失败
+即关闭：缺少可读 manifest 的根报告 `AB8250`；manifest 未编译的路由、该宿主没有包装层行的宿主事件，
+或没有 worker 的 bin / 脚本 / 服务器报告 `AB8251`；绑定到的 bin / 包装层缺少准备导出报告 `AB8252`。
+未指定宿主提交带 preflight 的路由会在排队前被服务以 `AB8255` 拒绝，若它仍到达子进程，子进程会再次
+以 `AB8252` 拒绝——所有情况都发生在到达处理函数之前。绑定 worker 内部的失败（包括处理函数抛错）
+即为该次调用的失败；不会再运行其他可执行项。
 生产状态位于 `<project>/.agent-bundle/state`，在 retirement 会移除的已发布 epoch 之外。它通过
 `AGENT_BUNDLE_STATE_ROOT` 与开发期 MCP 会话共享，因此能跨一次成功的重新发布保留；`unit-render`
 仍为每次运行使用新的临时状态根。

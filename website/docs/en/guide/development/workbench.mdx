@@ -359,14 +359,15 @@ routed CLI bin and worker from `executables.bins[]`, the rendered script's worke
 `executables.scripts[]`, the owning compiled server's `launch.worker` from
 `executables.mcpServers[]`, and, for an event route, the host's wrapper row from
 `executables.hooks[]` plus the worker its `routes.events[].execution` selects
-(`hooks/hooks-flight.mjs` for a standalone runtime, the shared runtime owner's worker
-otherwise). The binding fails closed: a root without a readable manifest is `AB8250`, a route
-the manifest does not compile, a hosted event with no wrapper row, or a shared-runtime event
-with several candidate servers and no named owner is `AB8251`, and a canonical submission of a
-route whose preflight only a host wrapper can run, or a bound bin or wrapper missing its
-preparation export, is `AB8252` — in every case before the handler is reached. A failure
-inside the bound worker, a handler throw included, is the invocation's failure; no other
-executable runs.
+(`hooks/hooks-flight.mjs` for a standalone runtime, otherwise the worker of the first compiled
+server reaching the host — the same server the compiler gave the shared event runtime). The
+binding fails closed: a root without a readable manifest is `AB8250`; a route the manifest does
+not compile, a hosted event with no wrapper row for that host, or a bin, script, or server
+without a worker is `AB8251`; a bound bin or wrapper missing its preparation export is
+`AB8252`. A preflight route submitted without a host is refused by the service as `AB8255`
+before it is queued, and the child refuses it again as `AB8252` should it ever reach it — in
+every case before the handler is reached. A failure inside the bound worker, a handler throw
+included, is the invocation's failure; no other executable runs.
 Production state lives at `<project>/.agent-bundle/state`, outside the published epochs that
 retirement removes. It is shared with dev MCP sessions through `AGENT_BUNDLE_STATE_ROOT`, so it
 survives a successful republish; `unit-render` still uses a fresh temporary state root per run.
