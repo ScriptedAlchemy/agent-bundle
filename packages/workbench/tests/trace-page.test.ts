@@ -28,12 +28,10 @@ it('renders the correlated timeline oldest first with one line per entry, nested
   expect(markup).toContain('<h1>Trace</h1>');
   expect(markup).toContain('9 entries in 4 groups');
   expect(markup).toContain('data-testid="trace-timeline"');
-  expect(markup).toContain('data-testid="trace-filter-bar"');
   expect(count(markup, 'data-testid="trace-group"')).toBe(4);
   expect(count(markup, 'data-testid="trace-entry"')).toBe(9);
   expect(markup).not.toContain('data-testid="trace-empty"');
   expect(markup).not.toContain('data-testid="trace-detail"');
-  expect(markup).not.toContain('data-testid="trace-new-pill"');
 
   expect(markup.indexOf('data-group-key="conversationId:conv-1"')).toBeLessThan(markup.indexOf('data-group-key="runId:run_9"'));
   expect(markup).toContain('22:41:04.101');
@@ -56,8 +54,6 @@ it('shows the empty state that explains what produces entries, and a connecting 
   expect(empty).toContain('data-testid="trace-empty"');
   expect(empty).toContain('Run a route, call a tool in Advanced → Protocol, or invoke the plugin from a host');
   expect(count(empty, 'data-testid="trace-group"')).toBe(0);
-  expect(count(empty, 'trace-chip')).toBe(7);
-  expect(count(empty, 'disabled=""')).toBe(8);
 
   const connecting = renderToStaticMarkup(createElement(TracePage, { client: untouched, onNavigate: () => undefined }));
   expect(connecting).toContain('Connecting…');
@@ -114,17 +110,4 @@ it('scopes the timeline to the group ?correlation= names and offers the way back
   expect(count(missing, 'data-testid="trace-group"')).toBe(0);
   expect(missing).toContain('No entry carries nobody.');
   expect(missing).not.toContain('data-testid="trace-empty"');
-});
-
-it('renders the filter bar with facets from the entries and every source chip', () => {
-  const markup = render();
-  expect(markup).toContain('<option value="claude">claude</option>');
-  expect(markup).toContain('<option value="portable">portable</option>');
-  expect(markup).toContain('<option value="tool:curator/search">tool:curator/search</option>');
-  expect(markup).toContain('<option value="error">error</option>');
-  expect(markup).toContain('placeholder="Filter summaries…"');
-  expect(markup).toContain('>Clear</button>');
-  for (const source of ['invocation', 'kernel', 'mcp', 'runtime', 'hook', 'log', 'diagnostic']) expect(markup).toContain(`data-source="${source}"`);
-  expect(markup).toContain('data-source="diagnostic" disabled=""');
-  expect(markup).not.toContain('data-source="mcp" disabled=""');
 });

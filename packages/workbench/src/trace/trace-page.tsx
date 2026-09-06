@@ -1,28 +1,23 @@
 /**
  * The Trace page (#600 PR 2): one correlated, live timeline of everything the
  * dev server observed the application doing. Entries arrive from `/api/trace`
- * already lowered; this page groups them, filters them, and opens the full
- * record behind each entry's `href`.
+ * already lowered; this page groups them and opens the full record behind each
+ * entry's `href`.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
-import { type TraceEntry, type TraceSource, type TraceStatus, traceSources } from '../../../agent-bundle/src/contracts/trace.ts';
+import { type TraceEntry, type TraceStatus } from '../../../agent-bundle/src/contracts/trace.ts';
 import { ShellLink } from '../shell/shell-link.tsx';
 import { parseWorkbenchLocation, type WorkbenchLocation } from '../shell/workbench-location.ts';
 import { openTraceFeed, type TraceClient, type TraceFeedState } from './trace-client.ts';
 import {
-  filterTraceGroups,
   formatTraceDuration,
   formatTraceTime,
   groupTraceEntries,
-  isEmptyTraceFilter,
   selectTraceEntry,
   selectTraceGroup,
-  traceFacetsFor,
   traceKindLabel,
   traceSourceGlyph,
-  type TraceFacets,
-  type TraceFilter,
   type TraceGroup,
   type TraceGroupKeyKind,
 } from './trace-model.ts';
@@ -41,34 +36,12 @@ export interface TracePageProps {
   readonly timeZone?: string;
 }
 
-const all = '';
-const bottomThresholdPx = 8;
-
-interface FilterState {
-  readonly host: string;
-  readonly routeId: string;
-  readonly sources: ReadonlySet<TraceSource>;
-  readonly status: string;
-  readonly text: string;
-}
-
-const emptyFilter: FilterState = Object.freeze({ host: all, routeId: all, sources: new Set<TraceSource>(), status: all, text: all });
-
-const isStatus = (value: string): value is TraceStatus => value === 'ok' || value === 'error' || value === 'running';
-
-const traceFilterFor = (state: FilterState): TraceFilter => Object.freeze({
-  ...(state.host === all ? {} : { host: state.host }),
-  ...(state.routeId === all ? {} : { routeId: state.routeId }),
-  ...(state.sources.size === 0 ? {} : { sources: state.sources }),
-  ...(isStatus(state.status) ? { status: state.status } : {}),
-  ...(state.text === all ? {} : { text: state.text }),
-});
-
 const groupKeyLabel = (kind: TraceGroupKeyKind): string => {
   switch (kind) {
     case 'conversationId':
       return 'conversation';
     case 'sessionId':
+    case 'mcpSessionId':
       return 'session';
     case 'invocationId':
       return 'invocation';
@@ -116,56 +89,6 @@ const useTraceFeed = (client: TraceClient, supplied: readonly TraceEntry[] | und
 
 const StatusPill = ({ status }: { readonly status: TraceStatus }) =>
   <span className={`trace-status trace-status--${status}`}>{status}</span>;
-
-const FilterBar = ({ facets, filter, onChange }: {
-  readonly facets: TraceFacets;
-  readonly filter: FilterState;
-  readonly onChange: (next: FilterState) => void;
-}) => {
-  const toggleSource = (source: TraceSource): void => {
-    const sources = new Set(filter.sources);
-    if (!sources.delete(source)) sources.add(source);
-    onChange({ ...filter, sources });
-  };
-  const active = !isEmptyTraceFilter(traceFilterFor(filter));
-  return <section aria-label="Trace filters" className="trace-filter-bar" data-testid="trace-filter-bar">
-    <div aria-label="Sources" className="trace-filter-sources" role="group">
-      {traceSources.map((source) => <button
-        aria-pressed={filter.sources.has(source)}
-        className="trace-chip"
-        data-source={source}
-        disabled={!facets.sources.includes(source) && !filter.sources.has(source)}
-        key={source}
-        onClick={() => toggleSource(source)}
-        type="button"
-      ><span aria-hidden="true" className={`trace-glyph trace-glyph--${source}`}>{traceSourceGlyph(source)}</span>{source}</button>)}
-    </div>
-    <label className="trace-filter-field"><span>Host</span>
-      <select onChange={(event) => onChange({ ...filter, host: event.currentTarget.value })} value={filter.host}>
-        <option value={all}>All hosts</option>
-        {facets.hosts.map((host) => <option key={host} value={host}>{host}</option>)}
-      </select>
-    </label>
-    <label className="trace-filter-field"><span>Route</span>
-      <select onChange={(event) => onChange({ ...filter, routeId: event.currentTarget.value })} value={filter.routeId}>
-        <option value={all}>All routes</option>
-        {facets.routeIds.map((routeId) => <option key={routeId} value={routeId}>{routeId}</option>)}
-      </select>
-    </label>
-    <label className="trace-filter-field"><span>Status</span>
-      <select onChange={(event) => onChange({ ...filter, status: event.currentTarget.value })} value={filter.status}>
-        <option value={all}>Any status</option>
-        <option value="ok">ok</option>
-        <option value="error">error</option>
-        <option value="running">running</option>
-      </select>
-    </label>
-    <label className="trace-filter-field trace-filter-text"><span>Text</span>
-      <input onChange={(event) => onChange({ ...filter, text: event.currentTarget.value })} placeholder="Filter summaries…" type="search" value={filter.text} />
-    </label>
-    <button className="trace-clear" disabled={!active} onClick={() => onChange(emptyFilter)} type="button">Clear</button>
-  </section>;
-};
 
 const GroupView = ({ correlation, group, onNavigate, selected, selectedEntryId, timeZone }: {
   readonly correlation: string | undefined;
@@ -276,33 +199,11 @@ const emptyMessage = (feed: TraceFeedState): string => {
 
 export const TracePage = ({ client, correlation, entries: suppliedEntries, entryId, onNavigate, timeZone }: TracePageProps) => {
   const feed = useTraceFeed(client, suppliedEntries);
-  const [filter, setFilter] = useState<FilterState>(emptyFilter);
   const groups = useMemo(() => groupTraceEntries(feed.entries), [feed.entries]);
-  const facets = useMemo(() => traceFacetsFor(feed.entries), [feed.entries]);
   const selectedEntry = entryId === undefined ? undefined : selectTraceEntry(feed.entries, entryId);
   const correlatedGroup = correlation === undefined ? undefined : selectTraceGroup(groups, correlation);
   const selectedGroup = correlatedGroup ?? (selectedEntry === undefined ? undefined : selectTraceGroup(groups, selectedEntry.id));
   const scope = correlation === undefined ? groups : correlatedGroup === undefined ? [] : [correlatedGroup];
-  const visible = filterTraceGroups(scope, traceFilterFor(filter));
-  const lastSequence = feed.entries.at(-1)?.sequence ?? 0;
-
-  // New groups land at the bottom. While the user is reading further up the
-  // timeline the scroll position stays put and the pill counts what arrived;
-  // at the bottom the timeline follows the feed.
-  const timelineRef = useRef<HTMLDivElement>(null);
-  const [atBottom, setAtBottom] = useState(true);
-  const [seenSequence, setSeenSequence] = useState(0);
-  useEffect(() => {
-    if (!atBottom) return;
-    const timeline = timelineRef.current;
-    if (timeline !== null) timeline.scrollTop = timeline.scrollHeight;
-    setSeenSequence(lastSequence);
-  }, [atBottom, lastSequence]);
-  const pending = atBottom ? 0 : visible.filter((group) => group.firstSequence > seenSequence).length;
-  const onScroll = (): void => {
-    const timeline = timelineRef.current;
-    if (timeline !== null) setAtBottom(timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= bottomThresholdPx);
-  };
 
   const heading = !feed.loaded
     ? 'Connecting…'
@@ -321,14 +222,13 @@ export const TracePage = ({ client, correlation, entries: suppliedEntries, entry
       </div>
       {feed.error === undefined ? undefined : <p className="request-error" role="alert">{feed.error}</p>}
       {feed.gap === undefined ? undefined : <p className="trace-gap" role="status">{String(feed.gap.droppedCount)} earlier {feed.gap.droppedCount === 1 ? 'entry is' : 'entries are'} no longer retained.</p>}
-      <FilterBar facets={facets} filter={filter} onChange={setFilter} />
       <div className="trace-timeline-wrap">
-        <div className="trace-timeline" data-testid="trace-timeline" onScroll={onScroll} ref={timelineRef}>
+        <div className="trace-timeline" data-testid="trace-timeline">
           {feed.entries.length === 0
             ? <p className="empty-row trace-empty" data-testid="trace-empty">{emptyMessage(feed)}</p>
-            : visible.length === 0
-              ? <p className="empty-row">{correlation !== undefined && correlatedGroup === undefined ? `No entry carries ${correlation}.` : 'No entry matches this filter.'}</p>
-              : visible.map((group) => <GroupView
+            : scope.length === 0
+              ? <p className="empty-row">{`No entry carries ${correlation}.`}</p>
+              : scope.map((group) => <GroupView
                   correlation={correlation}
                   group={group}
                   key={group.key}
@@ -338,7 +238,6 @@ export const TracePage = ({ client, correlation, entries: suppliedEntries, entry
                   timeZone={timeZone}
                 />)}
         </div>
-        {pending === 0 ? undefined : <button className="trace-new-pill" data-testid="trace-new-pill" onClick={() => setAtBottom(true)} type="button">{String(pending)} new</button>}
       </div>
     </div>
     {selectedEntry !== undefined

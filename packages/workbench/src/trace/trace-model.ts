@@ -1,8 +1,8 @@
 /**
  * Pure model behind the Trace page (#600 PR 2): the ordered entry list, the
- * correlated groups it folds into, the filters, and the selection rules the
- * URL drives. No transport, no React; the page calls these with whatever the
- * feed has delivered so far.
+ * correlated groups it folds into, and the selection rules the URL drives. No
+ * transport, no React; the page calls these with whatever the feed has
+ * delivered so far.
  */
 import type {
   TraceCorrelation,
@@ -22,6 +22,7 @@ export const maximumTraceEntries = 4_096;
 export const traceJoinKeys = Object.freeze([
   'conversationId',
   'sessionId',
+  'mcpSessionId',
   'invocationId',
   'executionId',
   'runId',
@@ -55,28 +56,10 @@ export interface TraceGroup {
   readonly status: TraceStatus;
 }
 
-export interface TraceFilter {
-  readonly host?: string;
-  readonly routeId?: string;
-  readonly sources?: ReadonlySet<TraceSource>;
-  readonly status?: TraceStatus;
-  /** Case-insensitive substring over `summary` and `kind`. */
-  readonly text?: string;
-}
-
-export interface TraceFacets {
-  readonly hosts: readonly string[];
-  readonly routeIds: readonly string[];
-  readonly sources: readonly TraceSource[];
-}
-
 const millis = (value: string): number => {
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
 };
-
-const sortedUnique = (values: readonly string[]): readonly string[] =>
-  Object.freeze([...new Set(values)].sort((left, right) => left.localeCompare(right)));
 
 /**
  * Replay and live entries share one server sequence: the result is ordered by
@@ -108,12 +91,17 @@ export const mergeTraceEntries = (
   return Object.freeze(merged.slice(-maximumTraceEntries));
 };
 
-/** `mcpRequestId` is only meaningful within its session; the other keys stand alone. */
-const joinToken = (correlation: TraceCorrelation, key: TraceJoinKey): string | undefined => {
+/** `mcpRequestId` is only meaningful within its session; session ids join across publishers. */
+const joinValue = (correlation: TraceCorrelation, key: TraceJoinKey): string | undefined => {
   const value = correlation[key];
   if (value === undefined) return undefined;
-  if (key !== 'mcpRequestId') return `${key}:${value}`;
-  return correlation.mcpSessionId === undefined ? undefined : `${key}:${correlation.mcpSessionId}/${value}`;
+  if (key !== 'mcpRequestId') return value;
+  return correlation.mcpSessionId === undefined ? undefined : `${correlation.mcpSessionId}/${value}`;
+};
+
+const joinToken = (correlation: TraceCorrelation, key: TraceJoinKey): string | undefined => {
+  const value = joinValue(correlation, key);
+  return value === undefined ? undefined : `correlation:${value}`;
 };
 
 const headlinePriority: Readonly<Record<TraceSource, number>> = Object.freeze({
@@ -156,9 +144,9 @@ const groupFor = (entries: readonly TraceEntry[]): TraceGroup => {
   let keyKind: TraceGroupKeyKind = 'entry';
   search: for (const joinKey of traceJoinKeys) {
     for (const entry of entries) {
-      const token = joinToken(entry.correlation, joinKey);
-      if (token === undefined) continue;
-      key = token;
+      const value = joinValue(entry.correlation, joinKey);
+      if (value === undefined) continue;
+      key = `${joinKey}:${value}`;
       keyKind = joinKey;
       break search;
     }
@@ -228,43 +216,6 @@ export const groupTraceEntries = (entries: readonly TraceEntry[]): readonly Trac
   }
   return Object.freeze([...members.values()].map((list) => groupFor(Object.freeze(list))));
 };
-
-const matchesText = (entry: TraceEntry, needle: string): boolean =>
-  entry.summary.toLowerCase().includes(needle) || entry.kind.toLowerCase().includes(needle);
-
-export const matchesTraceFilter = (entry: TraceEntry, filter: TraceFilter): boolean => {
-  if (filter.sources !== undefined && filter.sources.size > 0 && !filter.sources.has(entry.source)) return false;
-  if (filter.host !== undefined && entry.correlation.host !== filter.host) return false;
-  if (filter.routeId !== undefined && entry.correlation.routeId !== filter.routeId) return false;
-  if (filter.status !== undefined && (entry.status ?? 'ok') !== filter.status) return false;
-  const needle = filter.text?.trim().toLowerCase();
-  return needle === undefined || needle.length === 0 || matchesText(entry, needle);
-};
-
-export const isEmptyTraceFilter = (filter: TraceFilter): boolean =>
-  (filter.sources === undefined || filter.sources.size === 0) && filter.host === undefined &&
-  filter.routeId === undefined && filter.status === undefined && (filter.text?.trim() ?? '') === '';
-
-/**
- * Keeps each group's identity and headline while hiding the rows the filter
- * excludes; a group with no visible row disappears. Grouping before filtering
- * means a source filter on `mcp` still shows the frames under the session that
- * produced them rather than re-grouping them on their own.
- */
-export const filterTraceGroups = (groups: readonly TraceGroup[], filter: TraceFilter): readonly TraceGroup[] => {
-  if (isEmptyTraceFilter(filter)) return groups;
-  return Object.freeze(groups.flatMap((group) => {
-    const rows = group.rows.filter((row) => matchesTraceFilter(row.entry, filter));
-    return rows.length === 0 ? [] : [Object.freeze({ ...group, rows: Object.freeze(rows) })];
-  }));
-};
-
-export const traceFacetsFor = (entries: readonly TraceEntry[]): TraceFacets => Object.freeze({
-  hosts: sortedUnique(entries.flatMap((entry) => entry.correlation.host === undefined ? [] : [entry.correlation.host])),
-  routeIds: sortedUnique(entries.flatMap((entry) => entry.correlation.routeId === undefined ? [] : [entry.correlation.routeId])),
-  sources: Object.freeze([...new Set(entries.map((entry) => entry.source))].sort((left, right) =>
-    headlinePriority[left] - headlinePriority[right])),
-});
 
 /** Every correlation value on an entry, plus its own id: what `?correlation=` may name. */
 export const traceEntryCorrelationValues = (entry: TraceEntry): readonly string[] => Object.freeze([

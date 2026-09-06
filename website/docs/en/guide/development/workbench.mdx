@@ -170,7 +170,6 @@ Trace groups entries transitively on shared identity. The group label uses the s
 key in this order: conversation, session, invocation, kernel execution, runtime run, MCP request,
 then the browser-minted correlation id. An MCP request id joins only within its MCP session. The
 grouping is evidence-based: unrelated activity is not joined merely because it happened nearby.
-Filter by source, host, route, or status; the text filter matches summaries and kinds.
 `/trace?correlation=<value>` selects the group containing an entry with that exact correlation
 value.
 

@@ -508,6 +508,9 @@ it('retains only the newest 256 render events and one truncation marker', async 
   });
   release.resolve();
   await started.result;
+  expect(messages.findLast((message) => message.type === 'final')).toMatchObject({
+    invocation: { document },
+  });
 });
 
 it('cancels a running invocation without an outcome and publishes cancellation', async () => {

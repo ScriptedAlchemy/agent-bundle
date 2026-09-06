@@ -1,18 +1,14 @@
 import { expect, it } from '@rstest/core';
 
 import {
-  filterTraceGroups,
   formatTraceDuration,
   formatTraceTime,
   groupTraceEntries,
-  isEmptyTraceFilter,
-  matchesTraceFilter,
   maximumTraceEntries,
   mergeTraceEntries,
   selectTraceEntry,
   selectTraceGroup,
   traceEntryCorrelationValues,
-  traceFacetsFor,
   traceKindLabel,
   traceSourceGlyph,
 } from '../src/trace/trace-model.ts';
@@ -69,41 +65,35 @@ it('does not join on facets, treats an MCP request id as session-scoped, and rep
   expect(groups.map((group) => [group.key, sequences(group.rows.map((row) => row.entry))])).toEqual([
     ['entry:trc_1', [1]],
     ['entry:trc_2', [2]],
-    ['mcpRequestId:s1/1', [3]],
-    ['mcpRequestId:s2/1', [4]],
+    ['mcpSessionId:s1', [3]],
+    ['mcpSessionId:s2', [4]],
     ['entry:trc_5', [5]],
   ]);
   expect(groups[0]?.status).toBe('running');
   expect(groupTraceEntries([])).toEqual([]);
 });
 
-it('filters rows by source, host, route, status, and text while keeping group identity, and drops empty groups', () => {
-  const groups = groupTraceEntries(sampleTraceEntries);
-  const mcpOnly = filterTraceGroups(groups, { sources: new Set(['mcp']) });
-  expect(mcpOnly.map((group) => [group.key, sequences(group.rows.map((row) => row.entry))])).toEqual([['conversationId:conv-1', [5, 6]]]);
-  expect(mcpOnly[0]?.headline.kind).toBe('session.started');
+it('joins the same correlation value across publisher-specific keys', () => {
+  const groups = groupTraceEntries([
+    traceEntry(1, {
+      correlation: { mcpSessionId: 'session-1' },
+      kind: 'mcp.request',
+      occurredAt: '2026-09-05T12:00:00.000Z',
+      source: 'mcp',
+      summary: 'tools/call search_audible',
+    }),
+    traceEntry(2, {
+      correlation: { sessionId: 'session-1' },
+      kind: 'hook.received',
+      occurredAt: '2026-09-05T12:00:00.001Z',
+      source: 'hook',
+      summary: 'hook receipt',
+    }),
+  ]);
 
-  expect(filterTraceGroups(groups, { host: 'portable' }).map((group) => group.key)).toEqual(['runId:run_9']);
-  expect(filterTraceGroups(groups, { routeId: 'tool:curator/search' }).map((group) => group.key)).toEqual(['invocationId:inv_3', 'runId:run_9']);
-  expect(filterTraceGroups(groups, { status: 'error' }).map((group) => group.key)).toEqual(['runId:run_9']);
-  expect(filterTraceGroups(groups, { status: 'ok' }).flatMap((group) => sequences(group.rows.map((row) => row.entry)))).toEqual([1, 2, 3, 4, 5, 6, 7, 9]);
-  expect(filterTraceGroups(groups, { text: '  HAULER_status ' }).flatMap((group) => sequences(group.rows.map((row) => row.entry)))).toEqual([5, 6]);
-  expect(filterTraceGroups(groups, { text: 'render.finish' }).flatMap((group) => sequences(group.rows.map((row) => row.entry)))).toEqual([3]);
-  expect(filterTraceGroups(groups, { sources: new Set(['diagnostic']) })).toEqual([]);
-
-  expect(filterTraceGroups(groups, {})).toBe(groups);
-  expect(isEmptyTraceFilter({ sources: new Set(), text: '   ' })).toBe(true);
-  expect(isEmptyTraceFilter({ host: 'claude' })).toBe(false);
-  expect(matchesTraceFilter(sampleTraceEntries[7]!, { status: 'error', host: 'portable' })).toBe(true);
-  expect(matchesTraceFilter(sampleTraceEntries[7]!, { status: 'error', host: 'claude' })).toBe(false);
-});
-
-it('exposes facets in a stable order', () => {
-  expect(traceFacetsFor(sampleTraceEntries)).toEqual({
-    hosts: ['claude', 'portable'],
-    routeIds: ['event:session/start', 'event:tool/before', 'tool:curator/search', 'tool:hauler/hauler_status'],
-    sources: ['hook', 'invocation', 'runtime', 'mcp', 'kernel', 'log'],
-  });
+  expect(groups).toHaveLength(1);
+  expect(groups[0]?.key).toBe('sessionId:session-1');
+  expect(sequences(groups[0]!.rows.map((row) => row.entry))).toEqual([1, 2]);
 });
 
 it('selects a group by any correlation value and an entry by its id or a PR 1 invocation id', () => {
