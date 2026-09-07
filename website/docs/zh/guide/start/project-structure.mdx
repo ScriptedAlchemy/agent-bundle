@@ -1,181 +1,243 @@
 ---
-description: 'agent-bundle 识别的约定 src/ 根目录、配置与约定之间的关系，以及构建输出的落点。'
+description: '约定优先的复合插件：哪些文件声明路由、工具如何与浏览器视图共享契约，以及生成产物和可写状态应该放在哪里。'
 ---
 
 # 项目结构
 
-一个 agent-bundle 项目就是普通的 Node 包，只是在根目录多了一个文件，并采用约定的 `src/` 目录树。
-这里没有任何东西是强制的：配置沉默时由约定补齐，而当两者描述同一件事时，配置总是胜出。
+Agent Bundle 项目就是普通的 Node 包，加上一份 `agent-bundle.config.ts` 和约定式源码树。
+只创建插件需要的文件：静态 Skill 不需要 MCP 服务器，工具不需要浏览器 App，App 也不需要自己的服务器注册表。
+
+约定负责发现应用，配置提供身份、策略和显式例外。
+冲突声明会产生诊断，而不是一律按“配置总是胜出”静默处理。
 
 ## 目录布局
 
+下面是**复合插件的示意结构**，不是最小模板。这里是普通的手写源码；宿主清单和可执行包装器属于生成输出。
+
 ```text
 my-plugin/
-├── agent-bundle.config.ts     # 项目标识、targets 与策略
-├── package.json               # 权威的发布版本号与包标识
-├── assets/                    # 按字节复制到产物根目录中的静态文件
-└── src/
-    ├── skills/<name>/SKILL.md # 每个目录一个 Skill，并带有自己的资源
-    ├── commands/*.md          # 宿主斜杠命令文档
-    ├── rules/*.mdc            # 宿主规则文档
-    ├── hooks/*.ts             # 由配置引用的生命周期钩子处理器
-    ├── mcp/<server-id>.ts     # 手写的 stdio MCP 服务器入口
-    ├── mcp/<server>/          # 或生成式服务器，每个路由一个模块
-    │   ├── tools/*.tsx
-    │   ├── resources/*.tsx
-    │   ├── prompts/*.tsx
-    │   ├── apps/*.tsx         # 编译为自包含 HTML 的浏览器 MCP App
-    │   └── layout.tsx         # 可选的按服务器布局，包裹该服务器的路由
-    ├── scripts/<name>.ts      # 产物脚本（.tsx 通过 Agent 渲染器渲染）
-    ├── cli.ts                 # 单个包 bin
-    ├── cli/**/*.ts            # 或路由式 CLI，嵌套即命令路径
-    ├── index.ts               # 库入口
-    ├── layout.tsx             # 可选的共享布局，包裹每个渲染式路由
-    ├── state.ts               # 项目状态定义
-    └── providers/<name>.ts    # 请求上下文 provider
+├── agent-bundle.config.ts
+├── package.json
+├── tsconfig.json
+├── assets/                         # 可选静态资源
+├── src/
+│   ├── mcp/ops/
+│   │   ├── tools/
+│   │   │   ├── inspect.tsx          # 唯一操作实现、schema 和 Agent 文档
+│   │   │   └── inspect.cli.ts       # 该操作的可选 CLI 投影
+│   │   ├── resources/policy.tsx     # MCP 资源
+│   │   ├── prompts/review.tsx       # MCP 提示
+│   │   ├── apps/dashboard.tsx       # 浏览器入口，不是 Agent Server Component
+│   │   └── layout.tsx               # 可选的共享智能体文档布局
+│   ├── events/tool/
+│   │   ├── before.tsx               # tool/before 语义事件路由
+│   │   └── before.preflight.ts      # 必须由路由显式重导出的预检 gate
+│   ├── hooks/session-start.ts       # 由配置引用的可选普通钩子
+│   ├── skills/review/SKILL.md
+│   ├── commands/review.md           # 可选原生提示或命令文档
+│   ├── rules/project.mdc           # 可选且宿主支持的规则
+│   ├── cli/doctor.tsx               # 真正独立的 CLI 工作流
+│   ├── scripts/check-service.ts     # 普通产物脚本
+│   ├── providers/project.ts         # 可选请求依赖
+│   ├── state.ts                     # 可选框架状态定义
+│   ├── layout.tsx                   # 可选根文档布局
+│   ├── components/                  # 普通可复用呈现代码
+│   ├── domain/                      # 普通业务逻辑、客户端与策略
+│   └── install-bin.ts               # 可选包绑定安装器的委托入口
+└── tests/
+    ├── route-unit/
+    └── projection/
 ```
+
+这份结构中没有手写的 `application.ts` 注册表、生成式 MCP 入口或原生钩子 JSON；框架按需生成它们。
+`domain/` 和 `components/` 只是代码组织方式，不是新的框架约定。
+预构建的非 TypeScript 资源或原生可执行文件应显式声明为 `payload`，不能假定任意源码目录都会被交付。
 
 ## 各个根目录的含义
 
-| 路径 | 表面 | 如何退出 |
+| 路径 | 含义 | 重要边界 |
 | --- | --- | --- |
-| `src/skills/<name>/SKILL.md` | 一个 Skill。目录中其余内容都作为它的资源随行。完全不需要任何声明即可随产物发布。 | 删除该目录，或收窄 `skills` 配置中的 glob。 |
-| `src/commands/*.md` | 扁平的宿主命令文档。frontmatter 按宿主逐一判定：Claude Code 记录了 `description`、`argument-hint`、`allowed-tools`、`model` 与 `disable-model-invocation`，而 Cursor 固定的命令表面是无 frontmatter 的 Markdown。显式指向某个无法表达其所用字段的宿主的命令是 `AB4927`；隐式选中的宿主收到去掉该字段的正文，`validate` 给出警告 `AB4928`。`inspect` 以 `omittedFeatures` 列出同样的省略。 | 删除该文件。 |
-| `src/rules/*.mdc` | 扁平的宿主规则文档，由 Cursor 发射，保留 `description`、`globs` 与 `alwaysApply`。同样的按宿主判定适用：显式 target 为 `AB4907`，隐式 target 为警告 `AB4908`。 | 删除该文件。 |
-| `src/mcp/<server-id>.ts` | 某个已声明、但未指定 `entry`、`command` 或 `url` 的 MCP 服务器的 stdio 入口。 | 显式声明 `entry`。 |
-| `src/mcp/<server>/{tools,resources,prompts}/*` | 生成式 MCP 服务器路由。路径提供身份；每个模块提供静态 `config`、schema，以及一个 async 默认 Server Component。 | 把 `routes.servers.<server>` 设为 `custom`、`command` 或 `remote`。 |
-| `src/mcp/<server>/apps/*` | 浏览器 MCP App 入口，编译为自包含 HTML 并注册到生成的服务器上。必须提供静态 `config.resourceUri`。 | 使用自定义服务器，或给文件名加 `_` 前缀。 |
-| `src/scripts/<name>.ts` | 一个普通脚本，只编译一次，输出为产物根目录下的 `scripts/<name>.mjs`，所有所选宿主共用。嵌套模块是硬错误（`AB4808`）。 | 给某一段路径加 `_` 前缀，或用显式 `scripts` 条目认领该文件。 |
-| `src/scripts/<name>.tsx` | 渲染式脚本：async 默认组件接收 `argv` 与 `signal`，并按 CLI 输出契约通过 Agent 渲染器渲染。 | 改名为 `.ts`、给某一段路径加 `_` 前缀，或认领该文件。 |
-| `src/cli.ts` | 一个以 `plugin.name` 命名的包 bin。 | `bin: false` |
-| `src/cli/**/*.{ts,tsx}` | 路由式 CLI 命令，编译进一张做过冲突检查的命令图与一个可执行文件。嵌套即身份：`src/cli/library/audit.ts` 以 `<bin> library audit` 运行。它取代 `src/cli.ts` 约定。 | `bin: false`、`routes.cli: 'conventional'`，或给某一段路径加 `_` 前缀。 |
-| `src/index.ts` | 库输出，带声明文件。 | `lib: false` |
-| `src/layout.{ts,tsx}` | 共享文档布局：默认导出一个接收 `{ children, route, signal }` 的组件，在每个渲染式路由——生成式 MCP 工具、资源与提示、渲染式路由 CLI 命令、投影的 MCP 命令与渲染式脚本——外层渲染 `Agent.Result`。事件路由与浏览器 App 永不被包裹。 | 重命名为 `_layout.tsx`。 |
-| `src/mcp/<server>/layout.{ts,tsx}` | 按服务器的布局，嵌套在根布局之内，包裹该生成式服务器的路由。 | 重命名为 `_layout.tsx`，或把 `routes.servers.<server>` 设为非生成模式。 |
-| `src/state.ts` | 项目状态：默认导出 `defineState`。生成的 MCP、路由式 CLI 与渲染式脚本的请求作用域都会挂载它。 | `state: false`，或改名为 `_state.ts`。 |
-| `src/providers/<name>.{ts,tsx}` | 一个请求上下文 provider，挂载在请求句柄的 `providers.<camelCaseName>` 上；其工厂会收到请求的身份、lineage 以及只读的 state/notices 句柄。 | 给文件名加 `_` 前缀。 |
-| `assets/` | 静态资源，按字节复制到产物根目录的 `assets/` 目录，所有所选宿主共用一份。 | 改为声明顶层 `assets` 列表。 |
+| `src/mcp/<server>/tools/*.{ts,tsx}` | 生成式服务器上的工具。 | 渲染式工具导出 schema、可选静态 `config` 和默认组件，不需要手工注册。 |
+| `src/mcp/<server>/tools/<tool>.cli.ts` | 同目录工具的命名 CLI 投影。 | 复用工具，不是另一条 MCP 路由；可选 `mapInput` 改变 CLI 输入映射，而不是操作注册表。 |
+| `src/mcp/<server>/resources/*` 与 `prompts/*` | MCP 资源与提示。 | 它们不是工具，协议元数据和结果契约不同。 |
+| `src/mcp/<server>/apps/*.{ts,tsx}` | 浏览器 App 入口。 | 声明 `config.resourceUri`，框架编译并注册自包含 HTML。 |
+| `src/events/**` | 已支持的语义事件路由，例如 `tool/before`。 | 路径必须对应支持的事件族，不是任意事件总线主题；原生 envelope 由 adapter 负责。 |
+| `src/hooks/*.ts` | `hooks` 配置引用的普通处理器。 | 目录本身不会注册它们；使用公开的 `HookHandler` 契约，不需要 JSX 或自定义 stdin 包装器。 |
+| `src/skills/<name>/SKILL.md` | 静态 Skill 及其资源文件。 | 不需要渲染 runtime 即可交付；渲染式和宿主专属形式见 [Skills](../authoring/skills.mdx)。 |
+| `src/commands/*.md` | 原生命令或提示文档。 | 不是 `src/cli/` 命令；可用性和 frontmatter 取决于宿主。 |
+| `src/rules/*.mdc` | 宿主支持的规则文档。 | 选中了 target，不代表它支持规则。 |
+| `src/cli/**/*.{ts,tsx}` | 独立的路由式 CLI 命令。 | 嵌套就是命令路径；如果是同一个工具操作，优先用工具的 `.cli.ts` 投影。 |
+| `src/scripts/<name>.ts` / `.tsx` | 普通或渲染式产物脚本。 | 脚本是扁平的；共享辅助代码放在约定根之外或私有路径下；渲染式脚本接收 `argv` 和 `signal`。 |
+| `src/providers/<name>.{ts,tsx}` | 请求上下文 provider。 | 通过 `agent()` 读取生成的 provider 值，不再添加全局服务注册表。 |
+| `src/state.ts` | 可选 `defineState` 声明。 | 框架状态是可选能力，不接管领域数据库；`state: false` 禁用发现。 |
+| `src/layout.{ts,tsx}` | 根 Agent 文档布局。 | 包裹渲染式路由，不包裹原生事件响应或浏览器 App。 |
+| `src/mcp/<server>/layout.{ts,tsx}` | 根布局内的服务器文档布局。 | 作用于该生成式服务器的路由。 |
+| `assets/` | 约定式静态资源。 | 复制到产物的 `assets/` 下；显式配置可以收窄选择。 |
 
-路由与包入口约定精确匹配 `.ts` 与 `.tsx` 文件；state 约定则专指 `src/state.ts`。被发现的条目在
-规范化模型中带有 `provenance.kind: 'conventional'`，因此 `agent-bundle inspect` 能告诉你某个文件
-是被约定识别的，还是被配置认领的。
+以 `_` 或 `.` 开头的私有路径段和声明文件不参与路由发现。
+`before.preflight.ts` 不会仅因为文件名而成为特殊入口，事件路由必须通过支持的 preflight 契约重导出它。
+不要为同一事件同时注册普通钩子和语义路由，形成两份意外实现。
+运行模式、target、provider 与 preflight 的选择见[钩子](../authoring/hooks.mdx)。
+
+路由 `config` 导出使用有界静态语法。运行时工作保留在处理器或领域模块中，不要为了获取元数据而执行它。
+Schema 保持唯一权威定义，不要在 CLI 和浏览器里分别重建协议类型。
+
+### 添加交互式 App
+
+工具中的 `Agent.*` JSX 描述面向智能体的文档；MCP App 入口在浏览器中运行，拥有自己的 DOM 或 React UI。
+不要把服务器路由导入浏览器，这会把 Node API、领域服务和仅供服务器使用的依赖带入错误的运行环境。
+
+使用已有的 App 资源绑定连接两者。对于 `src/mcp/ops/apps/dashboard.tsx`，在浏览器入口中声明资源 URI：
+
+```ts
+import type { AppRouteConfig } from 'agent-bundle';
+
+export const config = {
+  resourceUri: 'ui://my-plugin/dashboard.html',
+} satisfies AppRouteConfig;
+```
+
+这只是浏览器入口的元数据，不是完整 UI。默认 HTML 提供 `#root`；启动代码需要其他外壳时使用显式模板。
+工具可以引用 App，而不重复写 URI 字符串：
+
+```ts
+// Metadata in src/mcp/ops/tools/inspect.tsx
+import type { ToolConfig } from 'agent-bundle';
+import { appResourceUri } from 'agent-bundle/routes';
+
+export const config = {
+  description: 'Inspect project status.',
+  annotations: { readOnlyHint: true },
+  _meta: { ui: { resourceUri: appResourceUri('dashboard') } },
+} satisfies ToolConfig;
+```
+
+浏览器使用 `agent-bundle/app` 的 `createAppClient`。
+它的 opening-input、result、error 监听器及工具调用就是集成边界；不要重新实现 `postMessage` 传输、
+请求 ID 映射或 MCP 客户端。在连接之前注册 opening 监听器。
+使用宿主提供的初始调用结果进行渲染，不要在挂载时自动重跑一次修改性操作。
+所属 UI 退役时释放客户端和订阅。
+
+生成的路由声明提供 App 调用类型；它们必须是最新的，并且被浏览器的 TypeScript 项目包含。
+这不能替代对不可信数据的运行时校验。导入是浏览器安全的前提下，可以共享纯呈现组件与已验证数据。
+Node 渲染的文档组件不会仅因为也使用 JSX，就自动成为 DOM 组件。
+
+要通过可选的生产浏览器表面暴露同一个 App，在 `web.apps` 中配置已有的 `server/app` 身份和初始工具。
+不存在第二份 `src/web/` 注册表。完整示例与策略见
+[MCP 服务器与 Apps](../authoring/mcp.mdx)、[可工作的 App 示例](../../examples/mcp-app.mdx)及
+[`web` 配置](../../reference/configuration.mdx#web)。浏览器呈现方式与启动服务器的宿主投影是两个不同选择。
 
 ## 配置与约定
 
-配置保存任何单个文件都无法拥有的内容——项目标识、target 选择、策略，以及产物内
-[`web`](../../reference/configuration.mdx#web) 宿主要暴露哪些已声明的 MCP App：
+约定式起点仍然很小：
 
 ```ts twoslash
 import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
-  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
-  targets: ['portable', 'codex', 'claude'],
+  plugin: { name: 'my-plugin', description: 'Project tools for an agent.' },
+  targets: ['portable', 'claude', 'codex'],
 });
 ```
 
-只有当你需要约定无法表达的东西时才添加显式声明——不同的路径、target 限制，或退出约定：
+仅对约定无法表达的内容增加显式配置，例如指定 target 的普通钩子、预构建 payload、远程服务器、
+非标准路径、包专用 bin 或策略。必需能力仍需要支持它的宿主，或者明确限制目标范围。
 
-```ts twoslash
-import { defineConfig } from 'agent-bundle/config';
+手写的 `src/mcp/<server>.ts` 是已声明服务器的互操作路径。
+与同名生成式路由共存时，需要明确决定模式，而不是依赖文件系统顺序。
+同理，`src/cli.ts` 与 `src/cli/` 是两种备选 CLI 模式。
+`src/index.ts` 是可选库入口，不是应用注册入口；`bin: false` 和 `lib: false` 可以退出这些包约定。
 
-export default defineConfig({
-  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
-  scripts: {
-    // Restricted to one target, so it cannot ride the convention.
-    'detect-risk': { entry: './src/scripts/detect-risk.ts', targets: ['portable'] },
-  },
-  targets: ['portable', 'codex', 'claude'],
-});
+声明故意偏离约定时，检查实际路由图，而不是猜测哪个文件胜出：
+
+```sh
+npx --no-install agent-bundle inspect --routes
+npx --no-install agent-bundle validate
 ```
 
-当项目呈现出前约定时代的写法时，源码校验会报告**信息级**提示，而不是错误：`AB4730` 对应一个自行连接
-传输层的 stdio 入口（改为默认导出工厂函数即可升级到框架生命周期外壳），`AB4731` / `AB4732` /
-`AB4733` 对应 `src/cli.ts`、`src/index.ts` 或 `src/mcp/<server-id>.ts` 存在、但被显式配置遮蔽的情形。
-`bin: false` 与 `lib: false` 这两个退出方式则完全静默。
+正确的编译器必须已经安装到当前项目中。
+源码选择与迁移诊断的细节见[配置](../authoring/index.mdx)和[包入口](../authoring/package-entries.mdx)。
 
 ## 输出落在哪里
 
-`agent-bundle build` 会写出两类彼此独立的东西。
+区分以下职责：
+
+| 位置 | 所有者与用途 |
+| --- | --- |
+| `src/`、配置、`package.json` | 手写应用与包身份。 |
+| `.agent-bundle/` | 生成的路由声明与开发基础设施，不是手写注册表，也不是持久化应用数据的契约。 |
+| 默认的 `artifact/` | 已校验的组合插件树。 |
+| 启用包输出时的 `dist/` | 生成的 npm 根目录：产物字节，加上包元数据和包专用入口。 |
+| 解析后的可写状态根 | 框架状态与应用明确选择的数据位置，和已安装代码分离。 |
 
 ### 复合插件根目录
 
-无论 `targets` 选择了什么，产物输出位置都只有一个目录。命令行把该输出默认为 `artifact/`，因此它永远
-不会与下文的包构建冲突；`output.distPath` 或 `--output` 可以移动它。Amp 读取嵌套的
-`.amp/plugins/<name>/`，其他所选宿主把组合根当作插件根。不存在 `artifact/<host>/` 这样的分区。
-省略 `targets` 时，根目录只承载 `portable` 投影。
+产物示意如下：
 
 ```text
 artifact/
-├── .amp/plugins/<name>/index.js      # amp 目录插件工厂
-├── .claude-plugin/plugin.json        # claude，旁边是 marketplace.json
-├── .codex-plugin/plugin.json         # codex，旁边是 hooks.json 与 mcp.json
-├── .agents/plugins/marketplace.json  # codex marketplace
-├── .cursor-plugin/plugin.json        # cursor，旁边是 hooks.json 与 mcp.json
-├── .mcp.json                         # claude MCP 文档
-├── plugin.json                       # portable（Agent Plugins）清单
-├── mcp.json                          # portable MCP 文档
-├── hooks/
-│   ├── hooks.json                    # claude 钩子文档
-│   ├── <hook>.mjs                    # 只到达一个所选宿主的钩子的包装脚本
-│   ├── <hook>.<host>.mjs             # 到达多个宿主的钩子，每个宿主一个包装脚本
-│   └── hooks-flight.mjs
-├── mcp/mcp-<server>-<hash>.mjs       # 编译后的 MCP 入口，只输出一次
-├── bin/<plugin-name>.mjs             # 路由式 CLI 和/或 <plugin> web
-├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 组件目录，只输出一次
-├── INSTALL.md                        # 每个所选宿主一节
-├── install.mjs                       # 选择了 cursor 或 portable 时出现
-└── agent-bundle.manifest.json        # 产物索引：身份、投影、可执行文件、摘要
+├── agent-bundle.manifest.json
+├── agent-bundle.compile-evidence.json
+├── INSTALL.md
+├── .claude-plugin/          # 所选宿主清单
+├── .codex-plugin/
+├── .cursor-plugin/
+├── .amp/plugins/<name>/     # 选择 Amp 时的原生目录插件
+├── plugin.json             # 选择 portable 时的清单
+├── mcp/                    # 编译后的服务器入口及其 runtime 文件
+├── hooks/                  # 生成的原生包装器与钩子文档
+├── bin/<plugin-name>.mjs    # 声明后生成的路由 CLI / web 可执行文件
+└── skills/, scripts/, assets/, mcp-apps/, ...
 ```
 
-宿主清单位于各自的点目录中；`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/` 只输出一次、
-所有宿主共用。钩子与 MCP 文档在项目声明了钩子或 MCP 服务器时出现——此外，当钩子或 MCP 服务器到达
-另一个所选宿主的约定路径 `hooks/hooks.json`、`.mcp.json` 或 `mcp.json` 时，Codex 或 Cursor 会额外输出一份
-空文档，使目录发现不会加载其他宿主的文件——`bin/` 在项目有路由式 CLI、配置了
-[`web`](../../reference/configuration.mdx#web)，或两者兼有时出现。两个所选宿主若要以不同字节写出同一路径，就无法共用根目录，构建会以 `AB4103` 失败；一个只面向
-部分所选宿主的命令或规则，却位于另一个所选宿主会扫描的目录中，则是 `AB4105`。两者的恢复方式
-相同：让该组件对每个所选宿主都完全一致，或把这些宿主分别构建到不同的产物中。
+只有已声明的相关表面才会输出。精确的原生文档和其他 runtime 文件由清单记录；
+应用代码不应该根据这张示意图重新推断可执行文件清单。
+不存在 `artifact/<host>/` 分区。Amp 使用嵌套的原生目录，而框架的清单感知安装入口接受组合根，
+并选择正确的宿主表面。
 
-`agent-bundle.manifest.json` 记录了每个产出文件及其 SHA-256，因此产物校验是内容寻址的，而不是猜测。
-编译后的表面归属于复合身份——所选宿主按名称排序后以 `+` 连接，例如 `claude+codex`——`targets` 的
-书写顺序永远不会改变输出。
+`output.distPath` 或 CLI `--output` 移动组合根，不改变其内部布局。
+CLI 优先级是 `--output`、配置、默认 `artifact/`。
+编程式 `build()` API 的包输出与默认行为另有约定；应查阅它的参考，不要把 CLI 默认值复制到自定义构建中。
 
-`output.distPath` 只移动根目录；它从不改变根目录内部由框架拥有的布局。优先级是 CLI `--output`，
-然后 `output.distPath`，最后是默认值——对同时输出包构建的 `agent-bundle build` 是 `artifact`，对不带
-`packageOutputs` 的编程式 `build()` 是 `dist`。取值必须是非空、限定在项目根目录内的相对 POSIX 路径。
+清单记录文件摘要和规范的可执行文件身份。重排 targets 不会创建另一个应用。
+字节冲突或意外的跨宿主发现应通过校验解决，不应通过手改生成清单修复。
+见 [Target 与产物](../../reference/targets-artifacts.mdx)。
 
 ### npm 包构建
 
-当项目声明了 `bin`/`lib`——或通过约定提供了它们——同一次构建还会在 `dist/` 下写出可供 node 消费的
-包构建：
+`dist/` 是**完整的生成式 npm 包根目录**，不只是 JavaScript 文件夹：
 
 ```text
 dist/
-├── bin/<name>.js              # 自执行 ESM、shebang、可执行位
-├── <stem>.js                  # 库入口
-└── **/*.d.ts                  # 声明文件，当 lib.dts 开启时
+├── package.json                  # 生成的包相对路径与 bin 映射
+├── agent-bundle.manifest.json
+├── INSTALL.md
+├── ...                          # 原样复制的组合产物
+├── bin/<plugin-name>.mjs         # 同一个生成式路由 CLI（如果存在）
+├── bin/<authored-bin>.js         # 可选的显式包专用可执行文件
+└── <library>.js, <library>.d.ts  # 可选库输出
 ```
 
-`dist` 是强制忽略的目录：包输出永远不会进入项目源码快照，也不会进入 Skill 与资源发现。两类输出不得重叠：
-在带有包入口的项目上把 `output.distPath` 或 `--output` 指向 `dist` 就是 `AB4706`。默认值已经把二者分开，
-显式写出也无妨：
+路由式 CLI 不会为 npm 再编译一份竞争的 `.js` 实现；生成的 `package.json` 指向产物中的可执行文件。
+显式包专用 bin 与库入口是不同的输出，仍有自己的编译过程。
 
-```ts twoslash
-import { defineConfig } from 'agent-bundle/config';
+组合输出与 npm 输出不得重叠：包输出已使用 `dist/` 时，再把产物放到那里是无效配置。
+构建输出不是源码输入。应打包生成的 npm 根，而不是源码仓库或猜测的 `dist/artifact/` 嵌套目录。
+校验与安装流程见[交付捆绑包](../distribution/index.mdx)。
 
-export default defineConfig({
-  output: { distPath: 'artifact' },
-  plugin: { description: 'A CLI plus a plugin.', name: 'my-plugin' },
-  targets: ['portable', 'claude'],
-});
-```
+### 可写状态不是已安装代码
+
+请求内部使用框架提供的 plugin/context 绑定。独立代码可使用公开的 runtime `resolvePluginRoot`，
+它区分 `root` 与 `stateRoot`；`AGENT_BUNDLE_STATE_ROOT` 独立于代码根覆盖值。
+
+不要因为加载器位于已安装代码树中，就把运行时缓存、刷新后的凭据或数据库也放在那里。
+应用数据保留自己的 schema、显式迁移和覆盖策略，并且不能与框架存储冲突。
+框架不会自动接管或清除任意插件数据。
+见[配置与状态](../authoring/index.mdx)和[安装生命周期](../distribution/installation.mdx)。
 
 ## 下一步
 
-- [编译器架构](../concepts/architecture.mdx) —— 这些根目录如何变成路由图、
-  宿主投影与一份复合产物。
-- [配置模型](../authoring/index.mdx) —— 完整的配置表面。
-- [Skills](../authoring/skills.mdx)、[钩子](../authoring/hooks.mdx)、
-  [MCP 服务器与 MCP App](../authoring/mcp.mdx) —— 每种表面一页。
-- [脚本与资源](../authoring/scripts-assets.mdx) 与
-  [包入口](../authoring/package-entries.mdx) —— 其余的构建输出。
+[快速开始](./quick-start.mdx)运行一条真实约定路由。
+[Skills](../authoring/skills.mdx)、[钩子](../authoring/hooks.mdx)、[MCP](../authoring/mcp.mdx)和
+[脚本与资源](../authoring/scripts-assets.mdx)说明各表面契约。
+[编译器架构](../concepts/architecture.mdx)用于理解实现细节，不是额外的设置步骤。

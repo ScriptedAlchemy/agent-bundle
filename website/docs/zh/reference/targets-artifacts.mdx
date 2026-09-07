@@ -1,194 +1,192 @@
 ---
-description: 'agent-bundle build 输出的组合插件根目录：各宿主投影把清单、钩子与 MCP 文档放在何处、钩子 wrapper 的命名规则、AB4103/AB4105/AB4106 组合规则、可选的清单 web 节，以及产物清单契约。'
+description: '全部五种内置输出投影、各自的原生发现路径、组合约束、规范 artifact/npm 根目录，以及由清单拥有的执行与 web 绑定。'
 ---
 
 # Target 与产物
 
-target 表格——各宿主投影携带什么，以及 portable 标准为何省略规则、命令与钩子——在
-[配置模型](../guide/authoring/index.mdx)中。源码树布局在[项目结构](../guide/start/project-structure.mdx)中。
-本页讲的是输出契约：`build` 输出的那一个目录，以及其中的字节必须满足的产物清单。
+先用[Target 与能力地图](../guide/start/capabilities.mdx)选择表面。
+[生成的宿主矩阵](./hosts.md)记录功能支持及证据。
+本页描述实际输出，以及下游工具消费的对象。
 
-## 组合插件根目录
+## 复合插件根目录
 
-`agent-bundle build` 在产物输出位置写出**一个目录**——默认是 `artifact/`；`output.distPath` 或 `--output`
-可以移动它。`targets` 选择铺进该根目录的**宿主投影**：`amp`、`claude`、`codex`、`cursor` 与 `portable`，
-可任意组合。Claude Code、Codex、Cursor 与 portable 把根目录当作插件根；Amp 则读取生成在
-`.amp/plugins/<name>/` 的那一个目录。
+`agent-bundle build` 写出一个组合产物根目录，默认是 `artifact/`。
+`output.distPath` 或 CLI `--output` 可以移动根目录，但不会重新设计内部布局。
+五种内置投影是 **`amp`、`claude`、`codex`、`cursor` 和 `portable`**。
 
-- 省略 `targets`——配置与命令行都省略——时，构建只输出 `portable` 投影。
-- 顺序无关。`['codex', 'claude']` 与 `['claude', 'codex']` 产出逐字节相同的输出，规范化模型、产物清单与
-  `inspect` 都按名称排序列出所选宿主。
-- `plugin` 不是 target。`targets: ['plugin']` 或 `--target plugin` 是未知 target（`AB4100`）：组合根目录
-  本来就是每次构建的输出。
+省略 `targets` 时只选择 `portable`。
+显式选择可以组合内置投影，但编写的组件必须符合兼容性规则。
+target 顺序不改变结果。`plugin`、`web`、`npm` 和浏览器展示 profile 不是额外的内置 target。
 
-以全部五个投影构建时，host-test 示例的根目录如下（组件目录只在项目编写了对应组件时才会出现）：
+以下是组合布局示意，不承诺空插件也会输出每个文件。
+实际可执行名称及包含的组件以生成清单为准。
 
 ```text
 artifact/
-├── .amp/plugins/<name>/index.js          # Amp PluginAPI 工厂
-├── .amp/plugins/<name>/skills/           # 显式注册的 Amp Skill
-├── .amp/plugins/<name>/hooks/<hook>.mjs  # Amp 事件回调 wrapper
-├── .amp/plugins/<name>/hooks/hooks-flight.mjs  # 同目录的独立事件 worker
-├── .agents/plugins/marketplace.json      # Codex 市场
-├── .claude-plugin/plugin.json            # Claude Code 清单
+├── .amp/plugins/<name>/
+│   ├── index.js                       # 原生 Amp 工厂
+│   ├── skills/                        # 显式注册的 Skills
+│   └── hooks/                         # 映射回调的可执行支持
+├── .claude-plugin/plugin.json
 ├── .claude-plugin/marketplace.json
-├── .codex-plugin/plugin.json             # Codex 清单
-├── .codex-plugin/hooks.json              # Codex 钩子文档
-├── .codex-plugin/mcp.json                # Codex MCP 文档
-├── .cursor-plugin/plugin.json            # Cursor 清单
-├── .cursor-plugin/marketplace.json
-├── .cursor-plugin/hooks.json             # Cursor 钩子文档
-├── .cursor-plugin/mcp.json               # Cursor MCP 文档
-├── .mcp.json                             # Claude Code MCP 文档
-├── plugin.json                           # portable（Agent Plugins）清单
-├── mcp.json                              # portable MCP 文档
-├── hooks/hooks.json                      # Claude Code 钩子文档
-├── hooks/<hook>.mjs                      # wrapper：钩子只被一个所选宿主选中
-├── hooks/<hook>.<host>.mjs               # wrapper：钩子被多个所选宿主共享
-├── hooks/hooks-flight.mjs
-├── mcp/mcp-<server>-<hash>.mjs           # 编译后的 MCP 入口（+ -flight.mjs）
-├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # 路由式 CLI 和/或 <plugin> web
-├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 只输出一次
-├── INSTALL.md                            # 选中了任一内置宿主时
-├── install.mjs                           # 选中了 cursor 或 portable 时
-├── agent-bundle.manifest.json            # 产物索引（manifestVersion 4）
-└── agent-bundle.compile-evidence.json    # 每个已编译文件的编译器记录
+├── .codex-plugin/plugin.json
+├── .codex-plugin/hooks.json
+├── .codex-plugin/mcp.json
+├── .agents/plugins/marketplace.json
+├── .cursor-plugin/plugin.json
+├── .cursor-plugin/hooks.json
+├── .cursor-plugin/mcp.json
+├── .mcp.json                          # Claude MCP 文档
+├── plugin.json                        # portable 清单
+├── mcp.json                           # portable MCP 文档
+├── hooks/hooks.json                   # Claude hook 文档
+├── hooks/                             # 编译后的宿主绑定 wrapper/worker
+├── mcp/                               # 编译后的 MCP 入口及 worker
+├── bin/                               # 生成 CLI / 配置的 web 命令
+├── skills/, commands/, rules/
+├── scripts/, assets/, mcp-apps/
+├── INSTALL.md
+├── install.mjs                        # 所选 Cursor/portable 安装路径
+├── agent-bundle.manifest.json
+└── agent-bundle.compile-evidence.json
 ```
 
-`agent-bundle.compile-evidence.json` 是编译器对每个已编译（`bundle`）文件的记录；
-`validate --artifact` 把已列入清单的记录对照文件表复核（`AB6039`）。
+根目录共享组件只输出一次。
+Amp 目录插件把已注册的 Skills 和执行支持保留在自身嵌套目录中，以保证安装副本自包含。
+因此，原生 Amp 安装根并不是组合产物根。
 
-宿主清单位于根目录下各自的点目录中。根级 `skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/`
-是共享的，只输出**一次**。Amp 注册的 Skill、事件 wrapper，以及各目录内与这些 wrapper 同级的独立
-worker 都保留在 `.amp/plugins/<name>/` 内，使安装后的插件保持自包含。根目录下不会出现其他任何东西：
-没有生成的 `AGENTS.md`，也没有 `hooks/hooks-cursor.json`，也没有 `web/` 目录。已配置 MCP App 的浏览器
-宿主作为框架拥有的 `web` 命令装在 `bin/<plugin>.mjs` 里。该 bin 在 `src/cli/**` 编译出至少一条命令时、
-在配置了
-[`web`](./configuration.mdx#web) 时（即使没有手写 CLI 命令），或两者兼有时输出。
+纯静态 Skills 插件不需要空 MCP 服务器，也不需要 Flight/state 进程。
+当另一个所选宿主在约定 fallback 路径上有内容时，某些空原生 hook/MCP 文档是有意设置的发现隔离屏障。
+不要把它们当作未使用文件删除。
 
 ### 各宿主从哪里读取文档
 
-| 宿主 | 清单 | 钩子文档 | MCP 文档 | 市场 |
+| Target | 入口或清单 | Hook 注册 | MCP 配置 | Marketplace |
 | --- | --- | --- | --- | --- |
-| Amp | ——；`index.js` 记录为 `documents.entry` | 由 `amp.on` 注册回调 | 已注册 Skill 旁的扁平 `skills/<name>/mcp.json` | —— |
-| Claude Code | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
-| Codex | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
-| Cursor | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | `marketplace: true` 时为 `.cursor-plugin/marketplace.json` |
-| portable | `plugin.json` | —— | `mcp.json` | —— |
+| `amp` | `.amp/plugins/<name>/index.js` | 原生 PluginAPI 回调 | 显式注册的 Skill 旁边、Skill 级别的 `mcp.json` | 不生成 |
+| `claude` | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
+| `codex` | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
+| `cursor` | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | 按需生成 `.cursor-plugin/marketplace.json` |
+| `portable` | `plugin.json` | 格式没有原生 hook 组件 | `mcp.json` | 不生成 |
 
-无论选择了哪些宿主，这些路径都是固定的，因此单宿主根目录与五宿主根目录共用同一种布局。Amp 的目录隔离在
-`.amp/plugins/<name>/` 下；Claude Code 与
-portable 的 Agent Plugins 格式从约定的插件根位置加载文档，无法重定向；Codex 与 Cursor 的清单携带显式的
-`hooks` 与 MCP 指针，因此它们的文档紧挨着各自的清单。这两个宿主在指针缺失时还会回退到对约定路径的目录
-发现，因此当钩子或 MCP 服务器到达另一个所选宿主的约定路径时，没有自己文档的 Codex 或 Cursor 投影仍会
-指向一份空文档——Cursor 绝不会加载 Claude Code 的 `hooks/hooks.json`。
+有效的单 target 与多 target 选择使用稳定路径。
+Codex 和 Cursor 通过显式指针避免读取其他投影的 fallback 文档。
+第三方 portable 客户端可能有不同优先级和支持子集；应查阅[宿主矩阵](./hosts.md)中的独立记录，
+而不是把本表当作其原生布局。
 
-### 钩子 wrapper
+### Hook 包装器
 
-钩子 wrapper 会把它所面向的宿主（该宿主的编解码、`target`、宿主契约修订）烤进自身，因此一个 wrapper
-无法同时服务两个宿主：
+编译 hook wrapper 绑定所选宿主的 codec 与契约。
+同一份 hook 源码因此可能生成多个 wrapper。
+配置声明的 hook 只到达一个宿主时使用普通名称，到达多个宿主时使用宿主限定名称。
+约定语义事件和独立 worker 同样记录在 `executables.hooks` 中。
 
-- 只触达一个所选宿主的钩子保留普通名字 `hooks/<name>.mjs`。
-- 触达多个所选宿主的钩子按宿主各输出一次，即 `hooks/<name>.<host>.mjs`，各宿主的钩子文档指向自己的
-  那个 wrapper。
+使用 `hooks list` 和清单，不要自己构造 wrapper 文件名。
+原生事件、payload 来源、matcher 与返回语义见[事件矩阵](./events.md)。
+显式 targets 和受支持的事件 `requires` 声明影响选择，但都不能制造宿主无法表达的事件或决定。
 
-配置钩子触达哪些宿主，由它的 `targets`（默认是全部 target）与所选宿主取交集决定。事件路由也可以改为
-声明 `requires`；编译器会把所选宿主与支持全部指定能力行的宿主取交集。因此同一个源钩子在仅 `claude`
-的根目录中是 `hooks/audit.mjs`，在 `claude` + `cursor` 的根目录中则是 `hooks/audit.claude.mjs`
-加 `hooks/audit.cursor.mjs`。每个所选宿主的原生钩子都会保留。清单的 `executables.hooks[]` 为每个宿主的每个
-wrapper 各记一行——没有单独的钩子索引文件——`hooks list`、`hooks simulate` 与产物校验（`AB6018`）读的就是
-这些行。
+### 编译表面
 
-### 编译产出面
+生成的 MCP 入口、脚本、CLI bin 和浏览器 App 归属于组合选择，不会为每个宿主重新构建成互不相关的应用。
+Agent Document renderer 与浏览器 App 编译使用不同环境。
 
-MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属于**组合身份**——所选宿主名按名称排序、以
-`+` 连接，例如 `claude+codex`——而不是归属于任何单个宿主。`agent-bundle inspect --bundler` 显示的是同一
-件事：它的 `output.path` 就是产物输出 `<output>`，其下没有宿主段。
+Amp 的 MCP 投影属于 Skill。
+当前适配器允许与恰好一个捆绑 Skill 关联的、受支持的远程服务器及全局可解析命令服务器；
+对于没有受支持原生路径/cwd 契约的编译器自有本地 MCP 入口，则予以拒绝。
+把 Amp 列为 target，不会使普通本地生成 MCP starter 自动兼容 Amp。
 
-Amp 的 MCP 是例外：它位于 Skill 范围，而非插件根 MCP 文档。适配器只在恰有一个捆绑 Skill 时接受可搬迁的
-远程服务器与全局可解析命令。Amp 未文档化插件根 token 或执行 `cwd`，所以编译器拥有的本地 MCP 入口会被拒绝。
+配置 `web` 表面后，即使没有手写 CLI 命令，框架也会向 `bin/<plugin>.mjs` 加入自有 web 命令。
+它是声明的 MCP App 的本地浏览器宿主，不是 `web` 输出 target、另一份生成的 `web/` 应用，
+也不是绕过 App 同意机制的许可。
 
 ### 一个根目录，一套字节
 
-按路径合并投影，只有在各宿主对字节达成一致时才行得通。三条规则守住根目录的诚实，它们都是错误，且
-`validate` 与 `inspect` 会在 `build` 拒绝的同一位置报告它们：
-
-| 代码 | 规则 |
+| 诊断 | 约束与恢复 |
 | --- | --- |
-| `AB4103` | 两个所选投影为同一路径规划了不同的字节。投影按宿主名顺序比较、路径按路径顺序比较，因此无论 `targets` 怎么写，同一选择报告的都是同一处冲突。常见原因是 frontmatter 带有宿主扩展（`targets: { claude: … }`）的 Skill：它为 Claude Code 降级出的 `skills/<name>/SKILL.md` 字节与其他宿主不同。请让该组件对每个所选宿主都一致，或把冲突的宿主构建进单独的产物。 |
-| `AB4105` | 一个只面向部分所选宿主的组件——frontmatter 带 `targets` 的命令或规则——位于另一个所选宿主会扫描的约定目录中（Claude Code 与 Cursor 的 `commands/`、Cursor 的 `rules/`）。在同一个根目录里无法把该文件对那个宿主隐藏起来，因此构建宁可拒绝也不泄漏它。请把 `targets` 扩展到每个会发现该目录的所选宿主，或把这些宿主分开构建。Skill 从不按宿主限定：每个 skill 都会交付给所有所选宿主，会改变其字节的按宿主 frontmatter 扩展属于 `AB4103` 冲突。 |
-| `AB4106` | 所选目标把注册在高级 `TargetRegistry` 上的适配器——即任何其适配器不是随框架发布的 `amp`、`claude`、`codex`、`cursor`、`portable` 适配器的目标，按适配器身份而非名称判断，因此以这些名字注册的自定义适配器同样算作高级适配器——与另一个目标混在一起。只有内建宿主就各自不共享的文档放在何处、各自扫描哪些目录以及同一套安装面达成了一致，因此第三方适配器要单独构建：`targets: ['<name>']` 输出到自己的 `--output`。只选一个目标时永不触发。 |
+| `AB4103` | 所选投影对共享路径的内容有分歧。让共享组件兼容，或分别构建冲突投影。target 顺序从不授权覆盖。 |
+| `AB4105` | 面向部分宿主的 command/rule 会被另一个所选宿主发现。修正范围/内容，或分离产物。不同文件名本身不证明发现隔离。 |
+| `AB4106` | 高级第三方适配器与另一 target 组合。当前自定义适配器契约要求隔离的单 target 构建；用内置名称注册适配器不会自动获得内置布局保证。 |
 
-三者与 `AB4100` 一起列在[诊断参考](./diagnostics.md)中。
+Skills 由所选 targets 共享。宿主扩展若改变生成的 Skill 内容，仍可能触发真正的 `AB4103` 冲突。
+明确拒绝，比交付一个行为取决于谁先发现它的组合更安全。
 
-## 根目录即可分发
+## 根目录可直接分发
 
-组合根目录就是分发单位：构建之后没有打包步骤。它携带所选宿主要读取的组件、一份生成的 `INSTALL.md`
-——每个所选宿主一节，以捆绑包真实的插件名与市场名写成——以及这些宿主所需的安装表面，为整个选择只输出
-一次：
+复制组合产物不需要逐宿主重新编译。
+它包含生成的安装说明和必要安装支持。
+**npm 分发仍需要基于生成 npm 根目录的 npm 打包步骤**；目录构建不等于已经生成 tarball。
 
-| 所选宿主 | 市场清单 | 安装表面 |
-| --- | --- | --- |
-| `amp` | —— | 把 `.amp/plugins/<name>/` 复制到项目或系统插件根。 |
-| `claude` | `.claude-plugin/marketplace.json`。 | `claude plugin marketplace add` + `claude plugin install`。 |
-| `codex` | `.agents/plugins/marketplace.json`。 | `codex plugin marketplace add` + `codex plugin add`。 |
-| `cursor` | `marketplace: true` 时为 `.cursor-plugin/marketplace.json`。 | `install.mjs`。 |
-| `portable` | —— | `install.mjs`。 |
+| 所选 target | 支持的安装方向 |
+| --- | --- |
+| `amp` | 把嵌套生成目录安装到文档规定的 project/user 插件位置；使用宿主文档中的交互操作重新加载。 |
+| `claude` | 从声明的组合根进行原生市场注册和插件安装。 |
+| `codex` | 从声明的组合根进行原生市场注册和插件添加。 |
+| `cursor` | 基于 receipt 所有权的本地复制，或显式选择的市场工作流。 |
+| `portable` | 遵循记录的读取方说明。内含 `install.mjs` 是文档中的 Cursor 兼容路径，不是所有 portable 读取方的通用安装器。 |
 
-只要选中了内置宿主就会写出 `INSTALL.md`；其中包含 `cursor` 或 `portable` 时还会写出 `install.mjs`。
-当必需的安装表面文件缺失时，产物校验会报错，因此根目录不可能在缺少其 `INSTALL.md` 所承诺的安装器的
-情况下发布。npm pack 清单会检查同样的路径（`AB7010`）。
+框架的 `install --from` 从组合根解析所选原生位置。
+消费者可以遵循 `INSTALL.md` 而不安装编译器。
+插件还可通过 `agent-bundle/install` 提供薄包绑定 bin；它是显式选择，不会为每个包自动生成。
+
+启用包输出时，`dist/` 是完整 npm 根：已校验组合产物的副本、`package.json`、标准包文档，以及声明的包专用入口。
+生成路由 CLI 原样复制，并由 `bin/<name>.mjs` 引用；手写包 bin 则编译为 `bin/<name>.js`。
+tarball 内不要求嵌套 `artifact/`。
+`prepack`、实际 `npm pack` 与安装 bin 的证明见[交付](../guide/distribution/index.mdx)。
+npm 安装不会自动将插件注册到宿主。
 
 ## agent-bundle.manifest.json
 
-每个根目录输出一份清单（`manifestVersion: 4`）。它是根目录的**索引**——每个消费者都通过这一份文档了解
-根目录包含什么——也是之后每一项完整性检查的输入：`validate --artifact`、`prepack`、`install`、
-`doctor --from`、`serve-app`、`mcp`、`hooks`，以及 packed 与 installed-host 证明级别。完整的字段参考见
-[产物清单](./artifact-manifest.mdx)页；概要如下：
+当前封闭产物契约为 **`manifestVersion: 4`**。
+它是构建应用的索引，不是另一份需要插件作者维护的文件。
 
-| 分节 | 内容 |
+| 部分 | 职责 |
 | --- | --- |
-| `manifestVersion`、`runtime` | `4`，以及 `{ node }`，即面向消费者的生成式可执行文件下限。 |
-| `application` | 身份，只记录一次且与宿主无关：`id`、`name`、`version`，可选的 `description`。这是 `install`、`doctor` 与 `uninstall` 作用的对象。 |
-| `files[]` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`（`bundle`、`copy`、`generated`、`prebuilt`）、可选的 `mode`。 |
-| `projections[]` | 每个所选宿主一行，按 `host` 排序：`host`、可选的 `builtInHost`、指向该投影输出的宿主插件、市场、MCP 与钩子文档的 `documents` 指针，以及它的 `marketplace` 名。 |
-| `routes` | 编译后的路由图：`servers[]`、`events[]`、`scripts[]`、`cli`、`providers[]`、`layouts[]`、`contracts[]`（当有路由绑定时）及其 `digest`。绑定了契约的路由用 `route.contract` 命名它。 |
-| `executables` | 根目录能启动的每个进程：`bins[]`、`hooks[]`（每个宿主的每个 wrapper 一行）、带 `entry` 与 `apps[]` 的 `mcpServers[]`，以及 `scripts[]`。 |
-| `distribution` | `channels`（`local`，当 `compiler.project.packageName` 存在时再加 `npm`）、指向 `INSTALL.md` / `install.mjs` 的 `install` 指针，以及 `payloads[]`——每个预构建负载目录、它所打包的宿主及其声明的 `runtimeDependencies`。 |
-| `compiler` | 运行记录，由 `recordVersion` 独立于 `manifestVersion` 版本化：`producer`、`project`（`configPath`、`configDigest`、`modelDigest`、`revision`、`sourceInputs`，可选的 `packageName` / `packageVersion`）、`provenance[]`（每个 `files[]` 行一条 `{ path, sourceInputs[] }`）、`adapters[]`（每个投影的 `adapterRevision`、`observedVersion`、固定的 `schemas`）、`agentSkills` 与 `validation`。 |
-| `web` | **除非配置了 [`web`](./configuration.mdx#web)，否则不出现。** `{ open, apps[] }`，每个 app 为 `{ allow, app, args, entry, env, name, resourceUri, server, tool?, input? }`。`entry` 是根相对的已编译 MCP 可执行文件，必须对应一行 `files[]`；`args` 是该服务器在 entry 之后声明的 `mcp.servers.<id>.args`，`env` 是其已声明的静态 env，二者的 `agent-bundle:path:*` 令牌都保持未展开。App 按 `app` 排序；`targets` 落在本根选择范围之外的已暴露 App 会被省略（若一个都不剩则整个小节省略）。`<plugin> web` 命令、`agent-bundle dev` 的 `/web/<server>/<app>` 与 `doctor` 读取这一节，绝不会从 `src/**` 重新发现 App。 |
+| `application`、`runtime` | 插件身份/版本，以及生成可执行文件所选的 Node 最低版本。 |
+| `files` | 输出文件 inventory、种类、大小、digest 和适用的 mode。 |
+| `projections` | 所选宿主绑定，以及指向原生文档/入口的指针。 |
+| `routes` | 规范操作、契约、CLI 投影、事件、布局和 provider 记录。 |
+| `executables` | 精确的 bin、hook、MCP 服务器和脚本，适用时包括规范启动绑定。 |
+| `distribution` | 通道、安装支持和预构建 payload 的依赖声明。 |
+| `compiler` | Producer、源码/provenance、适配器与校验证据，其版本独立于公开产物契约。 |
+| `web` | 可选的 App 暴露及策略，引用已有服务器/App 记录；不再复制一份服务器 entry、argv 或 env。 |
 
-只有 `build` 写它；其中的一切都派生自配置、约定文件系统与编译后的模型，字节是规范的——每个读取方都会拒绝
-被手工改过的副本。由于每个文件都携带摘要，校验比对的是**真实字节**，而不是检查路径是否存在，因此被手工
-改过的生成文件会失败。正是这一契约，让 `validate --artifact`、`mcp` 与 `hooks` 能在项目源码已被删除的产物
-上工作。根目录中的宿主文档与清单在同一次构建中由同一个编译模型序列化而成；每份宿主文档都是带摘要固定的
-`files[]` 行，因此手工编辑会使摘要校验失败。
+对于编译或预构建 MCP 服务器，规范启动参数区分**产物引用**与**字面值**。
+字面值带斜杠并不意味着它是可重定位产物路径。
+启动器只在正确边界展开受支持的声明占位符。
+
+`web.apps` 记录包含 App 身份、服务器关联、允许能力及可选 opening tool/input。
+启动选择来自对应 executable/projection 记录。
+不要从浏览器 profile 推导启动，也不要把 `entry`、`args` 和 `env` 再加到每个 web App 中。
+精确字段定义见[产物清单](./artifact-manifest.mdx)。
+
+原生文档与规范清单都由编译器生成。
+结构校验、规范表示、引用文件检查与内容摘要承担不同职责；仅解析清单的 reader 不一定正在运行全部产物校验。
+使用适当的公开验证命令，不要改写 digest 来认可被修改的输出。
+
+持久化的 `agent-bundle.compile-evidence.json` 把编译器证据绑定到输出字节。
+摘要一致不等于对反射加载或未分析运行时加载的通用证明。
+编译器无法建立自包含证据的地方，仍需要剩余检查和预构建依赖声明。
+参见[校验](../guide/distribution/validation.mdx)。
 
 ## 版本与修订
 
-有四条版本轴被分别追踪，并且被期望彼此一致：
+收集证据时，区分源码包版本、构建产物版本、已安装产物版本和实际运行服务器版本。
+installed-host 证明比较相关观测；缺失的观测不能被编造。
 
-- **源码** —— 项目 `package.json` 中的发布版本。
-- **已构建产物** —— 清单中的 `compiler.project.packageVersion`。
-- **已安装产物** —— 在宿主已安装根目录下找到的那份清单。
-- **运行中的进程** —— 活跃的 MCP `initialize` 所报告的版本。
+adapter revision 与 observed native-host version 描述的契约不同于插件自己的 release version。
+compiler record 的形状也独立版本化。
+不要只更新私有 manifest reader，而不更新生成其输入的编译器。
+使用兼容的公开 compiler/runtime/lifecycle 包组合，并验证实际交付物。
 
-`host-install` 证明级别会记录全部四者，并在任何一项缺失或不一致时以失败告终。`prepack` 则为前两者，外加
-规范化后的插件元数据与宿主清单把关（`AB7013`），并拒绝这样的 `package.json`：安装期依赖字段点名了
-打包后声明文件、消费者安装脚本或预构建 `runtimeDependencies` 都不能证明消费者需要的包
-（`AB7014`），或消费者的 npm 无法从注册表抓取的包（`AB7015`）。仅仅内联进已编译 bundle 的包不算已使用。
-[验证指南](../guide/distribution/validation.mdx)列出了每一种证据来源。
-
-`compiler.adapters[]` 记录 `adapterRevision`（单调递增，仓库自有）与 `observedVersion`（记录该能力证据时所观察到的
-宿主版本）。两者都不做哈希：Git 已经为仓库自有内容做了版本管理，在仓库内部再哈希一遍会让每次编辑表格
-都产生变动噪声。哈希固定只保留给 vendored 的外部内容 —— `src/adapters/schemas/*` 下带 `PROVENANCE.json`
-的宿主文档 schema、Agent Skills schema 固定值，以及输出文件与源输入。
+`prepack` 检查适用的 package/manifest 版本与依赖证据。
+内联进生成 JavaScript 的依赖不会自动变成消费者运行依赖；
+预构建 payload、声明文件和受支持安装脚本则可能证明真实需求。
 
 ## 下一步
 
-- [产物清单](./artifact-manifest.mdx) —— `agent-bundle.manifest.json` 的每个字段、由谁写入、由谁读取。
-- [编译器架构](../guide/concepts/architecture.mdx) —— 编译器的三层，以及哪些
-  生产读者消费清单的每个字段。
-- [产物校验](../guide/distribution/validation.mdx) —— 读取这份清单的那些检查。
-- [宿主安装](../guide/distribution/installation.mdx) —— 把根目录安装进各个宿主。
-- [运行时环境](./runtime-environment.mdx) —— 输出的可执行文件在运行时假定了什么。
+- [能力地图](../guide/start/capabilities.mdx)：受支持 targets、功能导航和证明边界。
+- [产物清单](./artifact-manifest.mdx)：精确字段与规范所有权。
+- [编译器架构](../guide/concepts/architecture.mdx)：实现阶段与读取方。
+- [产物校验](../guide/distribution/validation.mdx)：交付根目录上的检查。
+- [宿主安装](../guide/distribution/installation.mdx)：scope、所有权、替换与移除。
+- [运行环境](./runtime-environment.mdx)：执行假设与可写状态。

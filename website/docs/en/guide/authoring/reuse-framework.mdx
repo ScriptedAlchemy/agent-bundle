@@ -1,0 +1,204 @@
+---
+description: 'Practical recipes for one tool with CLI and App surfaces, shared contracts, event preflight, request context, writable state, payloads, and supported installation without handwritten framework glue.'
+---
+
+# Reuse the framework
+
+Start with the smallest authored surface that does the job. A route is the operation; a CLI
+projection or browser App is another way to use it. The framework owns registration, transport,
+compilation, and installation. Your plugin owns its product behavior.
+
+For the complete source tree, see [Project structure](../start/project-structure.mdx). For which
+hosts can consume a surface, use the [capability map](../start/capabilities.mdx).
+
+## One tool, one operation
+
+Put the operation in its conventional route and move substantial domain computation into an
+ordinary imported module when that makes the code easier to read. A registration array, generated
+route-file script, custom `McpServer`, or string-keyed dispatcher is not required.
+
+```tsx
+// src/mcp/greeter/tools/hello.tsx
+import { Agent } from '@agent-bundle/runtime';
+import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Greet a person.',
+  annotations: { readOnlyHint: true },
+} satisfies ToolConfig;
+export const inputSchema = z.object({ name: z.string().min(1) }).strict();
+export const resultSchema = z.object({ greeting: z.string() }).strict();
+
+export default async function Hello({ input }: ToolRouteProps<typeof inputSchema>) {
+  const result = { greeting: `Hello, ${input.name}.` };
+  return (
+    <Agent.Result value={result}>
+      <Agent.Text>{result.greeting}</Agent.Text>
+    </Agent.Result>
+  );
+}
+```
+
+Here the server name is `greeter`, the protocol tool name is `hello`, and the canonical route ID
+is `tool:greeter/hello`. You do not separately register those identities. A meaningful server name
+can group the tools your plugin actually provides; creating one server per operation is not
+required.
+
+`readOnlyHint` is descriptive metadata, not enforcement of a security policy. Keep validation,
+permission-sensitive decisions and side-effect guards in the operation's actual execution path.
+
+## Expose that tool as a CLI command
+
+Add a sibling projection, not a second handler:
+
+```ts
+// src/mcp/greeter/tools/hello.cli.ts
+import type { CliProjectionConfig } from 'agent-bundle/routes';
+
+export const config = {
+  command: ['hello'],
+  confirm: false,
+} satisfies CliProjectionConfig;
+```
+
+`confirm: false` is intentional for this read-only greeting. Do not copy it to a mutation without
+reviewing the intended confirmation policy. The generated command calls the same tool and
+validates against its canonical schema.
+
+Use the supported aliases, flags, positionals and synchronous `mapInput` only to translate CLI
+syntax. Do not repeat the domain operation or its result renderer inside the mapper. Keep a
+separate `src/cli/**` route for a genuinely independent aggregate workflow.
+
+Automatic flag inference has a bounded schema grammar. A rich nested/union schema remains a
+valid tool even when it cannot be projected into named flags. The documented bulk MCP command
+path supports JSON input; named projections do not yet acquire that mode merely by adding a
+`mapInput` function. Use the actual supported path described in
+[package entries](./package-entries.mdx), rather than weakening the tool schema or pretending
+an unimplemented option exists.
+
+## Share contracts, not a second schema registry
+
+A route may import a supported locally declared schema and export it as `inputSchema` or
+`resultSchema`. Keep one authoritative domain contract. The generated declaration file supplies
+route IDs, App result types and provider types; it does not improve a deliberately loose schema
+into a precise one.
+
+Validate untrusted external responses at their domain boundary, then render the normalized
+receipt. Success, partial data, and expected failure may need distinct variants. Do not force
+success-only fields onto an error branch, fabricate a missing identifier, or parse a previously
+rendered text report to recover data the operation already had.
+
+Caller input and parsed handler input are conceptually different: defaults and transformations
+run during parsing. The current generated invocation types still use schema output for some
+caller-facing contracts. That limitation does not justify a second browser schema or a broad
+`as any`; see [troubleshooting](../development/troubleshooting.mdx) and the schema discussion in
+[configuration](./index.mdx).
+
+## Add a browser App without rebuilding its transport
+
+A browser App lives under `src/mcp/<server>/apps/*`. Its `config` declares the resource URI and,
+when used, the HTML template. Associate a tool with that App through the supported metadata
+and `appResourceUri` helper. The compiler registers the resource and bundles its assets.
+
+In the browser entry, use the generated tool ID and the public client:
+
+```ts
+import { createAppClient } from 'agent-bundle/app';
+import { name, version } from 'agent-bundle/meta';
+
+const client = createAppClient({ appInfo: { name, version } });
+const result = await client.call('tool:greeter/hello', { name: 'Ada' });
+```
+
+This excerpt illustrates the typed call, not a complete App startup sequence. In a real App,
+register opening-input, result, error and cancellation handlers before connecting, call
+`client.connect()`, and dispose the client with the view's lifecycle. The complete
+[MCP App example](../../examples/mcp-app.mdx) demonstrates that sequence and a real tool/resource.
+Opening notifications are distinct from the result of a subsequent `client.call`.
+
+Do not implement parent-message RPC, a second initialization handshake, another pending-request
+map, or a manual `AppRegister` for conventional routes. Your App still owns local selection,
+formatting, polling policy, and its loading/error UI. TypeScript does not validate arbitrary
+external messages merely because a local variable has a generated type.
+
+An `Agent.*` tree is agent-facing output, not browser DOM. The browser App can use normal DOM or
+React code; sharing domain contracts does not mean importing server modules into the browser
+at runtime. Generated type-only imports must remain type-only.
+
+## Choose semantic events or a plain hook deliberately
+
+Use `src/events/**` for a canonical event route with Agent output, request context, and optional
+preflight. Use a config-declared plain handler with the public `HookHandler`/`HookEvent` types
+when simple execution and a small result are enough. Do not duplicate native stdin/stdout
+wrappers in either case.
+
+A preflight gate belongs before expensive or side-effecting work. Native payload fields are
+not uniform across hosts; consume the canonical fields where available and preserve unknown or
+absent evidence honestly. A stop, deny, continue, or rewritten input must retain the host's
+actual decision semantics. An unrelated logging failure must not silently turn an already
+established protective decision into permission to continue.
+
+Capability-based `requires` and explicit target scoping serve different purposes. Consult the
+[hook guide](./hooks.mdx) and [event matrix](../../reference/events.md) before selecting an event,
+matcher, provider subset, or native-only behavior. Native hook documents are an explicit
+advanced escape hatch, not the default way to recreate semantic events.
+
+## Use observed context and keep code separate from data
+
+Use `await agent()` inside an executing route only when it needs request identity, providers,
+capabilities, lineage, state or notices. Declare shared request dependencies in `src/providers/*`
+instead of mounting another application-global service locator. A provider's value should have
+the request lifetime the operation expects.
+
+The request's plugin binding already separates code and writable framework state. Do not rebuild
+a precedence chain of `CLAUDE_PLUGIN_ROOT`, `CURSOR_PLUGIN_ROOT` and guessed artifact directories.
+Standalone code can use the documented public resolver with an explicit fallback policy.
+
+An asset is immutable code-side input. A cache, database, acquired login session, or operational
+receipt is mutable data. Choose a deliberate application-owned writable location, preserve
+explicit operator overrides, and keep its migration/retention policy in the plugin. Do not
+rewrite the installed package's `.env` during ordinary execution or use the framework's kernel
+files as an unstructured domain directory. See
+[runtime environment](../../reference/runtime-environment.mdx).
+
+Notices use the framework ledger and the supported channels in the
+[notice matrix](../../reference/notices.md). Publishing, attempting delivery, and acknowledging
+receipt are different states; a successful write is not proof that an agent saw the notice.
+
+## Package assets and executables through declarations
+
+Use Skills' own resource directories, `assets`, conventional scripts, or `definePrebuilt` for
+the appropriate kind of input. A prebuilt payload is copied, not converted into a compiled
+TypeScript dependency. Declare packages required by that payload at consumer runtime through
+its supported dependency declaration; do not externalize ordinary generated code by default.
+
+The compiler's manifest owns generated executable paths, launch arguments and projection
+bindings. A consumer should not scan `mcp/` for a likely file, assume the first `args` value is
+always a Node entry, rewrite emitted JavaScript strings, or repair permissions from an
+unvalidated manifest.
+
+Use generated native installation instructions or the public package-bound
+`agent-bundle/install` entry. A branded installer can be a thin binding; it must not become a
+second native-cache manager, receipt database, or lifecycle parser. See
+[shipping](../distribution/index.mdx).
+
+## Test the layer you changed
+
+| Change | Smallest useful proof, followed by stronger proof where needed |
+| --- | --- |
+| Domain computation | Deterministic domain tests with external services injected. |
+| Route rendering, schemas or context | Public route tests using the actual generated graph and declarations. |
+| MCP registration or CLI projection | The framework's protocol/CLI helpers, plus one compiled parity case. |
+| Browser App behavior | The public browser harness, including opening success/error/cancellation, then an actual generated-server journey. |
+| Packaging, paths or installation | Actual packed/source-free execution and receipt-owned install tests. |
+| Host behavior | A separately labelled native host test with real authorization; mocks are not an authenticated model turn. |
+
+Keep independent expected identities and safety outcomes in tests. Deriving every expectation
+from the same output under test cannot detect a wrong rename or missing annotation. Conversely,
+do not copy the framework's whole transport implementation into a test fixture merely to test
+a plugin's domain behavior.
+
+The goal is deletion of duplicated ownership: one route graph, one set of domain contracts,
+one supported client bridge and one lifecycle implementation. A useful domain helper is not
+a defect merely because the framework also has helpers.

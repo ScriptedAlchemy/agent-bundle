@@ -1,126 +1,219 @@
 ---
-description: '用脚手架创建 agent-bundle 项目，或手写 agent-bundle.config.ts，然后构建并运行开发者 Workbench。'
+description: '创建插件，添加一个约定式 MCP 工具，查看渲染结果并测试，再把同一个操作暴露为 CLI 命令。'
 ---
 
 # 快速开始
 
-有两条入门路径。脚手架生成的项目本身就能通过自带的 `check`；手写路径则只需要在已有仓库里加四行配置。
+本教程使用 MCP starter。添加工具不需要服务器工厂、注册数组、自定义传输层或第二份构建配置。
+这个示例也不需要智能体账号。
+
+先安装 [Node.js 22.19 或更高版本](./installation.mdx)，并选择一个 **Package preview** 工作流
+已经成功的提交。下面使用该提交不可变的预览 SHA，而不是仅凭 `agent-bundle` 这个未限定名称选择 npm 包。
 
 ## 用脚手架创建项目
 
-最快的方式是 `create-agent-bundle`。它会依次询问名称、模板与宿主 targets：
+把 `<preview-sha>` 替换为该提交的 SHA：
 
 ```sh
-npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> \
-  my-plugin
+AB_SHA='<preview-sha>'
+npx "https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@${AB_SHA}" \
+  my-plugin --template mcp-server --targets portable,claude,codex
+cd my-plugin
+npm install
+npm run check
 ```
 
-等到 npm 正式发布之后，这条命令会变成 `npm create agent-bundle`。在此之前，请使用
-[预览通道](./installation.mdx)中的提交 SHA 或 PR 编号。
-
-同时指定目录与模板的运行会被视为脚本化调用，不再询问任何问题——其余取值回退到各自的默认值：
-
-```sh
-npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> \
-  my-plugin \
-  --template mcp-server \
-  --targets portable,codex,claude
-```
+同时指定目录与模板会使用脚本化路径。预览脚手架从同一提交选择 compiler/runtime 配对。
+提交生成的锁文件；后续干净检出可以使用 `npm ci`。
+[安装指南](./installation.mdx)说明预览选择，以及正式发布的脚手架如何配对版本号独立的 compiler/runtime。
 
 ### 模板
 
-| 模板 | 你会得到什么 |
+| 模板 | 用途 |
 | --- | --- |
-| `minimal` | 一个纯 Skills 插件：一个 `src/skills/<name>/SKILL.md` 目录，此外别无他物。 |
-| `mcp-server` | 由一个 `src/mcp/<server>/tools/<name>.tsx` 路由模块构成的 stdio MCP 服务器，外加一个产物脚本，并已接好框架测试 harness。 |
-| `cli-tool` | 可安装的路由式 CLI（`src/cli/greet.ts`），外加一个约定式脚本（`src/scripts/hello.ts`）与带声明文件的 `src/index.ts` 库导出，并由生成的 projection 测试池在 `cli-dispatch` 与 `script-dispatch` 级别加以证明。 |
+| `minimal` | 静态 Skills，不需要 MCP 服务器或 React runtime。 |
+| `mcp-server` | 约定式 MCP 工具及路由、投影测试；当前 starter 还演示了可选的库导出与产物脚本。 |
+| `cli-tool` | 独立的路由式 CLI，附带脚本和库示例。 |
 
-每个模板都自带 `check` 脚本（validate、build、typecheck、tests），并且校验时零诊断——包括 `AB473x`
-迁移提示，因为这些模板从一开始就是按照 entry 约定编写的。`mcp-server` 模板还自带消费者测试 harness，
-每个测试池都标注了自己承载的证明级别。
+当前脚手架接受 `portable`、`claude`、`codex` 和 `cursor`。编译器也支持 `amp`，现有项目可在
+`agent-bundle.config.ts` 中选择它——但这个 MCP starter 不行：Amp 的 Skill 级 MCP 契约会拒绝
+starter 中由编译器拥有的本地 `status` 服务器，因此在这里写 `targets: ['amp']` 会以
+`amp.mcp.generated-local` 构建失败。要做 Amp 插件，请脚手架 `minimal` 模板，或在恰好一个 Skill
+旁声明远程服务器或可全局解析的命令服务器。添加原生 target 也不代表实时开发代理支持该宿主。
+见[宿主安装](../distribution/installation.mdx)。
 
-预览脚手架会把 `agent-bundle` 与 `@agent-bundle/runtime` 固定到同一个提交 SHA。通过 npm 安装的脚手架则
-从自身打包后的可选 peer 元数据读取精确的 compiler/runtime 配对；两者版本彼此独立，因此 compiler `0.2.0`
-可以正确选择 runtime `0.1.0`。对需要 runtime 的模板使用 `--framework-version` 时，取值必须与记录的
-compiler 版本一致，否则脚手架会在写入文件之前停止。全部参数见
-[create-agent-bundle README](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/packages/create-agent-bundle/README.md)。
+## 添加第一个工具
 
-## 或者手写配置
+Starter 已包含一个 `status` 服务器及其 `report-status` 工具。在旁边新增
+`src/mcp/status/tools/hello.tsx`：
 
-在项目根目录的 `agent-bundle.config.ts` 中描述插件：
+```tsx
+import { Agent } from '@agent-bundle/runtime';
+import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
 
-```ts twoslash
-import { defineConfig } from 'agent-bundle/config';
+export const config = {
+  description: 'Return a greeting without changing anything.',
+  annotations: { readOnlyHint: true },
+} satisfies ToolConfig;
 
-export default defineConfig({
-  plugin: { name: 'my-plugin', description: 'What it does.' },
-  targets: ['claude', 'codex', 'cursor'],
-  skills: ['src/skills/*'],
-  hooks: { sessionStart: { handler: './src/session-start.ts' } },
-  mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
-});
+export const inputSchema = z.object({ name: z.string().min(1) }).strict();
+export const resultSchema = z.object({ message: z.string() }).strict();
+
+export default async function Hello({ input }: ToolRouteProps<typeof inputSchema>) {
+  const result = { message: `Hello, ${input.name}.` };
+  return (
+    <Agent.Result value={result}>
+      <Agent.Text>{result.message}</Agent.Text>
+    </Agent.Result>
+  );
+}
 ```
 
-大多数项目需要的比这还少，因为配置沉默时 `src/` 约定会自动补齐：
+路径声明了 `status` 服务器上的 `hello` 工具；它的框架路由 ID 是 `tool:status/hello`。
+`value` 是结构化结果，子节点描述面向智能体的呈现方式。
+结果应保持 JSON 兼容，并用 `resultSchema` 描述它的真实形状。
 
-```ts twoslash
-import { defineConfig } from 'agent-bundle/config';
-
-export default defineConfig({
-  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
-  targets: ['portable', 'codex', 'claude'],
-});
-```
-
-`targets` 选择这一个产物根目录承载哪些宿主投影——`amp`、`claude`、`codex`、`cursor`、`portable`；省略它时
-根目录只承载 `portable`。发布版本号来自 `package.json`。`plugin.version` 字段仍然可用，但它是已废弃的
-兼容轴；取值与 `package.json` 不一致时会报告 `AB4008` 警告。
+不要再把这个工具加入 `agent-bundle.config.ts`，也不要调用 `registerTool`。
+添加路由文件就是注册。领域实现可以放在路由目录以外并正常导入，不需要另一份操作注册表。
 
 ## 构建，或交互式开发
 
 ```sh
-npx agent-bundle build --root .   # 把复合插件根目录写到 artifact/
-npx agent-bundle dev --root .     # 带实时重建的本地 Workbench
+npm run dev -- --open
 ```
 
-`build` 会校验项目并写出产物根目录；声明了 `bin`/`lib` 时还会一并完成包构建。`dev` 在 loopback 上提供
-开发者 Workbench，并随输入变化持续重建。用它的 Application 树选择工具、事件、CLI 命令、脚本、App、
-Skill、规则或命令；运行可执行叶子，并首先检视渲染出的 Agent Document。Trace 展示本次会话的调用，
-Problems 保存诊断，Advanced 则包含 eval、产物检视、协议检视、宿主诊断与原始日志。
+在 Workbench 的 **Application** 树中选择 `status` 下的 `hello` 工具，输入参数并调用：
+
+```json
+{ "name": "Ada" }
+```
+
+渲染文档应显示 `Hello, Ada.`，结构化结果应包含 `{"message":"Hello, Ada."}`。
+**Trace** 展示调用，**Problems** 展示构建诊断，**Advanced** 提供底层检视。
+普通路由调用并不能证明外部宿主已经安装或调用了插件。
+
+修改问候语，等待本次重建完成后再调用。无效修改会保留上一个可用构建并显示诊断；
+之前的输出不是新源码已成功编译的证据。Workbench 不需要为了刷新视图而自动重复执行修改性操作。
+
+不启动开发服务器、只构建一次时运行：
+
+```sh
+npm run build
+```
+
+## 测试路由
+
+新增 `tests/route-unit/hello.test.ts`：
+
+```ts
+import { expect, it } from '@rstest/core';
+import { renderRoute } from 'agent-bundle/test';
+
+it('returns the greeting as structured data', async () => {
+  const rendered = await renderRoute('tool:status/hello', {
+    input: { name: 'Ada' },
+  });
+  expect(rendered.result).toEqual({ message: 'Hello, Ada.' });
+});
+```
+
+运行现有的聚合命令：
+
+```sh
+npm run check
+```
+
+当前 MCP starter 的 `npm test` 单独运行时会排除路由和投影测试。
+`check` 执行校验、构建、类型检查及全部三组测试；完整门禁使用它，聚焦路由时使用
+`npm run test:routes`。真实 MCP 进程和浏览器 App 等进一步的证明级别见[测试](../development/testing.mdx)。
+
+消费路由、provider 或 App 类型的 TypeScript 项目必须包含生成的 `.agent-bundle/routes.d.ts`。
+它是生成文件，不是手写注册表。在干净目录中单独检查类型，或添加、重命名路由后，先刷新它：
+
+```sh
+npm run validate
+npm run typecheck
+```
+
+旧声明文件存在，不等于它是最新的。Starter 的完整 `check` 已把生成放在类型检查之前。
+
+## 把工具复用为 CLI 命令
+
+新增 `src/mcp/status/tools/hello.cli.ts`：
+
+```ts
+import type { CliProjectionConfig } from 'agent-bundle/routes';
+
+export const config = {
+  command: ['hello'],
+} satisfies CliProjectionConfig;
+```
+
+它是同目录工具的投影，不是另一条工具路由或处理器。重新构建，再运行产物中生成的可执行文件：
+
+```sh
+npm run build
+node artifact/bin/my-plugin.mjs hello --name Ada
+```
+
+使用的仍然是同一份 `inputSchema`、路由实现和结果，不需要再创建 `src/cli/hello.ts`。
+`src/cli/` 留给真正独立的 CLI 工作流。
+
+自动 flag 推导只支持有界的 schema 语法。复杂嵌套或 union schema 不保证能使用这种命名投影；
+不要为了生成 flag 而复制或削弱工具 schema。
+[包入口](../authoring/package-entries.mdx)说明了支持的语法和已有的批量 MCP 命令 JSON 输入路径。
+
+## 或者手写配置
+
+在已有包中安装匹配的[框架/runtime 配对](./installation.mdx)，以及代码使用的渲染和 schema 依赖。
+约定式路由不需要 `mcp.servers` 条目：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'my-plugin', description: 'Project tools for an agent.' },
+  targets: ['portable', 'claude', 'codex'],
+});
+```
+
+版本保留在 `package.json` 中。省略 targets 时只选择 `portable`。
+自定义本地服务器、预构建服务器和远程服务器仍可通过[显式模式](../authoring/mcp.mdx)使用；
+不要在同一个名称下混合手写服务器和生成式路由，并依赖静默优先级。
 
 ## 查看编译器的判断
 
+在已经安装了正确编译器的项目中运行：
+
 ```sh
-npx agent-bundle inspect --root .            # 规范化配置与每个宿主投影的计划
-npx agent-bundle inspect --root . --skills   # 加上 skill focus
-npx agent-bundle validate --root .           # 检查项目源码
+npx --no-install agent-bundle inspect --routes
+npx --no-install agent-bundle validate
+npx --no-install agent-bundle validate --artifact artifact
 ```
 
-`inspect` 读取源码配置并展示规范化后的模型——这正是确认某个约定是否真的被识别的地方。
+前两个命令读取源码项目，最后一个无需源码即可检查构建后的组合产物。
+用路由 ID 关联源码、Workbench 与测试输出。
 
 ## 安装结果
 
-产物根目录带有一份生成的 `INSTALL.md`，每个所选宿主一节，其中的命令使用该捆绑包真实的插件名与市场名。
-所有宿主安装的都是同一个目录，因此 `--from` 始终指向根目录。按上文构建出 `portable`、`codex` 与
-`claude` 三个 target 后，宿主安装命令是：
+读取生成的 `artifact/INSTALL.md`，其中包含所选宿主的安装命令和插件真实名称。
+在当前开发项目中，已安装的编译器也能执行显式安装：
 
 ```sh
-npx agent-bundle install claude --from artifact --scope user
-npx agent-bundle install codex --from artifact
-node artifact/install.mjs   # portable 包，通过生成的安装器
+npx --no-install agent-bundle install claude --from artifact --scope user
 ```
 
-把 `cursor` 加入 `targets`，同一个根目录就会多出 `.cursor-plugin/`；然后用 `npx agent-bundle install
-cursor --from artifact` 以同样方式安装。
+这是对宿主状态的修改，不是 `build` 或 `dev` 的一部分。请明确选择宿主与作用域。
+Amp 的原生插件位于嵌套目录中；框架安装器从组合根解析该目录。
+遵循生成的说明，不要假定所有宿主的原生安装根都相同。
 
-若想在 Claude Code 上进行免安装的开发循环：
-
-```sh
-claude --plugin-dir artifact plugin list --json
-```
+npm 分发应使用[生成的 npm 根目录和 prepack 门禁](../distribution/index.mdx)。
+消费者可以遵循交付的 `INSTALL.md`，或使用插件显式提供的包绑定安装器，
+不应为了安装插件而下载一个无关的同名 npm 包。
 
 ## 下一步
 
-- [项目结构](./project-structure.mdx) —— 每个 `src/` 根目录的含义，以及输出落在哪里。
-- [配置模型](../authoring/index.mdx) —— 每个配置字段及其归属。
-- [Skills](../authoring/skills.mdx) —— 大多数插件最先编写的表面。
+[项目结构](./project-structure.mdx)展示工具、CLI 投影、钩子、provider、状态、Skills 和浏览器 App
+如何组合。[MCP App 示例](../../examples/mcp-app.mdx)展示真实工具结果上的交互视图；
+[钩子](../authoring/hooks.mdx)解释何时使用普通处理器，何时使用语义事件路由。

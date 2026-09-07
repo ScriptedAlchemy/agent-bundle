@@ -1,0 +1,168 @@
+---
+description: 'Choose among all five built-in output targets, find the generated capability matrices, and distinguish plugin emission, client compatibility, browser presentation, and verified execution.'
+---
+
+# Targets and capability map
+
+Use this page to answer **what to author, which output to select, and where the limits are**.
+For a first working tool, start with [Quick start](./quick-start.mdx). For the precise,
+versioned host behavior, use the generated matrices rather than assuming every host implements
+the same plugin interface.
+
+## All built-in output targets
+
+These are the five built-in values of `targets` in `agent-bundle.config.ts`. They select what
+the compiler emits, not an account, a model, or a running development session.
+
+| Target | Output and intended reader | Important boundary |
+| --- | --- | --- |
+| `amp` | A native directory plugin at `.amp/plugins/<name>/`, with an `index.js` PluginAPI factory, explicitly registered Skills, and mapped event callbacks. | Its MCP configuration is skill-scoped. The adapter accepts supported remote or globally resolvable command servers beside exactly one bundled Skill, not compiler-owned local MCP entries. Amp installation and live account execution are different proof levels. |
+| `claude` | Claude Code: `.claude-plugin/plugin.json`, the generated marketplace entry, `hooks/hooks.json`, and `.mcp.json` where applicable. | Compiled semantic hooks and explicitly authored native hooks have different authoring contracts. Native additions such as LSP declarations stay Claude-specific. |
+| `codex` | Codex: `.codex-plugin/plugin.json` and explicit pointers to its own hook/MCP documents, plus `.agents/plugins/marketplace.json`. | CLI, editor, and desktop behavior must be qualified separately. Serving an MCP App resource does not imply that every Codex client displays it. |
+| `cursor` | Cursor: `.cursor-plugin/plugin.json` and its own hook/MCP documents; an optional marketplace document. | The owned local-copy installation path differs from native marketplace CLI installation. Do not write Cursor's global hook configuration by hand. |
+| `portable` | Agent Plugins 1.0.0: root `plugin.json`, Skills, and `mcp.json` where authored. | This is a format target, not a universal host. It does not define native hooks, rules, or slash-command documents. Each reader's supported subset is recorded separately. |
+
+Omitting `targets` selects `portable` alone. Explicit selection replaces that default:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'project-tools', description: 'Tools for this project.' },
+  targets: ['claude', 'codex', 'cursor'],
+});
+```
+
+To select different projections for one build, repeat `--target`. Run this only after installing
+the intended framework package in the project:
+
+```sh
+npx --no-install agent-bundle build --target claude --target codex
+```
+
+A combination is valid only when its actual components can coexist. Different bytes at the same
+path, or a component accidentally discovered by another host, are build errors—not permission
+to overwrite one projection with another. Reordering the target list does not resolve a conflict.
+See [composition rules](../../reference/targets-artifacts.mdx).
+
+The current scaffolder's target choices lag the compiler's Amp support. To build for Amp, use
+an appropriate existing/static project and set `targets` explicitly; the generated MCP starter's
+compiler-owned local server is refused under Amp's skill-scoped MCP contract
+(`amp.mcp.generated-local`). See the current
+[installation guide](../distribution/installation.mdx) for the nested install root and reload
+procedure.
+
+## The authoritative capability matrices
+
+The following pages are generated from the same pinned capability records used by the adapters.
+They include the source documents, observed versions, detailed restrictions, and reasons for
+omissions. Do not maintain a second checklist of native support in a plugin repository.
+
+| Question | Read |
+| --- | --- |
+| Which components, transports, path tokens, native metadata and install methods does a target support? | [Host capability matrix](../../reference/hosts.md) |
+| Which semantic events and plain-hook events exist, which payload fields are present, and how are tool selectors mapped? | [Event and hook matrix](../../reference/events.md) |
+| Which notice channels and recipient identities are supported, and what counts as delivery? | [Notice delivery matrix](../../reference/notices.md) |
+| Which files and executable records are emitted? | [Targets and artifacts](../../reference/targets-artifacts.mdx) and [artifact manifest](../../reference/artifact-manifest.mdx) |
+| Which component did this particular build select or omit? | `agent-bundle inspect --json`; its plans report selected/skipped components, reasons, and per-kind capability judgments. |
+
+A capability judgment is scoped to a feature and its recorded evidence:
+
+| State | Meaning for an author |
+| --- | --- |
+| `supported` | The declared behavior has supporting evidence for the recorded target/version. It is not proof that your operation has been run successfully in that host. |
+| `degraded` | A restricted or translated behavior is available. Read the reason before depending on it. |
+| `unavailable` | The framework has no supported path for the requested behavior under that record. The reason may identify a missing host feature or missing evidence; those are not the same claim. |
+| `prohibited` | The contract explicitly refuses this use. Do not bypass the diagnostic by copying a private implementation. |
+
+Runtime verification is a separate axis. A record may describe an implemented adapter while
+account-dependent activation remains **unverified**. Absence of an account is not evidence that
+that host cannot perform the operation. Conversely, successful file placement is not proof that
+the host enabled the plugin or invoked a tool.
+
+## What the framework can build
+
+This is an authoring map, not a promise that every target accepts every component. The host
+matrices and the actual build's inspection decide availability.
+
+| Need | Ordinary authoring path | Framework responsibility / guide |
+| --- | --- | --- |
+| Reusable instructions and resources | `src/skills/<name>/SKILL.md` | Discover, validate, package, and project Skills; [Skills](../authoring/skills.mdx). Static Skills need no server. |
+| Generated instruction content | A documented rendered Skill source | Render at build time into the Skill artifact, not an always-running host service; [Skills](../authoring/skills.mdx). |
+| Host slash commands or rules | `src/commands/*.md`, `src/rules/*.mdc` | Validate supported frontmatter and native discovery; [configuration](../authoring/index.mdx). A Markdown command is not an executable CLI route. |
+| Callable tools, resources, or prompts | `src/mcp/<server>/{tools,resources,prompts}/*` | Generate registration, server lifecycle, contracts, and protocol projection; [MCP](../authoring/mcp.mdx). |
+| Reuse a tool from a terminal | A sibling `<tool>.cli.ts` | Project argv into the canonical operation; [package entries](../authoring/package-entries.mdx). |
+| An independent terminal workflow | `src/cli/**` | Generate the command tree, argument handling, output, and exit semantics. Use this for a different workflow, not another copy of a tool. |
+| Agent-facing structured and readable output | `Agent.*` elements from an executable route | Compose the Agent Document and its surface output. Domain computation stays in the plugin. |
+| A browser view for a tool | `src/mcp/<server>/apps/*` with an explicit tool association | Compile an MCP App and connect it through `agent-bundle/app`; [MCP Apps example](../../examples/mcp-app.mdx). |
+| Open that App without an agent UI | `serve-app`, or declared `web` exposure | Reuse the local browser host and consent boundary; [CLI](../../reference/cli.mdx). This is not a new deployment target. |
+| Cross-host event behavior | `src/events/**`, optionally with preflight | Normalize the event and project the supported decision/context; [hooks](../authoring/hooks.mdx). |
+| A lightweight plain hook | A config-declared handler using the public hook type | Own native stdin/stdout and result encoding without requiring an Agent renderer; [hooks and scripts example](../../examples/hooks-and-scripts.mdx). |
+| Shared rendering and request dependencies | `src/layout.tsx`, server layouts, `src/providers/*` | Compose supported routes and mount observed request context; [project structure](./project-structure.mdx). Browser Apps and events are not automatically document-layout children. |
+| Framework state and notices | `src/state.ts` and the public request handle | Supply the declared lifetimes, journal/notice machinery and honest availability; [runtime environment](../../reference/runtime-environment.mdx) and [notices](../../reference/notices.md). |
+| Scripts, static assets, or an opaque executable payload | `src/scripts/*`, assets, or `definePrebuilt` | Bundle or copy according to the declaration; [scripts/assets](../authoring/scripts-assets.mdx) and [payloads](../authoring/package-entries.mdx). Declare real payload runtime dependencies. |
+| npm bins/library output and installation | `bin`/`lib` where needed; optional `agent-bundle/install` entry | Assemble the canonical package root and reuse lifecycle ownership; [shipping](../distribution/index.mdx). |
+| Tests and agent evaluations | Public test/browser/Rstest and eval helpers | Keep route, protocol, packed and native evidence distinct; [development](../development/index.mdx). |
+
+Advanced custom/command/remote MCP servers, native metadata, native hook documents, prebuilt
+payloads, and bundler overrides remain supported where documented. They are escape hatches for
+real integration needs, not setup required for a normal tool.
+
+## Compatible clients are not additional targets
+
+The host matrix's **Recorded third-party clients** section describes readers of an existing
+output format. Its client names are not additional values for `targets`. A research issue for
+a host is also not an installed adapter.
+
+Read each client's tier and surface rows together. A skills-only reader may not read `plugin.json`.
+A reader of `mcp.json` may not expand the path tokens needed to start its server. An installation
+command may register a directory rather than copy it. A higher-priority manifest may redirect
+component paths; a per-file MCP override need not shadow unrelated Skills. Conditional components
+are absent from a plugin that never authored them.
+
+Use the dated source links in [the generated client records](../../reference/hosts.md) for those
+details. A generic statement that a client supports plugins is not enough to claim compatibility
+with this exact artifact. Hosts without a current implemented/recorded path are not advertised
+here as supported targets.
+
+## Build, development, and display are separate
+
+| Surface | Selection | What it does not imply |
+| --- | --- | --- |
+| Compilation | `targets` / build `--target` | All selected hosts expose identical features or share one native installation root. |
+| Development installation | `dev --install-host claude`, `codex`, or `cursor` | Every native target supports the live development proxy. Amp uses its documented copy/reload path. |
+| Embedded host terminal | The installed, supported Claude/Codex host-session integration | Authentication, trust, and successful model execution are supplied by the real host, not simulated by the Workbench. |
+| App presentation | A supported browser-host `--profile` | That profile is a native output target or the correct server launch projection. |
+| npm distribution | Pack the generated npm root | Installing the npm package automatically registers it with an agent host. |
+
+Third-party adapters registered through the advanced `TargetRegistry` build alone under the
+current composite contract. They do not automatically inherit the built-in targets' discovery
+isolation guarantees.
+
+## Check your own plugin
+
+Run separate inspection focuses; do not combine them into one invocation:
+
+```sh
+npx --no-install agent-bundle inspect --json
+npx --no-install agent-bundle inspect --routes --json
+npx --no-install agent-bundle inspect --hooks --json
+npx --no-install agent-bundle inspect --state --json
+npx --no-install agent-bundle validate
+```
+
+After building, inspect and validate the deliverable without rediscovering source:
+
+```sh
+npx --no-install agent-bundle inspect --artifact artifact --json
+npx --no-install agent-bundle validate --artifact artifact
+```
+
+For event routes, use supported `config.requires` capability declarations when the requirement
+is semantic, or explicit host selection when the behavior is intentionally native-specific.
+Do not claim support by dropping a blocking decision, fabricating context, or broadening approval.
+See the event guide for mutually exclusive declarations and unavailable-capability diagnostics.
+
+Keep the generated `INSTALL.md` with the deliverable and follow its actual host/root/scope
+instructions. A successful compile, a packed-process test, a native install, and an authenticated
+agent turn establish different things; document which ones were actually exercised.

@@ -1,53 +1,65 @@
 ---
-description: 'agent-bundle reference: the CLI, configuration fields, target artifacts, runtime environment, security boundaries, limitations, and the generated type API.'
+description: 'Exact Agent Bundle CLI, configuration, artifact and runtime contracts, plus generated host/event/notice capability maps, diagnostics, public APIs and practical troubleshooting.'
 ---
 
 # Reference
 
-The Guide explains how to build and ship a bundle. This section is the lookup half: exact flags,
-exact field names, exact defaults, and the boundaries the framework refuses to cross.
-
-Nothing here repeats a walkthrough. Where a concept is already explained in the Guide — the
-configuration model, the seven hook events, the proof levels — these pages link to it and record
-only the contract.
+Use the Guide to build a plugin and this section to check exact fields, flags, defaults and
+boundaries. The [target and capability map](../guide/start/capabilities.mdx) is the short route
+to all five built-in outputs and the functionality they can project.
 
 | Page | Answers |
 | --- | --- |
-| [CLI](./cli.mdx) | Every command, argument, option, default, and exit code. |
-| [Configuration](./configuration.mdx) | Every `agent-bundle.config.ts` field, its type, and its validation rule. |
-| [Targets and artifacts](./targets-artifacts.mdx) | The composite plugin root, what each host projection adds to it, and the artifact manifest contract. |
-| [Host capability matrix](./hosts.md) | The pinned per-host capability tables: versions, manifests, install surfaces, path tokens, MCP transports, plugin components. Generated at build time. |
-| [Event and hook matrix](./events.md) | Canonical events to native events per host, tool selectors to native matchers, deferred native events. Generated at build time. |
-| [Notice delivery matrix](./notices.md) | Which notice channels each host supports and why the rest are unavailable. Generated at build time. |
-| [Diagnostics reference](./diagnostics.md) | Every `AB` code family, trigger, severity, and recovery hint. Generated at build time from the repository contract. |
-| [Development-server HTTP](./dev-server-http.mdx) | Browser-facing invocation, trace, raw-log, and host hook-receipt routes and wire shapes. |
-| [Runtime environment](./runtime-environment.mdx) | Node floors, path tokens, environment variables, `.env` layering, and durable state locations. |
-| [Security](./security.mdx) | The credential, network, and trust boundaries. |
-| [Limitations](./limitations.mdx) | What the framework does not currently do or prove. |
-| [Type API](./api.mdx) | The generated symbol reference for every public export. |
+| [Target and capability map](../guide/start/capabilities.mdx) | Which surface to author; native target versus compatible reader versus development/display support. |
+| [CLI](./cli.mdx) | Commands, arguments, options, defaults and exit codes, including inspection, hooks, MCP, installation and local App hosting. |
+| [Configuration](./configuration.mdx) | `agent-bundle.config.ts` fields, types and validation rules. |
+| [Targets and artifacts](./targets-artifacts.mdx) | All five built-in projection layouts, composition constraints, distribution forms and executable ownership. |
+| [Artifact manifest](./artifact-manifest.mdx) | The canonical application, route, executable, launch, distribution and compiler record shapes. |
+| [Host capability matrix](./hosts.md) | Pinned versions, native documents, installation, path tokens, MCP behavior, lineage, plugin components and recorded compatible clients. Generated from adapter capability data. |
+| [Event and hook matrix](./events.md) | Canonical event families, native events, payload-field provenance, tool selectors and deferred native events. Generated from the same records. |
+| [Notice delivery matrix](./notices.md) | Recipient axes, supported channels, sensitivity constraints and unavailable-delivery reasons. Generated from the same records. |
+| [Diagnostics reference](./diagnostics.md) | Diagnostic codes, severity, trigger and recovery. Generated from the repository contract. |
+| [Development-server HTTP](./dev-server-http.mdx) | Invocation, trace, raw-log and hook-receipt routes for advanced integrations. |
+| [Runtime environment](./runtime-environment.mdx) | Node floors, path tokens, environment layering, observed context and writable state. |
+| [Security](./security.mdx) | Credential, network, sandbox, consent and trust boundaries. |
+| [Limitations](./limitations.mdx) | What is unsupported, deliberately constrained, or not established by available proof. |
+| [Type API](./api.mdx) | Generated symbols for the public package exports. |
+| [Troubleshooting](../guide/development/troubleshooting.mdx) | Missing routes/types, target mismatches, App lifecycle, package roots and qualification problems. |
+
+The generated matrices are not another manually curated compatibility list. Their dated source
+links explain the recorded behavior. `supported`, `degraded`, `unavailable` and `prohibited`
+are feature judgments; an unperformed account-dependent runtime test is a separate verification
+limit. Consult the actual component and client/version rather than assuming one host-level badge
+covers every operation.
+
+For authoring patterns, use [Reuse the framework](../guide/authoring/reuse-framework.mdx): one
+tool with CLI and App surfaces, canonical schemas, semantic/plain hooks, request dependencies,
+state, payloads and installation. Custom server factories and raw native documents remain
+advanced integration paths, not the minimum code required for a plugin.
 
 ## Reading the diagnostics
 
-Every command reports structured diagnostics rather than prose errors. One diagnostic is a stable
-`AB` code, a severity, a message, and usually a `sourcePath` and a `recovery` hint. For the
-diagnostic-gated commands — `build`, `prepack`, `validate`, `doctor`, `install`, and `dev` — only
-an **error** severity makes the command exit nonzero; warnings and infos never gate a build, a
-validation, or a dev rebuild. `eval` and `inspect` have an extra, non-diagnostic reason to exit
-`1`: a failing or inconclusive trial, or an invalid model — see the
-[CLI exit codes](./cli.mdx#exit-codes).
+A structured diagnostic identifies a code, severity, message and, when available, source path
+and recovery. Read the current command's final outcome as well: a parser usage error, a failing
+or inconclusive eval, and an invalid inspection model are different failure paths.
 
-The full code catalog is the [Diagnostics reference](./diagnostics.md), rendered at build time
-from the repository's
-[`docs/diagnostics.md`](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/diagnostics.md).
+Only an error diagnostic gates the diagnostic-based checks. Options such as `--strict` can
+promote applicable host-tool warnings to errors, so do not discard a nonzero result merely
+because an earlier unpromoted warning was informational to your workflow. Exact command
+behavior is in [CLI exit codes](./cli.mdx#exit-codes).
 
 | Family | Area |
 | --- | --- |
-| `AB30xx` | Skill documents: Markdown parsing and rendered-skill compilation. |
-| `AB40xx`–`AB47xx` | Plugin metadata, normalized model invariants, hooks, MCP, scripts, assets, package build, and the bundler escape hatch. |
-| `AB48xx`–`AB49xx` | Route graph, state, layout, and provider conventions: route module discovery, `config` extraction, shared layouts (`AB4830`–`AB4832`), and the compiled command surface. |
-| `AB5000` | General CLI and adapter failures. |
-| `AB60xx` | Built-artifact validation, including host schema documents and referenced files. |
-| `AB700x`–`AB7015` | Host installation and the npm prepack gate (`AB7014`/`AB7015`: installed-dependency hygiene). |
-| `AB7xxx` | Project preparation and development rebuilds, plus the read-only Doctor at `AB7300`–`AB7320`. |
-| `AB8xxx` | Development server configuration and Workbench routes. |
-| `AB9xxx` | Eval selection, harnesses, and persisted runs. |
+| `AB30xx` | Skill parsing and rendered content. |
+| `AB40xx`–`AB47xx` | Identity, target composition, hooks, MCP, assets, package output and bundler policy. |
+| `AB48xx`–`AB49xx` | Conventional routes, contracts, layouts, providers, state and generated command surfaces. |
+| `AB5000` | General command/adapter boundary failures. |
+| `AB60xx` | Artifact, native document, referenced-file and compiler-evidence validation. |
+| `AB7xxx` | Package/install checks, project preparation, rebuilds and Doctor. |
+| `AB8xxx` | Development server and Workbench boundaries. |
+| `AB9xxx` | Evaluations and persisted runs. |
+
+These families are navigation, not a replacement for the [full generated diagnostic
+reference](./diagnostics.md). Correct the owning declaration or input; do not change generated
+manifest fields, invent missing runtime evidence, or widen native permissions to suppress a
+failure.

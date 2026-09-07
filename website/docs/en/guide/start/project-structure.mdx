@@ -1,194 +1,269 @@
 ---
-description: 'The conventional src/ roots agent-bundle discovers, how config and conventions interact, and where build output lands.'
+description: 'A convention-first composite plugin: which files declare routes, how tools and browser views share contracts, and where generated output and writable state belong.'
 ---
 
 # Project structure
 
-An agent-bundle project is an ordinary Node package with one extra file at the root and a
-conventional `src/` tree. Nothing here is mandatory: conventions fill the config in when it is
-silent, and config always wins when both describe the same thing.
+An Agent Bundle project is an ordinary Node package with `agent-bundle.config.ts` and a
+conventional source tree. Start with the files your plugin needs. A static Skill does not need
+an MCP server; a tool does not need a browser App; an App does not need its own server registry.
+
+Conventions discover the application. Configuration supplies identity, policy, and explicit
+exceptions. Conflicting declarations are diagnosed rather than universally resolved by
+"config always wins."
 
 ## The layout
 
+This is an **illustrative composite plugin**, not a minimum template. The opening paths are
+ordinary authored source; host manifests and executable wrappers belong in generated output.
+
 ```text
 my-plugin/
-├── agent-bundle.config.ts     # project identity, targets, and policy
-├── package.json               # authoritative release version and package identity
-├── assets/                    # static files copied byte-for-byte into the artifact root
-└── src/
-    ├── skills/<name>/SKILL.md # one Skill per directory, with its own resources
-    ├── commands/*.md          # host slash-command documents
-    ├── rules/*.mdc            # host rule documents
-    ├── hooks/*.ts             # lifecycle hook handlers referenced from config
-    ├── mcp/<server-id>.ts     # a handwritten stdio MCP server entry
-    ├── mcp/<server>/          # or a generated server, one module per route
-    │   ├── tools/*.tsx
-    │   ├── resources/*.tsx
-    │   ├── prompts/*.tsx
-    │   ├── apps/*.tsx         # browser MCP Apps compiled to self-contained HTML
-    │   └── layout.tsx         # optional per-server layout around this server's routes
-    ├── scripts/<name>.ts      # artifact scripts (.tsx renders via the Agent renderer)
-    ├── cli.ts                 # a single package bin
-    ├── cli/**/*.ts            # or a routed CLI, where nesting is the command path
-    ├── index.ts               # the library entry
-    ├── layout.tsx             # optional shared layout around every rendered route
-    ├── state.ts               # project state definition
-    └── providers/<name>.ts    # request-context providers
+├── agent-bundle.config.ts
+├── package.json
+├── tsconfig.json
+├── assets/                         # optional static assets
+├── src/
+│   ├── mcp/ops/
+│   │   ├── tools/
+│   │   │   ├── inspect.tsx          # canonical operation + schemas + Agent document
+│   │   │   └── inspect.cli.ts       # optional CLI projection of that operation
+│   │   ├── resources/policy.tsx     # an MCP resource
+│   │   ├── prompts/review.tsx       # an MCP prompt
+│   │   ├── apps/dashboard.tsx       # browser entry, not an Agent Server Component
+│   │   └── layout.tsx               # optional shared agent-facing presentation
+│   ├── events/tool/
+│   │   ├── before.tsx               # semantic tool/before event route
+│   │   └── before.preflight.ts      # only a gate explicitly re-exported by the route
+│   ├── hooks/session-start.ts       # optional plain hook referenced from config
+│   ├── skills/review/SKILL.md
+│   ├── commands/review.md           # optional native prompt/command document
+│   ├── rules/project.mdc           # optional host-supported rule
+│   ├── cli/doctor.tsx               # a genuinely independent CLI workflow
+│   ├── scripts/check-service.ts     # plain artifact script
+│   ├── providers/project.ts         # optional request dependency
+│   ├── state.ts                     # optional framework state definition
+│   ├── layout.tsx                   # optional root document layout
+│   ├── components/                  # ordinary reusable presentation
+│   ├── domain/                      # ordinary business logic, clients, policies
+│   └── install-bin.ts               # optional package-bound installer delegation
+└── tests/
+    ├── route-unit/
+    └── projection/
 ```
+
+There is no authored `application.ts` registry, generated MCP entry, or native hook JSON in this
+layout. The compiler derives them where needed. `domain/` and `components/` are organizational
+choices, not new framework conventions. Use an explicit `payload` declaration for prebuilt
+non-TypeScript assets or native executables; do not assume an arbitrary source directory ships.
 
 ## What each root means
 
-| Path | Surface | Opt out |
+| Path | Meaning | Important boundary |
 | --- | --- | --- |
-| `src/skills/<name>/SKILL.md` | A Skill. Everything else in the directory ships as its resources. Ships with no declaration at all. | Remove the directory, or narrow the `skills` config globs. |
-| `src/commands/*.md` | Flat host command documents. Frontmatter is judged per host: Claude Code documents `description`, `argument-hint`, `allowed-tools`, `model`, and `disable-model-invocation`, while Cursor's pinned commands surface is frontmatter-free Markdown. A command that explicitly targets a host which cannot express a field it uses is `AB4927`; an implicitly selected host receives the body minus the field and `validate` warns `AB4928`. `inspect` lists the same omissions as `omittedFeatures`. | Remove the file. |
-| `src/rules/*.mdc` | Flat host rule documents, emitted by Cursor, which keeps `description`, `globs`, and `alwaysApply`. The same per-host judgment applies: `AB4907` for an explicit target, `AB4908` as a warning for an implicit one. | Remove the file. |
-| `src/mcp/<server-id>.ts` | Stdio entry for a declared MCP server that names no `entry`, `command`, or `url`. | Declare `entry` explicitly. |
-| `src/mcp/<server>/{tools,resources,prompts}/*` | Generated MCP server routes. The path supplies identity; each module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote`. |
-| `src/mcp/<server>/apps/*` | Browser MCP App entries compiled to self-contained HTML and registered on the generated server. Static `config.resourceUri` is required. | Use a custom server, or prefix the file with `_`. |
-| `src/scripts/<name>.ts` | A plain script compiled once to `scripts/<name>.mjs` at the artifact root, shared by every selected host. Nested modules are a hard error (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry. |
-| `src/scripts/<name>.tsx` | A rendered script: the async default component receives `argv` and `signal` and renders through the Agent renderer with the CLI output contract. | Rename to `.ts`, prefix a path segment with `_`, or claim the file. |
-| `src/cli.ts` | A package bin named after `plugin.name`. | `bin: false` |
-| `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one executable. Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Supersedes the `src/cli.ts` convention. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_`. |
-| `src/index.ts` | The library output, with declarations. | `lib: false` |
-| `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route — generated MCP tools, resources, and prompts, rendered routed-CLI commands, projected MCP commands, and rendered scripts. Event routes and browser Apps are never wrapped. | Rename to `_layout.tsx`. |
-| `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode. |
-| `src/state.ts` | Project state: default-exports `defineState`. Generated MCP, routed-CLI, and rendered-script request scopes mount it. | `state: false`, or rename to `_state.ts`. |
-| `src/providers/<name>.{ts,tsx}` | A request-context provider mounted at `providers.<camelCaseName>` on the request handle; its factory receives the request's identity, lineage, and read-only state/notice handles. | Prefix the file with `_`. |
-| `assets/` | Static resources copied byte-for-byte into the artifact root's `assets/` directory, once for every selected host. | Declare a top-level `assets` list instead. |
+| `src/mcp/<server>/tools/*.{ts,tsx}` | Tools on the generated server. | A rendered tool exports schemas, optional static `config`, and its default component. No manual registration. |
+| `src/mcp/<server>/tools/<tool>.cli.ts` | Named CLI projection of the sibling tool. | Reuses the tool; it is not another MCP route. Optional `mapInput` changes CLI input mapping, not the operation registry. |
+| `src/mcp/<server>/resources/*` and `prompts/*` | MCP resources and prompts. | These are not tools; their protocol metadata and result contracts differ. |
+| `src/mcp/<server>/apps/*.{ts,tsx}` | Browser App entries. | Declare `config.resourceUri`; the framework compiles and registers self-contained HTML. |
+| `src/events/**` | Supported semantic event routes, such as `tool/before`. | The path names a supported event family, not an arbitrary event bus topic. Native envelopes are adapter-owned. |
+| `src/hooks/*.ts` | Plain handlers referenced by `hooks` configuration. | The directory alone does not register them. Use the public `HookHandler` contract; no JSX or custom stdin wrapper is required. |
+| `src/skills/<name>/SKILL.md` | Static Skill plus its resource files. | A Skill can ship without the rendered runtime. See [Skills](../authoring/skills.mdx) for rendered and host-specific forms. |
+| `src/commands/*.md` | Native command/prompt documents. | These are not `src/cli/` commands. Availability and frontmatter are host-specific. |
+| `src/rules/*.mdc` | Rule documents where the host supports them. | A selected target is not a promise that it supports rules. |
+| `src/cli/**/*.{ts,tsx}` | Independent routed CLI commands. | Nesting is the command path. Prefer a tool's `.cli.ts` projection when it is the same operation. |
+| `src/scripts/<name>.ts` / `.tsx` | Plain / rendered artifact scripts. | Scripts are flat. Put shared helpers outside this conventional root or under a private path. Rendered scripts receive `argv` and `signal`. |
+| `src/providers/<name>.{ts,tsx}` | Request-context provider. | Read the generated provider value through `agent()`; do not add another global service registry. |
+| `src/state.ts` | Optional `defineState` declaration. | Framework state is optional and does not take ownership of your domain database. `state: false` disables discovery. |
+| `src/layout.{ts,tsx}` | Root agent-document layout. | Wraps rendered routes, not native event responses or browser Apps. |
+| `src/mcp/<server>/layout.{ts,tsx}` | Server document layout inside the root layout. | Applies to that generated server's routes. |
+| `assets/` | Conventional static assets. | Copied under the artifact's `assets/`; explicit configuration can narrow the selection. |
 
-Route and package entry conventions match `.ts` and `.tsx` files exactly; the state convention
-is specifically `src/state.ts`. Discovered entries carry `provenance.kind: 'conventional'` in the
-normalized model, so `agent-bundle inspect` tells you whether a file was picked up by convention
-or claimed by config.
+Private path segments beginning with `_` or `.` and declaration files are excluded from route
+discovery. A `before.preflight.ts` file is not special merely because of its name: the event
+route must re-export its gate through the supported preflight contract. Do not register a plain
+hook and a semantic route for the same event as two accidental implementations. See
+[hooks](../authoring/hooks.mdx) for runtime, target, provider, and preflight choices.
+
+Route-specific `config` exports use a bounded static grammar. Keep runtime work in the handler
+or domain module; do not execute it to populate metadata. Keep schemas authoritative rather
+than reconstructing protocol types independently in the CLI and browser.
+
+### Adding an interactive App
+
+A tool's `Agent.*` JSX describes the agent-facing document. An MCP App entry runs in the
+browser and owns its DOM or React UI. Do not import a server route into the browser: that can
+pull Node APIs, domain services, and server-only dependencies into the wrong runtime.
+
+Connect the two through the existing App resource binding. For a browser entry at
+`src/mcp/ops/apps/dashboard.tsx`, declare its resource URI in that entry:
+
+```ts
+import type { AppRouteConfig } from 'agent-bundle';
+
+export const config = {
+  resourceUri: 'ui://my-plugin/dashboard.html',
+} satisfies AppRouteConfig;
+```
+
+This is metadata for the browser entry, not a complete UI. The default HTML provides `#root`;
+use an explicit template when your bootstrap needs a different shell. The tool can reference
+the App without repeating the URI string:
+
+```ts
+// Metadata in src/mcp/ops/tools/inspect.tsx
+import type { ToolConfig } from 'agent-bundle';
+import { appResourceUri } from 'agent-bundle/routes';
+
+export const config = {
+  description: 'Inspect project status.',
+  annotations: { readOnlyHint: true },
+  _meta: { ui: { resourceUri: appResourceUri('dashboard') } },
+} satisfies ToolConfig;
+```
+
+Use `createAppClient` from `agent-bundle/app` in the browser. Its opening-input/result/error
+listeners and tool calls are the integration boundary; do not recreate `postMessage` transport,
+request-ID maps, or an MCP client. Register opening listeners before connecting. Render the
+opening result supplied by the host instead of automatically calling a mutation again on mount.
+Dispose the client and subscriptions when the owning UI is retired.
+
+Generated route declarations supply App call types. They must be current and included in the
+browser's TypeScript project; they do not replace validation of untrusted data. Pure
+presentation components and validated data can be shared where their imports are browser-safe.
+A Node-rendered document component is not automatically a DOM component just because both use
+JSX.
+
+To expose the same App through the optional production browser surface, configure `web.apps`
+with its existing `server/app` identity and opening tool. There is no second `src/web/` registry.
+See [MCP servers and Apps](../authoring/mcp.mdx),
+[the working App example](../../examples/mcp-app.mdx), and
+[`web` configuration](../../reference/configuration.mdx#web) for complete examples and policy.
+Browser presentation and the host projection that launches its server are separate choices.
 
 ## Config versus conventions
 
-The config holds what no single file can own — project identity, target selection, policy, and
-which declared MCP Apps the artifact-resident [`web`](../../reference/configuration.mdx#web)
-host exposes:
+The conventional starting point remains:
 
 ```ts twoslash
 import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
-  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
-  targets: ['portable', 'codex', 'claude'],
+  plugin: { name: 'my-plugin', description: 'Project tools for an agent.' },
+  targets: ['portable', 'claude', 'codex'],
 });
 ```
 
-Add an explicit declaration only when you need something the convention cannot express — a
-different path, a target restriction, or an opt-out:
+Add explicit configuration only for something the convention cannot express: a target-scoped
+plain hook, prebuilt payload, remote server, nonstandard path, package-only bin, or policy.
+Required capabilities still need a supported host or an explicit restriction.
 
-```ts twoslash
-import { defineConfig } from 'agent-bundle/config';
+A handwritten `src/mcp/<server>.ts` entry is an interoperability path for a declared server.
+Combining it with generated routes for the same server needs an explicit mode decision; do
+not rely on filesystem order. Likewise, `src/cli.ts` and `src/cli/` are alternative CLI modes.
+`src/index.ts` is an optional library entry, not application registration. `bin: false` and
+`lib: false` opt out of those package conventions.
 
-export default defineConfig({
-  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
-  scripts: {
-    // Restricted to one target, so it cannot ride the convention.
-    'detect-risk': { entry: './src/scripts/detect-risk.ts', targets: ['portable'] },
-  },
-  targets: ['portable', 'codex', 'claude'],
-});
+For declarations that intentionally differ from conventions, inspect the resulting graph rather
+than guessing which file won:
+
+```sh
+npx --no-install agent-bundle inspect --routes
+npx --no-install agent-bundle validate
 ```
 
-Source validation reports **informational** nudges — never errors — when a project shows a
-pre-convention pattern: `AB4730` for a self-connecting stdio entry that a default-exported
-factory would upgrade to the framework lifecycle shell, and `AB4731` / `AB4732` / `AB4733` when
-`src/cli.ts`, `src/index.ts`, or `src/mcp/<server-id>.ts` exists but explicit configuration
-shadows it. The `bin: false` and `lib: false` opt-outs stay silent.
+The compiler must already be installed in this project. Details of source selection and
+migration diagnostics are in [configuration](../authoring/index.mdx) and
+[package entries](../authoring/package-entries.mdx).
 
 ## Where output lands
 
-`agent-bundle build` writes two independent things.
+Keep these responsibilities separate:
+
+| Location | Owner and purpose |
+| --- | --- |
+| `src/`, config, `package.json` | Authored application and package identity. |
+| `.agent-bundle/` | Generated route declarations and development machinery. Do not treat it as an authored registry or a durable application-data contract. |
+| `artifact/` by default | The validated composite plugin tree. |
+| `dist/` when package output is enabled | The generated npm root: artifact bytes plus package metadata and package-only entries. |
+| Resolved writable state root | Framework state and deliberately selected application-owned data; separate from installed code. |
 
 ### The composite plugin root
 
-One directory at the artifact output, whatever `targets` selects. The CLI defaults that output to
-`artifact/`, so it never collides with the package build below; `output.distPath` or `--output`
-moves it. Amp reads its nested `.amp/plugins/<name>/` directory; the other selected hosts read the
-composite root as their plugin root. There is no `artifact/<host>/` partition. Omit `targets` and
-the root carries the `portable` projection alone.
+A schematic output is:
 
 ```text
 artifact/
-├── .amp/plugins/<name>/index.js      # amp directory-plugin factory
-├── .claude-plugin/plugin.json        # claude, with marketplace.json beside it
-├── .codex-plugin/plugin.json         # codex, with hooks.json and mcp.json beside it
-├── .agents/plugins/marketplace.json  # codex marketplace
-├── .cursor-plugin/plugin.json        # cursor, with hooks.json and mcp.json beside it
-├── .mcp.json                         # claude MCP document
-├── plugin.json                       # portable (Agent Plugins) manifest
-├── mcp.json                          # portable MCP document
-├── hooks/
-│   ├── hooks.json                    # claude hook document
-│   ├── <hook>.mjs                    # wrapper for a hook one selected host reaches
-│   ├── <hook>.<host>.mjs             # one wrapper per host for a hook several reach
-│   └── hooks-flight.mjs
-├── mcp/mcp-<server>-<hash>.mjs       # compiled MCP entries, emitted once
-├── bin/<plugin-name>.mjs             # routed CLI and/or <plugin> web
-├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # components, emitted once
-├── INSTALL.md                        # one section per selected host
-├── install.mjs                       # when cursor or portable is selected
-└── agent-bundle.manifest.json        # artifact index: identity, projections, executables
+├── agent-bundle.manifest.json
+├── agent-bundle.compile-evidence.json
+├── INSTALL.md
+├── .claude-plugin/          # selected host manifests
+├── .codex-plugin/
+├── .cursor-plugin/
+├── .amp/plugins/<name>/     # Amp's native directory plugin, when selected
+├── plugin.json             # portable manifest, when selected
+├── mcp/                    # compiled server entries and their runtime files
+├── hooks/                  # generated native wrappers and hook documents
+├── bin/<plugin-name>.mjs    # routed CLI / web executable, when declared
+└── skills/, scripts/, assets/, mcp-apps/, ...
 ```
 
-Host manifests live in their dotfolders; `skills/`, `hooks/`, `mcp/`, `scripts/`, `bin/`, and
-`assets/` are emitted once and shared. Hook and MCP documents appear when the project declares
-hooks or MCP servers — plus one empty Codex or Cursor document when a Hook or MCP server reaches
-another selected host's conventional `hooks/hooks.json`, `.mcp.json`, or `mcp.json` path, so folder
-discovery never loads the other host's file — and `bin/` when it has a routed CLI, when
-[`web`](../../reference/configuration.mdx#web) is configured, or both. Two selected hosts that
-would write the same path with different bytes cannot share the root, and the build fails with
-`AB4103`; a command or rule scoped to some of the selected hosts but sitting in a
-directory another selected host scans is `AB4105`. Both recover by making the component
-identical for every selected host, or by building those hosts into separate artifacts.
+Only relevant declared surfaces are emitted. Exact native documents and additional runtime
+files are recorded by the manifest; this tree is not an inventory to reconstruct in application
+code. There is no `artifact/<host>/` partition. Amp uses its nested native directory, while the
+framework's manifest-aware installation entry accepts the composite root and selects the
+correct host surface.
 
-`agent-bundle.manifest.json` records every emitted file with its SHA-256, so artifact validation
-is content-addressed rather than a guess. Compiled surfaces are attributed to the composite
-identity — the selected hosts sorted and joined with `+`, such as `claude+codex` — and the order
-of `targets` never changes the output.
+`output.distPath` or CLI `--output` moves the composite root without changing its internal
+layout. CLI precedence is `--output`, then configuration, then `artifact/`. The programmatic
+`build()` API has separate package-output/default semantics; use its reference rather than
+copying a CLI default into a custom build harness.
 
-`output.distPath` moves the root; it never changes the framework-owned layout inside it.
-Precedence is the CLI `--output`, then `output.distPath`, then the default — `artifact` for
-`agent-bundle build`, which also emits the package build, and `dist` for the programmatic
-`build()` without `packageOutputs`. Values must be non-empty, project-root-contained relative
-POSIX paths.
+The manifest records file digests and canonical executable identities. Reordering targets does
+not create another application. Conflicting bytes or unintended cross-host discovery are
+validation problems, not a reason to hand-edit the emitted manifests. See
+[targets and artifacts](../../reference/targets-artifacts.mdx).
 
 ### The npm package build
 
-When the project declares `bin`/`lib` — or provides them by convention — the same build also
-writes the node-consumable package build under `dist/`:
+`dist/` is the **complete generated npm package root**, not merely a folder of JavaScript:
 
 ```text
 dist/
-├── bin/<name>.js              # self-executing ESM, shebang, executable bit
-├── <stem>.js                  # the library entry
-└── **/*.d.ts                  # declarations, when lib.dts is on
+├── package.json                  # generated package-relative paths and bin map
+├── agent-bundle.manifest.json
+├── INSTALL.md
+├── ...                          # the composite artifact copied unchanged
+├── bin/<plugin-name>.mjs         # the same generated routed CLI, if present
+├── bin/<authored-bin>.js         # optional explicit package-only executable
+└── <library>.js, <library>.d.ts  # optional library output
 ```
 
-`dist` is a mandatory-ignored directory: package outputs never enter project source snapshots or
-Skill and asset discovery. The two outputs must not overlap: pointing `output.distPath` or
-`--output` at `dist` on a project with package entries is `AB4706`. The default already keeps
-them apart, and spelling it out is harmless:
+A routed CLI is not rebuilt into a competing `.js` implementation for npm. The generated
+`package.json` points at the artifact executable. Explicit package-only bins and library entries
+are different outputs and keep their own compilation.
 
-```ts twoslash
-import { defineConfig } from 'agent-bundle/config';
+The composite and npm outputs must not overlap; putting the artifact at `dist/` when package
+output also occupies it is invalid. Build outputs are not source inputs. Pack the generated
+npm root, not the source repository or a guessed nested `dist/artifact/` directory. Follow
+[shipping a bundle](../distribution/index.mdx) for validation and installation.
 
-export default defineConfig({
-  output: { distPath: 'artifact' },
-  plugin: { description: 'A CLI plus a plugin.', name: 'my-plugin' },
-  targets: ['portable', 'claude'],
-});
-```
+### Writable state is not installed code
+
+Inside a request, use the framework-provided plugin/context binding. Standalone code can use
+the documented public `resolvePluginRoot` runtime resolver, which distinguishes `root` from
+`stateRoot`; `AGENT_BUNDLE_STATE_ROOT` is independent of the code-root override.
+
+Do not place runtime caches, refreshed credentials, or databases under the installed code tree
+just because their loader lives there. Application-owned data keeps its own schema and explicit
+migration/override policy, and must not collide with framework storage. The framework does not
+implicitly adopt or purge arbitrary plugin data. See
+[configuration and state](../authoring/index.mdx) and
+[installation lifecycle](../distribution/installation.mdx).
 
 ## Next steps
 
-- [Compiler architecture](../concepts/architecture.mdx) — how these roots
-  become a route graph, host projections, and one composite artifact.
-- [Configuration model](../authoring/index.mdx) — the full config surface.
-- [Skills](../authoring/skills.mdx), [Hooks](../authoring/hooks.mdx),
-  [MCP servers and Apps](../authoring/mcp.mdx) — one page per surface.
-- [Scripts and assets](../authoring/scripts-assets.mdx) and
-  [Package entries](../authoring/package-entries.mdx) — the rest of the build output.
+[Quick start](./quick-start.mdx) exercises a real conventional route.
+[Skills](../authoring/skills.mdx), [hooks](../authoring/hooks.mdx),
+[MCP](../authoring/mcp.mdx), and [scripts/assets](../authoring/scripts-assets.mdx) specify each
+surface. Read [compiler architecture](../concepts/architecture.mdx) for implementation details,
+not as another setup step.

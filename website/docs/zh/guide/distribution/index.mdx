@@ -1,88 +1,171 @@
 ---
-description: 'agent-bundle 项目如何变成宿主可以安装的东西：构建、校验，并交付每个所选宿主都读取的那一个组合插件根目录。'
+description: '构建并校验组合插件，按需打包生成的 npm 根目录，并提供无需第二套编译器的显式安装路径。'
 ---
 
 # 交付捆绑包
 
-`agent-bundle build` 输出**一个组合插件根目录**——默认是 `artifact/`——这个根目录就是分发单位。构建之后
-没有额外的打包步骤，也没有逐宿主的重新打包脚本：根目录就是你复制、发布或交给宿主 CLI 的那个目录，
-`targets` 选中的每个宿主都把同一个目录当作自己的插件根目录来读取。
+有两种分发形式，它们包含同一份编译后的插件：
 
-```sh
-npx agent-bundle build --root . --output artifact
-```
+| 交付物 | 用途 |
+| --- | --- |
+| 默认位于 `artifact/` 的组合产物 | 复制已构建插件，或遵循生成的原生安装说明。 |
+| 启用包输出时位于 `dist/` 的生成式 npm 根 | 打包 npm tarball，其中包含产物、包元数据和包专用入口。 |
+
+两者都不需要手写逐宿主重新打包器。npm 仍然需要正常的**打包步骤**；
+该步骤必须针对生成的包根执行，而不是源码项目或另一份应用实现。
+
+下面的 `npx --no-install` 命令运行已经安装在开发项目中的编译器，刻意避免按未限定的 `agent-bundle`
+名称下载包。支持的预览或正式版本选择方式见[框架安装](../start/installation.mdx)。
 
 ## 流水线
 
-| 步骤 | 命令 | 产出什么 |
-| --- | --- | --- |
-| 构建 | `agent-bundle build` | 一个承载全部所选宿主投影的组合插件根目录；当项目声明了 `bin`/`lib` 时，还有 `dist/` 包构建。 |
-| 校验 | `agent-bundle validate --artifact <root> --strict` | 内容寻址地证明输出字节与清单一致，外加在所选宿主发布了校验器时的宿主工具结论。 |
-| 安装 | `agent-bundle install <host> --from <root>` | 把捆绑包注册进 Claude、Codex 或 Cursor——三者都从同一个根目录安装。 |
+```sh
+npx --no-install agent-bundle build --output artifact
+npx --no-install agent-bundle validate --artifact artifact --strict
+```
 
-构建在写出任何东西之前就已经校验过项目，因此针对源码单独运行一次 `validate` 更像是快速的预检，而不是
-必需的阶段。真正有意思的是校验**产物**，因为它完全不需要项目源码。
+| 步骤 | 能说明什么 |
+| --- | --- |
+| 源码校验与构建 | 声明可以编译为所选投影；成功构建不是原生宿主执行证据。 |
+| 产物校验 | 纯组合产物的文件和摘要与清单及适用规则一致；宿主工具检查取决于校验选项和可用工具。 |
+| 应用与集成测试 | 操作行为符合预期；更强的打包进程或原生宿主结论需要各自的测试。 |
+| 显式安装 | 所选宿主按支持的作用域与所有权规则获得正确投影。 |
+
+源码 `validate` 对编辑和类型检查很有用，但不能代替校验交付物。
+`validate --artifact` 不需要源码项目。安装是独立的操作者动作，构建插件不应把它注册到全局宿主。
 
 ### 根目录如何编译
 
-构建先为每个所选宿主投影做规划，再按路径把它们合并成一棵树——两个投影只有在字节一致时才能共享同一路径
-（`AB4103`），而只面向部分宿主的组件不能放在另一个所选宿主会发现它的位置（`AB4105`）。随后它把编译产出面
-最多分两个阶段降级到同一个暂存根目录，待产物校验通过后原子地发布：
+编译器发现应用、解析所选宿主投影、编译所需浏览器和服务器入口，并组装成一棵已校验的树。
+共享路径的字节必须兼容，宿主不能意外发现另一个宿主的组件。
 
-1. **MCP Apps**——浏览器环境，通过 `@rsbuild/core` 编译。只有当项目声明了 App 路由时这一阶段才存在，并且
-   始终最先运行：MCP 入口会内嵌它产出的 HTML。
-2. **智能体宿主面**——路由式 CLI bin、打包的脚本、hook 包装器、MCP stdio 入口，以及每个面各自的
-   react-server Flight worker，全部一起通过**一个 Rslib 实例**降级（每个输出一个 Rsbuild environment，
-   一个 Rspack 多编译器）。宿主面在运行时按文件名找到它的 worker，因此阶段内二者无需排序；每个面为清单
-   保留各自的源码证据。
-
-编译产出面只构建一次，归属于**组合身份**——所选宿主按名称排序并以 `+` 连接，例如 `claude+codex`——
-绝不会逐宿主各编译一次。两个阶段与包专用的库入口、手写 bin 以同样的方式合成打包器配置——profile、
-`tools.rsbuild`、`tools.rspack`，最后是框架不变量——见
-[`tools`](../../reference/configuration.mdx#tools)。
-`agent-bundle inspect --bundler` 会打印每个编译输出降级后的 Rspack 配置；它的 `output.path` 就是产物输出本身。
+可执行文件、启动参数以及所属服务器或 App 由生成清单确定，不应由消费者探测文件名来重建。
+不要从原生 `mcp.json` 的第一个参数推断服务器命令，不要猜测 `artifact/<host>/` 目录，
+也不要在编译后重命名生成的可执行文件。
+进阶编译细节见[架构](../concepts/architecture.mdx)和[产物校验](./validation.mdx)。
 
 ## 根目录里发布了什么
 
-Amp 目录插件位于 `.amp/plugins/<name>/`；其他宿主清单位于根目录下各自的点目录中
-（`.claude-plugin/`、`.codex-plugin/`、`.cursor-plugin/`，以及 portable 的 `plugin.json`），各自指向
-自己的钩子与 MCP 文档；而 `skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与
-`assets/` 是共享的，只输出一次。完整的目录树与各宿主的文档位置见
-[Target 与产物](../../reference/targets-artifacts.mdx)。
+组合产物包含所选原生清单、共享组件文件、编译入口、`agent-bundle.manifest.json`、持久化编译证据，
+以及适用时生成的 `INSTALL.md`。它使用插件的真实名称，而不是消费者需要替换的模板名称。
+输出布局见[项目结构](../start/project-structure.mdx)。
 
-只要选中了内置宿主，根目录就会携带一份生成的 `INSTALL.md`——每个所选宿主一节，使用捆绑包**真实的**
-插件名与市场名，而不是占位符——因此这份文件可以逐字照做。
+**组合根不一定等于宿主的原生安装根。** Amp 目录插件位于 `.amp/plugins/<name>/`，
+其他内置原生投影从组合根读取各自清单。框架的清单感知 `install --from` 接受组合根，
+并解析所选宿主的布局。使用生成的说明，不要要求最终用户理解嵌套目录结构。
 
-Claude 与 Codex 投影始终包含本地市场清单，正是这一点让它们的公开 CLI 能够直接安装该根目录。选中 `cursor`
-或 `portable` 时还会加上一个独立的 `install.mjs`，因为 Cursor 提供了市场管理能力，却没有非交互式的插件
-安装动词。
+选择 `cursor` 或 `portable` 会包含[宿主安装](./installation.mdx)所述的独立 `install.mjs` 路径。
+它是一种有明确说明的安装机制，不代表每个 portable 客户端都支持所有原生钩子或 App 能力。
 
-`agent-bundle.manifest.json` 记录每个输出文件及其 SHA-256，因此校验比对的是真实字节，而不是检查某个
-路径是否存在。
-
-构建是可复现的：对同一份未改动的源码树构建两次，会得到逐字节相同的产物——相同的清单、相同的摘要——
-无论 `--output` 叫什么名字、`targets` 以什么顺序书写，也无论每次构建的暂存目录叫什么名字。打包器写进
-编译入口里的模块标识只由项目根目录推导，绝不会来自暂存目录、输出目录或构建机器上的任何绝对路径，因此
-已安装的副本、预览包与 [`doctor`](./installation.mdx) 的比对在同一源码下看到的都是相同的字节。这些标识
-所命名的生成模块从内存中提供，位于项目根目录下保留的 `.agent-bundle-virtual/` 目录；只要有任何东西占用
-该目录，构建就会拒绝编译。
+把交付代码视为不可变内容。可写框架状态独立于安装代码目录解析。
+领域数据，包括刷新后的会话和应用数据库，需要明确的应用自有位置与迁移策略。
+不要把真实凭据、可变缓存或操作者数据打包成 assets。
 
 ## 面向 npm 的那一半
 
-同时作为 npm 包发布的项目还有第二份输出 `dist/`，但它不是第二次插件构建。`dist/` 就是 npm 包根目录：
-它包含完整的组合产物、`package.json`、标准包文档，以及[包入口](../authoring/package-entries.mdx)所述的
-包专用库入口或手写 bin。
-`validate --artifact` 等仅面向产物的命令仍应接收纯组合产物；清单感知的 `install --from` 路径则接受 npm 根目录。
+对于启用了包输出的项目，例如 MCP starter，`dist/` 包含完整 npm 根：原样复制的已校验产物、
+生成的 `package.json`、标准包文档及声明的包专用 bin 或库输出。
+Tarball 内不会再嵌套一层 `artifact/`。
 
-对于生成的路由式 CLI，已安装包的 `bin` 直接指向 `bin/<name>.mjs`；该文件从已校验产物原样复制。因此
-npm CLI 与产物 CLI 拥有完全相同的命令（包括 `web`）和完全相同的字节。tarball 中没有嵌套的
-`artifact/` 目录；框架不会并行编译另一份 `dist/bin/<name>.js` 应用，也不会生成相对包的安装器 bin。
+生成式路由 CLI 的 `package.json.bin` 直接指向产物中的 `bin/<name>.mjs`，
+操作表面与产物 CLI 相同，包括声明后的 `web`。
+**显式手写的包 bin** 则编译为 `bin/<name>.js`；它们是不同入口种类，不是同一路由 CLI 的两份版本。
 
-`agent-bundle prepack` 是这一半的门禁：它运行发布构建、以不执行脚本的方式 dry-run `npm pack`，并核实
-打包后的输出、产物哈希、bin 与版本号。
+先运行框架门禁，再打包生成目录：
+
+```sh
+npx --no-install agent-bundle prepack --json
+npm pack ./dist --ignore-scripts
+```
+
+`prepack` 执行发布构建，并校验 dry-run 包清单、入口路径、产物摘要、版本及声明的运行时依赖。
+第二条命令创建实际 tarball。这里的 `--ignore-scripts` 防止打包期间的脚本再次构建另一种产物；
+它不表示消费者安装时也会忽略安装脚本。
+
+检查生成的 `dist/package.json`、`bin` / `exports` 和 tarball 文件清单。
+不要手改生成清单；修改手写的包或配置输入，再重新构建。
+`minimal` 与 `mcp-server` starter 是私有开发包；有意进行公开发布时，还需要合适的包元数据，
+并移除它们的 `private: true`。`cli-tool` starter 脚手架产出即可发布。本指南不会自动发布任何
+内容。
+
+以构建目录分发的静态插件不需要为了原生安装而虚构一个库或可执行入口。
+选择 npm 分发及其可选入口时，请阅读[包入口](../authoring/package-entries.mdx)。
+
+### 消费者安装脚本与依赖
+
+构建工具不会自动成为运行时依赖。自包含的生成式 JavaScript 不应依赖源码检出、workspace 别名，
+或要求消费者安装编译器。预构建 payload 或明确保留的消费者安装脚本可能确实需要运行时依赖；
+应准确声明，而不是为了缩小包体积就把普通生成入口的依赖 externalize。
+
+不要意外把相对源码路径的 shell 脚本带入安装包。包构建器支持有界的已记录脚本形式重定位，
+并会诊断不支持的形式。如果消费者安装只有加 `--ignore-scripts` 才能通过，
+就没有证明承诺的安装生命周期。测试有副作用的脚本时使用隔离 fixture，
+不要使用真实凭据或全局宿主配置。
+
+### 可选的包绑定安装器
+
+要给消费者提供 `my-plugin-install install <host>`，声明一个包专用 bin，并把实现委托给公开框架入口。
+将该入口合并到现有配置，不要覆盖无关条目：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'my-plugin', description: 'Project tools for an agent.' },
+  targets: ['claude', 'codex', 'cursor'],
+  bin: { 'my-plugin-install': './src/install-bin.ts' },
+});
+```
+
+```ts
+// src/install-bin.ts
+import { fileURLToPath } from 'node:url';
+import { runInstallCli } from 'agent-bundle/install';
+
+export const main = (argv: readonly string[]): Promise<number> =>
+  runInstallCli(argv, {
+    from: fileURLToPath(new URL('..', import.meta.url)),
+    name: 'my-plugin-install',
+  });
+```
+
+父目录绑定指向 npm 根中**输出后的** `bin/` 入口。
+运行构建或安装后的形式，不要把直接运行源码文件当作安装证明。
+包构建会打包生命周期实现，消费者无需仅为使用该 bin 而安装编译器。
+
+这是显式启用的入口，不是自动添加到每个插件中的安装器。
+它复用 `install`、`uninstall` 和 `doctor`，只绑定一次包根。
+不需要消费者自有的 argv parser、原生配置合并器、根目录搜索循环或私有框架导入。
+支持的 flag 和作用域见[宿主安装](./installation.mdx)。
+
+### 证明安装后的包
+
+在全新的临时消费者目录中安装实际 tarball，测试它声明的 bin 或指定 MCP 服务器。
+移动或删除源码 fixture，使用不同工作目录，并提供独立可写状态根。
+确认预期工具和代表性结果。直接启动源码树中 `artifact/` 的测试有价值，但不是 npm 安装测试。
+
+`validate --artifact` 等仅面向产物的命令应接收**纯组合产物**。
+清单感知的 `install --from` 也接受 npm 根，并在宿主所有权比较中排除 npm 专用元数据。
+不要仅因为两种根目录都含有 `agent-bundle.manifest.json` 就互换使用。
+
+使用公开的[打包测试辅助函数](../development/testing.mdx)和规范清单，
+不要把私有安装器或原生文档 parser 复制进插件测试 harness。
+原生账号授权与宿主执行仍然需要单独限定证据。
+
+## 显式安装
+
+消费者遵循交付的 `INSTALL.md`，或者调用插件明确提供的包绑定安装器。
+已经安装编译器的开发者可以使用：
+
+```sh
+npx --no-install agent-bundle install claude --from artifact --scope user
+```
+
+只选择预期的宿主与作用域。安装 npm 包不等于注册宿主插件；框架 build/prepack 不代表同意修改宿主。
+只读 `doctor` 和卸载计划的行为见[宿主安装](./installation.mdx)。
 
 ## 本章内容
 
-- [产物校验](./validation.mdx) —— 源码与产物校验，以及各宿主自有工具的贡献。
-- [宿主安装](./installation.mdx) —— 安装到 Claude、Codex 与 Cursor，以及各自接受的安装作用域。
-- [预览包](./preview-packages.mdx) —— 目前代替 npm 的 pkg.pr.new 发布通道。
+- [产物校验](./validation.mdx)：源码检查、产物检查与宿主校验器。
+- [宿主安装](./installation.mdx)：原生根、作用域、凭据、替换和移除。
+- [预览包](./preview-packages.mdx)：当前开发分发通道。

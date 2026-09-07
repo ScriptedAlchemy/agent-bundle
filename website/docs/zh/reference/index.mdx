@@ -1,50 +1,60 @@
 ---
-description: 'agent-bundle 参考资料：命令行表面、配置字段、target 产物、运行时环境、安全边界、已知限制，以及生成的类型 API。'
+description: 'Agent Bundle 的精确 CLI、配置、产物与运行契约，以及生成的宿主/事件/notice 能力地图、诊断、公开 API 和实用故障排查。'
 ---
 
 # 参考
 
-指南讲的是如何构建并交付一份捆绑包。本章是查阅用的那一半：确切的标志、确切的字段名、确切的默认值，
-以及框架拒绝跨越的那些边界。
-
-这里不重复任何教程。凡是指南中已经解释过的概念——配置模型、七个钩子事件、证明级别——本章只链接过去，
-并仅记录契约本身。
+指南用于构建插件，本章用于核对精确字段、参数、默认值和边界。
+[Target 与能力地图](../guide/start/capabilities.mdx)集中列出全部五个内置输出及其可投影功能。
 
 | 页面 | 回答什么 |
 | --- | --- |
-| [命令行](./cli.mdx) | 每条命令、参数、选项、默认值与退出码。 |
-| [配置](./configuration.mdx) | `agent-bundle.config.ts` 的每个字段、类型与校验规则。 |
-| [Target 与产物](./targets-artifacts.mdx) | 复合插件根目录、各宿主投影向其中添加什么，以及产物清单契约。 |
-| [宿主能力矩阵](./hosts.md) | 固定的各宿主能力表：版本、清单、安装方式、路径 token、MCP 传输、插件组件。构建时生成。 |
-| [事件与钩子矩阵](./events.md) | 各宿主的规范事件到原生事件、工具选择器到原生匹配器、被推迟的原生事件。构建时生成。 |
-| [通知投递矩阵](./notices.md) | 每个宿主支持哪些通知通道，其余通道为何不可用。构建时生成。 |
-| [诊断参考](./diagnostics.md) | 每个 `AB` 代码族、触发条件、严重级别与恢复提示。构建时从仓库契约生成。 |
-| [开发服务器 HTTP](./dev-server-http.mdx) | 浏览器侧调用、Trace、Raw-log 与宿主钩子收据路由及其 wire 形状。 |
-| [运行时环境](./runtime-environment.mdx) | Node 版本下限、路径 token、环境变量、`.env` 分层与持久状态位置。 |
-| [安全](./security.mdx) | 凭据、网络与信任边界。 |
-| [已知限制](./limitations.mdx) | 框架目前不做什么、不能证明什么。 |
-| [类型 API](./api.mdx) | 全部公开导出的生成式符号参考。 |
+| [Target 与能力地图](../guide/start/capabilities.mdx) | 该编写哪个表面；原生 target、兼容读取方、开发/展示支持之间的区别。 |
+| [CLI](./cli.mdx) | 命令、参数、选项、默认值和退出码，包括 inspection、hook、MCP、安装与本地 App 托管。 |
+| [配置](./configuration.mdx) | `agent-bundle.config.ts` 的字段、类型和校验规则。 |
+| [Target 与产物](./targets-artifacts.mdx) | 全部五个内置投影布局、组合约束、分发形式及可执行文件所有权。 |
+| [产物清单](./artifact-manifest.mdx) | 规范 application、route、executable、launch、distribution 与 compiler 记录形状。 |
+| [宿主能力矩阵](./hosts.md) | 固定版本、原生文档、安装、路径 token、MCP 行为、lineage、插件组件和已记录兼容客户端。由适配器能力数据生成。 |
+| [事件与 hook 矩阵](./events.md) | 规范事件族、原生事件、payload 字段来源、工具选择器和推迟的原生事件。由相同记录生成。 |
+| [Notice 投递矩阵](./notices.md) | 接收方身份维度、支持通道、敏感度约束和无法投递原因。由相同记录生成。 |
+| [诊断参考](./diagnostics.md) | 诊断代码、级别、触发条件和恢复方式。由仓库契约生成。 |
+| [开发服务器 HTTP](./dev-server-http.mdx) | 高级集成使用的 invocation、trace、raw-log 和 hook-receipt 路由。 |
+| [运行环境](./runtime-environment.mdx) | Node 最低版本、路径 token、环境分层、观测上下文和可写状态。 |
+| [安全](./security.mdx) | 凭据、网络、沙箱、同意与信任边界。 |
+| [限制](./limitations.mdx) | 不支持、有意受限或现有证据尚未建立的行为。 |
+| [类型 API](./api.mdx) | 公开包导出的生成符号参考。 |
+| [故障排查](../guide/development/troubleshooting.mdx) | 路由/类型缺失、target 不匹配、App 生命周期、包根目录和验证问题。 |
+
+生成矩阵不是另一套手工维护的兼容列表。带日期的来源链接说明记录的行为。
+`supported`、`degraded`、`unavailable` 和 `prohibited` 是功能判断；
+尚未执行的账户相关运行测试属于独立的验证限制。
+应查阅具体组件与客户端/版本，不要假定一个宿主徽标涵盖全部操作。
+
+编写模式见[复用框架](../guide/authoring/reuse-framework.mdx)：
+同一工具的 CLI 与 App 表面、规范 schema、语义/普通 hook、请求依赖、state、payload 与安装。
+自定义服务器工厂和原生文档仍是高级集成路径，不是插件的最小必需代码。
 
 ## 如何读诊断
 
-每条命令报告的都是结构化诊断，而不是散文式错误。一条诊断包含稳定的 `AB` 代码、一个严重级别、一条消息，
-通常还有 `sourcePath` 与一条 `recovery` 提示。对于由诊断把关的命令——`build`、`prepack`、`validate`、
-`doctor`、`install` 与 `dev`——只有 **error** 级别才会让命令以非零退出；warning 与 info
-绝不会为构建、校验或 dev 重建把关。`eval` 与 `inspect` 还有一个与诊断无关的以 `1` 退出的理由：
-失败或无定论的试验，或者无效的模型——见[命令行退出码](./cli.mdx#退出码)。
+结构化诊断包含代码、严重级别、消息，以及可用时的源码位置与恢复提示。
+也要阅读命令的最终结果：参数解析错误、失败或 inconclusive 的 eval，以及无效 inspection model
+属于不同失败路径。
 
-完整的代码目录见[诊断参考](./diagnostics.md)，它在构建时由仓库中的
-[`docs/diagnostics.md`](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/diagnostics.md)
-渲染而来。
+只有 error 诊断会阻断由诊断决定的检查。
+`--strict` 等选项可以把适用的宿主工具 warning 提升为 error，
+因此不能仅因先前未提升的 warning 对某工作流只是信息，就忽略当前非零结果。
+精确命令行为见 [CLI 退出码](./cli.mdx#退出码)。
 
-| 家族 | 领域 |
+| 代码族 | 领域 |
 | --- | --- |
-| `AB30xx` | Skill 文档：Markdown 解析与渲染式 skill 编译。 |
-| `AB40xx`–`AB47xx` | 插件元数据、规范化模型不变式、钩子、MCP、脚本、资源、包构建，以及打包器逃生舱。 |
-| `AB48xx`–`AB49xx` | 路由图、state、布局与 provider 约定：路由模块发现、`config` 提取、共享布局（`AB4830`–`AB4832`），以及编译后的命令表面。 |
-| `AB5000` | 通用的命令行与适配器失败。 |
-| `AB60xx` | 已构建产物校验，包括宿主 schema 文档与被引用的文件。 |
-| `AB700x`–`AB7015` | 宿主安装与 npm prepack 门禁（`AB7014`/`AB7015`：安装期依赖卫生）。 |
-| `AB7xxx` | 项目准备与开发期重建，其中 `AB7300`–`AB7320` 为只读 Doctor。 |
-| `AB8xxx` | 开发服务器配置与 Workbench 路由。 |
-| `AB9xxx` | eval 选择、harness 与持久化运行记录。 |
+| `AB30xx` | Skill 解析与渲染内容。 |
+| `AB40xx`–`AB47xx` | 身份、target 组合、hook、MCP、assets、包输出和打包器策略。 |
+| `AB48xx`–`AB49xx` | 约定路由、契约、布局、provider、state 和生成命令表面。 |
+| `AB5000` | 通用命令/适配器边界失败。 |
+| `AB60xx` | 产物、原生文档、引用文件和编译证据校验。 |
+| `AB7xxx` | 包/安装检查、项目准备、重建和 Doctor。 |
+| `AB8xxx` | 开发服务器与 Workbench 边界。 |
+| `AB9xxx` | 评估与持久运行记录。 |
+
+这些代码族只是导航，不替代[完整生成诊断参考](./diagnostics.md)。
+修正拥有该行为的声明或输入；不要为压下错误而改写生成清单、虚构运行证据或扩大原生权限。
