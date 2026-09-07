@@ -244,7 +244,9 @@ const portableClients: readonly ClientCompatibilityRecord[] =
 const clientTierSentence = (record: ClientCompatibilityRecord): string => {
   switch (record.tier) {
     case 'agent-plugins':
-      return 'installs this bundle as one plugin';
+      // "Loads", not "installs": the recorded action below says whether the
+      // client copies the bundle or reads it where it lies.
+      return 'loads this bundle as one plugin';
     case 'skills':
       // Not "skills only": a skills-tier client is one that does not read the
       // manifest, and several of them read the MCP document as well.
@@ -253,6 +255,21 @@ const clientTierSentence = (record: ClientCompatibilityRecord): string => {
       return 'loads nothing from this bundle as published';
     default:
       throw new TypeError(`Unknown client compatibility tier ${JSON.stringify(record.tier)} for ${record.id}.`);
+  }
+};
+
+/**
+ * How a source other than a local directory is named, so an indexed
+ * marketplace entry and a Git repository are not printed as the same claim.
+ */
+const clientSourceSentence = (record: ClientCompatibilityRecord): string => {
+  switch (record.install!.source) {
+    case 'marketplace':
+      return 'a marketplace';
+    case 'repository':
+      return 'a Git repository';
+    default:
+      throw new TypeError(`Unknown client install source ${JSON.stringify(record.install!.source)} for ${record.id}.`);
   }
 };
 
@@ -304,8 +321,9 @@ const clientLine = (planned: readonly string[]) => (record: ClientCompatibilityR
       // An install command for a bundle it reads nothing of is not an install.
       anchor === undefined || reads.length === 0
         ? ''
-        : record.install!.source === 'marketplace'
-          ? ` Install (no local-directory install is verified for this artifact): \`${anchor.command}\`.`
+        : record.install!.source !== 'local-directory'
+          ? ` Install from ${clientSourceSentence(record)} (no local-directory install is verified for this`
+            + ` artifact): \`${anchor.command}\`.`
           // Registration points the client at the emitted tree; nothing is copied.
           : anchor.role === 'register'
             ? ` Register: \`${anchor.command}\`.`

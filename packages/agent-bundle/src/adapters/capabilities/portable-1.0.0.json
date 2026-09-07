@@ -697,9 +697,10 @@
         },
         "mcp": {
           "evidence": [
-            "2026-09-06: docs/MCP.md (commit 806d93e826ee615b702629775f0ec3dd19c97854, 2026-08-25) supports all three transports the 1.0.0 MCP schema defines, including the stdio and streamable-http forms this projection emits."
+            "2026-09-06: docs/MCP.md (commit 806d93e826ee615b702629775f0ec3dd19c97854, 2026-08-25) supports all three transports the 1.0.0 MCP schema defines, including the stdio and streamable-http forms this projection emits.",
+            "2026-09-06: docs/MCP.md#plugin-contributed-mcp (commit 19d34a5fb6c07b34e0b7234beb74a1cf1969efb4) states the bundle boundary verbatim — \"unknown fields and ambiguous transports fail closed; stdio environment values must be exact environment-source references; remote literal headers and secret-bearing URLs are rejected; declared network hosts must exactly match the normalized endpoint host set; and redirects remain on the reviewed origin\" — and docs/PLUGIN_BUNDLES.md states that \"`capabilities`, `when`, and `display_name` ride in `extensions[\"net.codewhale\"]`\" and that \"`capabilities.network_hosts` is not a future surface: it is enforced today, and must exactly match the normalized host set of the bundle's remote MCP endpoints\". Its validation section states the remote form verbatim: \"Remote MCP URLs must use HTTPS, except for explicit loopback HTTP endpoints. They cannot contain user information, a query, or a fragment. Literal headers are rejected: authentication must name a source environment variable through `env_headers` or `bearer_token_env_var`.\""
           ],
-          "reason": "2026-09-06: CodeWhale narrows the standard's env rule — \"Local stdio environment entries must use exact ${SOURCE_ENV} references\" — so an emitted env value that is anything other than one whole variable reference is not accepted there.",
+          "reason": "2026-09-06: CodeWhale narrows the standard at the plugin boundary. Its env rule — \"Local stdio environment entries must use exact ${SOURCE_ENV} references\" — rejects an emitted env value that is anything other than one whole variable reference. A remote server emitted into mcp.json is narrower still: the URL must be HTTPS (or explicit loopback HTTP) with no user information, query, or fragment, a literal header is rejected in favor of CodeWhale's own env_headers or bearer_token_env_var keys, redirects must stay on the reviewed origin, and the bundle must declare exactly the normalized endpoint host set in capabilities.network_hosts. That declaration rides in extensions[\"net.codewhale\"], which this projection writes only when the author authors portable.extensions; a remote server emitted without it is a validation error, and \"an active bundle must be … free of validation errors\", so the whole bundle stays inactive there until the author declares the matching host set.",
           "state": "degraded"
         },
         "placeholders": {
@@ -741,11 +742,25 @@
           "skills",
           "mcp.json"
         ],
-        "shadowedBy": [],
+        "shadowedBy": [
+          {
+            "path": ".plugin/plugin.json",
+            "surfaces": [
+              "manifest"
+            ]
+          },
+          {
+            "path": ".mcp.json",
+            "surfaces": [
+              "mcp"
+            ]
+          }
+        ],
         "evidence": [
           "2026-09-06: `copilot plugin install /tmp/hostcli/fixture` on 1.0.83 answered \"Plugin \\\"probe-plugin\\\" installed successfully. Installed 1 skill.\" for a hand-built Agent Plugins package (root plugin.json with the 1.0.0 $schema, skills/review/SKILL.md, mcp.json), and `copilot plugins list` then reported the plugin, the plugin-contributed MCP server, and the plugin-contributed skill from that one manifest.",
           "2026-09-06: the same install printed \"Warning: Direct plugin installs (repos, URLs, local paths) are deprecated. Only plugin@marketplace installs will be supported in a future release\", so the local-path command above is a deprecated path on 1.0.83.",
-          "2026-09-06: the installed copy is a copy, not a link: ~/.copilot/config.json recorded cache_path ~/.copilot/installed-plugins/_direct/fixture with source {\"source\":\"local\",\"path\":\"...\"}."
+          "2026-09-06: the installed copy is a copy, not a link: ~/.copilot/config.json recorded cache_path ~/.copilot/installed-plugins/_direct/fixture with source {\"source\":\"local\",\"path\":\"...\"}.",
+          "2026-09-06: https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference#file-locations orders the manifest locations \".plugin/plugin.json, plugin.json, .github/plugin/plugin.json, or .claude-plugin/plugin.json (checked in this order)\", so only .plugin/plugin.json wins over the emitted root manifest; the emitted root plugin.json is checked before .claude-plugin/plugin.json, so a composite root that also carries the Claude manifest is still read from the root. That order covers the manifest file alone. The same table lists the other components separately — \"Skills | skills/ (default, overridable in manifest)\" and \"MCP configuration | .mcp.json, .github/mcp.json\" — so the emitted root mcp.json is proven only by the 1.0.83 probe above, which ran with no .mcp.json present, and a root that also carries .mcp.json is recorded as taking the MCP surface."
         ]
       },
       "surfaces": {
@@ -765,7 +780,8 @@
           "evidence": [
             "2026-09-06: `copilot plugins list` reported \"MCP servers: Plugin-contributed: probe -- stdio transport\" and `copilot mcp get probe` reported Source: Plugin, Source plugin: probe-plugin (1.0.0) — the emitted mcp.json, read without a .mcp.json present."
           ],
-          "state": "supported"
+          "reason": "2026-09-06: the probe listed one stdio server: no streamable-http server from an emitted mcp.json was registered, launched, or authenticated on 1.0.83, so the evidence covers the stdio subset of the document rather than every transport the projection can emit.",
+          "state": "degraded"
         },
         "placeholders": {
           "evidence": [
@@ -892,14 +908,14 @@
       "observed": "hermes-agent.nousresearch.com developer guide retrieved 2026-09-06; no version is printed on the page",
       "tier": "agent-plugins",
       "install": {
-        "source": "marketplace",
+        "source": "repository",
         "actions": [
           {
             "role": "install",
             "command": "hermes plugins install <owner>/<repository> --no-enable"
           }
         ],
-        "location": "~/.hermes/plugins/<name>/ with the root plugin.json at that level; \"Anything deeper is ignored\". No local-directory install form is published for a portable package."
+        "location": "~/.hermes/plugins/<name>/ with the root plugin.json at that level; \"Anything deeper is ignored\". The install takes a Git repository, not an indexed marketplace name and not a local directory: no local-directory install form is published for a portable package, and the install leaves the plugin disabled."
       },
       "discovery": {
         "required": [
@@ -911,6 +927,7 @@
         "evidence": [
           "2026-09-06: https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/ states \"Portable packages use root plugin.json in the same locations\" as native packages (~/.hermes/plugins/<name>/) and \"Anything deeper is ignored\".",
           "2026-09-06: the only documented install spec for a portable package is `hermes plugins install owner/repository`; no local-directory install form is published, so installing the emitted directory in place is unproven.",
+          "2026-09-06: https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins/ separates the two install inputs — \"hermes plugins install <name> # install by index name (resolved to repo @ pinned ref)\" against \"hermes plugins install user/repo # install from Git, then prompt Enable? [y/N]\" — and states that \"Explicit `owner/repo` or Git-URL identifiers never touch the index\", so the recorded command names a Git repository rather than an indexed marketplace entry. The same page states the prompt \"defaults to no\" and that `--no-enable` skips it, so the recorded install leaves the plugin installed and disabled.",
           "2026-09-06: the same page scopes the whole tier — \"This is a compatibility adapter for the portable components Hermes already owns… an explicit supported subset, not a claim of full Agent Plugins conformance.\""
         ]
       },
@@ -1123,11 +1140,11 @@
         "source": "local-directory",
         "actions": [
           {
-            "role": "install",
+            "role": "register",
             "command": "\"chat.pluginLocations\": { \"<plugin directory>\": true }"
           }
         ],
-        "location": "the plugin directory itself; a marketplace plugin instead installs through the Extensions view filter @agentPlugins"
+        "location": "the plugin directory itself — the setting registers the emitted tree where it lies and nothing is copied; a marketplace plugin instead installs through the Extensions view filter @agentPlugins"
       },
       "discovery": {
         "required": [
@@ -1137,7 +1154,7 @@
         ],
         "shadowedBy": [],
         "evidence": [
-          "2026-09-06: https://code.visualstudio.com/docs/agent-customization/agent-plugins states \"If you manually clone or download a plugin, you can register it with the chat.pluginLocations setting. This setting maps local plugin directory paths to an enabled or disabled state\", so the emitted directory is loaded in place with no copy step.",
+          "2026-09-06: https://code.visualstudio.com/docs/agent-customization/agent-plugins#use-local-plugins states \"If you manually clone or download a plugin, you can register it with the chat.pluginLocations setting. This setting maps local plugin directory paths to an enabled or disabled state. Set the value to `true` to enable the plugin, or `false` to keep it registered but disabled\", so the emitted directory is registered in place with no copy step — the recorded action is a registration, not an install-managed copy.",
           "2026-09-06: the same page publishes no manifest-precedence order and calls .plugin/plugin.json \"Legacy OpenPlugin\", so the behavior of a root that carries both a canonical plugin.json and another client's manifest is unstated — unlike GitHub Copilot CLI, which orders .plugin/plugin.json ahead of the root manifest.",
           "2026-09-06: no `code --install-plugin`-style CLI verb for agent plugins is documented; installation is the setting above or the Extensions view."
         ]

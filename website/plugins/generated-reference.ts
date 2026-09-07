@@ -144,7 +144,7 @@ const messages = {
       'The `plugin` section of each table, flattened to dotted capability paths and grouped by top-level key. Boolean entries record a component the adapter emits; entries with a state carry the reason the host evidence supports or withholds it. Evidence notes stay in the JSON files.',
     clients: 'Recorded third-party clients',
     clientsIntro:
-      'The `clients` section of each table: agents that read the artifact this target already emits, pinned to their own documentation on the date it was read. These clients are not target adapters — nothing about them changes what the compiler writes — so every row is evidence about a reader of the existing artifact, never a projection. The tier says what the client loads: `agent-plugins` loads the emitted package as one plugin, `skills` loads the components it recognizes without reading the manifest, and `none` loads nothing from it as published. Reading a document and running what it configures are separate rows: `mcp` records that the client reads the emitted `mcp.json` as MCP configuration, while `placeholders` records that it expands the reserved `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` and provides them to the process it spawns. Precedence is per file and per surface — a file that wins for `mcp` leaves the skill tree discovered, and only a manifest that wins replaces the plugin. An install action carries the role its own documentation gives it, and a client with no verified local-directory install of this artifact is recorded against its marketplace source instead. A surface without evidence is `unavailable` with a dated reason, and the reason names exactly what the client would need instead.',
+      'The `clients` section of each table: agents that read the artifact this target already emits, pinned to their own documentation on the date it was read. These clients are not target adapters — nothing about them changes what the compiler writes — so every row is evidence about a reader of the existing artifact, never a projection. The tier says what the client loads: `agent-plugins` loads the emitted package as one plugin, `skills` loads the components it recognizes without reading the manifest, and `none` loads nothing from it as published. Reading a document and running what it configures are separate rows: `mcp` records that the client reads the emitted `mcp.json` as MCP configuration, while `placeholders` records that it expands the reserved `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` and provides them to the process it spawns. Precedence is per file and per surface — a file that wins for `mcp` leaves the skill tree discovered, and only a manifest that wins replaces the plugin. An install action carries the role its own documentation gives it — `install` copies the artifact, or the one component the client recognizes, into its own store, while `register` points the client at the emitted tree where it lies — and a client with no verified local-directory install of this artifact is recorded against the source its documentation does publish, an indexed `marketplace` name or a Git `repository`. A surface without evidence is `unavailable` with a dated reason, and the reason names exactly what the client would need instead.',
     clientSurfaces: 'Client surfaces',
     clientDiscovery: 'Client discovery',
     headers: {
@@ -152,6 +152,7 @@ const messages = {
       tier: 'Tier',
       observed: 'Observed',
       install: 'Install actions',
+      clientSource: 'Install source',
       surface: 'Surface',
       required: 'Paths it reads',
       shadowedBy: 'Shadowed by (per surface)',
@@ -264,7 +265,7 @@ const messages = {
       '每张表的 `plugin` 部分，按点分能力路径展开并按顶层键分组。布尔条目表示适配器会发出的组件；带状态的条目记录宿主证据支持或保留该能力的原因。证据说明保留在 JSON 文件中。',
     clients: '已记录的第三方客户端',
     clientsIntro:
-      '每张表的 `clients` 部分：会读取该目标已经产出的构件的其他代理，按其自身文档以及阅读文档的日期固定记录。这些客户端不是目标适配器——它们不会改变编译器写出的任何内容——因此每一行都是关于既有构件读取方的证据，而不是一种投影。tier 表示客户端加载什么：`agent-plugins` 把产出的包作为一个插件加载，`skills` 表示它不读取清单、只加载自己能识别的组件，`none` 表示按当前产出形态它什么都不加载。读取文档与运行文档所配置的内容是两行不同的记录：`mcp` 表示客户端会把产出的 `mcp.json` 当作 MCP 配置读取，而 `placeholders` 表示它会展开保留占位符 `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` 并把它们提供给所启动的进程。优先级按文件、按界面生效——某个文件在 `mcp` 上胜出并不影响技能树被发现，只有清单胜出才会替换整个插件。安装操作带有其自身文档给定的角色；对本产物没有已验证的本地目录安装形式的客户端，只按其市场来源记录。没有证据的界面一律为 `unavailable` 并附带带日期的原因，原因中明确写出该客户端实际需要的是什么。',
+      '每张表的 `clients` 部分：会读取该目标已经产出的构件的其他代理，按其自身文档以及阅读文档的日期固定记录。这些客户端不是目标适配器——它们不会改变编译器写出的任何内容——因此每一行都是关于既有构件读取方的证据，而不是一种投影。tier 表示客户端加载什么：`agent-plugins` 把产出的包作为一个插件加载，`skills` 表示它不读取清单、只加载自己能识别的组件，`none` 表示按当前产出形态它什么都不加载。读取文档与运行文档所配置的内容是两行不同的记录：`mcp` 表示客户端会把产出的 `mcp.json` 当作 MCP 配置读取，而 `placeholders` 表示它会展开保留占位符 `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` 并把它们提供给所启动的进程。优先级按文件、按界面生效——某个文件在 `mcp` 上胜出并不影响技能树被发现，只有清单胜出才会替换整个插件。安装操作带有其自身文档给定的角色——`install` 会把产物、或客户端唯一能识别的那个组件复制进它自己的存储，而 `register` 只是让客户端就地读取产出的目录树；对本产物没有已验证的本地目录安装形式的客户端，按其文档确实公布的来源记录：索引化的 `marketplace` 名称，或 Git `repository`。没有证据的界面一律为 `unavailable` 并附带带日期的原因，原因中明确写出该客户端实际需要的是什么。',
     clientSurfaces: '客户端界面',
     clientDiscovery: '客户端发现',
     headers: {
@@ -272,6 +273,7 @@ const messages = {
       tier: '层级',
       observed: '观测依据',
       install: '安装操作',
+      clientSource: '安装来源',
       surface: '界面',
       required: '读取的路径',
       shadowedBy: '被以下文件遮蔽（按界面）',
@@ -652,12 +654,15 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
     );
     sections.push(
       table(
-        [m.headers.client, m.headers.host, m.headers.tier, m.headers.observed, m.headers.install],
+        [m.headers.client, m.headers.host, m.headers.tier, m.headers.observed, m.headers.clientSource, m.headers.install],
         clients.map(({ host, record }) => [
           escapeProse(record.name),
           code(host.host),
           code(record.tier),
           escapeProse(record.observed),
+          // Where the recorded command takes the artifact from: a registered
+          // local directory, an indexed marketplace name, or a Git repository.
+          record.install === undefined ? m.notApplicable : code(record.install.source),
           record.install === undefined
             ? m.notApplicable
             : record.install.actions

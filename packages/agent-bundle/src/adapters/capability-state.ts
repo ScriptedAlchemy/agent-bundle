@@ -348,10 +348,13 @@ const CLIENT_INSTALL_ANCHORS: readonly string[] = Object.freeze(['install', 'reg
 /**
  * Where the recorded install command takes the artifact from. `local-directory`
  * is only for a client whose own documentation installs a directory path;
- * `marketplace` records a client that publishes no verified local form, so the
- * install surface never prints an unproven recipe against the emitted bundle.
+ * `marketplace` and `repository` record a client that publishes no verified
+ * local form, so the install surface never prints an unproven recipe against
+ * the emitted bundle. An indexed marketplace name and a Git `owner/repository`
+ * are separate inputs wherever a client's own documentation separates them.
  */
-const CLIENT_INSTALL_SOURCES: readonly string[] = Object.freeze(['local-directory', 'marketplace']);
+const CLIENT_INSTALL_SOURCES: readonly string[] =
+  Object.freeze(['local-directory', 'marketplace', 'repository']);
 
 /** One authored client row from a pinned table's `clients` block. */
 export interface ClientCompatibilityTableEntry {
@@ -493,8 +496,17 @@ const clientInstall = (
     }
     return Object.freeze({ command: action.command, role: action.role! });
   });
-  if (validated.filter((action) => CLIENT_INSTALL_ANCHORS.includes(action.role)).length !== 1) {
+  const anchors = validated.filter((action) => CLIENT_INSTALL_ANCHORS.includes(action.role));
+  if (anchors.length !== 1) {
     throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block without exactly one ${CLIENT_INSTALL_ANCHORS.join(' or ')} action.`);
+  }
+  // Registration names the emitted tree where it lies, so it is a local
+  // directory by definition: a registered marketplace or repository entry
+  // would render as an install of something this artifact is not.
+  if (anchors[0]!.role === 'register' && install.source !== 'local-directory') {
+    throw new CapabilityStateError(
+      `The pinned ${target} table gives client ${id} a register action against a ${install.source} source (expected local-directory).`,
+    );
   }
   return Object.freeze({
     actions: Object.freeze(validated),
