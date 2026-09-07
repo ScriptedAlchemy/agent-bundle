@@ -324,9 +324,14 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await expect(page.getByRole('heading', { level: 1, name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await captureExampleState(page, 'mcp-app', 'mcp-session-ready');
 
-    const appLeaf = applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'app' || leaf.execution === 'preview');
+    // The App leaf opens a session against the published build and calls the
+    // bound `show-status` tool with the form input; the result feeds the preview.
+    const appLeaf = applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'app');
+    expect(appLeaf).toBeDefined();
     if (appLeaf !== undefined) {
       await selectApplicationLeaf(page, server.url, appLeaf);
+      await page.getByLabel('service').selectOption('payments-api');
+      await page.getByRole('button', { name: 'Call tool and preview' }).click();
       const appText = async (selector: string): Promise<string | undefined> => {
         for (const frame of page.frames()) {
           try {
@@ -339,7 +344,8 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
         return undefined;
       };
       try {
-        await waitForExampleValue(page, () => appText('#service'), (value) => value !== undefined, 'the App service');
+        await waitForExampleValue(page, () => appText('#service'), (value) => value === 'payments-api', 'the App service');
+        await waitForExampleValue(page, () => appText('#status'), (value) => value === 'degraded', 'the App status');
       } catch (error) {
         await expectHealthyExamplePage(ledger);
         throw error;

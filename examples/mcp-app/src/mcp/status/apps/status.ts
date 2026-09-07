@@ -79,7 +79,6 @@ const client = createAppClient({
 });
 
 client.onToolInput(showStatusRoute, ({ service }) => {
-  currentService = service;
   serviceHeading.textContent = service;
   setStatus('checking');
   summary.textContent = `Checking readiness for ${service}.`;
@@ -110,8 +109,7 @@ document.querySelector('#read-policy')!.addEventListener('click', async () => {
   }
 });
 
-// Refresh re-runs the opening tool for the service on screen; the host asks
-// for consent before the call reaches the server.
+// Refresh re-runs the opening tool for the service on screen.
 document.querySelector('#refresh-status')!.addEventListener('click', async () => {
   if (currentService === undefined) return;
   try {
