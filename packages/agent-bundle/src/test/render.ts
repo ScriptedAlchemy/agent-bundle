@@ -563,16 +563,6 @@ export interface RouteModuleSchema<Value> extends AgentRouteSchema {
 }
 
 /**
- * A route's `inputSchema` as the harness sees it: the registration types what
- * a caller sends (`RouteTargetInput`), which is the schema's input side; what
- * `parse` returns — the component's props after defaults and transforms — is
- * not part of the registration, so it stays `unknown` here.
- */
-export interface RouteModuleInputSchema<Value> extends AgentRouteSchema {
-  readonly parse: (value: Value | unknown) => unknown;
-}
-
-/**
  * The evaluated module `loadRouteModule` returns: the same object the generated
  * server, the routed CLI, and `renderRoute` execute, so `inputSchema` and
  * `resultSchema` are the route's own schema instances by reference (not copies
@@ -584,7 +574,8 @@ export interface LoadedRouteModule<Target extends string = string> {
   readonly [exportName: string]: unknown;
   readonly config?: unknown;
   readonly default?: (props: never) => unknown;
-  readonly inputSchema?: RouteModuleInputSchema<RouteTargetInput<Target>>;
+  /** The registration types what a caller sends, not what `parse` returns (the component's props after defaults and transforms). */
+  readonly inputSchema?: RouteModuleSchema<unknown>;
   readonly resultSchema?: RouteModuleSchema<RouteTargetResult<Target>>;
 }
 
@@ -637,11 +628,6 @@ export const loadRouteModule = async <Target extends string>(
 };
 
 /**
- * The structured result a generated server would return: the document value
- * validated by the route's own `resultSchema`. A document that renders but
- * whose value the route's schema rejects is a route defect, not a pass.
- */
-/**
  * The component's `input` prop: the caller's input parsed by the route's own
  * `inputSchema`, exactly where the generated Flight worker parses it (defaults
  * filled, transforms applied) — so the registration types what the caller
@@ -670,6 +656,11 @@ const parsedInput = (
   }
 };
 
+/**
+ * The structured result a generated server would return: the document value
+ * validated by the route's own `resultSchema`. A document that renders but
+ * whose value the route's schema rejects is a route defect, not a pass.
+ */
 const parsedResult = (
   schema: { readonly parse: (value: unknown) => unknown },
   document: AgentDocument,
