@@ -236,6 +236,14 @@ product bridge in a real browser page — and `simulated` reuses the installed-h
 an isolated host-shaped root and spawned without a host-owned install, which is weaker than
 `host-install`.
 
+`mountBrowserApp` derives the opening call's `hostContext.toolInfo` from `toolName` and
+`toolDefinition`, publishes `toolInput`, and merges any other `host.context` fields. Do not repeat
+`toolInfo` in `host.context`; a conflicting opening tool name is rejected. Pass `toolResult` to
+publish an already-settled result during mount. Omit it when the opening call is still in flight,
+then settle exactly once with `publishToolResult(...)` — including an `isError: true` result — or
+`publishToolCancelled(reason?)`. Each publisher returns whether the bridge accepted that terminal
+notification.
+
 ```ts twoslash
 import { cliJson, cliNdjson, invokeCli, invokeMcpTool } from 'agent-bundle/test';
 

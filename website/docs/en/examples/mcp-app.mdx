@@ -46,8 +46,9 @@ to see how the surfaces fit together instead of studying one of them alone.
   creates its client with `createAppClient` from `agent-bundle/app`, receives the opening
   `show-status` call's input and structured result through `onToolInput` / `onToolResult`, and
   surfaces failed or unstructured opening results through `onToolError` registered on
-  `tool:status/show-status` (delivered when the host's initialize result names `show-status` as
-  the opening tool). **Refresh status** calls the same `show-status` tool again for the service
+  `tool:status/show-status`. Those route listeners fire when the host's initialize result names
+  `show-status` as the opening tool; `onToolCancelled` separately surfaces a host-cancelled
+  opening call. **Refresh status** calls the same `show-status` tool again for the service
   on screen, and **Read policy** reads the `readiness-policy` resource through
   `request('resources/read', …)`. The route id, input, and result are typed by the generated
   `.agent-bundle/routes.d.ts`, so the App declares no contract map of its own. No JSON-RPC ids,

@@ -150,6 +150,30 @@ it('preserves the stable Apps handshake and delays original tool data until init
   expect(bridge.lifecycle).toBe('initialized');
 });
 
+it('leaves the opening result pending when automatic publication is deferred', async () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    deferInitialToolResult: true,
+    host: fixture.host,
+    operations: fixture.operations,
+    send: (message) => (fixture.sent.push(message), true),
+  });
+
+  await bridge.receive(initialize('init:pending'));
+  await bridge.receive(initialized());
+
+  expect(fixture.sent.slice(1)).toEqual([
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', units: 'metric' } } },
+  ]);
+  expect(bridge.publishToolCancelled('user-dismissed')).toBe(true);
+  expect(fixture.sent.at(-1)).toEqual({
+    jsonrpc: '2.0',
+    method: 'ui/notifications/tool-cancelled',
+    params: { reason: 'user-dismissed' },
+  });
+});
+
 it('accepts the stable parameterless initialized notification before flushing host traffic', async () => {
   const fixture = fixtureFor();
   const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
@@ -309,7 +333,9 @@ it('rejects host tool metadata whose JSON Schemas are not object-rooted', () => 
     },
   });
 
-  expect(() => createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: () => true })).toThrow('MCP App host context must use stable MCP Apps field values.');
+  expect(() => createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: () => true })).toThrow(
+    'MCP App host context.toolInfo.tool.inputSchema must be an object-rooted JSON Schema.',
+  );
 });
 
 it('forwards only same-binding app-visible tools and resources while retaining request ids', async () => {
@@ -580,19 +606,27 @@ it('rejects malformed JSON-RPC envelopes and payloads before executing host call
     host: { ...fixture.host, context: { theme: 'sepia' } },
     operations: fixture.operations,
     send: () => true,
-  })).toThrow('MCP App host context must use stable MCP Apps field values.');
+  })).toThrow('MCP App host context.theme must be "light" or "dark".');
   expect(() => createMcpAppBridge({
     binding: fixture.binding,
     host: { ...fixture.host, capabilities: { serverTools: { listChanged: 'yes' } } },
     operations: fixture.operations,
     send: () => true,
-  })).toThrow('MCP App host context must use stable MCP Apps field values.');
+  })).toThrow('MCP App host capabilities must use stable MCP Apps field values.');
   expect(() => createMcpAppBridge({
     binding: fixture.binding,
-    host: { ...fixture.host, context: { toolInfo: { id: {}, tool: { name: 'show-weather' } } } },
+    host: {
+      ...fixture.host,
+      context: {
+        toolInfo: {
+          id: {},
+          tool: { inputSchema: { type: 'object' }, name: 'show-weather' },
+        },
+      },
+    },
     operations: fixture.operations,
     send: () => true,
-  })).toThrow('MCP App host context must use stable MCP Apps field values.');
+  })).toThrow('MCP App host context.toolInfo.id must be a JSON-RPC request id.');
 
   fixture.operations.callTool = async () => ({ content: [{ text: 42, type: 'text' }] }) as unknown as McpAppJsonValue;
   await bridge.receive({ id: 'bad-result', jsonrpc: '2.0', method: 'tools/call', params: { name: 'refresh-weather' } });

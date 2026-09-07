@@ -96,6 +96,14 @@ client.onToolError(showStatusRoute, (error) => {
   checks.replaceChildren();
 });
 
+client.onToolCancelled(({ reason }) => {
+  setStatus('unavailable');
+  summary.textContent = reason === undefined
+    ? 'Readiness check cancelled.'
+    : `Readiness check cancelled: ${reason}`;
+  checks.replaceChildren();
+});
+
 document.querySelector('#toggle-details')!.addEventListener('click', () => {
   document.querySelector('#details')!.toggleAttribute('hidden');
 });

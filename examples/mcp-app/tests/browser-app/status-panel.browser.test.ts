@@ -10,14 +10,6 @@ import {
 type BindingOperations = MountBrowserAppOptions['operations'];
 type ToolCallResult = Awaited<ReturnType<BindingOperations['callTool']>>;
 
-/**
- * The opening tool, `src/mcp/status/tools/show-status.tsx`. Framework hosts put
- * the leased tool definition in the initialize `hostContext.toolInfo`, and the
- * App client delivers `onToolInput`/`onToolResult` only to listeners on that
- * tool's route, so the harness has to open the panel with `show-status` for
- * the populated-state tests to go through the `tool:status/show-status`
- * listeners.
- */
 const showStatusTool = Object.freeze({
   _meta: Object.freeze({ ui: Object.freeze({ resourceUri: 'ui://mcp-app-example/status.html' }) }),
   description: 'Show the health of one example service.',
@@ -29,13 +21,6 @@ const showStatusTool = Object.freeze({
     type: 'object',
   }),
   name: 'show-status',
-});
-
-const openingHostContext = Object.freeze({
-  availableDisplayModes: Object.freeze(['inline']),
-  displayMode: 'inline',
-  platform: 'desktop',
-  toolInfo: Object.freeze({ tool: showStatusTool }),
 });
 
 const statusResult = Object.freeze({
@@ -118,7 +103,6 @@ const operations = (options: {
 
 const mountStatus = async (overrides: Partial<Parameters<typeof mountBrowserApp>[1]> = {}) => {
   const app = await mountBrowserApp('status', {
-    host: { context: openingHostContext },
     operations: operations(),
     toolDefinition: showStatusTool,
     toolInput: { service: 'payments-api' },
@@ -149,6 +133,11 @@ const initializeResult = (app: MountedBrowserApp): unknown => {
     ?.message.result;
 };
 
+const openingToolResults = (app: MountedBrowserApp): readonly BrowserAppTraffic[] =>
+  app.traffic.filter(({ direction, message }) => (
+    direction === 'host-to-app' && message.method === 'ui/notifications/tool-result'
+  ));
+
 it('mounts the compiled panel, initializes the bridge, and renders the published result accessibly', async () => {
   const app = await mountStatus();
   await waitFor(() => app.document.querySelector('#status')?.textContent === 'degraded');
@@ -166,9 +155,107 @@ it('mounts the compiled panel, initializes the bridge, and renders the published
   ]);
   expect(app.provenance).toMatchObject({ proofLevel: 'browser-app' });
   expect(['claude', 'codex', 'portable']).toContain(app.provenance.target);
-  expect(initializeResult(app)).toMatchObject({ hostContext: { toolInfo: { tool: { name: 'show-status' } } } });
+  expect(initializeResult(app)).toMatchObject({ hostContext: { toolInfo: { tool: showStatusTool } } });
   expect(app.traffic.some(({ message }) => message.method === 'ui/notifications/tool-input')).toBe(true);
   expect(app.traffic.some(({ message }) => message.method === 'ui/notifications/tool-result')).toBe(true);
+  expect(app.publishToolCancelled('too late')).toBe(false);
+});
+
+it('merges caller host context with the derived opening tool information', async () => {
+  const app = await mountStatus({ host: { context: { locale: 'fr-FR', theme: 'dark' } } });
+
+  expect(initializeResult(app)).toMatchObject({
+    hostContext: {
+      locale: 'fr-FR',
+      platform: 'desktop',
+      theme: 'dark',
+      toolInfo: { tool: { name: 'show-status' } },
+    },
+  });
+});
+
+it('fills the default object input schema for a partial tool definition', async () => {
+  const app = await mountStatus({
+    toolDefinition: {
+      _meta: showStatusTool._meta,
+      name: showStatusTool.name,
+    },
+  });
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'degraded');
+
+  expect(initializeResult(app)).toMatchObject({
+    hostContext: {
+      toolInfo: {
+        tool: {
+          inputSchema: { type: 'object' },
+          name: 'show-status',
+        },
+      },
+    },
+  });
+});
+
+it('rejects caller tool information that conflicts with the opening tool', async () => {
+  await expect(mountStatus({
+    host: {
+      context: {
+        toolInfo: {
+          tool: {
+            inputSchema: { type: 'object' },
+            name: 'other-tool',
+          },
+        },
+      },
+    },
+  })).rejects.toThrow(
+    'host.context.toolInfo.tool.name "other-tool" conflicts with opening tool "show-status"',
+  );
+});
+
+it('rejects a tool name that conflicts with its definition', async () => {
+  await expect(mountStatus({ toolName: 'other-tool' })).rejects.toThrow(
+    'toolDefinition.name "show-status" must match toolName "other-tool"',
+  );
+});
+
+it('mounts a pending opening call and renders its cancellation', async () => {
+  const app = await mountStatus({ toolResult: undefined });
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'checking');
+
+  expect(app.document.querySelector('h1')?.textContent).toBe('payments-api');
+  expect(openingToolResults(app)).toHaveLength(0);
+  expect(app.publishToolCancelled('The user stopped the readiness check.')).toBe(true);
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'unavailable');
+
+  expect(app.document.querySelector('#summary')?.textContent).toBe(
+    'Readiness check cancelled: The user stopped the readiness check.',
+  );
+  expect(app.traffic.some(({ message }) => message.method === 'ui/notifications/tool-cancelled')).toBe(true);
+  expect(app.publishToolResult(statusResult)).toBe(false);
+});
+
+it('settles a pending opening call with a later result', async () => {
+  const app = await mountStatus({ toolResult: undefined });
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'checking');
+
+  expect(app.publishToolResult(statusResult)).toBe(true);
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'degraded');
+
+  expect(openingToolResults(app)).toHaveLength(1);
+  expect(app.document.querySelector('h1')?.textContent).toBe('payments-api');
+});
+
+it('settles a pending opening call with a later error', async () => {
+  const app = await mountStatus({ toolResult: undefined });
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'checking');
+
+  expect(app.publishToolResult(failedStatusResult)).toBe(true);
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'unavailable');
+
+  expect(openingToolResults(app)).toHaveLength(1);
+  expect(app.document.querySelector('#summary')?.textContent).toBe(
+    'Readiness is unavailable: payments-api is not reachable from this host.',
+  );
 });
 
 it('uses the public App client without author wildcard or ext-apps plumbing', async () => {
@@ -251,11 +338,6 @@ it('fails closed when a consented binding operation is unavailable', async () =>
   expect(app.traffic.some(({ message }) => message.error?.code === -32000)).toBe(true);
   expect(app.document.querySelector('#bridge-outcome')?.textContent).not.toBe('Status refreshed.');
 });
-
-const openingToolResults = (app: MountedBrowserApp): readonly BrowserAppTraffic[] =>
-  app.traffic.filter(({ direction, message }) => (
-    direction === 'host-to-app' && message.method === 'ui/notifications/tool-result'
-  ));
 
 it('exits checking and renders an unavailable outcome when the opening result is an error', async () => {
   const calls: string[] = [];

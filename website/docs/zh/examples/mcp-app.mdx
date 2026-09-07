@@ -37,8 +37,9 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
   [测试](../guide/development/testing.mdx)中的 `browser-app` 级别。
 - **App 是桥接的客户端，而不是自带 transport。** `src/mcp/status/apps/status.ts` 从 `agent-bundle/app`
   创建客户端，通过 `onToolInput` / `onToolResult` 接收打开 App 的 `show-status` 输入与结构化结果，并用
-  注册在 `tool:status/show-status` 上的 `onToolError` 展示失败或缺少结构化数据的打开结果（当宿主的
-  initialize 结果指定 `show-status` 为打开工具时送达）。**Refresh status** 为屏幕上的服务再次调用同一个
+  注册在 `tool:status/show-status` 上的 `onToolError` 展示失败或缺少结构化数据的打开结果；
+  当宿主的 initialize 结果指定 `show-status` 为打开工具时，这些路由监听器才会触发；
+  `onToolCancelled` 则独立展示被宿主取消的开场调用。**Refresh status** 为屏幕上的服务再次调用同一个
   `show-status` 工具，**Read policy** 通过 `request('resources/read', …)` 读取 `readiness-policy`
   资源。路由 id、输入与结果由生成的 `.agent-bundle/routes.d.ts` 提供类型，因此 App 自己不声明任何契约
   表。视图中不再保留 JSON-RPC id、pending map、`postMessage('*')` 或 `structuredContent` 解包逻辑。详见
