@@ -302,6 +302,11 @@ it('documents recorded Agent Plugins clients for the portable profile', () => {
   expect(install).toContain('**Antigravity**');
   // A client that reads the emitted tree where it lies is registered, not installed.
   expect(install).toContain('**Pi**');
+  // An instruction-and-skill host is recorded at the tier it actually reaches,
+  // in the location its own documentation scans (#703, #704, #710).
+  expect(install).toContain('**Cascade (Devin Desktop)**');
+  expect(install).toContain('**JetBrains Junie**');
+  expect(install).toContain('**Swival**');
   // Reading a document and running what it configures are separate claims.
   expect(install).toContain('`mcp` records that the client reads the emitted `mcp.json` as MCP configuration');
   // This fixture carries no component, so a client that reads only components

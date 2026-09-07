@@ -664,6 +664,7 @@ it('emits the artifact paths every recorded client reads, and none of the manife
 
   expect(clients.map((client) => client.id)).toEqual([
     'antigravity',
+    'cascade',
     'cline',
     'codewhale',
     'copilot-cli',
@@ -671,11 +672,13 @@ it('emits the artifact paths every recorded client reads, and none of the manife
     'gemini-cli',
     'grok-build',
     'hermes-agent',
+    'junie',
     'kiro-powers',
     'openclaw',
     'opencode',
     'pi',
     'qoder-cli',
+    'swival',
     'vs-code',
     'zed-agent',
   ]);

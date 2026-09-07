@@ -1729,6 +1729,176 @@
           "state": "unavailable"
         }
       }
+    },
+    "swival": {
+      "name": "Swival",
+      "issue": 703,
+      "observed": "docs retrieved 2026-09-06; no product version is published on the documentation pages",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "register",
+            "command": "swival --skills-dir <plugin directory>/skills \"<task>\""
+          },
+          {
+            "role": "inspect",
+            "command": "swival skills list"
+          }
+        ],
+        "location": "the emitted skills/ tree is read where it lies; `skills_dir` in swival.toml makes the same extra directory persistent, and `swival skills add` copies a cloned repository's skills into .swival/skills/ instead"
+      },
+      "discovery": {
+        "required": [
+          "mcp.json",
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://swival.dev/pages/skills.html publishes the discovery order — \".swival/skills/ — Swival-specific project skills (highest precedence)\", \".agents/skills/ — common cross-agent standard\", \"--skills-dir paths — explicit extra directories\", then the two global roots — and states \"Every immediate subdirectory that contains SKILL.md is treated as a skill\", which is the shape this projection emits under skills/.",
+          "2026-09-06: the same page states \"Each --skills-dir path can point directly at one skill directory that contains SKILL.md, or at a parent directory where nested subdirectories contain skill files\", so the emitted skills/ directory is read in place with no copy.",
+          "2026-09-06: https://swival.dev/pages/mcp.html states \"--mcp-config FILE provides an explicit path to an MCP JSON config file. When set, this replaces the default .swival/mcp.json lookup\", so the emitted mcp.json is read only when it is named explicitly.",
+          "2026-09-06: no page documents a plugin manifest, a package layout, or an install form that reads a root plugin.json, so nothing here claims one."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: Swival discovers skill directories and MCP configuration and publishes no plugin manifest of any kind (https://swival.dev/pages/skills.html, https://swival.dev/pages/mcp.html), so the emitted root plugin.json is read by nothing there.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://swival.dev/pages/skills.html requires exactly what this projection emits — a directory per skill containing SKILL.md whose frontmatter carries `name` and `description`, with \"The name field must be lowercase alphanumeric with hyphens, must match the directory name\" — and reads an extra parent directory named with --skills-dir."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: https://swival.dev/pages/mcp.html states \".swival/mcp.json ... uses the same format as other MCP-compatible tools\" with \"command, args, env for stdio, and url, headers for SSE\", and that an explicit file is read with --mcp-config FILE."
+          ],
+          "reason": "2026-09-06: the emitted document is read only when it is passed as --mcp-config <plugin directory>/mcp.json, and only two transports are documented — \"Each server needs either command (for stdio transport) or url (for SSE transport), but not both\". No page states what Swival does with the spec's `type` discriminator or with a streamable-http server, and a TOML server of the same name \"always win[s] by server name over JSON servers\".",
+          "state": "degraded"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: no ${PLUGIN_ROOT} or ${PLUGIN_DATA} expansion is documented for Swival MCP configuration, and the documented substitution surface is the skill body and its own directory path, so the reserved behavior of Agent Plugins 1.0.0 §9.1 is not provided.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for Swival to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "cascade": {
+      "name": "Cascade (Devin Desktop)",
+      "issue": 704,
+      "observed": "docs.devin.ai/desktop retrieved 2026-09-06; Windsurf renamed to Devin Desktop, Cascade documented as the legacy agent beside the Devin Local agent",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "cp -R skills/<skill> .agents/skills/<skill>"
+          }
+        ],
+        "location": ".windsurf/skills/<skill>/ (workspace) or ~/.codeium/windsurf/skills/<skill>/ (global); .agents/skills/ and ~/.agents/skills/ are read for cross-agent compatibility, which is where the emitted tree is copied"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://docs.devin.ai/desktop/cascade/skills states \"For cross-agent compatibility, Devin Desktop also discovers skills in .agents/skills/ and ~/.agents/skills/\", and requires \"a SKILL.md file with YAML frontmatter\" per skill directory — the shape this projection emits.",
+          "2026-09-06: the same page's scope table names .windsurf/skills/ and ~/.codeium/windsurf/skills/ as the discovery roots; the emitted package root is not one of them, so the tree is copied into a root Cascade scans.",
+          "2026-09-06: the MCP page states \"The MCP configuration on this page applies to the legacy Cascade agent only. The Devin Local agent — the default agent for new tabs — configures MCP servers in the Devin CLI config files instead\", which is the Devin CLI profile recorded separately as devin-cli (#701).",
+          "2026-09-06: no Devin Desktop page documents a plugin manifest for Cascade — the documented customization units are Skills, Rules, Workflows, and AGENTS.md."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: Cascade's documented customization units are Skills, Rules, Workflows, and AGENTS.md (https://docs.devin.ai/desktop/cascade/skills, https://docs.devin.ai/desktop/cascade/memories); no page defines a plugin manifest, so the emitted root plugin.json is read by nothing there.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://docs.devin.ai/desktop/cascade/skills requires a folder per skill with SKILL.md and YAML frontmatter carrying `name` and `description`, and reads the cross-agent .agents/skills/ root."
+          ],
+          "reason": "2026-09-06: the emitted package root is not a Cascade discovery root; each skill directory is copied into .windsurf/skills/, ~/.codeium/windsurf/skills/, or .agents/skills/ before Cascade sees it, and the copy is what loads.",
+          "state": "degraded"
+        },
+        "mcp": {
+          "reason": "2026-09-06: Cascade reads MCP servers from ~/.codeium/windsurf/mcp_config.json only (https://docs.devin.ai/desktop/cascade/mcp), where a remote server \"requires a serverUrl or url field\" and interpolation is ${env:VAR_NAME} / ${file:/path}; no page reads a plugin-relative mcp.json, so the emitted document is not a Cascade MCP source.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: the documented interpolation patterns are ${env:VAR_NAME} and ${file:/path/to/file} in mcp_config.json (https://docs.devin.ai/desktop/cascade/mcp); ${PLUGIN_ROOT} and ${PLUGIN_DATA} are not documented anywhere for Cascade, so the reserved behavior of Agent Plugins 1.0.0 §9.1 is not provided.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for Cascade to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "junie": {
+      "name": "JetBrains Junie",
+      "issue": 710,
+      "observed": "junie.jetbrains.com/docs retrieved 2026-09-06, agent-skills page dated 01 September 2026; no CLI version is published on the page",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "register",
+            "command": "junie --skill-location <plugin directory>/skills"
+          },
+          {
+            "role": "inspect",
+            "command": "/skills"
+          }
+        ],
+        "location": ".junie/skills/<skill>/ (project) or ~/.junie/skills/<skill>/ (user); `skill-locations` in config.json makes an extra folder persistent, and .agents/skills/ is read in a trusted project"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://junie.jetbrains.com/docs/agent-skills.html states \"Skills follow the open Agent Skills format and are portable across agents\", requires that \"The SKILL.md file is required. A folder without it is not recognized as a skill\", and reads \"Custom folders: any folders you add with the --skill-location option or the skill-locations field in config.json\".",
+          "2026-09-06: the same page names the default roots — \"<project>/.junie/skills/<skill>/\" and \"~/.junie/skills/<skill>/\" — plus \".agents/skills/ directories: <project>/.agents/skills/ (in a trusted project) and ~/.agents/skills/\"; the emitted package root is none of them, so it loads only as a registered extra location.",
+          "2026-09-06: https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html names the MCP config locations as \"Project scope: .junie/mcp/mcp.json at the root of your project\" and \"User scope: ~/.junie/mcp/mcp.json\", and no page states which file name --mcp-location looks for inside an additional folder.",
+          "2026-09-06: no Junie page documents a plugin manifest; the documented units are agent skills, guidelines, and MCP configuration."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: Junie's documented units are agent skills, guidelines, and MCP configuration (https://junie.jetbrains.com/docs/agent-skills.html); no page defines a plugin manifest, so the emitted root plugin.json is read by nothing there.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://junie.jetbrains.com/docs/agent-skills.html requires a folder per skill containing SKILL.md with YAML frontmatter whose `name` is required and `description` optional — satisfied by every skill this projection emits — and reads extra folders given with --skill-location."
+          ],
+          "reason": "2026-09-06: the emitted skills/ root is not a default location, so it loads only once registered with --skill-location or the skill-locations config field, and \"if a project-level and a user-level skills have the same name, the user-level skill will be skipped\".",
+          "state": "degraded"
+        },
+        "mcp": {
+          "reason": "2026-09-06: MCP servers are read from .junie/mcp/mcp.json or ~/.junie/mcp/mcp.json (https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html). --mcp-location adds \"additional folders where MCP servers should be found\", but no page states the file name it looks for inside them, and the documented server fields are command/args/env and url/headers with no `type` discriminator, so the emitted plugin-root mcp.json is not a proven Junie MCP source.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: no ${PLUGIN_ROOT} or ${PLUGIN_DATA} expansion is documented for Junie MCP configuration or skills, so the reserved behavior of Agent Plugins 1.0.0 §9.1 is not provided.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for Junie to read.",
+          "state": "unavailable"
+        }
+      }
     }
   },
   "specificationSections": {
