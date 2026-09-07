@@ -59,8 +59,8 @@ artifact/
 `validate --artifact` 把已列入清单的记录对照文件表复核（`AB6039`）。
 
 宿主清单位于根目录下各自的点目录中。根级 `skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/`
-是共享的，只输出**一次**。Amp 注册的 Skill、事件 wrapper，以及与各 wrapper 目录同级的独立 worker
-都保留在 `.amp/plugins/<name>/` 内，使安装后的插件保持自包含。根目录下不会出现其他任何东西：
+是共享的，只输出**一次**。Amp 注册的 Skill、事件 wrapper，以及各目录内与这些 wrapper 同级的独立
+worker 都保留在 `.amp/plugins/<name>/` 内，使安装后的插件保持自包含。根目录下不会出现其他任何东西：
 没有生成的 `AGENTS.md`，也没有 `hooks/hooks-cursor.json`，也没有 `web/` 目录。已配置 MCP App 的浏览器
 宿主作为框架拥有的 `web` 命令装在 `bin/<plugin>.mjs` 里。该 bin 在 `src/cli/**` 编译出至少一条命令时、
 在配置了

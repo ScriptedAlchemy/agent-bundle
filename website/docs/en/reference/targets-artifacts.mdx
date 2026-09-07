@@ -66,7 +66,7 @@ file table (`AB6039`).
 
 Host manifests live in their dotfolders at the root. Root-level `skills/`, `hooks/`, `mcp/`,
 `scripts/`, `bin/`, and `assets/` are shared and emitted **once**. Amp's registered skills,
-event wrappers, and each wrapper directory's sibling standalone worker stay inside
+event wrappers, and the standalone worker beside those wrappers in each directory stay inside
 `.amp/plugins/<name>/` so the installed plugin remains self-contained. Nothing else appears at
 the root: no generated `AGENTS.md`, no `hooks/hooks-cursor.json`, no `web/` directory. The browser
 host for configured MCP Apps ships inside `bin/<plugin>.mjs` as the framework-owned `web` command.

@@ -463,7 +463,20 @@ it('publishes failed event invocations with native provenance', async () => {
   });
 });
 
-it('keeps hostless shared events on a nested host standalone fallback', async () => {
+it.each([
+  {
+    host: 'claude',
+    label: 'the shared root',
+    worker: 'hooks/hooks-flight.mjs',
+    wrapper: 'hooks/event-route-tool-after.claude.mjs',
+  },
+  {
+    host: 'amp',
+    label: 'a nested Amp plugin',
+    worker: '.amp/plugins/fixture/hooks/hooks-flight.mjs',
+    wrapper: '.amp/plugins/fixture/hooks/event-route-tool-after.mjs',
+  },
+] as const)('keeps hostless shared events on the standalone fallback in $label', async ({ host, worker, wrapper }) => {
   const route = {
     config: [],
     event: 'tool/after',
@@ -492,14 +505,14 @@ it('keeps hostless shared events on a nested host standalone fallback', async ()
           manifest: {
             executables: {
               hooks: [{
-                host: 'amp',
+                host,
                 kind: 'event-route',
-                path: '.amp/plugins/fixture/hooks/event-route-tool-after.mjs',
+                path: wrapper,
                 routeId: route.id,
               }],
               mcpServers: [],
             },
-            files: [{ path: '.amp/plugins/fixture/hooks/hooks-flight.mjs' }],
+            files: [{ path: worker }],
             routes: {
               digest: 'digest',
               events: [{
@@ -513,7 +526,7 @@ it('keeps hostless shared events on a nested host standalone fallback', async ()
         },
         manifest: { plugin: { name: 'fixture', version: '1.0.0' }, projectRoot: '/project' } as never,
         stateRoot: '/project/.agent-bundle/state',
-        targets: ['amp'],
+        targets: ['claude'],
       },
       release: () => undefined,
     }),
@@ -532,7 +545,7 @@ it('keeps hostless shared events on a nested host standalone fallback', async ()
     status: 'failed',
   });
   expect(production).toEqual({
-    executable: '.amp/plugins/fixture/hooks/hooks-flight.mjs',
+    executable: worker,
     kind: 'direct',
   });
 });
