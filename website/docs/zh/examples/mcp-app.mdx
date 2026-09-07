@@ -29,7 +29,7 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 - **MCP App 是编译出来的资源，不是被服务的页面。** App 只编译一次，位于产物根目录的
   `mcp-apps/status.html`，带有稳定的 `resourceUri`，并被内联进生成的 `status` 服务器入口，而所有选中
   宿主都从同一个根目录启动这个入口。
-- **降级证据是一等公民。** `src/service-status.ts` 持有 schema 以及不可变的 `compiler` 与 `payments-api`
+- **降级证据是一等公民。** `src/service-status.ts` 持有 schema 以及 `compiler` 与 `payments-api`
   健康记录，而 `payments-api` 故意返回降级的延迟数据。有意思的输出是一项被如实报告的失败检查，而不是
   一张全绿截图。
 - **浏览器表面自成一个证明级别。** `tests/browser-app/status-panel.browser.test.ts` 通过
@@ -59,7 +59,7 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 
 | 路径 | 是什么 |
 | --- | --- |
-| `src/service-status.ts` | 服务 schema 与两条不可变的健康记录。 |
+| `src/service-status.ts` | 服务 schema 与两条健康记录。 |
 | `src/mcp/status/tools/show-status.tsx` | `show-status` 工具路由；其 `_meta.ui.resourceUri` 打开 App。 |
 | `src/mcp/status/resources/readiness-policy.tsx` | `policy://mcp-app-example/readiness` 资源路由。 |
 | `src/mcp/status/apps/status.ts` / `status.html` | 编译为 `mcp-apps/status.html` 的 MCP App 入口与模板。 |

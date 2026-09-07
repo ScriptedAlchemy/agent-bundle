@@ -36,5 +36,5 @@ const catalog: Readonly<Record<Service, ServiceStatus>> = {
   },
 };
 
-/** The immutable health record of one example service; `payments-api` is deliberately degraded. */
+/** The health record of one example service; `payments-api` is deliberately degraded. */
 export const serviceStatus = (service: Service): ServiceStatus => catalog[service];

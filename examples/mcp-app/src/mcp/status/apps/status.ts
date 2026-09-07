@@ -14,7 +14,7 @@ const showStatusRoute = 'tool:status/show-status';
 type Service = AppRouteInput<typeof showStatusRoute>['service'];
 type ServiceStatus = AppRouteResult<typeof showStatusRoute>;
 
-/** The service on screen, for the refresh call. */
+/** The service the host asked for, so refresh can retry a failed opening call. */
 let currentService: Service | undefined;
 
 const serviceHeading = document.querySelector<HTMLHeadingElement>('#service')!;
@@ -58,7 +58,6 @@ const toolErrorDetail = (error: AppClientError): string => {
 };
 
 const renderStatus = (result: ServiceStatus) => {
-  currentService = result.service;
   serviceHeading.textContent = result.service;
   setStatus(result.status);
   summary.textContent = result.summary;
@@ -79,6 +78,7 @@ const client = createAppClient({
 });
 
 client.onToolInput(showStatusRoute, ({ service }) => {
+  currentService = service;
   serviceHeading.textContent = service;
   setStatus('checking');
   summary.textContent = `Checking readiness for ${service}.`;

@@ -35,7 +35,7 @@ to see how the surfaces fit together instead of studying one of them alone.
   `mcp-apps/status.html` in the artifact root with a stable `resourceUri`, and is inlined into
   the generated `status` server entry, which every selected host launches from that same root.
 - **Degraded evidence is first-class.** `src/service-status.ts` holds the schemas and the
-  immutable `compiler` and `payments-api` records, and `payments-api` deliberately returns
+  `compiler` and `payments-api` records, and `payments-api` deliberately returns
   degraded latency. The interesting output is a failing check that is reported honestly, not a
   green screenshot.
 - **A browser surface is its own proof level.** `tests/browser-app/status-panel.browser.test.ts`
@@ -70,7 +70,7 @@ to see how the surfaces fit together instead of studying one of them alone.
 
 | Path | What it is |
 | --- | --- |
-| `src/service-status.ts` | The service schemas and the two immutable health records. |
+| `src/service-status.ts` | The service schemas and the two health records. |
 | `src/mcp/status/tools/show-status.tsx` | The `show-status` tool route; its `_meta.ui.resourceUri` opens the App. |
 | `src/mcp/status/resources/readiness-policy.tsx` | The `policy://mcp-app-example/readiness` resource route. |
 | `src/mcp/status/apps/status.ts` / `status.html` | The MCP App entry and template compiled to `mcp-apps/status.html`. |
@@ -89,9 +89,11 @@ to see how the surfaces fit together instead of studying one of them alone.
 3. Under **Application → Scripts**, select `check-service-fixture` and run it. The emitted checker
    resolves the packaged status fixture beside its emitted module, so it succeeds independently
    of the shell's working directory.
-4. Select the `status` App under **Application → MCP → status → Apps**. Its live preview occupies
-   the route workspace. **Advanced → Artifact** shows the composite plugin root, where
-   `mcp-apps/status.html` appears whichever target is selected.
+4. Select the `status` App under **Application → MCP → status → Apps**. The workspace opens a
+   session against the published build with `show-status` bound to the App; choose a service and
+   **Call tool and preview** to render the panel beside the tool result. **Advanced → Artifact**
+   shows the composite plugin root, where `mcp-apps/status.html` appears whichever target is
+   selected.
 5. Before two eval runs exist, **Advanced → Evals → Compare** deliberately shows
    `At least two recorded runs are needed before a comparison can be aligned.` — the precise
    empty state, not an error.

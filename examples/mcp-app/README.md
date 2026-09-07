@@ -23,7 +23,7 @@ and Claude artifacts; every one of them carries the App resource.
   service's health, `resources/readiness-policy.tsx` serves the release rule
   at `policy://mcp-app-example/readiness`, and `apps/status.ts` +
   `status.html` compile to the `ui://mcp-app-example/status.html` App the
-  tool opens. `src/service-status.ts` holds the schemas and the immutable
+  tool opens. `src/service-status.ts` holds the schemas and the
   `compiler` and `payments-api` records; `payments-api` deliberately returns
   degraded latency evidence. The build owns registration, the stdio lifecycle
   shell, and `.agent-bundle/routes.d.ts`, which types the App's

@@ -258,7 +258,8 @@ const openingToolResults = (app: MountedBrowserApp): readonly BrowserAppTraffic[
   ));
 
 it('exits checking and renders an unavailable outcome when the opening result is an error', async () => {
-  const app = await mountStatus({ toolResult: failedStatusResult });
+  const calls: string[] = [];
+  const app = await mountStatus({ operations: operations({ calls }), toolResult: failedStatusResult });
   await waitFor(() => app.document.querySelector('#status')?.textContent === 'unavailable');
 
   expect(app.bridge.lifecycle).toBe('initialized');
@@ -280,6 +281,17 @@ it('exits checking and renders an unavailable outcome when the opening result is
   expect(app.document.querySelector('#status')?.textContent).not.toBe('healthy');
   expect(app.document.querySelector('#summary')?.textContent).not.toBe('Every check is passing.');
   expect(app.document.querySelectorAll('#checks li')).toHaveLength(0);
+
+  // Refresh retries the requested service after a failed opening call.
+  app.document.querySelector<HTMLButtonElement>('#refresh-status')!.click();
+  await waitFor(() => app.pendingConsentChallenges.length === 1);
+  await expect(app.decideConsent(app.pendingConsentChallenges[0]!.id, true)).resolves.toBe(true);
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'degraded');
+  expect(calls).toEqual(['show-status']);
+  expect(app.traffic.some(({ message }) => {
+    const args = messageParam(message, 'arguments');
+    return message.method === 'tools/call' && isRecord(args) && args['service'] === 'payments-api';
+  })).toBe(true);
 });
 
 it('renders the unavailable outcome when the opening result has no structured content', async () => {
