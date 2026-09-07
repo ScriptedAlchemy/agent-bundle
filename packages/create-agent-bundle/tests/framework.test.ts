@@ -10,6 +10,7 @@ import {
   assertLocalFrameworkTarball,
   previewPackageSpec,
   resolveFrameworkSpec,
+  runtimePairingFromManifest,
   runtimeSpecForFramework,
   validatedRuntimeSpecForFramework,
 } from '../src/framework.ts';
@@ -37,6 +38,30 @@ const expectUsageError = (error: unknown, message?: string): void => {
 };
 
 const releasePairing = { framework: '0.2.0', runtime: '0.1.0' } as const;
+
+it('reads release pairing metadata but ignores source and preview peer rewrites', () => {
+  expect(runtimePairingFromManifest({
+    peerDependencies: {
+      '@agent-bundle/runtime': '0.1.0',
+      'agent-bundle': '0.2.0',
+    },
+    version: '0.1.0',
+  })).toEqual(releasePairing);
+  expect(runtimePairingFromManifest({
+    peerDependencies: {
+      '@agent-bundle/runtime': '0.0.0-preview-da5df1d',
+      'agent-bundle': '0.0.0-preview-da5df1d',
+    },
+    version: '0.0.0-preview-da5df1d',
+  })).toBeUndefined();
+  expect(runtimePairingFromManifest({
+    peerDependencies: {
+      '@agent-bundle/runtime': 'workspace:*',
+      'agent-bundle': 'workspace:*',
+    },
+    version: '0.0.0',
+  })).toBeUndefined();
+});
 
 it('declares the compiler/runtime release pair as optional workspace peers', async () => {
   const manifest = JSON.parse(
@@ -96,6 +121,8 @@ describe('runtimeSpecForFramework', () => {
     expect(runtimeSpecForFramework('file:/tmp/agent-bundle-0.2.0.tgz', releasePairing))
       .toBe('file:/tmp/agent-bundle-runtime-0.1.0.tgz');
     expect(runtimeSpecForFramework('file:/tmp/agent-bundle.tgz', releasePairing))
+      .toBe('file:/tmp/agent-bundle-runtime.tgz');
+    expect(runtimeSpecForFramework('file:/tmp/agent-bundle.tgz'))
       .toBe('file:/tmp/agent-bundle-runtime.tgz');
   });
 

@@ -68,6 +68,9 @@ from the compiler version — and rejects a runtime-bearing scaffold whose
 `--framework-version` does not match the recorded compiler. A local compiler
 tarball selects the sibling runtime tarball with the recorded runtime version
 and validates both package names and versions before writing the project.
+Until this project owns the npm package names, use the preview command above;
+a locally packed release record does not make the unrelated registry package
+safe to install.
 
 ## License
 

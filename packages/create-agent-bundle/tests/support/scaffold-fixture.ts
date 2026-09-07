@@ -120,6 +120,21 @@ export const scaffoldProject = async (
   return join(runnerRoot, projectName);
 };
 
+export const scaffoldProjectFromReleasePairing = async (
+  template: string,
+  projectName: string,
+): Promise<string> => {
+  const { runnerRoot, scaffolderBin } = await fixture();
+  await execFile(scaffolderBin, [
+    projectName,
+    '--template', template,
+    '--targets', 'portable',
+    '--package-manager', 'npm',
+    '--no-install',
+  ], { cwd: runnerRoot, env: installedEnvironment() });
+  return join(runnerRoot, projectName);
+};
+
 export const scaffoldReleasePairing = async (): Promise<Readonly<{
   framework: string;
   runtime: string;

@@ -11,6 +11,7 @@ import {
   installScaffoldedProject,
   npmRun,
   scaffoldProject,
+  scaffoldProjectFromReleasePairing,
   scaffoldProjectWithMismatchedRuntime,
   scaffoldReleasePairing,
 } from './support/scaffold-fixture.ts';
@@ -28,10 +29,20 @@ it('rejects a local framework tarball paired with an incompatible runtime versio
   });
 }, 600_000);
 
-it('scaffolds with differently versioned release tarballs and runs after source deletion', async () => {
+it('uses the packed release pair when no framework override is passed', async () => {
   const pairing = await scaffoldReleasePairing();
-  expect(pairing.framework).not.toBe(pairing.runtime);
+  const projectRoot = await scaffoldProjectFromReleasePairing('mcp-server', 'registry-pair-project');
+  const manifest = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+    readonly devDependencies: Record<string, string>;
+  };
+  expect(manifest.devDependencies).toMatchObject({
+    '@agent-bundle/runtime': pairing.runtime,
+    'agent-bundle': pairing.framework,
+  });
+}, 600_000);
 
+it('scaffolds with independently versioned release tarballs and runs after source deletion', async () => {
+  const pairing = await scaffoldReleasePairing();
   const projectRoot = await scaffoldProject('mcp-server', 'paired-runtime-project', ['--no-install']);
   const manifest = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
     readonly devDependencies: Record<string, string>;

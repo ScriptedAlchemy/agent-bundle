@@ -18,6 +18,18 @@ export interface FrameworkRuntimePairing {
   readonly runtime: string;
 }
 
+export const runtimePairingFromManifest = (manifest: {
+  readonly peerDependencies?: Readonly<Record<string, unknown>>;
+  readonly version: string;
+}): FrameworkRuntimePairing | undefined => {
+  if (previewPattern.test(manifest.version)) return undefined;
+  const framework = manifest.peerDependencies?.['agent-bundle'];
+  const runtime = manifest.peerDependencies?.['@agent-bundle/runtime'];
+  if (typeof framework !== 'string' || typeof runtime !== 'string') return undefined;
+  if (framework.startsWith('workspace:') || runtime.startsWith('workspace:')) return undefined;
+  return { framework, runtime };
+};
+
 export const previewPackageSpec = (packageName: PreviewPackageName, sha: string): string =>
   `https://pkg.pr.new/ScriptedAlchemy/agent-bundle/${packageName}@${sha}`;
 
@@ -35,13 +47,14 @@ export const runtimeSpecForFramework = (
   if (preview !== null) return `${preview[1]}@agent-bundle/runtime@${preview[2]}`;
   const localTarball = /^(file:(?:.*[/\\])?)agent-bundle(-[^/\\]+)?\.tgz$/u.exec(frameworkSpec);
   if (localTarball !== null) {
+    if (localTarball[2] === undefined) return `${localTarball[1]}agent-bundle-runtime.tgz`;
     if (pairing === undefined) {
       throw new UsageError(
         `Cannot select @agent-bundle/runtime for agent-bundle spec "${frameworkSpec}": `
         + 'this create-agent-bundle package has no release pairing metadata.',
       );
     }
-    return `${localTarball[1]}agent-bundle-runtime${localTarball[2] === undefined ? '' : `-${pairing.runtime}`}.tgz`;
+    return `${localTarball[1]}agent-bundle-runtime-${pairing.runtime}.tgz`;
   }
   if (
     frameworkSpec !== ''

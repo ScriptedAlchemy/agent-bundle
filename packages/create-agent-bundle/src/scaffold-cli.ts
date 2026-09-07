@@ -9,7 +9,7 @@ import type { PlatformError } from 'effect/PlatformError';
 
 import { mapCause, runPromise } from './effect/boundary.ts';
 import { liftPromise, liftTry } from './effect/lift.ts';
-import { type FrameworkRuntimePairing, resolveFrameworkSpec } from './framework.ts';
+import { resolveFrameworkSpec, runtimePairingFromManifest } from './framework.ts';
 import {
   UsageError,
   resolveOptions,
@@ -80,14 +80,6 @@ const ownManifest = Effect.gen(function* () {
   return JSON.parse(yield* fs.readFileString(manifestPath)) as OwnManifest;
 });
 
-const releasePairing = (manifest: OwnManifest): FrameworkRuntimePairing | undefined => {
-  const framework = manifest.peerDependencies?.['agent-bundle'];
-  const runtime = manifest.peerDependencies?.['@agent-bundle/runtime'];
-  if (typeof framework !== 'string' || typeof runtime !== 'string') return undefined;
-  if (framework.startsWith('workspace:') || runtime.startsWith('workspace:')) return undefined;
-  return { framework, runtime };
-};
-
 const runInstall = (options: ResolvedOptions, targetDirectory: string): Effect.Effect<number, Error> =>
   liftPromise(() => {
     log.step(`Installing dependencies with ${options.packageManager}...`);
@@ -116,7 +108,7 @@ const scaffoldProgram = Effect.fnUntraced(function* (
   // Reading this package's own manifest fails before the intro, exactly as
   // it did as a rejected Promise: no cancel banner, the error leaves runCli.
   const manifest = yield* ownManifest;
-  const pairing = releasePairing(manifest);
+  const pairing = runtimePairingFromManifest(manifest);
   intro(`create-agent-bundle ${manifest.version}`);
   const run = Effect.gen(function* () {
     const path = yield* Path.Path;
