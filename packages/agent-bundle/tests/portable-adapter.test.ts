@@ -662,9 +662,24 @@ it('emits the artifact paths every recorded client reads, and none of the manife
   const emitted = plan.entries.map((entry) => entry.relativePath);
   const clients = clientCompatibilityFrom('portable', capabilityTable.clients);
 
-  expect(clients.map((client) => client.id)).toEqual(
-    ['antigravity', 'devin-cli', 'grok-build', 'openclaw', 'qoder-cli'],
-  );
+  expect(clients.map((client) => client.id)).toEqual([
+    'amp',
+    'antigravity',
+    'cline',
+    'codewhale',
+    'copilot-cli',
+    'devin-cli',
+    'gemini-cli',
+    'grok-build',
+    'hermes-agent',
+    'kiro-powers',
+    'openclaw',
+    'opencode',
+    'pi',
+    'qoder-cli',
+    'vs-code',
+    'zed-agent',
+  ]);
   for (const client of clients) {
     for (const required of client.discovery.required) {
       expect(

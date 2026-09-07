@@ -264,7 +264,7 @@ it('reads a shadow this build actually wrote as fact, not as a hypothetical', ()
     + ' This build also writes `.mcp.json`, which it uses for mcp instead.');
   // The narrowed Devin MCP row is about a document this build hands to another
   // client, so neither the reads nor the limit may be claimed here.
-  expect(install).not.toContain('  - Partial `mcp`');
+  expect(install).not.toContain('  - Partial `mcp`: 2026-09-06: the emitted document is read, and applied');
   expect(install).not.toContain('A root that also carries `.mcp.json`');
   // A client with no verified local install prints its own marketplace command,
   // which its documentation shows carrying the trust flag.
@@ -295,7 +295,12 @@ it('documents recorded Agent Plugins clients for the portable profile', () => {
   // A client whose own contract rejects the emitted manifest is named as such.
   expect(install).toContain('**Antigravity**');
   expect(install).toContain('loads nothing from this bundle as published');
-  expect(install).not.toContain('Kiro');
+  // An IDE client is named from its record with its own pinned import flow.
+  expect(install).toContain('**Kiro (Powers)**');
+  expect(install).toContain('Import power from a folder');
+  // A client that reads nothing is still named, so its absence is not silence.
+  expect(install).toContain('**Amp**');
+  expect(install).toContain('**Pi**');
   // Reading a document and running what it configures are separate claims.
   expect(install).toContain('`mcp` records that the client reads the emitted `mcp.json` as MCP configuration');
   // This fixture carries no component, so a client that reads only components
