@@ -5,20 +5,6 @@ export default defineConfig({
   hooks: {
     sessionStart: { handler: './src/hooks/session-start.ts' },
   },
-  mcp: {
-    servers: {
-      status: {
-        apps: {
-          status: {
-            entry: './views/status-panel.ts',
-            resourceUri: 'ui://mcp-app-example/status.html',
-            targets: ['portable'],
-            template: './views/status-panel.html',
-          },
-        },
-      },
-    },
-  },
   plugin: {
     description: 'A unified service-readiness assistant with MCP, Skills, Hooks, scripts, and evaluation.',
     name: 'mcp-app-example',

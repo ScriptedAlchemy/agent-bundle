@@ -11,43 +11,47 @@ to see how the surfaces fit together instead of studying one of them alone.
 
 - **Run from the repository root:** `pnpm example:mcp-app`
 - **Package:** `@agent-bundle-example/mcp-app`
-- **Public dependencies:** `agent-bundle` (`workspace:*`), `@modelcontextprotocol/server`,
+- **Public dependencies:** `agent-bundle` (`workspace:*`), `@agent-bundle/runtime`, `react`,
   `zod`; `@rstest/browser`, `@rstest/core`, `@rstest/playwright`, and `playwright` for the
   browser-app test
-- **Targets:** `portable`, `codex`, `claude` — the MCP App is declared for `portable`
+- **Targets:** `portable`, `codex`, `claude` — every target ships the `status` server and its App
 - **Credentials:** none — the eval and the fixture check read only checked-in data
 - **Source:** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
 
 ## What it proves
 
-- **The MCP entry convention.** `src/mcp/status.ts` default-exports the `status` server factory,
-  and the config declares no server `entry` — the build discovers it through the
-  `src/mcp/<server-id>.ts` convention. See
+- **Routes are the registration.** The config names no server, tool, resource, or App. The
+  `status` server exists because `src/mcp/status/**` holds three route modules:
+  `tools/show-status.tsx` (one service's health), `resources/readiness-policy.tsx` (the release
+  rule at `policy://mcp-app-example/readiness`), and `apps/status.ts` + `status.html` (the App
+  the tool opens through `_meta.ui.resourceUri`, spelled once with `appResourceUri('status')`).
+  There is no handwritten `McpServer`, no `registerTool`, and no
+  `@modelcontextprotocol/server` dependency. See
   [MCP servers and MCP Apps](../guide/authoring/mcp.mdx).
-- **The generated stdio lifecycle is not yours to write.** The build wraps that factory in the
-  lifecycle shell: the console-to-stderr guard, signal handling, stdin-EOF exit, bounded
+- **The generated stdio lifecycle is not yours to write.** The build emits the server entry and
+  its lifecycle shell: the console-to-stderr guard, signal handling, stdin-EOF exit, bounded
   shutdown, and the heartbeat.
-- **An MCP App is a compiled resource, not a served page.** The declared app is scoped to
-  `portable`, so it is compiled when that projection is selected — once, to
-  `mcp-apps/status.html` in the artifact root, with a stable `resourceUri` — and inlined into the
-  generated `status` server entry, which every selected host launches from that same root.
-- **Degraded evidence is first-class.** The `status` server serves immutable `compiler` and
-  `payments-api` health records, and `payments-api` deliberately returns degraded latency. The
-  interesting output is a failing check that is reported honestly, not a green screenshot.
+- **An MCP App is a compiled resource, not a served page.** The App compiles once, to
+  `mcp-apps/status.html` in the artifact root with a stable `resourceUri`, and is inlined into
+  the generated `status` server entry, which every selected host launches from that same root.
+- **Degraded evidence is first-class.** `src/service-status.ts` holds the schemas and the
+  immutable `compiler` and `payments-api` records, and `payments-api` deliberately returns
+  degraded latency. The interesting output is a failing check that is reported honestly, not a
+  green screenshot.
 - **A browser surface is its own proof level.** `tests/browser-app/status-panel.browser.test.ts`
   mounts the production-compiled App HTML over the product bridge through
   `agent-bundle/test/browser` — the `browser-app` level in
   [Testing](../guide/development/testing.mdx).
-- **The App is a client of the bridge, not a transport of its own.** `views/status-panel.ts`
+- **The App is a client of the bridge, not a transport of its own.** `src/mcp/status/apps/status.ts`
   creates its client with `createAppClient` from `agent-bundle/app`, receives the opening
   `show-status` call's input and structured result through `onToolInput` / `onToolResult`, and
-  surfaces failed or unstructured opening results through `onToolError`
-  registered on `tool:status/show-status` (delivered when the host's initialize result names
-  `show-status` as the opening tool), refreshes through `call('tool:status/refresh-status', …)`,
-  and reads the readiness policy through `request('resources/read', …)`. The `status` server is
-  handwritten, so no generated route contracts exist; the view types its two tools itself with a
-  structural `AppRegister` augmentation. No JSON-RPC ids, pending maps, `postMessage('*')`, or
-  `structuredContent` unwrapping remain in the view. See
+  surfaces failed or unstructured opening results through `onToolError` registered on
+  `tool:status/show-status` (delivered when the host's initialize result names `show-status` as
+  the opening tool). **Refresh status** calls the same `show-status` tool again for the service
+  on screen, and **Read policy** reads the `readiness-policy` resource through
+  `request('resources/read', …)`. The route id, input, and result are typed by the generated
+  `.agent-bundle/routes.d.ts`, so the App declares no contract map of its own. No JSON-RPC ids,
+  pending maps, `postMessage('*')`, or `structuredContent` unwrapping remain in the view. See
   [The typed App client](../guide/authoring/mcp.mdx#the-typed-app-client).
 - **The `web` surface ships inside the artifact.** The example configures
   `web: { apps: [{ app: 'status/status', tool: 'show-status', allow: ['call-tool'] }] }`,
@@ -66,8 +70,10 @@ to see how the surfaces fit together instead of studying one of them alone.
 
 | Path | What it is |
 | --- | --- |
-| `src/mcp/status.ts` | The `status` server factory, discovered by convention, serving the two health records. |
-| `views/status-panel.ts` / `views/status-panel.html` | The MCP App entry and template compiled to `mcp-apps/status.html`. |
+| `src/service-status.ts` | The service schemas and the two immutable health records. |
+| `src/mcp/status/tools/show-status.tsx` | The `show-status` tool route; its `_meta.ui.resourceUri` opens the App. |
+| `src/mcp/status/resources/readiness-policy.tsx` | The `policy://mcp-app-example/readiness` resource route. |
+| `src/mcp/status/apps/status.ts` / `status.html` | The MCP App entry and template compiled to `mcp-apps/status.html`. |
 | `src/skills/service-readiness/` | The evidence, checks, and report needed for a service-readiness decision. |
 | `src/hooks/session-start.ts` | Adds the readiness workflow to compatible host sessions. |
 | `src/scripts/check-service-fixture.ts` | Validates the checked-in compiler fixture before a release walkthrough. |
@@ -93,7 +99,8 @@ to see how the surfaces fit together instead of studying one of them alone.
    select `show-status`, choose `payments-api`, and invoke it. Invocation history shows the
    degraded summary with labelled Availability and P95 latency checks, the latter failing. Open
    the App preview: the rendered panel shows the same record through the MCP Apps bridge, with a
-   text-labelled amber `degraded` indicator. Inspect the protocol trace, use
+   text-labelled amber `degraded` indicator; **Refresh status** and **Read policy** call the real
+   tool and resource. Inspect the protocol trace, use
    **Restart MCP session**, then close, reset, and reopen the session to exercise the lifecycle.
    Then open **Trace** to see the MCP request, response, notifications, and session activity joined
    by their session and JSON-RPC request ids.

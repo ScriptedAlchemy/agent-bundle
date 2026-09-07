@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 
-import { isHealthyCompilerFixture } from '../compiler-status-contract.ts';
+import { healthyCompilerStatus } from '../service-status.ts';
 
 const fixturePath = new URL('../assets/evals/fixtures/status/result.json', import.meta.url);
 
@@ -11,7 +12,7 @@ const fixturePath = new URL('../assets/evals/fixtures/status/result.json', impor
 export const main = async (): Promise<number> => {
   try {
     const fixture = JSON.parse(await readFile(fixturePath, 'utf8')) as unknown;
-    if (!isHealthyCompilerFixture(fixture)) {
+    if (!isDeepStrictEqual(fixture, healthyCompilerStatus)) {
       throw new Error('compiler fixture must contain the exact healthy compiler status');
     }
     process.stdout.write('Compiler fixture is healthy.\n');

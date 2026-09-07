@@ -9,7 +9,7 @@ pnpm example:mcp-app
 This credential-free example turns one service-readiness workflow into a real
 local MCP server, typed tool, interactive MCP App resource, Skill, session-start
 Hook, fixture-check script, and deterministic eval. It builds portable, Codex,
-and Claude artifacts; the App resource remains portable.
+and Claude artifacts; every one of them carries the App resource.
 
 ## What is authored
 
@@ -18,13 +18,16 @@ and Claude artifacts; the App resource remains portable.
 - `src/hooks/session-start.ts` adds the readiness workflow to compatible host
   sessions, while `check-service-fixture` validates the checked-in compiler
   fixture before a release walkthrough.
-- `src/mcp/status.ts` default-exports the `status` server factory serving
-  immutable `compiler` and `payments-api` health records; `payments-api`
-  deliberately returns degraded latency evidence. The build discovers the
-  entry through the `src/mcp/<server-id>.ts` convention — the config declares
-  no `entry` — and wraps the factory in the generated stdio lifecycle shell
-  (console-to-stderr guard, signal handling, stdin-EOF exit, bounded
-  shutdown, heartbeat).
+- `src/mcp/status/**` is the `status` server, generated from three route
+  modules the config never names: `tools/show-status.tsx` reports one
+  service's health, `resources/readiness-policy.tsx` serves the release rule
+  at `policy://mcp-app-example/readiness`, and `apps/status.ts` +
+  `status.html` compile to the `ui://mcp-app-example/status.html` App the
+  tool opens. `src/service-status.ts` holds the schemas and the immutable
+  `compiler` and `payments-api` records; `payments-api` deliberately returns
+  degraded latency evidence. The build owns registration, the stdio lifecycle
+  shell, and `.agent-bundle/routes.d.ts`, which types the App's
+  `createAppClient` calls from the tool's `inputSchema` and `resultSchema`.
 
 ## Workbench walkthrough
 
@@ -40,8 +43,8 @@ and Claude artifacts; the App resource remains portable.
    emitted checker resolves the packaged status fixture beside its emitted
    module, so it succeeds without depending on the shell working directory.
 4. **Advanced → Raw logs** exposes the resulting producer records. In
-   **Advanced → Artifact**, select portable to inspect `mcp-apps/status.html`;
-   Codex and Claude retain their host artifacts but not this portable App resource.
+   **Advanced → Artifact**, `mcp-apps/status.html` appears whichever target
+   is selected.
 5. Before recording two eval runs, **Advanced → Evals → Compare** deliberately displays:
    `At least two recorded runs are needed before a comparison can be aligned.`
    That is the precise empty state, not an error.
@@ -50,7 +53,8 @@ and Claude artifacts; the App resource remains portable.
    Availability and P95 latency checks (the latter fails). Open the App preview:
    the rendered panel also shows `payments-api`, a text-labelled amber
    `degraded` indicator, the same summary, and passing/failing checks through
-   the MCP Apps bridge. Inspect the
+   the MCP Apps bridge; **Refresh status** calls `show-status` again and
+   **Read policy** reads the readiness-policy resource. Inspect the
    protocol trace in the route workspace; use **Advanced → Protocol** for
    session restart, reset, and lifecycle inspection.
 7. **Advanced → Evals → Runs** defaults to the deterministic `mcp-app-status` suite. Run
