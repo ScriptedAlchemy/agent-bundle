@@ -35,6 +35,13 @@ export const previewPackageSpec = (packageName: PreviewPackageName, sha: string)
 
 export const previewFrameworkSpec = (sha: string): string => previewPackageSpec('agent-bundle', sha);
 
+const missingPairingError = (frameworkSpec: string): UsageError => new UsageError(
+  `Cannot select @agent-bundle/runtime for agent-bundle spec "${frameworkSpec}": `
+  + 'this create-agent-bundle package has no release pairing metadata. Use a same-SHA pkg.pr.new URL, '
+  + 'the unversioned local pair agent-bundle.tgz and agent-bundle-runtime.tgz, or a create-agent-bundle '
+  + 'release paired with that registry compiler.',
+);
+
 /**
  * Exact previews pair by commit. Released scaffolders carry the compiler and
  * runtime versions their packed manifest selected from the workspace.
@@ -48,12 +55,7 @@ export const runtimeSpecForFramework = (
   const localTarball = /^(file:(?:.*[/\\])?)agent-bundle(-[^/\\]+)?\.tgz$/u.exec(frameworkSpec);
   if (localTarball !== null) {
     if (localTarball[2] === undefined) return `${localTarball[1]}agent-bundle-runtime.tgz`;
-    if (pairing === undefined) {
-      throw new UsageError(
-        `Cannot select @agent-bundle/runtime for agent-bundle spec "${frameworkSpec}": `
-        + 'this create-agent-bundle package has no release pairing metadata.',
-      );
-    }
+    if (pairing === undefined) throw missingPairingError(frameworkSpec);
     return `${localTarball[1]}agent-bundle-runtime-${pairing.runtime}.tgz`;
   }
   if (
@@ -63,12 +65,7 @@ export const runtimeSpecForFramework = (
     && !frameworkSpec.endsWith('.tgz')
     && !frameworkSpec.endsWith('.tar.gz')
   ) {
-    if (pairing === undefined) {
-      throw new UsageError(
-        `Cannot select @agent-bundle/runtime for agent-bundle spec "${frameworkSpec}": `
-        + 'this create-agent-bundle package has no release pairing metadata.',
-      );
-    }
+    if (pairing === undefined) throw missingPairingError(frameworkSpec);
     if (frameworkSpec !== pairing.framework) {
       throw new UsageError(
         `This create-agent-bundle release is paired with agent-bundle ${pairing.framework} `

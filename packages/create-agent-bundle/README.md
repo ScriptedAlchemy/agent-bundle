@@ -60,14 +60,20 @@ anything; its README documents the wiring to add with the first route.
 ## The framework dependency
 
 Preview scaffolders pin `agent-bundle` and `@agent-bundle/runtime` to exact
-[pkg.pr.new](https://pkg.pr.new) tarballs from one commit SHA. An npm release
-instead records its compatible compiler and runtime versions as optional
-peers in the packed `create-agent-bundle` manifest. The scaffolder pins those
-two recorded versions independently — it never derives the runtime version
-from the compiler version — and rejects a runtime-bearing scaffold whose
-`--framework-version` does not match the recorded compiler. A local compiler
-tarball selects the sibling runtime tarball with the recorded runtime version
-and validates both package names and versions before writing the project.
+[pkg.pr.new](https://pkg.pr.new) tarballs from one commit SHA. A runtime
+template overridden from a preview scaffolder accepts another exact
+pkg.pr.new URL or the unversioned local names `agent-bundle.tgz` and
+`agent-bundle-runtime.tgz`; versioned registry or local overrides require the
+matching npm scaffolder release.
+
+An npm release records its compatible compiler and runtime versions as
+optional peers in the packed `create-agent-bundle` manifest. The scaffolder
+pins those two recorded versions independently — it never derives the runtime
+version from the compiler version — and rejects a runtime-bearing scaffold
+whose `--framework-version` does not match the recorded compiler. A local
+compiler tarball selects the sibling runtime tarball with the recorded runtime
+version and validates both package names and versions before writing the
+project.
 Until this project owns the npm package names, use the preview command above;
 a locally packed release record does not make the unrelated registry package
 safe to install.

@@ -44,6 +44,11 @@ preview version of the runtime built from the same commit, so a matched pair ins
 stock npm. Mixing two different SHAs fails with `ERESOLVE` by design — the range to inspect is
 the one in the installed `agent-bundle` package.
 
+A preview scaffolder has no npm release-pair record. For a runtime template, an explicit
+`--framework-version` must therefore be an exact pkg.pr.new compiler URL or the local
+`agent-bundle.tgz` beside `agent-bundle-runtime.tgz`. Versioned registry or local tarball
+overrides require the matching released scaffolder.
+
 pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`).
 
 Preview versions are spelled `0.0.0-preview-<sha>`. They are built from the same output the

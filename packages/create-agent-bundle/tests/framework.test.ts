@@ -138,7 +138,9 @@ describe('runtimeSpecForFramework', () => {
 
   it('never copies a registry compiler selector when pairing metadata is absent', () => {
     expect(() => runtimeSpecForFramework('0.2.0')).toThrow(UsageError);
-    expect(() => runtimeSpecForFramework('0.2.0')).toThrow('pairing metadata');
+    expect(() => runtimeSpecForFramework('0.2.0')).toThrow('same-SHA pkg.pr.new URL');
+    expect(() => runtimeSpecForFramework('file:/tmp/agent-bundle-0.2.0.tgz'))
+      .toThrow('agent-bundle.tgz and agent-bundle-runtime.tgz');
   });
 
   it('rejects package specs that cannot resolve independently under the runtime name', () => {

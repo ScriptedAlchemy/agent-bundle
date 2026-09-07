@@ -39,6 +39,10 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@5685
 内部的这个 peer 范围改写为同一提交构建出的 runtime 精确预览版本，因此配对安装用原生 npm 即可完成。
 混用两个不同的 SHA 会按设计以 `ERESOLVE` 失败——需要检查的范围位于已安装的 `agent-bundle` 包中。
 
+预览脚手架没有 npm 发布配对记录。因此，对需要 runtime 的模板显式传入 `--framework-version` 时，必须使用
+精确的 pkg.pr.new compiler URL，或使用相邻的本地 `agent-bundle.tgz` 与
+`agent-bundle-runtime.tgz`。带版本号的 registry 或本地 tarball 覆盖需要匹配的正式发布脚手架。
+
 pnpm 与 yarn 接受同样的 URL（`pnpm add <url>`、`yarn add agent-bundle@<url>`）。
 
 预览版本号形如 `0.0.0-preview-<sha>`。它们由发布门禁校验的同一份产物构建而来，但并不是 npm 正式版本。
