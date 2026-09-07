@@ -3,6 +3,7 @@
   "cli",
   "configuration",
   "targets-artifacts",
+  "capabilities",
   "artifact-manifest",
   "hosts",
   "events",
