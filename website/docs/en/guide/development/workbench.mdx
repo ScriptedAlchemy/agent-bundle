@@ -470,14 +470,21 @@ agent-bundle dev proxy --root <projectRoot> --server <serverName> --target <host
 Rebuilds never replace that stable command with an epoch path, and the contents of the host
 process `PATH` do not affect whether the project-local framework can be spawned.
 
-Every selected host installs from the same composite epoch root. Each later `artifact.available`
-event copies that root into an immutable installed generation for each host. Top-level directories
-switch by atomic symlink (or Windows junction) rename and
-top-level files by atomic sibling-file rename, so a host sees an old or a new complete entry and
-no synchronized directory disappears between generations. A failed publication rolls the pointers
-back to the prior generation and emits an `AB7202` diagnostic on `dev.host.sync`; a failed build
-emits no `artifact.available` at all, so the last-good install is untouched. Re-sync writes the
-host cache directly and does not invoke the Claude or Codex CLI again.
+Before a Codex epoch is reported synchronized, Agent Bundle sends Codex's idempotent
+`plugin/install` request over an existing local app-server control socket. This refreshes the
+app-server's MCP and hook component snapshot by atomically adopting the stable receipt-owned
+source, without restarting the server. When no app-server is running, later Codex sessions load
+the installed registration normally.
+
+Every selected host installs from the same composite epoch root. Outside the running Codex
+app-server path, each later `artifact.available` event copies that root into an immutable installed
+generation for each host. Top-level directories switch by atomic symlink (or Windows junction)
+rename and top-level files by atomic sibling-file rename, so a host sees an old or a new complete
+entry and no synchronized directory disappears between generations. A failed direct publication
+rolls the pointers back when a prior generation remains and emits an `AB7202` diagnostic on
+`dev.host.sync`; a failed build emits no `artifact.available` at all, so the last-good install is
+untouched. Re-sync writes the host cache directly and does not invoke the Claude or Codex CLI
+again.
 
 Stopping the dev server unregisters and removes its Claude and Codex development installs. A
 later run registers the same stable source path again, so restart does not leave duplicate

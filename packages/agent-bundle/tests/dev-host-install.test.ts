@@ -1,9 +1,12 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, expect, it } from '@rstest/core';
+import { WebSocketServer } from 'ws';
 
 import { devProxyServerCommand } from '../src/dev/dev-proxy-command.ts';
 import {
@@ -100,6 +103,61 @@ const writeEpoch = async (
   return root;
 };
 
+const writeCodexEpoch = async (
+  projectRoot: string,
+  id: string,
+  hookStatus: string,
+  mcpServer: string,
+): Promise<string> => {
+  const root = join(projectRoot, '.agent-bundle', 'epochs', id);
+  await Promise.all([
+    mkdir(join(root, '.agents', 'plugins'), { recursive: true }),
+    mkdir(join(root, '.codex-plugin'), { recursive: true }),
+    mkdir(join(root, 'hooks'), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(join(root, 'manifest.json'), '{}\n'),
+    writeFile(
+      join(root, '.agents', 'plugins', 'marketplace.json'),
+      '{"name":"dev-proof-marketplace","plugins":[]}\n',
+    ),
+    writeFile(join(root, '.codex-plugin', 'plugin.json'), '{"name":"dev-proof","version":"1.0.0"}\n'),
+    writeFile(
+      join(root, '.codex-plugin', 'hooks.json'),
+      `${JSON.stringify({
+        hooks: {
+          SessionStart: [{
+            hooks: [{
+              command: 'node ./hooks/session-start.codex.mjs',
+              statusMessage: hookStatus,
+              type: 'command',
+            }],
+          }],
+        },
+      })}\n`,
+    ),
+    writeFile(
+      join(root, '.codex-plugin', 'mcp.json'),
+      `${JSON.stringify({
+        mcpServers: {
+          [mcpServer]: {
+            args: ['./mcp/probe.mjs'],
+            command: 'node',
+            type: 'stdio',
+          },
+        },
+      })}\n`,
+    ),
+    writeFile(join(root, 'hooks', 'session-start.codex.mjs'), `export default ${JSON.stringify(hookStatus)};\n`),
+  ]);
+  await writeInstallFixtureManifest(
+    root,
+    { name: 'dev-proof', version: '1.0.0' },
+    [{ host: 'codex', mcp: '.codex-plugin/mcp.json' }],
+  );
+  return root;
+};
+
 const activePayload = (value: ArtifactEpoch) => Object.freeze({
   activeEpoch: value,
   currentSourceRevision: value.projectRevision,
@@ -159,6 +217,7 @@ it('installs a marked public-host dev variant from a stable source and removes i
       bundleRoot: options.from,
       destination,
       host: 'codex',
+      marketplace: 'dev-proof-marketplace',
       plugin: 'dev-proof',
       state: 'installed',
       version: '1.0.0',
@@ -308,6 +367,150 @@ it('installs a marked public-host dev variant from a stable source and removes i
   ]));
   expect(installedEpochs).toEqual(['epoch-1', 'epoch-3']);
   expect(uninstalls).toHaveLength(2);
+});
+
+it('refreshes a persistent Codex component snapshot before attaching each epoch', async () => {
+  const root = await createRoot();
+  const codexRoot = await mkdtemp(join(tmpdir(), 'codex-'));
+  roots.push(codexRoot);
+  const projectRoot = join(root, 'project');
+  const destination = join(codexRoot, 'plugins', 'cache', 'dev-proof-marketplace', 'dev-proof', '1.0.0');
+  const firstEpochRoot = await writeCodexEpoch(projectRoot, 'epoch-1', 'epoch one', 'probe-v1');
+  const secondEpochRoot = await writeCodexEpoch(projectRoot, 'epoch-2', 'epoch two', 'probe-v2');
+  const rootsByEpoch = new Map([
+    ['epoch-1', firstEpochRoot],
+    ['epoch-2', secondEpochRoot],
+  ]);
+  const socketPath = join(codexRoot, 'app-server-control', 'app-server-control.sock');
+  const pluginId = 'dev-proof@dev-proof-marketplace';
+  const appServer = new Map<string, {
+    readonly hookHash: string;
+    readonly hookStatus: string;
+    readonly mcpServers: readonly string[];
+  }>();
+  const refreshSources: string[] = [];
+  await mkdir(dirname(socketPath), { recursive: true });
+  const httpServer = createServer();
+  const webSocketServer = new WebSocketServer({ server: httpServer });
+  webSocketServer.on('connection', (socket) => {
+    socket.on('message', (data) => {
+      let request: {
+        readonly id?: number;
+        readonly method: string;
+        readonly params?: Readonly<Record<string, unknown>>;
+      };
+      try {
+        request = JSON.parse(data.toString()) as typeof request;
+      } catch {
+        return;
+      }
+      void (async () => {
+        if (request.id === undefined) return;
+        if (request.method === 'initialize') {
+          socket.send(JSON.stringify({ id: request.id, result: { codexHome: codexRoot } }));
+          return;
+        }
+        if (request.method !== 'plugin/install') {
+          socket.send(JSON.stringify({ error: { code: -32601, message: 'unknown method' }, id: request.id }));
+          return;
+        }
+        const marketplacePath = request.params?.marketplacePath;
+        const pluginName = request.params?.pluginName;
+        if (typeof marketplacePath !== 'string' || typeof pluginName !== 'string') {
+          throw new TypeError('Fake Codex app-server received invalid plugin/install parameters.');
+        }
+        socket.send(JSON.stringify({ id: request.id, method: 'fake/request', params: {} }));
+        await new Promise<void>((resolvePromise) => {
+          setTimeout(resolvePromise, 50);
+        });
+        const source = dirname(dirname(dirname(marketplacePath)));
+        const marketplaceDocument = JSON.parse(await readFile(marketplacePath, 'utf8')) as { readonly name: string };
+        const hooks = JSON.parse(await readFile(join(source, '.codex-plugin', 'hooks.json'), 'utf8')) as {
+          readonly hooks: { readonly SessionStart: readonly [{ readonly hooks: readonly [{ readonly statusMessage: string }] }] };
+        };
+        const mcp = JSON.parse(await readFile(join(source, '.codex-plugin', 'mcp.json'), 'utf8')) as {
+          readonly mcpServers: Readonly<Record<string, unknown>>;
+        };
+        await rm(destination, { force: true, recursive: true });
+        await mkdir(dirname(destination), { recursive: true });
+        await cp(source, destination, { recursive: true });
+        appServer.set(`${pluginName}@${marketplaceDocument.name}`, {
+          hookHash: createHash('sha256').update(JSON.stringify(hooks)).digest('hex'),
+          hookStatus: hooks.hooks.SessionStart[0].hooks[0].statusMessage,
+          mcpServers: Object.keys(mcp.mcpServers).sort(),
+        });
+        refreshSources.push(source);
+        socket.send(JSON.stringify({ id: request.id, result: { appsNeedingAuth: [], authPolicy: 'ON_INSTALL' } }));
+      })().catch((error: unknown) => {
+        socket.send(JSON.stringify({
+          error: { code: -32603, message: error instanceof Error ? error.message : String(error) },
+          id: request.id,
+        }));
+      });
+    });
+  });
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    httpServer.once('error', rejectPromise);
+    httpServer.listen(socketPath, () => {
+      httpServer.off('error', rejectPromise);
+      resolvePromise();
+    });
+  });
+  const eventHub = new ProjectEventHub();
+  const syncEvents: unknown[] = [];
+  eventHub.subscribe((event) => {
+    if (event.type === 'dev.host.sync') syncEvents.push(event.payload);
+  });
+  const manager = new DevHostInstallManager({
+    environment: { ...process.env, CODEX_HOME: codexRoot },
+    epochStore: {
+      acquireEpochReference: async (epochId) => ({
+        close: async () => undefined,
+        epoch: epoch(projectRoot, epochId),
+        root: rootsByEpoch.get(epochId)!,
+      }),
+    },
+    eventHub,
+    hosts: ['codex'],
+    installBundle: async (options) => ({
+      bundleRoot: options.from,
+      destination,
+      host: 'codex',
+      marketplace: 'dev-proof-marketplace',
+      plugin: 'dev-proof',
+      state: 'already-installed',
+      version: '1.0.0',
+    }),
+    projectRoot,
+    uninstallBundle: async () => undefined,
+  });
+
+  try {
+    manager.sync('epoch-1');
+    await manager.settled();
+    expect(syncEvents.at(-1)).toMatchObject({ epochId: 'epoch-1', state: 'succeeded' });
+    expect([...appServer.keys()]).toEqual([pluginId]);
+    const first = appServer.get(pluginId);
+    expect(first).toMatchObject({ hookStatus: 'epoch one', mcpServers: ['probe-v1'] });
+
+    manager.sync('epoch-2');
+    await manager.settled();
+    expect(syncEvents.at(-1)).toMatchObject({ epochId: 'epoch-2', state: 'succeeded' });
+    const second = appServer.get(pluginId);
+    expect(second).toMatchObject({ hookStatus: 'epoch two', mcpServers: ['probe-v2'] });
+    expect(second?.hookHash).not.toBe(first?.hookHash);
+    expect([...appServer.keys()]).toEqual([pluginId]);
+    expect(refreshSources).toEqual([
+      join(projectRoot, '.agent-bundle', 'dev', 'codex'),
+      join(projectRoot, '.agent-bundle', 'dev', 'codex'),
+    ]);
+    expect(JSON.parse(await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8')))
+      .toMatchObject({ epochId: 'epoch-2' });
+  } finally {
+    await manager.close();
+    await new Promise<void>((resolvePromise) => webSocketServer.close(() => resolvePromise()));
+    await new Promise<void>((resolvePromise) => httpServer.close(() => resolvePromise()));
+  }
 });
 
 it('publishes a diagnostic event and preserves the installed generation when re-sync fails', async () => {

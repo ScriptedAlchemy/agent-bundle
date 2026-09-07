@@ -23,6 +23,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import {
   defaultCommandRunner,
   installBundle as defaultInstallBundle,
+  publicHostRoot,
   type InstallBundleOptions,
   type InstallCommandRunner,
   type InstallHost,
@@ -32,6 +33,7 @@ import {
   uninstallBundle as defaultUninstallBundle,
   type UninstallBundleOptions,
 } from '../install/uninstall.ts';
+import { withCodexAppServer } from './codex-app-server.ts';
 import { devProxyServerCommand } from './dev-proxy-command.ts';
 import {
   subscribeToEpochAdoption,
@@ -63,6 +65,7 @@ export interface DevHostInstallManagerOptions {
 interface InstalledDevHost {
   readonly destination: string;
   readonly host: InstallHost;
+  readonly plugin?: string;
   epochId: string;
 }
 
@@ -130,7 +133,11 @@ const prepareDevBundle = async (
   epochId: string,
   projectRoot: string,
   run: PlatformRun,
-): Promise<Readonly<{ readonly cleanup: () => Promise<void>; readonly root: string }>> => {
+): Promise<Readonly<{
+  readonly cleanup: () => Promise<void>;
+  readonly marketplaceDocument?: string;
+  readonly root: string;
+}>> => {
   const parent = await mkdtemp(join(tmpdir(), `agent-bundle-dev-${host}-`));
   const root = join(parent, 'bundle');
   try {
@@ -139,9 +146,10 @@ const prepareDevBundle = async (
     if (manifestRead.status !== 'ok') {
       throw new Error(`Development install requires a valid artifact manifest at ${manifestRead.path}.`);
     }
-    const mcpDocument = manifestRead.manifest.projections.find(
+    const projection = manifestRead.manifest.projections.find(
       (projection) => projection.builtInHost === host,
-    )?.documents.mcp;
+    );
+    const mcpDocument = projection?.documents.mcp;
     if (mcpDocument !== undefined) {
       await rewriteMcpDocument(root, mcpDocument, host, projectRoot, run);
     }
@@ -155,6 +163,9 @@ const prepareDevBundle = async (
     });
     return Object.freeze({
       cleanup: () => rm(parent, { force: true, recursive: true }),
+      ...(projection?.documents.marketplace === undefined
+        ? {}
+        : { marketplaceDocument: projection.documents.marketplace }),
       root,
     });
   } catch (error) {
@@ -474,8 +485,10 @@ export class DevHostInstallManager {
     try {
       const source = host === 'cursor' ? prepared.root : stableDevBundle(this.#projectRoot, host);
       let installed = this.#installed.get(host);
+      if (host !== 'cursor' && (installed === undefined || host === 'codex')) {
+        await ensureStableDevBundle(prepared.root, source);
+      }
       if (installed === undefined) {
-        if (host !== 'cursor') await ensureStableDevBundle(prepared.root, source);
         const result = await this.#installBundle({
           commandRunner: this.#commandRunner,
           environment: this.#environment,
@@ -489,12 +502,35 @@ export class DevHostInstallManager {
           destination: installedDestination(result, this.#home, this.#environment),
           epochId: '',
           host,
+          ...(host === 'codex' ? { plugin: result.plugin } : {}),
         };
         this.#installed.set(host, installed);
       }
       const previousEpochId = installed.epochId;
+      let generationPublished = false;
       try {
-        await publishDevGeneration(installed.destination, prepared.root, epochId);
+        let refreshedByAppServer = false;
+        if (host === 'codex') {
+          refreshedByAppServer = await withCodexAppServer(
+            publicHostRoot('codex', this.#environment, this.#home ?? homedir()),
+            async (request) => {
+              const plugin = installed.plugin;
+              const marketplaceDocument = prepared.marketplaceDocument;
+              if (plugin === undefined || marketplaceDocument === undefined) {
+                throw new TypeError('Cannot refresh a Codex development install with no plugin marketplace identity.');
+              }
+              await request('plugin/install', {
+                marketplacePath: join(source, marketplaceDocument),
+                pluginName: plugin,
+              });
+              return true;
+            },
+          ) === true;
+        }
+        if (!refreshedByAppServer) {
+          await publishDevGeneration(installed.destination, prepared.root, epochId);
+          generationPublished = true;
+        }
       } catch (error) {
         if (previousEpochId.length > 0 && await pathExists(generationRoot(installed.destination, previousEpochId))) {
           await publishInstalledGeneration(installed.destination, previousEpochId);
@@ -503,10 +539,12 @@ export class DevHostInstallManager {
         throw error;
       }
       installed.epochId = epochId;
-      await pruneGenerations(
-        installed.destination,
-        previousEpochId.length === 0 ? [epochId] : [previousEpochId, epochId],
-      );
+      if (generationPublished) {
+        await pruneGenerations(
+          installed.destination,
+          previousEpochId.length === 0 ? [epochId] : [previousEpochId, epochId],
+        );
+      }
     } finally {
       await prepared.cleanup();
     }
