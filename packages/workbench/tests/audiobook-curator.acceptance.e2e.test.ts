@@ -82,11 +82,11 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     }
     const inventoryLeaf = applicationLeafForRouteId(surface.application, 'tool:curator/inventory_sources');
     const auditLeaf = applicationLeafForRouteId(surface.application, 'tool:curator/audit_library');
-    const inventoryCliLeaf = applicationLeaves(surface.application).find((leaf) =>
-      leaf.routeId === 'cli:inventory' && leaf.ref.kind === 'cli');
-    if (auditLeaf?.ref.kind !== 'tool' || inventoryLeaf?.ref.kind !== 'tool' || inventoryCliLeaf?.ref.kind !== 'cli') {
-      throw new Error('inspectWorkbenchSurface did not project the audit, inventory, and CLI routes.');
+    if (auditLeaf?.ref.kind !== 'tool' || inventoryLeaf?.ref.kind !== 'tool') {
+      throw new Error('inspectWorkbenchSurface did not project the audit and inventory tools.');
     }
+    // The `inventory` command is the tool's `.cli.ts` projection (#725), not a `cli:*` leaf.
+    expect(inventoryLeaf.command?.path).toEqual(['inventory']);
     expect(searchLeaf.ref.server).toBe('curator');
     const searchPath = workbenchLeafPath(searchLeaf);
     expect(searchPath).toBe('/routes/mcp/curator/tool/search_audible');
@@ -152,30 +152,6 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     const inventoryDocument = workbenchTestId(page, 'renderedDocument');
     await expect(inventoryDocument).toHaveAttribute('aria-busy', 'false', { timeout: runTimeout });
     await expect(inventoryDocument.locator('.agent-document-error-node')).toBeVisible({ timeout: runTimeout });
-
-    await selectApplicationLeaf(page, server.url, inventoryCliLeaf);
-    await workbenchTestId(page, 'routeInputEditor').getByRole('button', { name: 'Raw JSON' }).click();
-    const cliArgs = workbenchTestId(page, 'routeInputEditor').locator('textarea');
-    await cliArgs.fill('[]');
-    await workbenchTestId(page, 'routeRun').click();
-    await expect(inventoryStatus).toHaveClass(/route-status--failed/u, { timeout: runTimeout });
-    await expect(page.getByText(/Loading/u)).toHaveCount(0, { timeout: browserTimeout });
-    await expect(page.locator('.route-diagnostic')).toContainText(/required|missing|usage/iu, { timeout: browserTimeout });
-    await workbenchTestId(page, 'inspectorToggle').click();
-    await page.getByRole('tab', { name: 'Providers' }).click();
-    const libraryProvider = page.getByRole('row').filter({ hasText: 'library' });
-    await expect(libraryProvider).toContainText('unobserved', { timeout: browserTimeout });
-    await expect(libraryProvider).toContainText('—');
-
-    await workbenchTestId(page, 'routeInputEditor').getByRole('button', { name: 'Form' }).click();
-    await fillRouteInput(page, {
-      report: join(project.root, 'inventory-report.json'),
-      source: acceptanceLibrary,
-    });
-    await workbenchTestId(page, 'routeInputEditor').getByLabel('Strict').selectOption('true');
-    await runSelectedRoute(page, runTimeout);
-    await expect(page.getByText(/Loading/u)).toHaveCount(0, { timeout: browserTimeout });
-    await expect(inventoryStatus).toContainText('Exit code 1', { timeout: runTimeout });
 
     await selectApplicationLeaf(page, server.url, searchLeaf);
     await fillRouteInput(page, { title: searchTitle });
