@@ -11,8 +11,9 @@ target 表格——各宿主投影携带什么，以及 portable 标准为何省
 ## 组合插件根目录
 
 `agent-bundle build` 在产物输出位置写出**一个目录**——默认是 `artifact/`；`output.distPath` 或 `--output`
-可以移动它。`targets` 选择铺进该根目录的**宿主投影**：`claude`、`codex`、`cursor` 与 `portable`，可任意
-组合。每个所选宿主都把同一个目录当作自己的插件根目录来读取；没有需要把宿主指向的逐宿主子目录。
+可以移动它。`targets` 选择铺进该根目录的**宿主投影**：`amp`、`claude`、`codex`、`cursor` 与 `portable`，
+可任意组合。Claude Code、Codex、Cursor 与 portable 把根目录当作插件根；Amp 则读取生成在
+`.amp/plugins/<name>/` 的那一个目录。
 
 - 省略 `targets`——配置与命令行都省略——时，构建只输出 `portable` 投影。
 - 顺序无关。`['codex', 'claude']` 与 `['claude', 'codex']` 产出逐字节相同的输出，规范化模型、产物清单与
@@ -20,10 +21,12 @@ target 表格——各宿主投影携带什么，以及 portable 标准为何省
 - `plugin` 不是 target。`targets: ['plugin']` 或 `--target plugin` 是未知 target（`AB4100`）：组合根目录
   本来就是每次构建的输出。
 
-以全部四个投影构建时，host-test 示例的根目录如下（组件目录只在项目编写了对应组件时才会出现）：
+以全部五个投影构建时，host-test 示例的根目录如下（组件目录只在项目编写了对应组件时才会出现）：
 
 ```text
 artifact/
+├── .amp/plugins/<name>/index.js          # Amp PluginAPI 工厂
+├── .amp/plugins/<name>/skills/           # 显式注册的 Amp Skill
 ├── .agents/plugins/marketplace.json      # Codex 市场
 ├── .claude-plugin/plugin.json            # Claude Code 清单
 ├── .claude-plugin/marketplace.json
@@ -46,7 +49,7 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 只输出一次
 ├── INSTALL.md                            # 选中了任一内置宿主时
 ├── install.mjs                           # 选中了 cursor 或 portable 时
-├── agent-bundle.manifest.json            # 产物索引（manifestVersion 3）
+├── agent-bundle.manifest.json            # 产物索引（manifestVersion 4）
 └── agent-bundle.compile-evidence.json    # 每个已编译文件的编译器记录
 ```
 
@@ -63,12 +66,14 @@ artifact/
 
 | 宿主 | 清单 | 钩子文档 | MCP 文档 | 市场 |
 | --- | --- | --- | --- | --- |
+| Amp | ——；`index.js` 记录为 `documents.entry` | 由 `amp.on` 注册回调 | 已注册 Skill 旁的扁平 `skills/<name>/mcp.json` | —— |
 | Claude Code | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
 | Codex | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
 | Cursor | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | `marketplace: true` 时为 `.cursor-plugin/marketplace.json` |
 | portable | `plugin.json` | —— | `mcp.json` | —— |
 
-无论选择了哪些宿主，这些路径都是固定的，因此单宿主根目录与四宿主根目录共用同一种布局。Claude Code 与
+无论选择了哪些宿主，这些路径都是固定的，因此单宿主根目录与五宿主根目录共用同一种布局。Amp 的目录隔离在
+`.amp/plugins/<name>/` 下；Claude Code 与
 portable 的 Agent Plugins 格式从约定的插件根位置加载文档，无法重定向；Codex 与 Cursor 的清单携带显式的
 `hooks` 与 MCP 指针，因此它们的文档紧挨着各自的清单。这两个宿主在指针缺失时还会回退到对约定路径的目录
 发现，因此当钩子或 MCP 服务器到达另一个所选宿主的约定路径时，没有自己文档的 Codex 或 Cursor 投影仍会
@@ -96,6 +101,9 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 `+` 连接，例如 `claude+codex`——而不是归属于任何单个宿主。`agent-bundle inspect --bundler` 显示的是同一
 件事：它的 `output.path` 就是产物输出 `<output>`，其下没有宿主段。
 
+Amp 的 MCP 是例外：它位于 Skill 范围，而非插件根 MCP 文档。适配器只在恰有一个捆绑 Skill 时接受可搬迁的
+远程服务器与全局可解析命令。Amp 未文档化插件根 token 或执行 `cwd`，所以编译器拥有的本地 MCP 入口会被拒绝。
+
 ### 一个根目录，一套字节
 
 按路径合并投影，只有在各宿主对字节达成一致时才行得通。三条规则守住根目录的诚实，它们都是错误，且
@@ -105,7 +113,7 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 | --- | --- |
 | `AB4103` | 两个所选投影为同一路径规划了不同的字节。投影按宿主名顺序比较、路径按路径顺序比较，因此无论 `targets` 怎么写，同一选择报告的都是同一处冲突。常见原因是 frontmatter 带有宿主扩展（`targets: { claude: … }`）的 Skill：它为 Claude Code 降级出的 `skills/<name>/SKILL.md` 字节与其他宿主不同。请让该组件对每个所选宿主都一致，或把冲突的宿主构建进单独的产物。 |
 | `AB4105` | 一个只面向部分所选宿主的组件——frontmatter 带 `targets` 的命令或规则——位于另一个所选宿主会扫描的约定目录中（Claude Code 与 Cursor 的 `commands/`、Cursor 的 `rules/`）。在同一个根目录里无法把该文件对那个宿主隐藏起来，因此构建宁可拒绝也不泄漏它。请把 `targets` 扩展到每个会发现该目录的所选宿主，或把这些宿主分开构建。Skill 从不按宿主限定：每个 skill 都会交付给所有所选宿主，会改变其字节的按宿主 frontmatter 扩展属于 `AB4103` 冲突。 |
-| `AB4106` | 所选目标把注册在高级 `TargetRegistry` 上的适配器——即任何其适配器不是随框架发布的 `claude`、`codex`、`cursor`、`portable` 适配器的目标，按适配器身份而非名称判断，因此以这些名字注册的自定义适配器同样算作高级适配器——与另一个目标混在一起。只有内建宿主就各自不共享的文档放在何处、各自扫描哪些目录以及同一套安装面达成了一致，因此第三方适配器要单独构建：`targets: ['<name>']` 输出到自己的 `--output`。只选一个目标时永不触发。 |
+| `AB4106` | 所选目标把注册在高级 `TargetRegistry` 上的适配器——即任何其适配器不是随框架发布的 `amp`、`claude`、`codex`、`cursor`、`portable` 适配器的目标，按适配器身份而非名称判断，因此以这些名字注册的自定义适配器同样算作高级适配器——与另一个目标混在一起。只有内建宿主就各自不共享的文档放在何处、各自扫描哪些目录以及同一套安装面达成了一致，因此第三方适配器要单独构建：`targets: ['<name>']` 输出到自己的 `--output`。只选一个目标时永不触发。 |
 
 三者与 `AB4100` 一起列在[诊断参考](./diagnostics.md)中。
 
@@ -117,6 +125,7 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 
 | 所选宿主 | 市场清单 | 安装表面 |
 | --- | --- | --- |
+| `amp` | —— | 把 `.amp/plugins/<name>/` 复制到项目或系统插件根。 |
 | `claude` | `.claude-plugin/marketplace.json`。 | `claude plugin marketplace add` + `claude plugin install`。 |
 | `codex` | `.agents/plugins/marketplace.json`。 | `codex plugin marketplace add` + `codex plugin add`。 |
 | `cursor` | `marketplace: true` 时为 `.cursor-plugin/marketplace.json`。 | `install.mjs`。 |
@@ -128,14 +137,14 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 
 ## agent-bundle.manifest.json
 
-每个根目录输出一份清单（`manifestVersion: 3`）。它是根目录的**索引**——每个消费者都通过这一份文档了解
+每个根目录输出一份清单（`manifestVersion: 4`）。它是根目录的**索引**——每个消费者都通过这一份文档了解
 根目录包含什么——也是之后每一项完整性检查的输入：`validate --artifact`、`prepack`、`install`、
 `doctor --from`、`serve-app`、`mcp`、`hooks`，以及 packed 与 installed-host 证明级别。完整的字段参考见
 [产物清单](./artifact-manifest.mdx)页；概要如下：
 
 | 分节 | 内容 |
 | --- | --- |
-| `manifestVersion`、`runtime` | `3`，以及 `{ node }`，即面向消费者的生成式可执行文件下限。 |
+| `manifestVersion`、`runtime` | `4`，以及 `{ node }`，即面向消费者的生成式可执行文件下限。 |
 | `application` | 身份，只记录一次且与宿主无关：`id`、`name`、`version`，可选的 `description`。这是 `install`、`doctor` 与 `uninstall` 作用的对象。 |
 | `files[]` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`（`bundle`、`copy`、`generated`、`prebuilt`）、可选的 `mode`。 |
 | `projections[]` | 每个所选宿主一行，按 `host` 排序：`host`、可选的 `builtInHost`、指向该投影输出的宿主插件、市场、MCP 与钩子文档的 `documents` 指针，以及它的 `marketplace` 名。 |

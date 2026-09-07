@@ -11,6 +11,7 @@ export {
   skillTokenSpellings,
 } from './skills/tokens.ts';
 export type {
+  AmpSkillExtension,
   ClaudeSkillExtension,
   CodexSkillExtension,
   CursorSkillExtension,

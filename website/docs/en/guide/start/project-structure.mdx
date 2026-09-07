@@ -107,12 +107,13 @@ shadows it. The `bin: false` and `lib: false` opt-outs stay silent.
 
 One directory at the artifact output, whatever `targets` selects. The CLI defaults that output to
 `artifact/`, so it never collides with the package build below; `output.distPath` or `--output`
-moves it. Every selected host reads this directory as its plugin root — there is no
-`artifact/<host>/` partition — so `targets` decides which host manifests appear at the root, not
-where anything lands. Omit `targets` and the root carries the `portable` projection alone.
+moves it. Amp reads its nested `.amp/plugins/<name>/` directory; the other selected hosts read the
+composite root as their plugin root. There is no `artifact/<host>/` partition. Omit `targets` and
+the root carries the `portable` projection alone.
 
 ```text
 artifact/
+├── .amp/plugins/<name>/index.js      # amp directory-plugin factory
 ├── .claude-plugin/plugin.json        # claude, with marketplace.json beside it
 ├── .codex-plugin/plugin.json         # codex, with hooks.json and mcp.json beside it
 ├── .agents/plugins/marketplace.json  # codex marketplace

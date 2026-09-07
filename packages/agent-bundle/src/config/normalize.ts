@@ -79,7 +79,7 @@ import { normalizeNoticeRetention } from './notice-retention.ts';
 import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
 
 const isSkillHost = (name: string): name is SkillHost =>
-  name === 'claude' || name === 'codex' || name === 'cursor' || name === 'portable';
+  name === 'amp' || name === 'claude' || name === 'codex' || name === 'cursor' || name === 'portable';
 
 const loweringHosts = (targetNames: readonly string[]): SkillHost[] =>
   [...new Set(targetNames.filter(isSkillHost))];

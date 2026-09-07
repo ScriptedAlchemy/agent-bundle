@@ -648,9 +648,25 @@ export default defineConfig({
 | `targets` | Restrict the server to specific targets. |
 | `apps` | Browser MCP Apps registered on this server. |
 
+### Amp skill-scoped MCP
+
+Amp reads MCP from a registered skill, not one plugin-root document. With exactly one Amp skill,
+canonical remote servers become `{ url, headers? }` entries and external stdio commands become
+`{ command, args?, env? }` entries in that skill's flat `mcp.json` map — never under an
+`mcpServers` wrapper. Native `mcpServers` frontmatter wins over the sibling file, and a
+same-named CLI, workspace, or user server wins over the skill.
+
+Compiler-owned local entries (`entry`, generated routes, or prebuilt payload paths), `cwd`, and
+Agent Bundle path tokens are rejected for Amp. The pinned Amp docs publish no plugin-root token or
+skill-server execution cwd, so emitting a relative generated entry would not be relocatable.
+Use a globally resolvable command, a remote URL, or native Amp frontmatter instead. Amp connects
+skill servers during discovery while hiding their tools until activation; hidden tools do not
+prove that no server process started.
+
 ## The plugin-root environment anchor
 
-Every emitted stdio MCP server entry carries an `AGENT_BUNDLE_PLUGIN_ROOT` environment variable
+Every plugin-root stdio MCP server entry on the four root-document targets carries an
+`AGENT_BUNDLE_PLUGIN_ROOT` environment variable
 holding the plugin install root in the target's native spelling: `${CLAUDE_PLUGIN_ROOT}` on
 Claude Code, `${PLUGIN_ROOT}` on portable, `${CURSOR_PLUGIN_ROOT}` on Cursor, and `./` on Codex,
 resolved against the entry's plugin-root `cwd`. Codex has no path-token interpolation, so a Codex

@@ -19,6 +19,8 @@ import {
   type AgentTestProofLevel,
 } from './manifest.ts';
 
+type InstalledMcpHost = Exclude<InstallHost, 'amp'>;
+
 export type InstalledHostCheckName =
   | 'component-paths'
   | 'hook-commands'
@@ -53,7 +55,7 @@ export interface InstalledHostEvidenceMetadata {
 
 export interface InstalledHostObservation {
   readonly checks: Readonly<Record<InstalledHostCheckName, InstalledHostCheckOutcome>>;
-  readonly host: InstallHost;
+  readonly host: InstalledMcpHost;
   readonly metadata: InstalledHostEvidenceMetadata;
   readonly proofLevel: string;
   readonly sessionEvidence: string;
@@ -63,7 +65,7 @@ export interface InstalledHostObservation {
 export interface InstalledHostMcpProvenance {
   /** Installed-root-relative command entry, never an absolute host path. */
   readonly entry: string;
-  readonly host: InstallHost;
+  readonly host: InstalledMcpHost;
   readonly pid: number | undefined;
   readonly proofLevel: typeof HOST_INSTALL_PROOF_LEVEL | typeof SIMULATED_PROOF_LEVEL;
 }
@@ -82,7 +84,7 @@ export interface OpenInstalledHostMcpServerOptions {
   /** Root containing `agent-bundle.manifest.json` and target directories. */
   readonly artifactRoot: string;
   readonly env?: Readonly<Record<string, string>>;
-  readonly host: InstallHost;
+  readonly host: InstalledMcpHost;
   /** Version observed from the real host binary, when that lane invoked one. */
   readonly hostBinaryVersion?: string;
   /** Host-owned installed plugin root, not the build target directory. */
@@ -173,7 +175,7 @@ const commandStrings = (value: unknown): readonly string[] => {
     key === 'command' && typeof nested === 'string' ? [nested] : commandStrings(nested));
 };
 
-const expandHostPath = (value: string, host: InstallHost, installedRoot: string): string => {
+const expandHostPath = (value: string, host: InstalledMcpHost, installedRoot: string): string => {
   switch (host) {
     case 'claude':
       return value.replaceAll('${CLAUDE_PLUGIN_ROOT}', installedRoot);

@@ -576,9 +576,21 @@ export default defineConfig({
 | `targets` | 把服务器限制到特定 target。 |
 | `apps` | 注册到该服务器上的浏览器 MCP App。 |
 
+### Amp 的 Skill 范围 MCP
+
+Amp 从已注册 Skill 而非插件根文档读取 MCP。恰有一个 Amp Skill 时，规范远程服务器会成为
+`{ url, headers? }`，外部 stdio 命令会成为该 Skill 扁平 `mcp.json` 映射中的
+`{ command, args?, env? }`——外层绝不再包 `mcpServers`。原生 `mcpServers` frontmatter 优先于同级文件；
+同名的 CLI、工作区或用户服务器又优先于 Skill。
+
+Amp target 会拒绝编译器拥有的本地入口（`entry`、生成路由或预构建 payload 路径）、`cwd` 与 Agent Bundle
+路径 token。固定版本的 Amp 文档没有发布插件根 token 或 Skill 服务器执行 `cwd`，因此输出相对的生成入口
+并不可搬迁。请改用全局可解析命令、远程 URL 或原生 Amp frontmatter。Amp 在发现 Skill 时连接服务器，但
+在激活前隐藏工具；看不见工具并不能证明服务器进程尚未启动。
+
 ## 插件根目录环境锚点
 
-每个输出的 stdio MCP 服务器入口都带有 `AGENT_BUNDLE_PLUGIN_ROOT` 环境变量，其值是插件安装根目录在
+四个插件根文档 target 的每个 stdio MCP 服务器入口都带有 `AGENT_BUNDLE_PLUGIN_ROOT` 环境变量，其值是插件安装根目录在
 该 target 上的原生写法：Claude Code 上是 `${CLAUDE_PLUGIN_ROOT}`、可移植格式上是 `${PLUGIN_ROOT}`、
 Cursor 上是 `${CURSOR_PLUGIN_ROOT}`、Codex 上是 `./`，并相对入口的插件根 `cwd` 解析。Codex 没有路径
 token 插值，因此没有插件根工作目录的 Codex stdio 服务器会省略该锚点；由源码构建（`entry:`）的服务器

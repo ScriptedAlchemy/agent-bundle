@@ -2,7 +2,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
-import type { InstallHost } from '../install/install.ts';
+import type { DevInstallHost } from '../install/install.ts';
 
 interface AgentBundlePackage {
   readonly bin?: unknown;
@@ -61,7 +61,7 @@ const resolveAgentBundleCliEntry = async (): Promise<string> => {
 export const devProxyServerCommand = async (
   projectRoot: string,
   serverName: string,
-  host: InstallHost,
+  host: DevInstallHost,
 ): Promise<Readonly<{
   readonly args: readonly string[];
   readonly command: string;

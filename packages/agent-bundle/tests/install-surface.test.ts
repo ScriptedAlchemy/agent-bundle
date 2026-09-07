@@ -53,7 +53,7 @@ const writesFor = (target: string, model: NormalizedPlugin = modelFor(target)): 
     .map((entry) => [entry.relativePath, entry.content]));
 };
 
-it.each(['claude', 'codex', 'cursor', 'portable'])(
+it.each(['amp', 'claude', 'codex', 'cursor', 'portable'])(
   'emits a concrete INSTALL.md for the %s target',
   (target) => {
     const install = writesFor(target).get('INSTALL.md');
@@ -92,7 +92,7 @@ it('emits always-installable Claude and Codex local marketplaces with exact comm
 // A consumer never needs the framework CLI: the bundle is self-contained, so
 // install, reinstall, and uninstall are host commands, and `agent-bundle
 // install`/`uninstall`/`doctor` are documented as optional automation only.
-it.each(['claude', 'codex', 'cursor', 'portable'])(
+it.each(['amp', 'claude', 'codex', 'cursor', 'portable'])(
   'documents host-native install and uninstall for %s and marks the agent-bundle CLI optional',
   (target) => {
     const install = writesFor(target).get('INSTALL.md')!;

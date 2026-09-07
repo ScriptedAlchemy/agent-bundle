@@ -311,11 +311,12 @@ used; compile evidence records the `dist` bundles named in the diagnostic.
 
 ### Composite root
 
-Built with `targets: ['claude', 'codex', 'cursor', 'portable']`, the
+Built with `targets: ['amp', 'claude', 'codex', 'cursor', 'portable']`, the
 host-test example's root is:
 
 ```text
 artifact/
+├── .amp/plugins/<name>/{index.js,skills/,hooks/}
 ├── .agents/plugins/marketplace.json
 ├── .claude-plugin/{plugin.json,marketplace.json}
 ├── .codex-plugin/{plugin.json,hooks.json,mcp.json}
@@ -398,7 +399,7 @@ serializes it with `assembleArtifactManifest`: canonical `stableJson`
 plus a trailing newline. `parseArtifactManifest` rejects any other byte
 sequence, duplicate keys, unknown keys, missing keys, unsorted arrays,
 and a file entry that names the manifest itself. `manifestVersion` is
-`2`. The public reader is `build/manifest-file.ts`
+`4`. The public reader is `build/manifest-file.ts`
 `readArtifactManifest`: `ok`, `missing` (ENOENT only), or `invalid`.
 
 The schema is **closed in TypeScript** (`requireExactKeys` in
@@ -423,7 +424,7 @@ keeps only the outline.
 ### Sections the writer emits
 
 The document has two parts with two version numbers. The **public
-contract** (`manifestVersion: 3`) is what consumers read. The
+contract** (`manifestVersion: 4`) is what consumers read. The
 **compiler record** (`compiler`, `recordVersion: 1`) is the operational
 account of the run — producer, project digests, provenance, adapter
 revisions, pinned schemas, validation — and changes without bumping
@@ -431,11 +432,11 @@ revisions, pinned schemas, validation — and changes without bumping
 
 | Section | What it records |
 | --- | --- |
-| `manifestVersion` | `3` |
+| `manifestVersion` | `4` |
 | `application` | Host-independent identity: `id`, `name`, `version`, optional `description` |
 | `files[]` | Every emitted file except the manifest (`path`, `bytes`, `sha256`, `kind`, optional `mode`) |
 | `runtime` | `{ node }` from `NormalizedPlugin.runtime` |
-| `projections[]` | One row per selected host. `host` is the selected name; `builtInHost` is the shipped adapter identity (absent for an advanced-registry adapter); `documents` (`plugin?`, `marketplace?`, `mcp?`, `hooks?`) point at the derived host documents; optional `marketplace.name`. Renamed from `targets[]`. |
+| `projections[]` | One row per selected host. `host` is the selected name; `builtInHost` is the shipped adapter identity (absent for an advanced-registry adapter); `documents` (`plugin?`, `marketplace?`, `mcp?`, `hooks?`, `entry?`) point at the derived host documents; optional `marketplace.name`. Renamed from `targets[]`. |
 | `routes` | Compiled route graph: `servers[]`, `events[]`, `scripts[]`, `cli?`, `providers[]`, `layouts[]`, `contracts[]`, `digest` |
 | `executables` | Processes the root can start: `bins[]`, `hooks[]` (`kind` is `config` \| `event-route`), `mcpServers[]` (`entry`, `apps[]`), `scripts[]` |
 | `distribution` | `channels` (`local` always; `npm` when packaged) and optional `install` pointers |
@@ -585,8 +586,8 @@ issue:
 | [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) | Production `web` surface on that same bridge |
 
 Step 3 landed the authoritative `agent-bundle.manifest.json` as version 2;
-the distribution install pointers advance the current contract to
-`manifestVersion` 3. The field contract is
+distribution install pointers advanced it to version 3, and Amp executable
+entry pointers advance the current contract to `manifestVersion` 4. The field contract is
 [Artifact manifest](../../reference/artifact-manifest.mdx).
 #592 stays open until the remaining acceptance criteria on that issue
 land.

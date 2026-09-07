@@ -1222,7 +1222,7 @@ it('does not manufacture Codex MCP or hook documents from a static Claude select
 
 it('plans byte-stable native Codex and Claude plugin trees from the same frozen model', async () => {
   const registry = createDefaultRegistry();
-  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor']);
+  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor', 'amp']);
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(Object.isFrozen(plugin)).toBe(true);
 

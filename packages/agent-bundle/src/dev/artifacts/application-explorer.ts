@@ -30,7 +30,7 @@ export interface ApplicationExplorerIdentity {
 }
 
 export interface ApplicationExplorerDocument {
-  readonly kind: 'hooks' | 'marketplace' | 'mcp' | 'plugin';
+  readonly kind: 'entry' | 'hooks' | 'marketplace' | 'mcp' | 'plugin';
   readonly path: string;
 }
 
@@ -138,7 +138,7 @@ export interface ApplicationExplorerDistribution {
   readonly payloads: readonly ApplicationExplorerPayload[];
 }
 
-const documentKinds = ['hooks', 'marketplace', 'mcp', 'plugin'] as const;
+const documentKinds = ['entry', 'hooks', 'marketplace', 'mcp', 'plugin'] as const;
 
 const byId = <Value extends { readonly id: string }>(left: Value, right: Value): number =>
   left.id.localeCompare(right.id);

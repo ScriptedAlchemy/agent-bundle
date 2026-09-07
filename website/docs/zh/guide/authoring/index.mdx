@@ -36,18 +36,18 @@ export default defineConfig({
 
 ## Targets
 
-`targets` 选择构建铺进同一个复合插件根目录的宿主投影——也就是 `artifact/`（或
-`output.distPath`）下那个由所有选中宿主共同读取的单一目录：
+`targets` 选择构建铺进 `artifact/`（或 `output.distPath`）复合根目录的宿主投影：
 
 | Target | 向根目录投影什么 |
 | --- | --- |
+| `amp` | `.amp/plugins/<name>/` 下的一个目录插件：`index.js`、显式注册的 Skill、API 回调与 Skill 范围 MCP。 |
 | `claude` | Claude Code 插件布局：`.claude-plugin/`、`hooks/hooks.json`、`.mcp.json`。 |
 | `codex` | Codex 插件布局：`.codex-plugin/`，内含它自己的 `hooks.json` 与 `mcp.json`。 |
 | `cursor` | Cursor 插件布局：`.cursor-plugin/`，内含它自己的 `hooks.json` 与 `mcp.json`。 |
 | `portable` | [Agent Plugins 开放标准](https://agent-plugins.org)（规范 1.0.0）：根目录的 `plugin.json` 与 `mcp.json`。Cursor 原生加载；其余读取该构件的客户端，连同它加载与不加载的界面，都记录在[已记录的第三方客户端](/zh/reference/hosts)中。 |
 
-宿主清单各自位于自己的点目录中；`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/`
-只输出一份，由所有宿主共享。省略 `targets` 时构建只输出 `portable` 投影。顺序无关紧要——
+Amp 插件嵌套在 `.amp/plugins/` 下；其他宿主清单各自位于自己的点目录中，`skills/`、`hooks/`、`mcp/`、
+`scripts/`、`bin/` 与 `assets/` 只输出一份并共享。省略 `targets` 时构建只输出 `portable` 投影。顺序无关紧要——
 `['codex', 'claude']` 与 `['claude', 'codex']` 产生完全相同的字节——而其他任何名称（包括
 `plugin`）都是未知 target（`AB4100`）。
 

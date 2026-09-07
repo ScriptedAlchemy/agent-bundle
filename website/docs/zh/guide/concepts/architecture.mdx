@@ -273,10 +273,11 @@ node 表面。
 
 ### 复合根目录
 
-以 `targets: ['claude', 'codex', 'cursor', 'portable']` 构建时，host-test 示例的根目录为：
+以 `targets: ['amp', 'claude', 'codex', 'cursor', 'portable']` 构建时，host-test 示例的根目录为：
 
 ```text
 artifact/
+├── .amp/plugins/<name>/{index.js,skills/,hooks/}
 ├── .agents/plugins/marketplace.json
 ├── .claude-plugin/{plugin.json,marketplace.json}
 ├── .codex-plugin/{plugin.json,hooks.json,mcp.json}
@@ -349,7 +350,7 @@ prompt 路由则返回经校验的协议结果（来自 `document.value`）。CL
 `build/manifest-routes.ts` 的 `artifactRoutesFor`。`writeManifest` 再用
 `assembleArtifactManifest` 将其序列化：规范的 `stableJson` 加一个末尾换行。
 `parseArtifactManifest` 拒绝任何其他字节序列、重复键、未知键、缺失键、未排序
-的数组，以及指向清单自身的文件条目。`manifestVersion` 为 `3`。公开读取方是
+的数组，以及指向清单自身的文件条目。`manifestVersion` 为 `4`。公开读取方是
 `build/manifest-file.ts` 的 `readArtifactManifest`：`ok`、`missing`（仅
 ENOENT）或 `invalid`。
 
@@ -371,7 +372,7 @@ ENOENT）或 `invalid`。
 
 ### 写入器发出的分节
 
-文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 3`）
+文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 4`）
 是消费者读取的部分。**编译器记录**（`compiler`，`recordVersion: 1`）是
 这次运行的操作性账目——生产者、项目摘要、来源、适配器修订、固定的
 schema、验证结果——它的变化不会推动 `manifestVersion`；消费者读取方
@@ -379,11 +380,11 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 
 | 分节 | 记录什么 |
 | --- | --- |
-| `manifestVersion` | `3` |
+| `manifestVersion` | `4` |
 | `application` | 与宿主无关的身份：`id`、`name`、`version`，可选的 `description` |
 | `files[]` | 除清单自身外的每个发出文件（`path`、`bytes`、`sha256`、`kind`，可选的 `mode`） |
 | `runtime` | 来自 `NormalizedPlugin.runtime` 的 `{ node }` |
-| `projections[]` | 每个所选宿主一行。`host` 是所选名称；`builtInHost` 是随包适配器身份（高级注册表适配器则缺省）；`documents`（`plugin?`、`marketplace?`、`mcp?`、`hooks?`）指向派生出的宿主文档；以及可选的 `marketplace.name`。由 `targets[]` 更名而来。 |
+| `projections[]` | 每个所选宿主一行。`host` 是所选名称；`builtInHost` 是随包适配器身份（高级注册表适配器则缺省）；`documents`（`plugin?`、`marketplace?`、`mcp?`、`hooks?`、`entry?`）指向派生出的宿主文档；以及可选的 `marketplace.name`。由 `targets[]` 更名而来。 |
 | `routes` | 编译后的路由图：`servers[]`、`events[]`、`scripts[]`、`cli?`、`providers[]`、`layouts[]`、`contracts[]`、`digest` |
 | `executables` | 根目录能启动的进程：`bins[]`、`hooks[]`（`kind` 为 `config` \| `event-route`）、`mcpServers[]`（`entry`、`apps[]`）、`scripts[]` |
 | `distribution` | `channels`（始终有 `local`；已打包时有 `npm`）以及可选的 `install` 指针 |
@@ -512,8 +513,8 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 | [#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) | 生成的类型化 App 客户端 + 共享桥接 |
 | [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) | 基于同一桥接的生产 `web` 表面 |
 
-第 3 步以版本 2 落地了权威的 `agent-bundle.manifest.json`；分发安装指针把当前契约推进到
-`manifestVersion` 3。
+第 3 步以版本 2 落地了权威的 `agent-bundle.manifest.json`；分发安装指针将其推进到版本 3，
+Amp 可执行入口指针再把当前契约推进到 `manifestVersion` 4。
 字段契约见 [产物清单](../../reference/artifact-manifest.mdx)。#592
 会一直保持打开，直到该 issue 上剩余的验收标准落地。
 

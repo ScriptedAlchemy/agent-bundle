@@ -4,7 +4,8 @@ description: 'Declare agent-bundle lifecycle hooks: the canonical events, tool s
 
 # Hooks
 
-A hook is a handler module the compiler wraps and registers in each host's native hook document.
+A hook is a handler module the compiler wraps and registers in each host's native hook document,
+or from Amp's generated PluginAPI factory.
 You declare it once, keyed by a canonical event, and the adapters translate the event name, the
 matcher, and the result shape into whatever the selected host expects.
 
@@ -71,6 +72,12 @@ export default defineConfig({
 A host that does not implement an event simply does not receive that hook; the emitted document
 stays honest rather than inventing an equivalent.
 
+Amp maps plain `sessionStart` to fire-and-forget `session.start` and plain `beforeTool` to
+`tool.call`. Its `agent.start` and `agent.end` callbacks describe user turns, not subagents, so
+plain `agentStart`/`agentStop` are not mapped. Event routes additionally map `prompt/submit` to
+`agent.start`, `stop` to `agent.end`, and `tool/after` to `tool.result`. Amp explicitly has no
+`session.end`; the adapter never manufactures one.
+
 ## Tool selectors
 
 `tools` accepts the canonical selectors — `shell`, `file.read`, `file.write`, `mcp`, `agent` —
@@ -81,6 +88,10 @@ though `shell` alone would have worked. The [Event and hook matrix](../../refere
 renders the matcher table. `tools` also accepts explicit host-native selectors
 spelled `<target>:<native-name>`, such as `claude:WebSearch` or `codex:view_image`, which
 contribute only to that host's native matcher.
+
+Amp publishes no stable canonical built-in tool-name table. An Amp hook with selectors therefore
+uses explicit `amp:<native-name>` selectors; canonical selectors fail rather than guessing a
+native name.
 
 A hook that selects tools must leave every selected target with at least one applicable
 selector. A hook restricted to `claude:WebSearch` while also targeting `codex` fails the build
@@ -114,7 +125,7 @@ adds `toolResponse`; `StopHookEvent` and `AgentStopHookEvent` carry `stopHookAct
 only when every host delivers it, and the handler's second argument (`HookHandlerContext`) names
 the invoking `target`, its native event, and the validated native input verbatim for a handler
 that needs a host-specific field. `HookHandlerEventName` is the set of events a config hook can be
-declared for — the six every host maps to a plain hook; `workspaceOpen` is served by an
+declared for; each adapter maps only its documented subset, and `workspaceOpen` is served by an
 [event route](#event-routes) instead. The types are the portable contract: a field they admit is
 accepted by every host's wrapper *and* reaches that host's native output. Host-specific behaviour
 stays outside them and is reachable only from an untyped result: `additionalContext` from
@@ -152,6 +163,21 @@ Per-event restrictions are enforced, not documented-and-hoped:
 
 An unknown key, a wrong type, or a violation of any rule above fails the hook with a clear
 message instead of being projected into a host document that would misbehave silently.
+
+### Amp request results
+
+Amp's request callbacks use the exact pinned `@ampcode/plugin` unions. A `tool/before` event route
+maps explicit `allow`, `deny`, and `updatedInput` to `allow`, `reject-and-continue`, and `modify`.
+`{ outcome: 'synthesize', output, exitCode? }` becomes the native synthesized tool result.
+Pass-through produces no wrapper decision; the generated inline `tool.call` handler returns the
+API-required final `allow` only after every matching wrapper has passed.
+
+A `tool/after` route may return `status` (`done`, `error`, or `cancelled`) with replacement
+`output`/`error`; no value preserves the original result. A `prompt/submit` route's
+`Agent.Context` becomes the appended `agent.start` message. A denied `stop` becomes
+`{ action: 'continue', userMessage }`, which starts another turn, so the route must carry its own
+guard when it can re-enter. No permission prompt, model choice, or continuation loop is added by
+the adapter.
 
 ## Prebuilt handlers
 

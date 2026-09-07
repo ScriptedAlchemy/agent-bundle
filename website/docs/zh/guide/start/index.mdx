@@ -1,11 +1,11 @@
 ---
-description: 'agent-bundle 将一份带类型的配置编译为 Claude Code、Codex、Cursor 与可移植 Agent Plugins 格式都能安装的同一个插件根目录。'
+description: 'agent-bundle 将一份带类型的配置编译为 Amp、Claude Code、Codex、Cursor 与可移植 Agent Plugins 格式可安装的产物。'
 ---
 
 # 介绍
 
 agent-bundle 把一个智能体插件——由一份带类型的配置描述的 Skills、钩子、MCP 服务器与脚本——编译为
-一个可安装到 Claude Code、Codex 与 Cursor 的插件根目录，外加可移植的 Agent Plugins 格式。插件只写
+可安装到 Amp、Claude Code、Codex 与 Cursor 的产物，外加可移植的 Agent Plugins 格式。插件只写
 一次，编译器负责把每个宿主各自的清单与包装层生成到这同一个根目录中。
 
 需要 Node.js 22.19 或更高版本。
@@ -22,10 +22,12 @@ agent-bundle 把这件事反转过来。宿主专属布局是编译器的职责�
 npx agent-bundle build --root .
 ```
 
-这一条命令会在 `artifact/` 生成一个复合插件根目录：每个所选宿主的清单（`.claude-plugin/`、
-`.codex-plugin/`、`.cursor-plugin/`，以及可移植格式的 `plugin.json`）覆盖在共享的 `skills/`、`hooks/`、
+这一条命令会在 `artifact/` 生成一个复合根目录：Amp 的 `.amp/plugins/<name>/` 目录与其他宿主清单
+（`.claude-plugin/`、`.codex-plugin/`、`.cursor-plugin/`
+以及可移植格式的 `plugin.json`）覆盖在共享的 `skills/`、`hooks/`、
 `mcp/`、`bin/` 与 `scripts/` 目录之上，外加一份 `INSTALL.md`。`targets` 选择根目录承载哪些宿主投影
-——`claude`、`codex`、`cursor`、`portable`；省略时只选择 `portable`——而所有宿主安装的都是同一个目录。
+——`amp`、`claude`、`codex`、`cursor`、`portable`；省略时只选择 `portable`。Amp 安装嵌套的生成目录，
+其他宿主安装组合根目录。
 
 ## 配置负责什么
 

@@ -31,7 +31,7 @@ import type {
   McpAppProfileId,
   ProjectOptions,
 } from './api.ts';
-import type { installBundle, InstallHost } from './install/install.ts';
+import type { DevInstallHost, installBundle } from './install/install.ts';
 import type { runDoctor } from './install/doctor.ts';
 import type { uninstallBundle } from './install/uninstall.ts';
 import type { runHostMcpProxy } from './dev/host-mcp-proxy.ts';
@@ -147,7 +147,7 @@ interface JsonInputOptions {
 
 interface DevCommandOptions {
   readonly agentApi?: boolean;
-  readonly installHost: readonly InstallHost[];
+  readonly installHost: readonly DevInstallHost[];
   readonly open?: boolean;
   readonly port?: number;
   readonly root: string;

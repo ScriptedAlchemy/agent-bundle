@@ -2,6 +2,7 @@ import { execFile as executeFile } from 'node:child_process';
 import { access, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
@@ -67,6 +68,7 @@ const assertSmallRuntime = async (
 it('keeps packed static and plain-hook plugins free of undeclared runtimes', async () => {
   const { tarball } = await sharedPackedTarball('agent-bundle');
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-small-plugin-'));
+  const ampRoot = join(consumer, 'amp-static');
   const staticRoot = join(consumer, 'static');
   const hookRoot = join(consumer, 'plain-hook');
   const processTrace = join(consumer, 'plugin-processes.txt');
@@ -79,6 +81,31 @@ it('keeps packed static and plain-hook plugins free of undeclared runtimes', asy
         "const { appendFileSync } = require('node:fs');",
         "const { sep } = require('node:path');",
         "if (process.argv[1]?.includes(`${sep}hooks${sep}`)) appendFileSync(process.env.AGENT_BUNDLE_PROCESS_TRACE, `${process.pid} ${process.argv[1]}\\n`);",
+        '',
+      ].join('\n')),
+    ]);
+    await mkdir(join(ampRoot, 'src', 'skills', 'review'), { recursive: true });
+    await Promise.all([
+      writeFile(join(ampRoot, 'package.json'), JSON.stringify({
+        name: 'packed-amp-static',
+        private: true,
+        type: 'module',
+        version: '1.0.0',
+      })),
+      writeFile(join(ampRoot, 'agent-bundle.config.ts'), [
+        "import { defineConfig } from 'agent-bundle/config';",
+        'export default defineConfig({',
+        "  plugin: { description: 'Packed Amp static proof.', name: 'packed-amp-static' },",
+        "  targets: ['amp'],",
+        '});',
+        '',
+      ].join('\n')),
+      writeFile(join(ampRoot, 'src', 'skills', 'review', 'SKILL.md'), [
+        '---',
+        'name: review',
+        'description: Review a change.',
+        '---',
+        '# Review',
         '',
       ].join('\n')),
     ]);
@@ -118,7 +145,7 @@ it('keeps packed static and plain-hook plugins free of undeclared runtimes', asy
       )
       .replace("name: 'skills-starter'", "name: 'skills-starter-hook'");
     await writeFile(join(hookRoot, 'agent-bundle.config.ts'), hookConfig);
-    await Promise.all([staticRoot, hookRoot].map((root) =>
+    await Promise.all([ampRoot, staticRoot, hookRoot].map((root) =>
       execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], {
         cwd: root,
         env: environment,
@@ -181,6 +208,30 @@ it('keeps packed static and plain-hook plugins free of undeclared runtimes', asy
         expect.stringContaining(hook.path),
       ]);
     }
+
+    await writeFile(processTrace, '');
+    const ampCli = join(ampRoot, 'node_modules', '.bin', 'agent-bundle');
+    const ampArtifact = join(ampRoot, 'artifact');
+    const ampRelocated = join(ampRoot, 'relocated');
+    await run(ampCli, ampRoot, ['build', '--root', ampRoot, '--output', ampArtifact], environment);
+    await assertSmallRuntime(ampArtifact, 0);
+    await rename(ampArtifact, ampRelocated);
+    await run(ampCli, ampRoot, ['validate', '--root', ampRoot, '--artifact', ampRelocated], environment);
+    const registrations: string[] = [];
+    const factory = await import(
+      `${pathToFileURL(join(ampRelocated, '.amp', 'plugins', 'packed-amp-static', 'index.js')).href}?packed=${Date.now()}`
+    ) as { readonly default: (api: Readonly<Record<string, unknown>>) => Promise<void> };
+    await factory.default({
+      on() {
+        throw new Error('Packed content-only Amp factory registered an event callback.');
+      },
+      async registerSkill(definition: { readonly path: string }) {
+        registrations.push(definition.path);
+        return {};
+      },
+    });
+    expect(registrations).toEqual(['skills/review']);
+    expect(await readFile(processTrace, 'utf8')).toBe('');
   } finally {
     await rm(consumer, { force: true, recursive: true });
   }

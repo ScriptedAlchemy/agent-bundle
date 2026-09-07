@@ -15,6 +15,7 @@ import {
   noticeDeliveryAdvertisementFrom,
   type NoticeDeliveryCapabilityTableEntry,
 } from './capability-state.ts';
+import { ampAdapter } from './amp.ts';
 import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
 import type { BuiltInHost } from './composite-layout.ts';
@@ -22,6 +23,7 @@ import { cursorAdapter } from './cursor.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
 import {
+  artifactLayoutPluginToken,
   routedCliBinLayout,
   type TargetAdapter,
   type TargetArtifactDocumentContract,
@@ -131,6 +133,10 @@ const isSafeArtifactDocumentPath = (value: string): boolean => {
 const isSafeArtifactDirectory = (value: string): boolean =>
   isSafeArtifactDocumentPath(value) && !value.includes('/');
 
+const isSafeSkillDirectory = (value: string): boolean =>
+  value.split(artifactLayoutPluginToken).length <= 2
+  && isSafeArtifactDocumentPath(value.replace(artifactLayoutPluginToken, 'plugin'));
+
 const artifactSuffixPattern = /^\.[a-z\d]+$/u;
 
 const snapshotArtifactSuffixes = (value: unknown, field: string): readonly string[] => {
@@ -171,13 +177,13 @@ const snapshotOutputLayout = (value: unknown, field: string): TargetArtifactOutp
   });
 };
 
-const snapshotRootDocuments = (value: unknown): readonly string[] => {
-  const documents = dataArrayValues(value);
-  if (documents === undefined) throw new Error('Target adapter artifact layout root documents must be a data array.');
-  return Object.freeze(documents.map((document) => {
-    const name = requireNonempty(document, 'artifact layout root document');
+const snapshotRootPaths = (value: unknown, field: string): readonly string[] => {
+  const paths = dataArrayValues(value);
+  if (paths === undefined) throw new Error(`Target adapter artifact layout ${field} must be a data array.`);
+  return Object.freeze(paths.map((path) => {
+    const name = requireNonempty(path, `artifact layout ${field}`);
     if (!isSafeArtifactDirectory(name)) {
-      throw new Error('Target adapter artifact layout root documents must be safe single-segment names.');
+      throw new Error(`Target adapter artifact layout ${field} must contain safe single-segment names.`);
     }
     return name;
   }));
@@ -245,7 +251,12 @@ const snapshotArtifactLayout = (
   const workflows = layout.workflows === undefined
     ? undefined
     : requireNonempty(layout.workflows, 'artifact layout workflows namespace');
-  const rootDocuments = layout.rootDocuments === undefined ? undefined : snapshotRootDocuments(layout.rootDocuments);
+  const rootDirectories = layout.rootDirectories === undefined
+    ? undefined
+    : snapshotRootPaths(layout.rootDirectories, 'root directories');
+  const rootDocuments = layout.rootDocuments === undefined
+    ? undefined
+    : snapshotRootPaths(layout.rootDocuments, 'root documents');
 
   if (assets !== undefined && !isSafeArtifactDirectory(assets)) {
     throw new Error('Target adapter artifact layout assets namespace must be a safe single namespace.');
@@ -253,8 +264,8 @@ const snapshotArtifactLayout = (
   if (bin !== undefined && !isSafeArtifactDirectory(bin)) {
     throw new Error('Target adapter artifact layout bin namespace must be a safe single namespace.');
   }
-  if (skills !== undefined && !isSafeArtifactDirectory(skills)) {
-    throw new Error('Target adapter artifact layout skills namespace must be a safe single namespace.');
+  if (skills !== undefined && !isSafeSkillDirectory(skills)) {
+    throw new Error('Target adapter artifact layout skills namespace must be a safe path with at most one {plugin} segment.');
   }
   if (workflows !== undefined && !isSafeArtifactDirectory(workflows)) {
     throw new Error('Target adapter artifact layout workflows namespace must be a safe single namespace.');
@@ -277,6 +288,7 @@ const snapshotArtifactLayout = (
     ...(mcpApps === undefined ? {} : { mcpApps }),
     ...(mcpEntries === undefined ? {} : { mcpEntries }),
     ...(outputStyles === undefined ? {} : { outputStyles }),
+    ...(rootDirectories === undefined ? {} : { rootDirectories }),
     ...(rootDocuments === undefined ? {} : { rootDocuments }),
     ...(rules === undefined ? {} : { rules }),
     ...(scripts === undefined ? {} : { scripts }),
@@ -402,9 +414,15 @@ const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | unde
     throw new Error(`Target adapter "${adapter.name}" declares a hook contract without hooks capability.`);
   }
   if (hookContract === undefined) return undefined;
+  if (hookContract.registration !== undefined && hookContract.registration !== 'api') {
+    throw new Error(`Target adapter "${adapter.name}" declares an invalid hook registration mode.`);
+  }
   return Object.freeze({
     ...hookContract,
     eventNames: Object.freeze({ ...hookContract.eventNames }),
+    ...(hookContract.eventRouteNames === undefined
+      ? {}
+      : { eventRouteNames: Object.freeze({ ...hookContract.eventRouteNames }) }),
     matchers: Object.freeze({ ...hookContract.matchers }),
     readNativeCommands: hookContract.readNativeCommands ?? readStandardNativeHookCommands,
   });
@@ -412,11 +430,21 @@ const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | unde
 
 const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | undefined => {
   const mcpRuntime = adapter.mcpRuntime;
-  if (capabilityIsSupported(adapter.capabilities.mcp) && mcpRuntime === undefined) {
+  const skillScoped = adapter.mcpScope === 'skill';
+  if (adapter.mcpScope !== undefined && !skillScoped) {
+    throw new Error(`Target adapter "${adapter.name}" declares an invalid MCP scope.`);
+  }
+  if (capabilityIsSupported(adapter.capabilities.mcp) && mcpRuntime === undefined && !skillScoped) {
     throw new Error(`Target adapter "${adapter.name}" declares mcp capability without an MCP runtime contract.`);
   }
   if (!capabilityIsSupported(adapter.capabilities.mcp) && mcpRuntime !== undefined) {
     throw new Error(`Target adapter "${adapter.name}" declares an MCP runtime contract without mcp capability.`);
+  }
+  if (!capabilityIsSupported(adapter.capabilities.mcp) && skillScoped) {
+    throw new Error(`Target adapter "${adapter.name}" declares skill-scoped MCP without mcp capability.`);
+  }
+  if (mcpRuntime !== undefined && skillScoped) {
+    throw new Error(`Target adapter "${adapter.name}" cannot declare both a plugin-root MCP runtime and skill-scoped MCP.`);
   }
   if (mcpRuntime === undefined) return undefined;
   if (typeof mcpRuntime.manifestPath !== 'string' || !isSafeArtifactDocumentPath(mcpRuntime.manifestPath)) {
@@ -504,10 +532,11 @@ const assertCapabilityContract = (adapter: TargetAdapter): void => {
 
 /**
  * The shipped adapters by identity. An advanced registry may register its own
- * adapter under a built-in host's name; only these four are the built-in
+ * adapter under a built-in host's name; only these adapters are the built-in
  * hosts, whatever an adapter is called.
  */
 const builtInAdapters: ReadonlyMap<TargetAdapter, BuiltInHost> = new Map<TargetAdapter, BuiltInHost>([
+  [ampAdapter, 'amp'],
   [claudeAdapter, 'claude'],
   [codexAdapter, 'codex'],
   [cursorAdapter, 'cursor'],
@@ -789,4 +818,5 @@ export const createDefaultRegistry = (): TargetRegistry =>
     .register(portableAdapter, { default: true })
     .register(codexAdapter)
     .register(claudeAdapter)
-    .register(cursorAdapter);
+    .register(cursorAdapter)
+    .register(ampAdapter);

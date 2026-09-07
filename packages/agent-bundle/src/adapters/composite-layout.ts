@@ -31,10 +31,10 @@
  */
 
 /** The hosts Agent Bundle ships adapters for: the only targets that may share one composite root. */
-export type BuiltInHost = 'claude' | 'codex' | 'cursor' | 'portable';
+export type BuiltInHost = 'amp' | 'claude' | 'codex' | 'cursor' | 'portable';
 
 /** The built-in hosts, in the fixed order the install surface documents them. */
-export const builtInHostNames: readonly BuiltInHost[] = Object.freeze(['claude', 'codex', 'cursor', 'portable']);
+export const builtInHostNames: readonly BuiltInHost[] = Object.freeze(['amp', 'claude', 'codex', 'cursor', 'portable']);
 
 export const isBuiltInHost = (target: string): target is BuiltInHost =>
   (builtInHostNames as readonly string[]).includes(target);

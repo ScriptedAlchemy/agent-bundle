@@ -41,7 +41,7 @@ import { ProjectEventHub } from '../../src/dev/events.ts';
 import type { ArtifactEpoch } from '../../src/dev/types.ts';
 import { startDevServer } from '../../src/dev/workbench-server.ts';
 import { runDoctor, type DoctorCommandRunner } from '../../src/install/doctor.ts';
-import { installBundle, publicHostRoot, type InstallHost } from '../../src/install/install.ts';
+import { installBundle, publicHostRoot, type DevInstallHost } from '../../src/install/install.ts';
 import { manifestInventory, readInstallReceipt } from '../../src/install/receipt.ts';
 import { uninstallBundle } from '../../src/install/uninstall.ts';
 import {
@@ -171,11 +171,11 @@ export interface BuiltPortableHostInstallFixture extends BuiltFixtureProject {
 }
 
 export interface DevHostInstallProofReport {
-  readonly host: InstallHost;
+  readonly host: DevInstallHost;
   readonly hookChanged: true;
   readonly marker: {
     readonly epochId: 'epoch-2';
-    readonly host: InstallHost;
+    readonly host: DevInstallHost;
     readonly schemaVersion: 1;
   };
   readonly mcpUnchanged: true;
@@ -691,7 +691,7 @@ export const disposeHostInstallFixture = async (fixture: BuiltFixtureProject): P
 /** Proves initial host-owned installation followed by the host-specific development re-sync. */
 export const runDevHostInstallProof = async (
   fixture: BuiltHostInstallFixture,
-  host: InstallHost,
+  host: DevInstallHost,
   options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
 ): Promise<DevHostInstallProofReport> => {
   const root = await mkdtemp(join(tmpdir(), `agent-bundle-dev-install-${host}-`));
@@ -830,7 +830,7 @@ export const runDevHostInstallProof = async (
     assertProof(await readFile(join(destination, mcpPath), 'utf8') === mcpBefore, `${host} re-sync changed its proxy MCP document.`);
     assertProof((await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).includes('Dev epoch two.'), `${host} skill did not re-sync.`);
     assertProof((await readFile(join(destination, 'hooks', hookName), 'utf8')).includes('epoch two'), `${host} hook did not re-sync.`);
-    const markerDocument = parseJson<{ readonly epochId: 'epoch-2'; readonly host: InstallHost; readonly schemaVersion: 1 }>(
+    const markerDocument = parseJson<{ readonly epochId: 'epoch-2'; readonly host: DevInstallHost; readonly schemaVersion: 1 }>(
       await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8'),
       `${host} dev marker`,
     );
@@ -1865,7 +1865,7 @@ export interface DevLiveHostProofReport {
     readonly observations: readonly [string, string];
     readonly toolsListChanged: 1;
   };
-  readonly host: InstallHost;
+  readonly host: DevInstallHost;
   readonly hostBinaryVersion: string | 'not-required';
   readonly install: {
     readonly commandFromInstalledDocument: true;
@@ -1938,7 +1938,7 @@ const liveSkillSource = (version: 'v1' | 'v2'): string => [
 const liveHookSource = (version: 'v1' | 'v2'): string =>
   `export default () => ({ additionalContext: 'live development proof ${version}', outcome: 'continue' as const });\n`;
 
-const hostMcpDocument = (host: InstallHost): string => {
+const hostMcpDocument = (host: DevInstallHost): string => {
   switch (host) {
     case 'claude':
       return '.mcp.json';
@@ -1954,7 +1954,7 @@ const hostMcpDocument = (host: InstallHost): string => {
 };
 
 const liveHostDestination = (
-  host: InstallHost,
+  host: DevInstallHost,
   roots: { readonly claudeConfig: string; readonly codexHome: string; readonly home: string },
 ): string => {
   switch (host) {
@@ -2007,7 +2007,7 @@ const hostCliInstallCommandCount = async (path: string): Promise<number> =>
   }).length;
 
 const installHostCommandRecorder = async (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: Exclude<DevInstallHost, 'cursor'>,
   root: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<{ readonly environment: NodeJS.ProcessEnv; readonly log: string; readonly version: string }> => {
@@ -2153,7 +2153,7 @@ const readCodexAppServerComponents = async (
 
 const runLiveHostScenario = async (
   fixture: BuiltHostInstallFixture,
-  host: InstallHost,
+  host: DevInstallHost,
   options: {
     readonly environment: Readonly<NodeJS.ProcessEnv>;
     readonly persistentCodexAppServer?: boolean;
@@ -2383,7 +2383,7 @@ const runLiveHostScenario = async (
 
 export const runDevLiveHostProof = async (
   fixture: BuiltHostInstallFixture,
-  host: InstallHost,
+  host: DevInstallHost,
   options: {
     readonly environment: Readonly<NodeJS.ProcessEnv>;
     readonly persistentCodexAppServer?: boolean;
@@ -2671,7 +2671,7 @@ export interface HostUninstallProofReport {
   /** Entries under the Agent Bundle namespace (`agent-bundle/`) or receipts left behind: always empty. */
   readonly agentBundleResidue: readonly string[];
   readonly homeByteIdentical: boolean;
-  readonly host: InstallHost;
+  readonly host: DevInstallHost;
   /** Classified host-owned residue after uninstall, relative to the host root; empty when byte-identical. */
   readonly hostResidue: readonly HostResidueClass[];
   readonly keepData: 'kept' | 'retained-by-host' | 'unavailable';

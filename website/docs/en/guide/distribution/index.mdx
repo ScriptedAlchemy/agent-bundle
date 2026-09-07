@@ -50,8 +50,9 @@ lowered Rspack configuration of every compiled output; its `output.path` is the 
 
 ## What ships inside the root
 
-Host manifests live in their dotfolders at the root (`.claude-plugin/`, `.codex-plugin/`,
-`.cursor-plugin/`, and the portable `plugin.json`), each pointing at its own hook and MCP
+Amp's directory plugin lives at `.amp/plugins/<name>/`; other host manifests live in their
+dotfolders at the root (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, and the portable
+`plugin.json`), each pointing at its own hook and MCP
 documents, while `skills/`, `hooks/`, `mcp/`, `scripts/`, `bin/`, and `assets/` are shared and
 emitted once. The full tree and the per-host document locations are in
 [Targets and artifacts](../../reference/targets-artifacts.mdx).

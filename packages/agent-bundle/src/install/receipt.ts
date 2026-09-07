@@ -52,7 +52,7 @@ export const legacyInstallReceiptFormat = 'agent-bundle-install-receipt/1';
 
 /**
  * How the install was delivered: `local` copies into a host-loaded directory
- * (Cursor `plugins/local`), `marketplace` stages a local marketplace repository
+ * (Cursor `plugins/local`, Amp project/system plugins), `marketplace` stages a local marketplace repository
  * (Cursor Customize import), `host-cli` registered through the host's own
  * plugin CLI (Claude, Codex).
  */
@@ -65,6 +65,8 @@ export type InstallReceiptScope = 'local' | 'project' | 'user';
  * reverses exactly that and nothing else.
  */
 export type InstallRegistrationKind =
+  | 'amp-project-plugin'
+  | 'amp-system-plugin'
   | 'claude-marketplace'
   | 'claude-plugin'
   | 'codex-marketplace'
@@ -73,6 +75,8 @@ export type InstallRegistrationKind =
   | 'cursor-marketplace-staging';
 
 export const installRegistrationKinds: readonly InstallRegistrationKind[] = Object.freeze([
+  'amp-project-plugin',
+  'amp-system-plugin',
   'claude-marketplace',
   'claude-plugin',
   'codex-marketplace',

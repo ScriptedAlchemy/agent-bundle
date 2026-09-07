@@ -76,7 +76,7 @@ export default defineConfig({
 });
 ```
 
-`targets` selects the host projections the one artifact root carries — `claude`, `codex`,
+`targets` selects the host projections the one artifact root carries — `amp`, `claude`, `codex`,
 `cursor`, `portable`; omit it and the root carries `portable` alone. The release version comes
 from `package.json`. A `plugin.version` field still works as a deprecated compatibility axis, but
 a value that disagrees with `package.json` reports the `AB4008` warning.

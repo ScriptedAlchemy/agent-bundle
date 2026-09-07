@@ -20,7 +20,7 @@ export const skillTokenSpellings = Object.freeze({
 
 export type SkillTokenId = keyof typeof skillTokenSpellings;
 
-export type SkillHost = 'claude' | 'codex' | 'cursor' | 'portable';
+export type SkillHost = 'amp' | 'claude' | 'codex' | 'cursor' | 'portable';
 
 export type SkillDocumentKind =
   | 'commands'
@@ -49,6 +49,7 @@ const codexPlugins = 'https://developers.openai.com/plugins/build/plugins (Codex
 const cursorSkills = 'https://prod.cursor.com/docs/skills (Cursor 2026-08-28 pin)';
 const cursorPlugins = 'https://prod.cursor.com/docs/reference/plugins (cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a)';
 const portableSkills = 'https://agentskills.io/specification (69ef37e9424c0a7ea9dd2293b559e43ec8176379)';
+const ampSkills = 'https://ampcode.com/docs/customize/skills (retrieved 2026-09-07)';
 
 const none = (
   token: SkillTokenId,
@@ -75,6 +76,7 @@ const portable = (
 type HostDocumentTable = Partial<Record<SkillDocumentKind, Partial<Record<SkillTokenId, SkillTokenClassification>>>>;
 
 const table: Record<SkillHost, HostDocumentTable> = {
+  amp: {},
   claude: {
     'plugin-config': {
       pluginData: portable('pluginData', 'claude', 'plugin-config', '${CLAUDE_PLUGIN_DATA}', claudePlugins),
@@ -146,6 +148,7 @@ const table: Record<SkillHost, HostDocumentTable> = {
 };
 
 const noSkillMarkdown = {
+  amp: `${ampSkills}: Amp documents no Skill Markdown interpolation engine`,
   claude: claudeSkills,
   codex: `${codexSkills}: Codex documents no Skill Markdown interpolation engine`,
   cursor: `${cursorSkills}: documented \${VAR} interpolation belongs to plugin configuration, not Skill Markdown`,
@@ -217,7 +220,7 @@ const hostSkillMarkdownSyntax = (host: SkillHost): readonly string[] =>
 export const foreignSkillMarkdownSyntax = (host: SkillHost): readonly string[] => {
   const owned = new Set(hostSkillMarkdownSyntax(host));
   const foreign = new Set<string>();
-  for (const other of ['claude', 'codex', 'cursor', 'portable'] as const) {
+  for (const other of ['amp', 'claude', 'codex', 'cursor', 'portable'] as const) {
     if (other === host) continue;
     for (const syntax of hostSkillMarkdownSyntax(other)) {
       if (!owned.has(syntax)) foreign.add(syntax);

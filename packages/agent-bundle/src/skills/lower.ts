@@ -1,5 +1,6 @@
 import { stringify as stringifyYaml } from 'yaml';
 
+import { ampMcpDocumentIssues } from '../adapters/amp-mcp.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import {
@@ -12,6 +13,7 @@ import {
   type SkillHostDocumentIssue,
 } from '../schemas/skill-hosts/contract.ts';
 import type {
+  AmpSkillExtension,
   ClaudeSkillExtension,
   CodexSkillExtension,
   CursorSkillExtension,
@@ -75,6 +77,15 @@ const cursorFrontmatter = (
   paths: extension?.paths,
 });
 
+const ampFrontmatter = (
+  portable: PortableSkillMetadata,
+  extension: AmpSkillExtension | undefined,
+): Record<string, unknown> => omitUndefined({
+  ...portableFrontmatter(portable),
+  'builtin-tools': extension?.builtinTools,
+  mcpServers: extension?.mcpServers,
+});
+
 const codexSidecarDocument = (extension: CodexSkillExtension): Record<string, unknown> => omitUndefined({
   ...(extension.dependencies === undefined ? {} : {
     dependencies: omitUndefined({
@@ -120,6 +131,24 @@ const validateFrontmatter = (
   source: string,
 ): Diagnostic[] => {
   switch (host) {
+    case 'amp': {
+      const portable = Object.fromEntries(Object.entries(frontmatter).filter(([key]) =>
+        ['allowed-tools', 'compatibility', 'description', 'license', 'metadata', 'name'].includes(key)));
+      return [
+        ...schemaIssues(host, validateAgentSkillsFrontmatter(portable), source),
+        ...schemaIssues(host, frontmatter.mcpServers === undefined
+          ? []
+          : ampMcpDocumentIssues(frontmatter.mcpServers).map((issue) => {
+            const field = issue.path === '' ? 'mcpServers' : `mcpServers.${issue.path}`;
+            return {
+              field,
+              instancePath: `/${field.replaceAll('.', '/')}`,
+              keyword: 'amp-mcp',
+              message: issue.message,
+            };
+          }), source),
+      ];
+    }
     case 'claude':
       return schemaIssues(host, validateClaudeSkillFrontmatter(frontmatter), source);
     case 'cursor':
@@ -202,6 +231,9 @@ export const lowerSkillIr = (ir: SkillIr, host: SkillHost): SkillHostDocument =>
   let frontmatter: Record<string, unknown>;
 
   switch (host) {
+    case 'amp':
+      frontmatter = ampFrontmatter(ir.portable, ir.extensions.amp);
+      break;
     case 'claude':
       frontmatter = claudeFrontmatter(ir.portable, ir.extensions.claude);
       break;

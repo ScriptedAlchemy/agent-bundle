@@ -13,6 +13,7 @@ import {
   unavailableCapability,
   webSurfaceCapability,
 } from '../src/adapters/capability-state.ts';
+import ampCapabilityTable from '../src/adapters/capabilities/amp-0.0.0-20260907001852-gf348fed.json' with { type: 'json' };
 import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 import cursorCapabilityTable from '../src/adapters/capabilities/cursor-2026-08-28.json' with { type: 'json' };
@@ -48,6 +49,10 @@ it('records an honest four-state commands row on every adapter', () => {
     reason: 'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no commands surface.',
     state: 'unavailable',
   });
+  expect(registry.get('amp').capabilities.commands).toEqual({
+    reason: ampCapabilityTable.plugin.commands.reason,
+    state: 'unavailable',
+  });
 });
 
 it('records an honest four-state rules row on every adapter', () => {
@@ -66,6 +71,10 @@ it('records an honest four-state rules row on every adapter', () => {
   });
   expect(registry.get('portable').capabilities.rules).toEqual({
     reason: 'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no rules surface.',
+    state: 'unavailable',
+  });
+  expect(registry.get('amp').capabilities.rules).toEqual({
+    reason: ampCapabilityTable.plugin.rules.reason,
     state: 'unavailable',
   });
 });
@@ -190,6 +199,10 @@ it('publishes a dated four-state lsp row on every adapter so no host is judged b
     reason: codexCapabilityTable.plugin.components.lsp.reason,
     state: 'unavailable',
   });
+  expect(registry.get('amp').capabilities.lsp).toEqual({
+    reason: ampCapabilityTable.plugin.lsp.reason,
+    state: 'unavailable',
+  });
 });
 
 it('records dated unavailable native-diagnostics and native-extension rows on every host (#100)', () => {
@@ -212,6 +225,10 @@ it('records dated unavailable native-diagnostics and native-extension rows on ev
       reason: expect.stringContaining('Agent Plugin contract (1.0.0)'),
       state: 'unavailable',
     });
+    expect(registry.get('amp').capabilities[capability]).toEqual({
+      reason: ampCapabilityTable.plugin[capability].reason,
+      state: 'unavailable',
+    });
   }
   // Claude's row points at the LSP `diagnostics` option rather than inventing a component.
   expect(claudeCapabilityTable.plugin.nativeDiagnostics.reason).toContain('`lsp` kind');
@@ -223,6 +240,7 @@ it('publishes dated component feature rows per kind and host (#100 feature sets)
   const claude = registry.get('claude').capabilities;
   const codex = registry.get('codex').capabilities;
   const cursor = registry.get('cursor').capabilities;
+  const amp = registry.get('amp').capabilities;
   const portable = registry.get('portable').capabilities;
 
   // Commands: Claude documents the five frontmatter fields; Cursor's commands
@@ -256,8 +274,12 @@ it('publishes dated component feature rows per kind and host (#100 feature sets)
   expect(claude['skills.hostFrontmatter']).toMatchObject({ state: 'supported' });
   expect(codex['skills.hostFrontmatter']).toMatchObject({ state: 'supported' });
   expect(cursor['skills.hostFrontmatter']).toMatchObject({ state: 'supported' });
+  expect(amp['skills.hostFrontmatter']).toMatchObject({ state: 'supported' });
+  expect(amp['skills.builtinTools']).toMatchObject({ state: 'supported' });
+  expect(amp['skills.mcpServers']).toMatchObject({ state: 'supported' });
   expect(portable['skills.hostFrontmatter']).toMatchObject({ reason: expect.stringContaining('Agent Skills'), state: 'unavailable' });
   expect(claude['skills.markdownTokens']).toMatchObject({ state: 'supported' });
+  expect(amp['skills.markdownTokens']).toMatchObject({ reason: expect.stringContaining('no Skill Markdown'), state: 'unavailable' });
   for (const capabilities of [codex, cursor, portable]) {
     expect(capabilities['skills.markdownTokens']).toMatchObject({ reason: expect.stringContaining('AB3008'), state: 'unavailable' });
   }
@@ -853,13 +875,15 @@ it('rejects a malformed capability declaration when the adapter registers', () =
   expect(() => new TargetRegistry().register(source)).not.toThrow();
 });
 
-it('publishes the routed CLI bin capability with its bin layout on every built-in target (#387)', () => {
+it('publishes the routed CLI bin capability on root-plugin targets, not the isolated Amp directory (#387)', () => {
   const registry = createDefaultRegistry();
-  for (const name of registry.names()) {
+  for (const name of registry.names().filter((target) => target !== 'amp')) {
     const adapter = registry.get(name);
     expect(adapter.capabilities.cli?.state, name).toBe('supported');
     expect(registry.artifactLayout(name).cliBin, name).toEqual({ allowedSuffixes: ['.mjs'], directory: 'bin' });
   }
+  expect(registry.get('amp').capabilities.cli).toBeUndefined();
+  expect(registry.artifactLayout('amp').cliBin).toBeUndefined();
 
   // A supported `cli` row promises a place for the executable, so an adapter
   // without the layout — or with no artifact layout at all — cannot register;
@@ -917,7 +941,7 @@ it('publishes the routed CLI bin capability with its bin layout on every built-i
   expect(registry.hostsComponent('unknown-target', 'cli')).toBe(false);
 });
 
-it('pins a supported web surface row on every host capability table (#564)', () => {
+it('pins a supported web surface row on every root-plugin capability table (#564)', () => {
   const row = {
     reason: 'browser host inside the composite artifact; <plugin> web runs from the installed root on any host',
     state: 'supported',
@@ -1082,7 +1106,7 @@ it('reports the evidence-backed G10 event family matrix without inferred support
 it('reports evidence-backed installation support only for real host targets', () => {
   const registry = createDefaultRegistry();
 
-  for (const target of ['claude', 'codex', 'cursor'] as const) {
+  for (const target of ['amp', 'claude', 'codex', 'cursor'] as const) {
     expect(registry.get(target).capabilities.install).toMatchObject({
       evidence: { target },
       state: 'supported',

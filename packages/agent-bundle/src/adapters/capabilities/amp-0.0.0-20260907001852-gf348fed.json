@@ -1,0 +1,296 @@
+{
+  "host": "amp",
+  "observedCliVersion": "0.0.1788739286-gf348fe",
+  "pluginApi": {
+    "package": "@ampcode/plugin",
+    "version": "0.0.0-20260907001852-gf348fed",
+    "source": "https://ampcode.com/docs/plugin-api",
+    "retrieved": "2026-09-07"
+  },
+  "plugins": {
+    "entry": "index.js",
+    "locations": {
+      "project": ".amp/plugins/<name>",
+      "system": "$XDG_CONFIG_HOME/amp/plugins/<name> or ~/.config/amp/plugins/<name>"
+    },
+    "precedence": [
+      "project",
+      "system",
+      "personal",
+      "workspace"
+    ],
+    "evidence": [
+      "retrieved 2026-09-07: https://ampcode.com/docs/customize/plugins documents directory plugins as <name>/index.ts or <name>/index.js, with index.ts winning when both exist, and project/system/personal/workspace precedence.",
+      "retrieved 2026-09-07: every plugin entry default-exports a factory receiving PluginAPI; the optional description export is a static string literal no longer than 300 characters."
+    ]
+  },
+  "install": {
+    "state": "supported",
+    "method": "copy",
+    "localRoot": ".amp/plugins/<name> or $XDG_CONFIG_HOME/amp/plugins/<name>",
+    "scopes": [
+      "project",
+      "user"
+    ],
+    "source": "https://ampcode.com/docs/customize/plugins",
+    "reason": "Agent Bundle copies only its generated Amp directory and records exact file ownership; plugins: reload remains an interactive operator action.",
+    "evidence": [
+      "retrieved 2026-09-07: project plugins live in .amp/plugins and system plugins live under $XDG_CONFIG_HOME/amp/plugins or ~/.config/amp/plugins.",
+      "2026-09-07: install/replace/uninstall tests preserve neighboring Amp settings and unowned files and remove only receipt-owned plugin files."
+    ]
+  },
+  "lifecycle": {
+    "activationState": {
+      "state": "degraded",
+      "observable": [
+        "placed",
+        "registered"
+      ],
+      "unavailable": [
+        "enabled",
+        "active"
+      ],
+      "reason": "The documented project/system directory is the registration; without an Amp account, enabled state and live activation remain unverified.",
+      "evidence": [
+        "2026-09-07: amp plugins list with @ampcode/cli@0.0.1788739286-gf348fe returned an account-dependent connection error."
+      ]
+    },
+    "uninstall": {
+      "state": "supported",
+      "reason": "The directory itself is the project/system registration; removing only receipt-owned files unregisters it on the next interactive plugin reload.",
+      "evidence": [
+        "retrieved 2026-09-07: https://ampcode.com/docs/customize/plugins documents project/system directory discovery and the interactive plugins: reload action."
+      ]
+    },
+    "keepData": {
+      "state": "supported",
+      "evidence": [
+        "2026-09-07: receipt-owned uninstall leaves unowned runtime/configuration files in place."
+      ]
+    }
+  },
+  "skills": {
+    "registration": {
+      "state": "supported",
+      "evidence": [
+        "retrieved 2026-09-07: https://ampcode.com/docs/customize/plugins requires await amp.registerSkill({ path: 'skills/<name>' }) for each bundled directory skill and does not scan plugins' skills directories automatically."
+      ]
+    },
+    "builtinTools": {
+      "state": "supported",
+      "evidence": [
+        "retrieved 2026-09-07: https://ampcode.com/docs/plugin-api documents builtin-tools as the gate for tools registered by the same plugin."
+      ]
+    },
+    "mcpServers": {
+      "state": "supported",
+      "evidence": [
+        "retrieved 2026-09-07: https://ampcode.com/docs/customize/skills documents mcpServers frontmatter taking precedence over sibling mcp.json."
+      ]
+    },
+    "discoveryPrecedence": [
+      "~/.config/agents/skills",
+      "~/.agents/skills",
+      "~/.config/amp/skills",
+      ".agents/skills",
+      ".claude/skills",
+      "~/.claude/skills",
+      "~/.claude/plugins/cache",
+      "amp.skills.path",
+      "built-in",
+      "personal repository",
+      "workspace repository"
+    ]
+  },
+  "mcp": {
+    "stdio": true,
+    "streamableHttp": true,
+    "scope": "skill",
+    "config": "skills/<name>/mcp.json",
+    "frontmatter": "mcpServers",
+    "precedence": [
+      "--mcp-config",
+      "workspace amp.mcpServers",
+      "user amp.mcpServers",
+      "skill"
+    ],
+    "pathTokens": {
+      "args": [],
+      "env": []
+    },
+    "tasks": {
+      "state": "unavailable",
+      "reason": "The pinned Amp skill MCP documentation does not state that the host issues MCP Tasks-augmented calls."
+    },
+    "structuredContentValidation": {
+      "state": "unavailable",
+      "reason": "The pinned local skill MCP documentation does not state client-side structuredContent validation behavior."
+    },
+    "evidence": [
+      "retrieved 2026-09-07: https://ampcode.com/docs/customize/skills defines a flat server map with command/args/env or url/headers plus optional includeTools; no mcpServers wrapper is present.",
+      "retrieved 2026-09-07: skill frontmatter mcpServers wins over mcp.json, and CLI/direct configuration with the same server name wins over skill configuration."
+    ]
+  },
+  "eventRoutes": {
+    "agent/idle": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no idle event."
+    },
+    "agent/start": {
+      "state": "unavailable",
+      "reason": "Amp agent.start is a user turn, not a subagent-start event."
+    },
+    "agent/stop": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no subagent-stop event."
+    },
+    "compact/after": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no compaction event."
+    },
+    "compact/before": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no compaction event."
+    },
+    "config/change": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no configuration-change event."
+    },
+    "file/change": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no file-change event."
+    },
+    "model-switch/after": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no model-switch event."
+    },
+    "model-switch/before": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no model-switch event."
+    },
+    "permission/denied": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no separate permission-denied event."
+    },
+    "permission/request": {
+      "state": "unavailable",
+      "reason": "Permission control is part of tool.call; no separate permission event is declared."
+    },
+    "prompt/submit": {
+      "state": "supported",
+      "nativeEvent": "agent.start",
+      "payload": {
+        "prompt": "prompt",
+        "sessionId": "session_id"
+      },
+      "evidence": [
+        "retrieved 2026-09-07: @ampcode/plugin PluginEventMap agent.start carries thread.id, message, and id and may return an appended message."
+      ]
+    },
+    "session/end": {
+      "state": "unavailable",
+      "reason": "Amp explicitly documents that no session.end event exists."
+    },
+    "session/start": {
+      "state": "supported",
+      "nativeEvent": "session.start",
+      "payload": {
+        "sessionId": "session_id"
+      },
+      "evidence": [
+        "retrieved 2026-09-07: @ampcode/plugin PluginEventMap session.start carries thread.id and is fire-and-forget."
+      ]
+    },
+    "stop": {
+      "state": "supported",
+      "nativeEvent": "agent.end",
+      "payload": {
+        "sessionId": "session_id"
+      },
+      "evidence": [
+        "retrieved 2026-09-07: @ampcode/plugin agent.end carries the turn status and may return { action: 'continue', userMessage }; it is not observation-only."
+      ]
+    },
+    "stop/failure": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no separate failed-stop event."
+    },
+    "task/complete": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no task lifecycle event."
+    },
+    "task/create": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no task lifecycle event."
+    },
+    "tool/after": {
+      "state": "supported",
+      "nativeEvent": "tool.result",
+      "payload": {
+        "sessionId": "session_id",
+        "toolInput": "tool_input",
+        "toolName": "tool_name",
+        "toolResponse": "tool_response",
+        "toolUseId": "tool_use_id"
+      },
+      "evidence": [
+        "retrieved 2026-09-07: @ampcode/plugin tool.result carries done/error/cancelled status, input, output and error and may return a replacement result."
+      ]
+    },
+    "tool/before": {
+      "state": "supported",
+      "nativeEvent": "tool.call",
+      "payload": {
+        "sessionId": "session_id",
+        "toolInput": "tool_input",
+        "toolName": "tool_name",
+        "toolUseId": "tool_use_id"
+      },
+      "evidence": [
+        "retrieved 2026-09-07: @ampcode/plugin tool.call returns allow, reject-and-continue, modify, synthesize, or error."
+      ]
+    },
+    "tool/failure": {
+      "state": "unavailable",
+      "reason": "Failures are a tool.result status, not a separate PluginEventMap event."
+    },
+    "workspace/open": {
+      "state": "unavailable",
+      "reason": "PluginEventMap declares no workspace-open event."
+    }
+  },
+  "plugin": {
+    "entry": ".amp/plugins/<name>/index.js",
+    "manifest": null,
+    "marketplace": null,
+    "commands": {
+      "state": "unavailable",
+      "reason": "Agent Bundle does not project command-palette commands from its canonical command documents."
+    },
+    "rules": {
+      "state": "unavailable",
+      "reason": "Amp plugin discovery has no plugin-root rules component."
+    },
+    "lsp": {
+      "state": "unavailable",
+      "reason": "The pinned PluginAPI declares no language-server registration surface."
+    },
+    "nativeDiagnostics": {
+      "state": "unavailable",
+      "reason": "The pinned PluginAPI declares no native diagnostics-provider component."
+    },
+    "nativeExtension": {
+      "state": "unavailable",
+      "reason": "The pinned PluginAPI declares no opaque native extension component."
+    }
+  },
+  "runtimeProof": {
+    "state": "unverified",
+    "reason": "The owner has no Amp account. Type and fake-PluginAPI proofs cover the generated contract; live thread/model/tool execution is account-dependent."
+  },
+  "tokens": {
+    "pluginData": false,
+    "pluginRoot": false,
+    "workspaceRoot": false
+  }
+}

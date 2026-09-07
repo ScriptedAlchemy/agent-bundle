@@ -127,7 +127,7 @@ describe('runInstallCli', () => {
   it('exits 2 on a usage error without touching the lifecycle', async () => {
     const out = capture();
     expect(await runInstallCli(['install', 'windsurf'], { from: '/pkg', ...out.sinks })).toBe(2);
-    expect(out.stderr()).toContain('Install host must be claude, codex, or cursor.');
+    expect(out.stderr()).toContain('Install host must be amp, claude, codex, or cursor.');
     expect(await runInstallCli([], { from: '/pkg', ...out.sinks })).toBe(2);
   });
 

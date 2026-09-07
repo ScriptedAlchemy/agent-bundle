@@ -802,7 +802,7 @@ const temporaryArtifact = async <Result>(
 };
 
 const hostValidationReport = (
-  target: BuiltInHost,
+  target: Exclude<BuiltInHost, 'amp'>,
   pluginDirectory: string,
   strict: boolean | undefined,
 ): Promise<NonNullable<ValidateResult['hostValidation']>[number]> => {
@@ -839,6 +839,7 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
       // held to that host's contract (#592).
       const reports = await Promise.all(
         registryFor(options).builtInHosts(validated.snapshot.manifest.projections.map((projection) => projection.host))
+          .filter((target): target is Exclude<BuiltInHost, 'amp'> => target !== 'amp')
           .map((target) => hostValidationReport(target, artifact, options.strict)),
       );
       return Object.freeze({
@@ -906,7 +907,8 @@ const skillFeatures = (skill: NormalizedPlugin['skills'][number]): readonly stri
   const ir = skill.skillIr;
   if (ir === undefined) return [];
   return [
-    ...(ir.extensions.claude === undefined && ir.extensions.codex === undefined && ir.extensions.cursor === undefined
+    ...(ir.extensions.amp === undefined && ir.extensions.claude === undefined
+      && ir.extensions.codex === undefined && ir.extensions.cursor === undefined
       ? []
       : ['hostFrontmatter']),
     ...(ir.placeholders.length === 0 ? [] : ['markdownTokens']),

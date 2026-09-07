@@ -44,8 +44,9 @@ npx agent-bundle build --root . --output artifact
 
 ## 根目录里发布了什么
 
-宿主清单位于根目录下各自的点目录中（`.claude-plugin/`、`.codex-plugin/`、`.cursor-plugin/`，以及 portable
-的 `plugin.json`），各自指向自己的钩子与 MCP 文档；而 `skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与
+Amp 目录插件位于 `.amp/plugins/<name>/`；其他宿主清单位于根目录下各自的点目录中
+（`.claude-plugin/`、`.codex-plugin/`、`.cursor-plugin/`，以及 portable 的 `plugin.json`），各自指向
+自己的钩子与 MCP 文档；而 `skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与
 `assets/` 是共享的，只输出一次。完整的目录树与各宿主的文档位置见
 [Target 与产物](../../reference/targets-artifacts.mdx)。
 

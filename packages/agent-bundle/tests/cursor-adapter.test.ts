@@ -77,7 +77,7 @@ const writeContents = (model: NormalizedPlugin): Record<string, string> => Objec
 
 it('registers cursor as a first-class target with pinned schema validation', () => {
   const registry = createDefaultRegistry();
-  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor']);
+  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor', 'amp']);
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(registry.supports('cursor', 'mcp')).toBe(true);
   expect(registry.supports('cursor', 'rules')).toBe(true);

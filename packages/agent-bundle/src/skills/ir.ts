@@ -36,6 +36,11 @@ export interface CursorSkillExtension {
   readonly paths?: readonly string[];
 }
 
+export interface AmpSkillExtension {
+  readonly builtinTools?: readonly string[];
+  readonly mcpServers?: Readonly<Record<string, unknown>>;
+}
+
 export interface CodexSkillToolDependency {
   readonly description?: string;
   readonly transport?: string;
@@ -62,6 +67,7 @@ export interface CodexSkillExtension {
 }
 
 export interface SkillIrExtensions {
+  readonly amp?: AmpSkillExtension;
   readonly claude?: ClaudeSkillExtension;
   readonly codex?: CodexSkillExtension;
   readonly cursor?: CursorSkillExtension;
