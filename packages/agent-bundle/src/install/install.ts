@@ -1125,9 +1125,8 @@ export const ampInstallLocation = (
   }
   const home = options.home ?? homedir();
   const environment = options.environment ?? process.env;
-  const project = resolve(options.projectRoot ?? process.cwd());
   const hostRoot = scope === 'project'
-    ? project
+    ? resolve(options.projectRoot ?? process.cwd())
     : join(environment['XDG_CONFIG_HOME'] ?? join(home, '.config'), 'amp');
   const installRoot = scope === 'project'
     ? join(hostRoot, '.amp', 'plugins')
