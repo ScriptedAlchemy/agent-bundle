@@ -21,8 +21,12 @@ import type { EventPreflightResult } from './preflight.ts';
  * projected as one (#461).
  */
 const resultValueSchema = z.object({
-  outcome: z.enum(['continue', 'allow', 'ask', 'deny']).optional(),
+  error: z.string().optional(),
+  exitCode: z.number().int().optional(),
+  outcome: z.enum(['continue', 'allow', 'ask', 'deny', 'synthesize']).optional(),
+  output: z.unknown().optional(),
   reason: z.string().min(1).optional(),
+  status: z.enum(['done', 'error', 'cancelled']).optional(),
   updatedInput: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
@@ -104,6 +108,63 @@ export const validateNativeEventEnvelope = (
   const { canonicalEvent, nativeEvent, target } = validation;
   if (native.hook_event_name !== nativeEvent) {
     return nativeEventError(`native hook_event_name must equal ${nativeEvent}`);
+  }
+  if (target === 'amp') {
+    requireNativeString(native, 'session_id');
+    switch (canonicalEvent) {
+      case 'session/start':
+        if (nativeEvent !== 'session.start') return nativeEventError('Amp session/start must use session.start');
+        return native;
+      case 'prompt/submit':
+        if (nativeEvent !== 'agent.start') return nativeEventError('Amp prompt/submit must use agent.start');
+        requireNativeStringValue(native, 'prompt');
+        return native;
+      case 'stop':
+        if (nativeEvent !== 'agent.end') return nativeEventError('Amp stop must use agent.end');
+        if (!['done', 'error', 'cancelled'].includes(String(native.status))) {
+          return nativeEventError('native status is invalid');
+        }
+        return native;
+      case 'tool/before':
+      case 'tool/after':
+        if (nativeEvent !== (canonicalEvent === 'tool/before' ? 'tool.call' : 'tool.result')) {
+          return nativeEventError(`Amp ${canonicalEvent} uses the wrong native event`);
+        }
+        requireNativeString(native, 'tool_name');
+        if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+          return nativeEventError('native tool_input must be an object');
+        }
+        requireNativeString(native, 'tool_use_id');
+        if (
+          canonicalEvent === 'tool/after'
+          && !['done', 'error', 'cancelled'].includes(String(native.status))
+        ) {
+          return nativeEventError('native status is invalid');
+        }
+        return native;
+      case 'agent/idle':
+      case 'agent/start':
+      case 'agent/stop':
+      case 'compact/after':
+      case 'compact/before':
+      case 'config/change':
+      case 'file/change':
+      case 'model-switch/after':
+      case 'model-switch/before':
+      case 'permission/denied':
+      case 'permission/request':
+      case 'session/end':
+      case 'stop/failure':
+      case 'task/complete':
+      case 'task/create':
+      case 'tool/failure':
+      case 'workspace/open':
+        return nativeEventError(`Amp PluginEventMap does not support ${canonicalEvent}`);
+      default: {
+        const exhaustive: never = canonicalEvent;
+        return exhaustive;
+      }
+    }
   }
   if (target === 'cursor') {
     if (canonicalEvent === 'workspace/open') {
@@ -500,8 +561,16 @@ export const projectEventDocument = (
   const additionalContext = contexts.length === 0 ? undefined : contexts.join('');
   const parsedValue = document.value === undefined ? undefined : resultValueSchema.parse(document.value);
   if (
-    (parsedValue?.outcome === 'allow' && event !== 'tool/before' && event !== 'permission/request' && event !== 'model-switch/before')
-    || (parsedValue?.outcome === 'ask' && event !== 'tool/before' && event !== 'model-switch/before')
+    target !== 'amp' &&
+    (
+      parsedValue?.outcome === 'synthesize'
+      || (parsedValue?.outcome === 'allow' && event !== 'tool/before' && event !== 'permission/request' && event !== 'model-switch/before')
+      || (parsedValue?.outcome === 'ask' && event !== 'tool/before' && event !== 'model-switch/before')
+      || parsedValue?.error !== undefined
+      || parsedValue?.exitCode !== undefined
+      || parsedValue?.output !== undefined
+      || parsedValue?.status !== undefined
+    )
   ) {
     throw new TypeError(
       `${event} does not accept outcome "${parsedValue.outcome}": allow is a tool/before, model-switch/before, or permission/request decision and ask is a tool/before or model-switch/before decision; continue leaves the host's own flow untouched.`,
@@ -516,6 +585,142 @@ export const projectEventDocument = (
     }
     return parsedValue.reason;
   };
+
+  if (target === 'amp') {
+    switch (event) {
+      case 'session/start':
+        if (additionalContext !== undefined || parsedValue !== undefined) {
+          throw new TypeError('Amp session.start is observation-only and has no result channel.');
+        }
+        return undefined;
+      case 'prompt/submit':
+        if (
+          parsedValue?.outcome !== undefined && parsedValue.outcome !== 'continue'
+          || parsedValue?.error !== undefined
+          || parsedValue?.exitCode !== undefined
+          || parsedValue?.output !== undefined
+          || parsedValue?.reason !== undefined
+          || parsedValue?.status !== undefined
+          || parsedValue?.updatedInput !== undefined
+        ) {
+          throw new TypeError('Amp agent.start accepts appended context only.');
+        }
+        return additionalContext === undefined
+          ? undefined
+          : Object.freeze({ message: Object.freeze({ content: additionalContext }) });
+      case 'stop':
+        if (
+          additionalContext !== undefined
+          || parsedValue?.error !== undefined
+          || parsedValue?.exitCode !== undefined
+          || parsedValue?.output !== undefined
+          || parsedValue?.status !== undefined
+          || parsedValue?.updatedInput !== undefined
+          || (
+            parsedValue?.outcome !== undefined
+            && parsedValue.outcome !== 'continue'
+            && parsedValue.outcome !== 'deny'
+          )
+          || (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny')
+        ) {
+          throw new TypeError('Amp agent.end accepts only a denied stop with a follow-up message.');
+        }
+        return parsedValue?.outcome === 'deny'
+          ? Object.freeze({ action: 'continue', userMessage: requireDenyReason() })
+          : undefined;
+      case 'tool/before':
+        if (additionalContext !== undefined || parsedValue?.status !== undefined || parsedValue?.error !== undefined) {
+          throw new TypeError('Amp tool.call has no context or terminal-status result fields.');
+        }
+        if (parsedValue?.outcome === 'ask') {
+          throw new TypeError('Amp tool.call has no ask result; native permissions remain host-owned.');
+        }
+        if (parsedValue?.outcome === 'synthesize') {
+          if (
+            typeof parsedValue.output !== 'string'
+            || parsedValue.reason !== undefined
+            || parsedValue.updatedInput !== undefined
+          ) {
+            throw new TypeError('Amp tool.call synthesize requires string output and no decision or input-rewrite fields.');
+          }
+          return Object.freeze({
+            action: 'synthesize',
+            result: Object.freeze({
+              ...(parsedValue.exitCode === undefined ? {} : { exitCode: parsedValue.exitCode }),
+              output: parsedValue.output,
+            }),
+          });
+        }
+        if (parsedValue?.output !== undefined || parsedValue?.exitCode !== undefined) {
+          throw new TypeError('Amp tool.call output and exitCode are valid only with outcome synthesize.');
+        }
+        if (parsedValue?.outcome === 'deny') {
+          if (parsedValue.updatedInput !== undefined) {
+            throw new TypeError('Amp tool.call cannot reject and modify one call.');
+          }
+          return Object.freeze({ action: 'reject-and-continue', message: requireDenyReason() });
+        }
+        if (parsedValue?.reason !== undefined) {
+          throw new TypeError('Amp tool.call reason is valid only with outcome deny.');
+        }
+        if (parsedValue?.updatedInput !== undefined) {
+          return Object.freeze({ action: 'modify', input: parsedValue.updatedInput });
+        }
+        return parsedValue?.outcome === 'allow' ? Object.freeze({ action: 'allow' }) : undefined;
+      case 'tool/after': {
+        if (
+          additionalContext !== undefined
+          || parsedValue?.exitCode !== undefined
+          || parsedValue?.reason !== undefined
+          || parsedValue?.updatedInput !== undefined
+          || (
+            parsedValue?.outcome !== undefined
+            && parsedValue.outcome !== 'continue'
+          )
+        ) {
+          throw new TypeError('Amp tool.result accepts only a replacement status, output, and error.');
+        }
+        if (
+          parsedValue?.status === undefined
+          && parsedValue?.output === undefined
+          && parsedValue?.error === undefined
+        ) {
+          return undefined;
+        }
+        const status = parsedValue?.status ?? nativeInput?.status;
+        if (status !== 'done' && status !== 'error' && status !== 'cancelled') {
+          throw new TypeError('Amp tool.result replacement requires a terminal status.');
+        }
+        return Object.freeze({
+          ...(parsedValue?.error === undefined ? {} : { error: parsedValue.error }),
+          ...(parsedValue?.output === undefined ? {} : { output: parsedValue.output }),
+          status,
+        });
+      }
+      case 'agent/idle':
+      case 'agent/start':
+      case 'agent/stop':
+      case 'compact/after':
+      case 'compact/before':
+      case 'config/change':
+      case 'file/change':
+      case 'model-switch/after':
+      case 'model-switch/before':
+      case 'permission/denied':
+      case 'permission/request':
+      case 'session/end':
+      case 'stop/failure':
+      case 'task/complete':
+      case 'task/create':
+      case 'tool/failure':
+      case 'workspace/open':
+        throw new TypeError(`Amp PluginEventMap does not support ${event}.`);
+      default: {
+        const exhaustive: never = event;
+        return exhaustive;
+      }
+    }
+  }
 
   if (event === 'stop') {
     if (parsedValue?.outcome !== 'deny') return undefined;

@@ -36,22 +36,24 @@ interface CapturedEvent {
   readonly nativeEvent: string;
 }
 
-const liveFixtures: Readonly<Record<AgentEventPayloadHost, string>> = {
+type LivePayloadHost = Exclude<AgentEventPayloadHost, 'amp'>;
+
+const liveFixtures: Readonly<Record<LivePayloadHost, string>> = {
   claude: 'claude-2.1.259-orchestration',
   codex: 'codex-0.147.0',
   cursor: 'cursor-3.18.25',
 };
 
-const hostTables: Readonly<Record<AgentEventPayloadHost, Readonly<Record<string, EventRouteCapabilityTableEntry>>>> = {
+const hostTables: Readonly<Record<LivePayloadHost, Readonly<Record<string, EventRouteCapabilityTableEntry>>>> = {
   claude: claudeCapabilityTable.hooks.eventRoutes,
   codex: codexCapabilityTable.hooks.eventRoutes,
   cursor: cursorCapabilityTable.hooks.eventRoutes,
 };
 
-const hosts = Object.keys(liveFixtures) as AgentEventPayloadHost[];
+const hosts = Object.keys(liveFixtures) as LivePayloadHost[];
 const signal = new AbortController().signal;
 
-const capturedEvents = async (host: AgentEventPayloadHost): Promise<readonly CapturedEvent[]> => {
+const capturedEvents = async (host: LivePayloadHost): Promise<readonly CapturedEvent[]> => {
   const text = await readFile(new URL(`../../../fixtures/host-lineage/${liveFixtures[host]}.ndjson`, import.meta.url), 'utf8');
   const events: CapturedEvent[] = [];
   for (const line of text.split('\n')) {

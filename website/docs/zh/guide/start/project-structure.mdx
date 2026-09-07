@@ -101,12 +101,13 @@ export default defineConfig({
 ### 复合插件根目录
 
 无论 `targets` 选择了什么，产物输出位置都只有一个目录。命令行把该输出默认为 `artifact/`，因此它永远
-不会与下文的包构建冲突；`output.distPath` 或 `--output` 可以移动它。每个所选宿主都把这个目录当作
-自己的插件根目录来读取——不存在 `artifact/<host>/` 这样的分区——因此 `targets` 决定的是根目录中出现
-哪些宿主清单，而不是任何东西落在哪里。省略 `targets` 时，根目录只承载 `portable` 投影。
+不会与下文的包构建冲突；`output.distPath` 或 `--output` 可以移动它。Amp 读取嵌套的
+`.amp/plugins/<name>/`，其他所选宿主把组合根当作插件根。不存在 `artifact/<host>/` 这样的分区。
+省略 `targets` 时，根目录只承载 `portable` 投影。
 
 ```text
 artifact/
+├── .amp/plugins/<name>/index.js      # amp 目录插件工厂
 ├── .claude-plugin/plugin.json        # claude，旁边是 marketplace.json
 ├── .codex-plugin/plugin.json         # codex，旁边是 hooks.json 与 mcp.json
 ├── .agents/plugins/marketplace.json  # codex marketplace

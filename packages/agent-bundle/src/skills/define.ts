@@ -1,7 +1,8 @@
-import type { ClaudeSkillExtension, CodexSkillExtension, CursorSkillExtension } from './ir.ts';
+import type { AmpSkillExtension, ClaudeSkillExtension, CodexSkillExtension, CursorSkillExtension } from './ir.ts';
 import { skillTokenSpellings } from './tokens.ts';
 
 export interface DefinedSkillTargets {
+  readonly amp?: AmpSkillExtension;
   readonly claude?: ClaudeSkillExtension;
   readonly codex?: CodexSkillExtension;
   readonly cursor?: CursorSkillExtension;

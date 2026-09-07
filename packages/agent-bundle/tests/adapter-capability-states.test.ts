@@ -853,13 +853,15 @@ it('rejects a malformed capability declaration when the adapter registers', () =
   expect(() => new TargetRegistry().register(source)).not.toThrow();
 });
 
-it('publishes the routed CLI bin capability with its bin layout on every built-in target (#387)', () => {
+it('publishes the routed CLI bin capability on root-plugin targets, not the isolated Amp directory (#387)', () => {
   const registry = createDefaultRegistry();
-  for (const name of registry.names()) {
+  for (const name of registry.names().filter((target) => target !== 'amp')) {
     const adapter = registry.get(name);
     expect(adapter.capabilities.cli?.state, name).toBe('supported');
     expect(registry.artifactLayout(name).cliBin, name).toEqual({ allowedSuffixes: ['.mjs'], directory: 'bin' });
   }
+  expect(registry.get('amp').capabilities.cli).toBeUndefined();
+  expect(registry.artifactLayout('amp').cliBin).toBeUndefined();
 
   // A supported `cli` row promises a place for the executable, so an adapter
   // without the layout — or with no artifact layout at all — cannot register;

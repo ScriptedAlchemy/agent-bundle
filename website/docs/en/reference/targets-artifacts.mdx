@@ -13,8 +13,9 @@ contract: the one directory `build` emits, and the artifact manifest its bytes h
 
 `agent-bundle build` writes **one directory** at the artifact output — `artifact/` by default;
 `output.distPath` or `--output` moves it. `targets` selects the **host projections** laid into
-that root: `claude`, `codex`, `cursor`, and `portable`, in any combination. Every selected host
-reads the same directory as its plugin root; there is no per-host subdirectory to point a host at.
+that root: `amp`, `claude`, `codex`, `cursor`, and `portable`, in any combination. Claude Code,
+Codex, Cursor, and portable read the root as their plugin root; Amp reads the one generated
+directory at `.amp/plugins/<name>/`.
 
 - Omit `targets` — in config and on the command line — and the build emits only the `portable`
   projection.
@@ -29,6 +30,8 @@ directories appear only when the project authors them):
 
 ```text
 artifact/
+├── .amp/plugins/<name>/index.js          # Amp PluginAPI factory
+├── .amp/plugins/<name>/skills/           # explicitly registered Amp skills
 ├── .agents/plugins/marketplace.json      # Codex marketplace
 ├── .claude-plugin/plugin.json            # Claude Code manifest
 ├── .claude-plugin/marketplace.json
@@ -51,7 +54,7 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # emitted once
 ├── INSTALL.md                            # when any built-in host is selected
 ├── install.mjs                           # when cursor or portable is selected
-├── agent-bundle.manifest.json            # the artifact index (manifestVersion 3)
+├── agent-bundle.manifest.json            # the artifact index (manifestVersion 4)
 └── agent-bundle.compile-evidence.json    # compiler record per compiled file
 ```
 
@@ -70,13 +73,14 @@ browser host for configured MCP Apps ships inside `bin/<plugin>.mjs` as the fram
 
 | Host | Manifest | Hook document | MCP document | Marketplace |
 | --- | --- | --- | --- | --- |
+| Amp | —; `index.js` is recorded as `documents.entry` | callbacks registered with `amp.on` | flat `skills/<name>/mcp.json` beside the registered skill | — |
 | Claude Code | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
 | Codex | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
 | Cursor | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | `.cursor-plugin/marketplace.json` when `marketplace: true` |
 | portable | `plugin.json` | — | `mcp.json` | — |
 
-The paths are fixed whatever the selection, so a single-host root and a four-host root share one
-layout. Claude Code and the portable Agent Plugins format load their documents from the
+The paths are fixed whatever the selection, so a single-host root and a five-host root share one
+layout. Amp's directory is isolated under `.amp/plugins/<name>/`; Claude Code and the portable Agent Plugins format load their documents from the
 conventional plugin-root locations and cannot be redirected; Codex and Cursor manifests carry
 explicit `hooks` and MCP pointers, so their documents sit beside their manifests. Both of those
 hosts also fall back to folder discovery of the conventional paths when the pointer is absent, so
@@ -109,6 +113,11 @@ MCP entries, scripts, routed CLI bins, and MCP Apps are compiled **once** and at
 `claude+codex` — rather than to any one host. `agent-bundle inspect --bundler` shows the same
 thing: its `output.path` is the artifact output, `<output>`, with no host segment beneath it.
 
+Amp's MCP surface is the exception: it is skill-scoped, not a plugin-root runtime document.
+The Amp adapter accepts relocatable remote servers and globally resolvable commands beside exactly
+one bundled skill. It rejects compiler-owned local MCP entries because Amp documents neither a
+plugin-root path token nor an execution cwd for resolving such an entry.
+
 ### One root, one set of bytes
 
 Merging projections by path only works when the hosts agree on the bytes. Three rules keep the
@@ -119,7 +128,7 @@ refuses:
 | --- | --- |
 | `AB4103` | Two selected projections plan the same path with different bytes. Projections are compared in host-name order and paths in path order, so a given selection reports the same collision however `targets` is written. The usual cause is a Skill whose frontmatter carries a host extension (`targets: { claude: … }`), which lowers to different `skills/<name>/SKILL.md` bytes for Claude Code than for the other hosts. Make the component identical for every selected host, or build the conflicting hosts into separate artifacts. |
 | `AB4105` | A component scoped to a subset of the selected hosts — a command or rule with frontmatter `targets` — sits in a conventional directory another selected host scans (`commands/` for Claude Code and Cursor, `rules/` for Cursor). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. Extend `targets` to every selected host that discovers the directory, or build those hosts separately. Skills are never host-scoped: every skill ships to every selected host, and a per-host frontmatter extension that changes its bytes is an `AB4103` collision instead. |
-| `AB4106` | The selection mixes an adapter registered on an advanced `TargetRegistry` — any target whose adapter is not one of the shipped `claude`, `codex`, `cursor`, `portable` adapters, judged by adapter identity, so a custom adapter registered under one of those names counts as advanced — with another target. Only the built-in hosts agree on where their unshared documents live, which directories each discovers, and one install surface, so a third-party adapter is built alone: `targets: ['<name>']` into its own `--output`. A single-target selection never triggers it. |
+| `AB4106` | The selection mixes an adapter registered on an advanced `TargetRegistry` — any target whose adapter is not one of the shipped `amp`, `claude`, `codex`, `cursor`, `portable` adapters, judged by adapter identity, so a custom adapter registered under one of those names counts as advanced — with another target. Only the built-in hosts agree on where their unshared documents live, which directories each discovers, and one install surface, so a third-party adapter is built alone: `targets: ['<name>']` into its own `--output`. A single-target selection never triggers it. |
 
 All three are listed with `AB4100` in the [Diagnostics reference](./diagnostics.md).
 
@@ -144,7 +153,7 @@ inventory checks the same paths (`AB7010`).
 
 ## agent-bundle.manifest.json
 
-One manifest is emitted per root (`manifestVersion: 3`). It is the root's **index** — the one
+One manifest is emitted per root (`manifestVersion: 4`). It is the root's **index** — the one
 document every consumer reads to learn what the root contains — and the input to every later
 integrity check: `validate --artifact`, `prepack`, `install`, `doctor --from`, `serve-app`, `mcp`,
 `hooks`, and the packed and installed-host proof levels. The full field reference is the
@@ -152,7 +161,7 @@ integrity check: `validate --artifact`, `prepack`, `install`, `doctor --from`, `
 
 | Section | Contents |
 | --- | --- |
-| `manifestVersion`, `runtime` | `3`, and `{ node }`, the consumer-facing generated-executable floor. |
+| `manifestVersion`, `runtime` | `4`, and `{ node }`, the consumer-facing generated-executable floor. |
 | `application` | The identity, once and host-independent: `id`, `name`, `version`, optional `description`. What `install`, `doctor`, and `uninstall` act on. |
 | `files[]` | Every emitted file: `path`, `bytes`, `sha256`, `kind` (`bundle`, `copy`, `generated`, `prebuilt`), optional `mode`. |
 | `projections[]` | One row per selected host, sorted by `host`: `host`, optional `builtInHost`, the `documents` pointers to the host plugin, marketplace, MCP, and hooks documents the projection emitted, and its `marketplace` name. |

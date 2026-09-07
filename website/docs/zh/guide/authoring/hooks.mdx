@@ -4,7 +4,8 @@ description: '声明 agent-bundle 生命周期钩子：规范事件、工具选�
 
 # 钩子
 
-钩子是一个处理器模块，编译器会把它包装起来并注册到每个宿主原生的钩子文档中。你只需按规范事件分键
+钩子是一个处理器模块，编译器会把它包装起来并注册到每个宿主原生的钩子文档中，或由 Amp 生成的 PluginAPI
+工厂注册。你只需按规范事件分键
 声明一次，适配器就会把事件名、匹配器与结果形状翻译成所选宿主期望的样子。
 
 ## 声明一个钩子
@@ -69,6 +70,11 @@ export default defineConfig({
 
 不实现某个事件的宿主，就不会收到对应的钩子；输出的文档保持诚实，而不是发明一个等价物。
 
+Amp 把朴素 `sessionStart` 映射到 fire-and-forget 的 `session.start`，把 `beforeTool` 映射到
+`tool.call`。它的 `agent.start` 与 `agent.end` 描述用户回合而非子智能体，因此不映射朴素
+`agentStart`/`agentStop`。事件路由还会把 `prompt/submit` 映射到 `agent.start`、`stop` 映射到
+`agent.end`、`tool/after` 映射到 `tool.result`。Amp 明确没有 `session.end`，适配器也绝不制造一个。
+
 ## 工具选择器
 
 `tools` 接受规范选择器——`shell`、`file.read`、`file.write`、`mcp`、`agent`——在宿主有对应原生匹配器时
@@ -76,6 +82,9 @@ export default defineConfig({
 选择器都必须在每个所选 target 上可映射，因此以 `codex` 为 target 的 `tools: ['file.read', 'shell']` 会导致构建
 失败，尽管单独的 `shell` 本可以工作。[事件与钩子矩阵](../../reference/events.md)渲染了这张匹配器表。`tools` 同时接受写成 `<target>:<native-name>` 的显式宿主原生选择器，例如 `claude:WebSearch` 或
 `codex:view_image`，这类选择器只会贡献给该宿主的原生匹配器。
+
+Amp 没有发布稳定的规范内置工具名表。Amp 钩子如需选择器，应使用显式的 `amp:<native-name>`；规范选择器
+会失败，而不是猜测原生名字。
 
 选择了工具的钩子必须让每个所选 target 都至少留下一个可用的选择器。一个只限定 `claude:WebSearch`
 却同时以 `codex` 为 target 的钩子会导致构建失败，而不是输出一份匹配器为空、永远不会触发的 Codex 文档。
@@ -104,8 +113,8 @@ export default ((event) => ({
 增加 `toolResponse`；`StopHookEvent` 与 `AgentStopHookEvent` 携带 `stopHookActive`；`AgentStartHookEvent`
 携带 `agentId` 与 `agentType`）都按名字导出，只有当每个宿主都会提供某个字段时它才是必填的；处理器的第二个
 参数（`HookHandlerContext`）给出调用它的 `target`、该宿主的原生事件名以及原样的已校验原生输入，供需要
-宿主特定字段的处理器使用。`HookHandlerEventName` 是配置 hook 可以声明的事件集合——每个宿主都映射为
-普通 hook 的那六个；`workspaceOpen` 改由[事件路由](#事件路由)提供。这些类型是可移植契约：它们所接纳的
+宿主特定字段的处理器使用。`HookHandlerEventName` 是配置 hook 可以声明的事件集合；每个适配器只映射其
+文档化子集，`workspaceOpen` 改由[事件路由](#事件路由)提供。这些类型是可移植契约：它们所接纳的
 字段既被每个宿主的包装层接受，*也*会到达该宿主的原生输出。宿主特定的行为不在其中，只能通过未带类型的
 结果触及：来自 `beforeTool` 的 `additionalContext`（Claude 与 Codex 会投递；Cursor 的 `preToolUse` 输出
 只携带权限或输入重写）、来自 `agentStart` 或 `agentStop` 的 `additionalContext`（分别为 Claude 与 Codex、
@@ -138,6 +147,18 @@ export default ((event) => ({
 
 未知的键、错误的类型，或违反上述任一规则，都会让钩子以清晰的错误消息失败，而不是被投影成一份行为
 异常却毫无声响的宿主文档。
+
+### Amp 请求结果
+
+Amp 的请求回调严格使用固定版本 `@ampcode/plugin` 的联合类型。`tool/before` 事件路由把显式 `allow`、
+`deny` 与 `updatedInput` 分别映射为 `allow`、`reject-and-continue` 与 `modify`。
+`{ outcome: 'synthesize', output, exitCode? }` 成为原生合成工具结果。透传不产生 wrapper 决定；生成的内联
+`tool.call` 处理器只在全部匹配 wrapper 都透传后，才返回 API 必需的最终 `allow`。
+
+`tool/after` 路由可返回 `status`（`done`、`error` 或 `cancelled`）以及替换的 `output`/`error`；不返回值
+则保留原结果。`prompt/submit` 路由的 `Agent.Context` 成为 `agent.start` 追加消息。被拒绝的 `stop` 成为
+`{ action: 'continue', userMessage }`，会启动另一个回合，因此可重入的路由必须自行加 guard。适配器不添加
+权限提示、模型选择或继续循环。
 
 ## 预构建处理器
 

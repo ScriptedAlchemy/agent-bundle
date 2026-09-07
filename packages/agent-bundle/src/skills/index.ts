@@ -3,6 +3,7 @@ export type { DefinedSkill, DefinedSkillTargets } from './define.ts';
 export { inspectSkillProjection } from './inspect.ts';
 export type { SkillProjectionInspection } from './inspect.ts';
 export type {
+  AmpSkillExtension,
   ClaudeSkillExtension,
   CodexSkillExtension,
   CodexSkillToolDependency,

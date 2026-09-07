@@ -5,7 +5,7 @@ description: 'agent-bundle compiles one typed config into one installable plugin
 # Introduction
 
 agent-bundle compiles an agent plugin — Skills, hooks, MCP servers, and scripts, described
-by one typed config — into one installable plugin root for Claude Code, Codex, and Cursor, plus
+by one typed config — into installable output for Amp, Claude Code, Codex, and Cursor, plus
 the portable Agent Plugins format. You write the plugin once; the compiler emits each host's
 manifests and wrappers into that root.
 
@@ -25,12 +25,12 @@ source tree:
 npx agent-bundle build --root .
 ```
 
-That single command emits one composite plugin root at `artifact/`: the manifests of every
-selected host (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, the portable
+That single command emits one composite root at `artifact/`: Amp's `.amp/plugins/<name>/`
+directory and the manifests of every other selected host (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, the portable
 `plugin.json`) over shared `skills/`, `hooks/`, `mcp/`, `bin/`, and `scripts/` directories,
-plus one `INSTALL.md`. `targets` selects which host projections the root carries — `claude`,
-`codex`, `cursor`, `portable`; omitted, it selects `portable` alone — and every host installs
-the same directory.
+plus one `INSTALL.md`. `targets` selects which host projections the root carries — `amp`,
+`claude`, `codex`, `cursor`, `portable`; omitted, it selects `portable` alone. Amp installs its
+nested generated directory; the other hosts install the composite root.
 
 ## What the config owns
 

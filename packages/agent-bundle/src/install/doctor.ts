@@ -83,7 +83,7 @@ import {
   resolveInstalledStateRoots,
 } from './state-root.ts';
 
-export type DoctorHost = InstallHost;
+export type DoctorHost = Exclude<InstallHost, 'amp'>;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
 export type DoctorInventoryStatus = 'known' | 'skipped' | 'unknown';
 export type DoctorFindingState =

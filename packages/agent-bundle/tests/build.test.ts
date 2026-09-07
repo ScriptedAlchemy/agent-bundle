@@ -390,7 +390,7 @@ it('low-level build writes and returns the exact canonical manifest for a config
           source: { status: 'passed' },
         },
       },
-      manifestVersion: 3,
+      manifestVersion: 4,
       projections: [expect.objectContaining({ host: 'portable' })],
       runtime: { node: '22.12.0' },
     });

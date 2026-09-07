@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   artifactCompilerRecordVersion,
   artifactManifestName,
+  artifactManifestVersion,
   assembleArtifactManifest,
   type ArtifactManifest,
   type ArtifactManifestCompilerAdapter,
@@ -14,13 +15,13 @@ import type { WebManifest } from '../../src/web-host/manifest.ts';
 import { digest, sha256Hex } from '../../src/core/digest.ts';
 import type { InstallHost } from '../../src/install/install.ts';
 
-const pluginDocuments: Readonly<Record<InstallHost, string>> = Object.freeze({
+const pluginDocuments: Readonly<Record<Exclude<InstallHost, 'amp'>, string>> = Object.freeze({
   claude: '.claude-plugin/plugin.json',
   codex: '.codex-plugin/plugin.json',
   cursor: '.cursor-plugin/plugin.json',
 });
 
-const marketplaceDocuments: Readonly<Record<Exclude<InstallHost, 'cursor'>, string>> = Object.freeze({
+const marketplaceDocuments: Readonly<Record<Exclude<InstallHost, 'amp' | 'cursor'>, string>> = Object.freeze({
   claude: '.claude-plugin/marketplace.json',
   codex: '.agents/plugins/marketplace.json',
 });
@@ -62,17 +63,21 @@ export const writeInstallFixtureManifest = async (
   const projectionRows: ArtifactManifestProjection[] = [];
   const adapterRows: ArtifactManifestCompilerAdapter[] = [];
   for (const projection of projections) {
-    const plugin = pluginDocuments[projection.host];
-    const marketplace = projection.host === 'cursor'
+    const entry = projection.host === 'amp'
+      ? `.amp/plugins/${application.name}/index.js`
+      : undefined;
+    const plugin = projection.host === 'amp' ? undefined : pluginDocuments[projection.host];
+    const marketplace = projection.host === 'amp' || projection.host === 'cursor'
       ? undefined
       : marketplaceDocuments[projection.host];
     projectionRows.push({
       // The fixture hosts are the shipped adapters, so identity and name coincide.
       builtInHost: projection.host,
       documents: {
+        ...(entry === undefined ? {} : { entry }),
         ...(marketplace === undefined ? {} : { marketplace }),
         ...(projection.mcp === undefined ? {} : { mcp: projection.mcp }),
-        plugin,
+        ...(plugin === undefined ? {} : { plugin }),
       },
       host: projection.host,
       ...(projection.marketplace === undefined
@@ -150,7 +155,7 @@ export const writeInstallFixtureManifest = async (
     distribution: { channels: ['local'], payloads: [] },
     executables: { bins: [], hooks: [], mcpServers, scripts: [] },
     files,
-    manifestVersion: 3,
+    manifestVersion: artifactManifestVersion,
     projections: projectionRows,
     ...(web === undefined ? {} : { web }),
     routes: {

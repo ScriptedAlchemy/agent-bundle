@@ -68,10 +68,12 @@ export const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetAr
  * `hookContract().manifestPath`), which the runtime reads through as well.
  */
 export interface TargetPlanDocuments {
+  /** A host-native executable plugin entry when the host has no JSON plugin manifest (Amp's `index.js`). */
+  readonly entry?: string;
   /** The marketplace document and the marketplace name it registers; absent when the projection emits none. */
   readonly marketplace?: Readonly<{ readonly name: string; readonly path: string }>;
   /** The host plugin manifest (`.claude-plugin/plugin.json`, `plugin.json`, …). */
-  readonly plugin: string;
+  readonly plugin?: string;
 }
 
 export interface TargetArtifactPlan {
@@ -426,6 +428,12 @@ export interface TargetArtifactOutputLayout {
   readonly directory: string;
 }
 
+/** Dynamic application-name segment admitted in a target's Skill directory layout. */
+export const artifactLayoutPluginToken = '{plugin}';
+
+export const resolveArtifactLayoutDirectory = (directory: string, plugin: string): string =>
+  directory.replaceAll(artifactLayoutPluginToken, plugin);
+
 const noArtifactDocumentIssues: readonly TargetArtifactDocumentIssue[] = Object.freeze([]);
 const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = deepFreeze([{
   instancePath: '',
@@ -455,6 +463,7 @@ export interface TargetArtifactLayout {
   readonly rootDocuments?: readonly string[];
   readonly rules?: TargetArtifactOutputLayout;
   readonly scripts?: TargetArtifactOutputLayout;
+  /** Skill root, optionally containing one `{plugin}` application-name segment. */
   readonly skills?: string;
   readonly workflows?: string;
 }
@@ -551,6 +560,8 @@ export interface TargetAdapter {
   readonly configExtension?: TargetConfigExtension;
   readonly hookContract?: TargetHookContract;
   readonly metadata: TargetAdapterMetadata;
+  /** `skill` when MCP configuration is emitted beside each skill rather than as one plugin-root runtime document. */
+  readonly mcpScope?: 'skill';
   readonly mcpRuntime?: TargetMcpRuntimeContract;
   readonly name: string;
   /**

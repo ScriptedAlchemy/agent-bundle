@@ -107,8 +107,16 @@ describe('skill token registry', () => {
   });
 
   it('classifies the six canonical tokens per host in Skill Markdown', () => {
-    const hosts = ['claude', 'codex', 'cursor', 'portable'] as const satisfies readonly SkillHost[];
+    const hosts = ['amp', 'claude', 'codex', 'cursor', 'portable'] as const satisfies readonly SkillHost[];
     const expected: Record<SkillHost, Record<keyof typeof skillTokenSpellings, 'none' | 'portable'>> = {
+      amp: {
+        arguments: 'none',
+        pluginData: 'none',
+        pluginRoot: 'none',
+        projectRoot: 'none',
+        sessionIdentity: 'none',
+        skillRoot: 'none',
+      },
       claude: {
         arguments: 'portable',
         pluginData: 'portable',
@@ -176,7 +184,7 @@ describe('canonical Skill IR', () => {
     expect(ir.passThrough).toBe(true);
     expect(ir.markdown).toBe(portableMarkdown);
 
-    for (const host of ['claude', 'codex', 'cursor', 'portable'] as const) {
+    for (const host of ['amp', 'claude', 'codex', 'cursor', 'portable'] as const) {
       const lowered = lowerSkillIr(ir, host);
       expect(lowered.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
       expect(lowered.skillMarkdown).toBe(portableMarkdown);
@@ -191,10 +199,16 @@ describe('canonical Skill IR', () => {
       'description: Review a change and report actionable findings.',
       'model: sonnet',
       'context: fork',
+      'builtin-tools:',
+      '  - review_status',
       'paths:',
       '  - src/**',
       'disable-model-invocation: true',
       'targets:',
+      '  amp:',
+      '    mcpServers:',
+      '      review:',
+      '        url: https://mcp.example.test/mcp',
       '  codex:',
       '    interface:',
       '      display_name: Review change',
@@ -211,6 +225,10 @@ describe('canonical Skill IR', () => {
     const document = await parseSkill(join(root, 'src', 'skills', 'review'), root);
     const ir = parseSkillIr(document);
     expect(ir.passThrough).toBe(false);
+    expect(ir.extensions.amp).toEqual({
+      builtinTools: ['review_status'],
+      mcpServers: { review: { url: 'https://mcp.example.test/mcp' } },
+    });
     expect(ir.extensions.claude).toEqual(expect.objectContaining({ context: 'fork', model: 'sonnet' }));
     expect(ir.extensions.cursor).toEqual(expect.objectContaining({
       disableModelInvocation: true,
@@ -221,10 +239,18 @@ describe('canonical Skill IR', () => {
       policy: { allowImplicitInvocation: true },
     }));
 
+    const amp = lowerSkillIr(ir, 'amp');
+    expect(amp.frontmatter['builtin-tools']).toEqual(['review_status']);
+    expect(amp.frontmatter.mcpServers).toEqual({ review: { url: 'https://mcp.example.test/mcp' } });
+    expect(amp.frontmatter).not.toHaveProperty('model');
+    expect(amp.sidecars).toEqual([]);
+
     const claude = lowerSkillIr(ir, 'claude');
     expect(claude.frontmatter.model).toBe('sonnet');
     expect(claude.frontmatter.context).toBe('fork');
     expect(claude.frontmatter).not.toHaveProperty('display_name');
+    expect(claude.frontmatter).not.toHaveProperty('builtin-tools');
+    expect(claude.frontmatter).not.toHaveProperty('mcpServers');
     expect(claude.sidecars).toEqual([]);
 
     const cursor = lowerSkillIr(ir, 'cursor');

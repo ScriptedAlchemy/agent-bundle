@@ -37,7 +37,7 @@ npx agent-bundle --version
 | `--root <root>` | `process.cwd()` | Project root. |
 | `--config <path>` | — | Configuration file relative to `--root`. |
 | `--mode <mode>` | `production` | Configuration mode. |
-| `--target <target>` | config `targets`, else `portable` | Host projection to select: `claude`, `codex`, `cursor`, or `portable`. Repeatable; the selection replaces the configured `targets` for this run, and every selected host lands in the one composite root whatever the order. Any other name, `plugin` included, is `AB4100`. |
+| `--target <target>` | config `targets`, else `portable` | Host projection to select: `amp`, `claude`, `codex`, `cursor`, or `portable`. Repeatable; the selection replaces the configured `targets` for this run, and every selected host lands in the one composite root whatever the order. Any other name, `plugin` included, is `AB4100`. |
 | `--json` | off | Write one machine-readable JSON document. |
 
 **Artifact commands** — `mcp list`, `mcp invoke`, `mcp run`, `serve-app`, `hooks list`, `hooks simulate`:
@@ -181,9 +181,9 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `<host>` | **required** | `claude`, `codex`, or `cursor`. |
-| `--from <root>` | `process.cwd()` | The composite root: the directory holding `agent-bundle.manifest.json`. Identity (name, version, marketplace) comes from the manifest's `application` and `projections[host]`, and the host is pointed at `projections[host].documents.plugin`; there is no `<from>/<host>` lookup, and every host installs from the same directory. `AB7001` when the manifest is missing or not canonical, has no projection for the host, its projection has no host plugin manifest or the pointed file is missing, `claude`/`codex` have no marketplace identity, or the `cursor` plugin name is unsafe. See [Artifact manifest](./artifact-manifest.mdx). |
-| `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Codex and Cursor are user-scoped. |
+| `<host>` | **required** | `amp`, `claude`, `codex`, or `cursor`. |
+| `--from <root>` | `process.cwd()` | The composite root holding `agent-bundle.manifest.json`. Identity comes from `application` and `projections[host]`; other hosts use `documents.plugin`, while Amp copies only the directory containing `documents.entry`. `AB7001` covers a missing/invalid manifest, projection, required host file, unsafe local name, or missing Claude/Codex marketplace identity. |
+| `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Amp accepts `project` and `user` (its system root); Codex and Cursor are user-scoped. Run Amp project-scope installation from the destination project root. |
 | `--mode <mode>` | `local` | Cursor only. `local` copies the bundle into `~/.cursor/plugins/local/<name>`; `marketplace` stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step that makes Cursor manage the plugin as a marketplace install. |
 | `--replace` (alias `--force`) | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
 
@@ -193,7 +193,7 @@ touches owned files only, and `--replace` adopts a pre-receipt copy; Claude repl
 `claude plugin uninstall --keep-data` before reinstalling and Codex runs `codex plugin remove`
 before `add`. Every install writes a lifecycle receipt (format `agent-bundle-install-receipt/2`:
 version, content hash, mode, scope, owned paths, host registrations, timestamps) — in-tree for
-Cursor local copies, under `<host root>/agent-bundle/receipts/` for Claude, Codex, and Cursor
+Cursor and Amp local copies, under `<host root>/agent-bundle/receipts/` for Claude, Codex, and Cursor
 marketplace mode — that `uninstall` and `doctor` consume.
 During install, an explicit state root that does not yet exist is created and receives
 `.agent-bundle-state-owner.json`, which records the installation identity. Parent directories may
@@ -208,9 +208,9 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `<host>` | **required** | `claude`, `codex`, or `cursor`. |
+| `<host>` | **required** | `amp`, `claude`, `codex`, or `cursor`. |
 | `--from <root>` | `process.cwd()` | The composite root whose `agent-bundle.manifest.json` identifies the plugin (name, version, marketplace), read exactly as `install` reads it (`AB7001` on the same conditions). |
-| `--scope <scope>` | `user` | The scope the plugin was installed at (Claude). |
+| `--scope <scope>` | `user` | The scope the plugin was installed at (Claude or Amp). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
 | `--keep-data` | on | Keep every recorded framework state root, derived web-data, legacy `state/`, and a recorded Cursor `PLUGIN_DATA` directory. This is the default; the flag makes it explicit and preserves the ownership receipt for a later purge. |
 | `--purge-data` | off | Remove only receipt-recorded, installation-owned durable-data roots. Refused (`AB7008`) without `--confirm-purge`; shared, externally managed, marker-less, foreign-marker, and otherwise unproven roots are retained and listed. |
@@ -219,7 +219,7 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 
 Uninstall removes exactly what the receipt owns: the recorded files and installer-created
 directories (Cursor local, including the `~/.cursor/plugins[/local]` directories the install
-created), the staged repository (Cursor marketplace, after its `HEAD` matches the recorded
+created; Amp project/system, inside only `.amp/plugins/<name>`), the staged repository (Cursor marketplace, after its `HEAD` matches the recorded
 commit), or the host registrations (`claude plugin uninstall <id> --scope <scope> --keep-data` +
 `claude plugin marketplace remove`, `codex plugin remove` + `codex plugin marketplace remove` —
 the marketplace is retained while another installed plugin still uses it, including a Claude

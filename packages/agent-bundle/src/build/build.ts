@@ -342,6 +342,7 @@ const manifestProjections = (options: {
     const documents = projection.plan.documents;
     const emitted = (path: string | undefined): string | undefined =>
       path !== undefined && options.filePaths.has(path) ? path : undefined;
+    const entry = emitted(documents?.entry);
     const plugin = emitted(documents?.plugin);
     const marketplace = emitted(documents?.marketplace?.path);
     const mcp = emitted(options.registry.mcpRuntime(host)?.manifestPath);
@@ -350,6 +351,7 @@ const manifestProjections = (options: {
     return Object.freeze({
       ...(builtInHost === undefined ? {} : { builtInHost }),
       documents: Object.freeze({
+        ...(entry === undefined ? {} : { entry }),
         ...(hooks === undefined ? {} : { hooks }),
         ...(marketplace === undefined ? {} : { marketplace }),
         ...(mcp === undefined ? {} : { mcp }),

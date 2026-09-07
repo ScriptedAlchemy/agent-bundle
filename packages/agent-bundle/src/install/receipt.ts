@@ -65,6 +65,8 @@ export type InstallReceiptScope = 'local' | 'project' | 'user';
  * reverses exactly that and nothing else.
  */
 export type InstallRegistrationKind =
+  | 'amp-project-plugin'
+  | 'amp-system-plugin'
   | 'claude-marketplace'
   | 'claude-plugin'
   | 'codex-marketplace'
@@ -73,6 +75,8 @@ export type InstallRegistrationKind =
   | 'cursor-marketplace-staging';
 
 export const installRegistrationKinds: readonly InstallRegistrationKind[] = Object.freeze([
+  'amp-project-plugin',
+  'amp-system-plugin',
   'claude-marketplace',
   'claude-plugin',
   'codex-marketplace',

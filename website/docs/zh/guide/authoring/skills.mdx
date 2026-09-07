@@ -75,6 +75,7 @@ export default defineConfig({
 
 | 宿主 | 示例 |
 | --- | --- |
+| `amp` | `builtinTools`、`mcpServers`（输出为 `builtin-tools` 与 `mcpServers`） |
 | `claude` | `allowedTools`、`disallowedTools`、`argumentHint`、`model`、`effort`、`context: 'fork'`、`background`、`userInvocable`、`disableModelInvocation`、`whenToUse`、`shell`、`paths`、`hooks` |
 | `codex` | `dependencies.tools`、`interface`（显示名、图标、品牌色、默认提示词）、`policy.allowImplicitInvocation` |
 | `cursor` | `globs`、`icon`、`color`、`paths`、`disableModelInvocation` |
@@ -82,10 +83,21 @@ export default defineConfig({
 Skill frontmatter 中的 `targets` 就是上述按宿主划分的对象，别无他用；写成列表（如 `targets: ['claude']`）是
 `AB3006`。Skill 会输出到项目选择的每一个 target——不存在按 Skill 限制产物的机制。
 
-所有选中宿主读取的是同一个复合插件根目录，因此 `skills/<name>/SKILL.md` 只存在一份。若某个宿主扩展
-让文档在一个选中宿主上的降级结果与另一个宿主不同——例如在 `claude` + `codex` 的构建中写
+Claude Code、Codex、Cursor 与 portable 共享 `skills/<name>/SKILL.md`；Amp 的副本位于
+`.amp/plugins/<plugin>/skills/<name>/SKILL.md`。若某个宿主扩展让共享文档在一个选中宿主上的降级结果
+与另一个宿主不同——例如在 `claude` + `codex` 的构建中写
 `targets: { claude: { effort: high } }`——就是致命的 `AB4103` 冲突。请让输出的文档对每个选中宿主
 都完全一致，或者把这些宿主分开构建到不同的产物中（每次构建只写一个 `targets` 条目）。
+
+### Amp 注册与 Skill MCP
+
+Amp 不会扫描目录插件中的 `skills/`。生成的 `index.js` 会为每个捆绑 Skill 恰好一次地等待
+`amp.registerSkill({ path: 'skills/<name>' })`。Amp 把它列为 `<plugin>:<skill>`，因此不会与机器、项目、
+Claude 兼容、内置、个人或工作区来源发现的裸 Skill 名竞争。
+
+`builtin-tools` 会把同一个 Amp 插件注册的工具隐藏到 Skill 加载时。`SKILL.md` frontmatter 中的
+`mcpServers` 优先于同级 `mcp.json`；作者提供的同级文件也会保留而不会被覆盖。规范
+`mcp.servers` 以 Amp 为 target 时，仅在恰有一个捆绑 Skill 且两种原生来源都不存在时，才输出扁平服务器映射。
 
 ## 路径 token
 

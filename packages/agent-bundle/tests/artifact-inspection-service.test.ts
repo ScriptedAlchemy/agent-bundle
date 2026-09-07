@@ -287,7 +287,7 @@ const manifestFor = (
       scripts,
     },
     files: manifestFiles,
-    manifestVersion: 3,
+    manifestVersion: 4,
     projections: [projection],
     routes: {
       digest: 'e'.repeat(64),

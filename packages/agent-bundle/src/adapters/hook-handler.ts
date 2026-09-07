@@ -218,7 +218,7 @@ export type HookEventFields = typeof hookEventFields;
 export interface HookHandlerContext {
   readonly nativeEvent: string;
   readonly nativeInput: Readonly<Record<string, unknown>>;
-  readonly target: 'claude' | 'codex' | 'cursor';
+  readonly target: 'amp' | 'claude' | 'codex' | 'cursor';
 }
 
 /**

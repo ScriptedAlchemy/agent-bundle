@@ -2704,7 +2704,7 @@ const installSurfaceModel = (target: string): NormalizedPlugin => ({
 });
 
 const installSurfaceArtifact = async (
-  target: 'claude' | 'codex' | 'cursor' | 'portable',
+  target: 'amp' | 'claude' | 'codex' | 'cursor' | 'portable',
   omitted: string,
 ): Promise<string> => {
   const registry = createDefaultRegistry();
@@ -2719,7 +2719,7 @@ const installSurfaceArtifact = async (
   return writeArtifact(files, true, [targetFromRegistry(registry, target)]);
 };
 
-it.each(['claude', 'codex', 'cursor', 'portable'] as const)(
+it.each(['amp', 'claude', 'codex', 'cursor', 'portable'] as const)(
   'rejects a %s artifact without INSTALL.md',
   async (target) => {
     const root = await installSurfaceArtifact(target, 'INSTALL.md');

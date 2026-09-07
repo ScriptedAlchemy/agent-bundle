@@ -231,10 +231,33 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
   '',
 ];
 
+const ampInstructions = (model: NormalizedPlugin): string[] => [
+  '## Amp',
+  '',
+  `This build contains one directory plugin at \`.amp/plugins/${model.metadata.name}/\`. Copy that directory`,
+  'into the target project at the same path, or into the system plugin root:',
+  '',
+  '```sh',
+  `mkdir -p "\${XDG_CONFIG_HOME:-$HOME/.config}/amp/plugins/${model.metadata.name}"`,
+  `cp -R ./.amp/plugins/${model.metadata.name}/. "\${XDG_CONFIG_HOME:-$HOME/.config}/amp/plugins/${model.metadata.name}/"`,
+  'amp plugins list',
+  '```',
+  '',
+  `From the destination project root, the optional \`agent-bundle install amp --from <bundle-dir> --scope project\``,
+  'makes the project copy. The default `--scope user` makes the system copy. Both write a receipt inside only',
+  'the copied plugin directory; replacement preserves unowned files and Amp settings, and the optional',
+  '`agent-bundle uninstall amp` removes only receipt-owned files.',
+  '',
+  'Amp reload is interactive. In a running session open the command palette with Ctrl+O and run',
+  '`plugins: reload`; Agent Bundle never automates it. `amp plugins list` in another shell inspects plugins but',
+  'does not reload the running session.',
+  '',
+];
+
 /**
  * The third-party clients recorded in the pinned portable capability table
  * (#693–#714). Every sentence this section prints about a client outside the
- * four shipped adapters comes from a record there, so the install surface
+ * shipped adapters comes from a record there, so the install surface
  * names what each client's own documentation says it loads — and what it does
  * not — instead of asserting a bare list of native clients.
  */
@@ -421,6 +444,8 @@ const instructionsFor = (
   planned: readonly string[],
 ): string[] => {
   switch (target) {
+    case 'amp':
+      return ampInstructions(model);
     case 'claude':
       return claudeInstructions(model);
     case 'codex':

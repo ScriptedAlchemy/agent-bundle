@@ -3,9 +3,10 @@ import { resolve } from 'node:path';
 
 import { portableAdapter } from '../adapters/portable.ts';
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
-import type {
-  TargetArtifactDocumentIssue,
-  TargetArtifactDocumentValidator,
+import {
+  resolveArtifactLayoutDirectory,
+  type TargetArtifactDocumentIssue,
+  type TargetArtifactDocumentValidator,
 } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
@@ -466,10 +467,16 @@ const validatePortableProjection = async (options: {
 
 const ownershipRecovery = artifactDiagnosticRecoveries.AB6014;
 
-const isSkillArtifactPath = (relativePath: string, skills: string | undefined): boolean => {
+const isSkillArtifactPath = (
+  relativePath: string,
+  skills: string | undefined,
+  plugin: string,
+): boolean => {
   if (skills === undefined) return false;
-  const [layout, name, resource] = relativePath.split('/');
-  return layout === skills && name !== undefined && resource !== undefined;
+  const root = resolveArtifactLayoutDirectory(skills, plugin);
+  if (!relativePath.startsWith(`${root}/`)) return false;
+  const [name, resource] = relativePath.slice(root.length + 1).split('/');
+  return name !== undefined && resource !== undefined;
 };
 
 const isRecursiveArtifactPath = (relativePath: string, directory: string | undefined): boolean => {
@@ -491,6 +498,7 @@ const isProjectionArtifactPath = (
   relativePath: string,
   target: string,
   registry: TargetRegistry,
+  plugin: string,
 ): boolean => {
   const layout = registry.artifactLayout(target);
   const hookContract = registry.hookContract(target);
@@ -504,7 +512,7 @@ const isProjectionArtifactPath = (
     isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||
     isDirectOutputLayoutPath(relativePath, layout.rules) ||
     isDirectOutputLayoutPath(relativePath, layout.scripts) ||
-    isSkillArtifactPath(relativePath, layout.skills) ||
+    isSkillArtifactPath(relativePath, layout.skills, plugin) ||
     isAdapterRootDocument(relativePath, layout.rootDocuments) ||
     relativePath === hookContract?.manifestPath ||
     relativePath === mcpRuntime?.manifestPath ||
@@ -534,7 +542,8 @@ const validateArtifactOwnership = (options: {
 
   for (const file of options.files) {
     if (file.path === compileEvidenceFileName || admitsEverything) continue;
-    if (known.some((target) => isProjectionArtifactPath(file.path, target, options.registry))) continue;
+    if (known.some((target) =>
+      isProjectionArtifactPath(file.path, target, options.registry, options.manifest.application.name))) continue;
     // Prebuilt payload files live in config-named directories under the
     // root, so no emitted layout describes them.
     if (manifestKinds.get(file.path) === 'prebuilt') continue;

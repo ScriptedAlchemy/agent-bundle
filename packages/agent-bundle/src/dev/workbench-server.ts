@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { readArtifactManifest } from '../build/manifest-file.ts';
-import type { InstallHost } from '../install/install.ts';
+import type { DevInstallHost } from '../install/install.ts';
 import { HookService } from '../services/hook-service.ts';
 import { AgentApi } from './agent-api.ts';
 import { ArtifactInspectionService } from './artifacts/artifact-inspection-service.ts';
@@ -127,7 +127,7 @@ export interface StartDevServerOptions {
   /** Supplied by integration tests; published callers use the packaged assets. */
   readonly assets?: WorkbenchAssetSource;
   /** Hosts whose installed development variant follows successful artifact epochs. */
-  readonly installHosts?: readonly InstallHost[];
+  readonly installHosts?: readonly DevInstallHost[];
   /** Launch the foreground URL after it has started. Defaults to false. */
   readonly open?: boolean;
   /** Injectable browser launcher for embedding and deterministic tests. */

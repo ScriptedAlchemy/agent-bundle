@@ -273,10 +273,11 @@ node 表面。
 
 ### 复合根目录
 
-以 `targets: ['claude', 'codex', 'cursor', 'portable']` 构建时，host-test 示例的根目录为：
+以 `targets: ['amp', 'claude', 'codex', 'cursor', 'portable']` 构建时，host-test 示例的根目录为：
 
 ```text
 artifact/
+├── .amp/plugins/<name>/{index.js,skills/,hooks/}
 ├── .agents/plugins/marketplace.json
 ├── .claude-plugin/{plugin.json,marketplace.json}
 ├── .codex-plugin/{plugin.json,hooks.json,mcp.json}
@@ -371,7 +372,7 @@ ENOENT）或 `invalid`。
 
 ### 写入器发出的分节
 
-文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 3`）
+文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 4`）
 是消费者读取的部分。**编译器记录**（`compiler`，`recordVersion: 1`）是
 这次运行的操作性账目——生产者、项目摘要、来源、适配器修订、固定的
 schema、验证结果——它的变化不会推动 `manifestVersion`；消费者读取方

@@ -79,6 +79,7 @@ their host so they reach only that adapter:
 
 | Host | Examples |
 | --- | --- |
+| `amp` | `builtinTools`, `mcpServers` (emitted as `builtin-tools` and `mcpServers`) |
 | `claude` | `allowedTools`, `disallowedTools`, `argumentHint`, `model`, `effort`, `context: 'fork'`, `background`, `userInvocable`, `disableModelInvocation`, `whenToUse`, `shell`, `paths`, `hooks` |
 | `codex` | `dependencies.tools`, `interface` (display name, icons, brand color, default prompt), `policy.allowImplicitInvocation` |
 | `cursor` | `globs`, `icon`, `color`, `paths`, `disableModelInvocation` |
@@ -87,11 +88,24 @@ their host so they reach only that adapter:
 `targets: ['claude']` is `AB3006`. A Skill is emitted to every target the project selects — there
 is no per-Skill artifact restriction.
 
-Every selected host reads the same composite plugin root, so `skills/<name>/SKILL.md` exists
-once. A host extension that lowers the document differently for one selected host than for
+Claude Code, Codex, Cursor, and portable share `skills/<name>/SKILL.md`; Amp receives its copy
+under `.amp/plugins/<plugin>/skills/<name>/SKILL.md`. A host extension that lowers a shared
+document differently for one selected host than for
 another — `targets: { claude: { effort: high } }` in a `claude` + `codex` build, say — is a
 fatal `AB4103` collision. Keep the emitted document identical for every selected host, or build
 those hosts into separate artifacts (one `targets` entry per build).
+
+### Amp registration and skill MCP
+
+Amp does not scan a directory plugin's `skills/` folder. Its generated `index.js` awaits
+`amp.registerSkill({ path: 'skills/<name>' })` exactly once for every bundled skill. Amp lists
+the result as `<plugin>:<skill>`, so it does not compete with a bare skill discovered from the
+machine, project, Claude-compatible, built-in, personal, or workspace skill roots.
+
+`builtin-tools` gates tools registered by that same Amp plugin until the skill loads.
+`mcpServers` in `SKILL.md` frontmatter wins over a sibling `mcp.json`; an authored sibling is
+also preserved rather than overwritten. If canonical `mcp.servers` target Amp, the adapter emits
+the flat server map beside exactly one bundled skill only when neither native source exists.
 
 ## Path tokens
 

@@ -3,6 +3,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type {
+  AmpSkillExtension,
   ClaudeSkillExtension,
   CodexSkillExtension,
   CursorSkillExtension,
@@ -31,6 +32,7 @@ const claudeOnlyKeys = new Set([
 ]);
 const sharedKeys = new Set(['disable-model-invocation', 'paths']);
 const cursorOnlyKeys = new Set(['color', 'globs', 'icon']);
+const ampOnlyKeys = new Set(['builtin-tools', 'mcpServers']);
 const authoringKeys = new Set(['targets']);
 const claudeTargetKeys = new Set([
   ...claudeOnlyKeys,
@@ -66,6 +68,7 @@ const codexInterfaceKeys = new Set([
 const codexPolicyKeys = new Set(['allowImplicitInvocation', 'allow_implicit_invocation']);
 const codexDependenciesKeys = new Set(['tools']);
 const codexToolKeys = new Set(['description', 'transport', 'type', 'url', 'value']);
+const ampTargetKeys = new Set(['builtin-tools', 'builtinTools', 'mcpServers']);
 
 const asString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -153,6 +156,17 @@ const cursorFrom = (fields: Readonly<Record<string, unknown>>): CursorSkillExten
   return Object.keys(extension).length === 0 ? undefined : Object.freeze(extension);
 };
 
+const ampFrom = (fields: Readonly<Record<string, unknown>>): AmpSkillExtension | undefined => {
+  const builtinTools = fields.builtinTools ?? fields['builtin-tools'];
+  const extension: AmpSkillExtension = {
+    ...(Array.isArray(builtinTools) && builtinTools.every((tool) => typeof tool === 'string')
+      ? { builtinTools: Object.freeze([...builtinTools]) }
+      : {}),
+    ...(isRecord(fields.mcpServers) ? { mcpServers: deepFreeze({ ...fields.mcpServers }) } : {}),
+  };
+  return Object.keys(extension).length === 0 ? undefined : Object.freeze(extension);
+};
+
 const pickString = (record: Readonly<Record<string, unknown>>, camel: string, snake: string): string | undefined =>
   asString(record[camel]) ?? asString(record[snake]);
 
@@ -226,6 +240,15 @@ const mergeCursor = (
   return Object.freeze({ ...left, ...right });
 };
 
+const mergeAmp = (
+  left: AmpSkillExtension | undefined,
+  right: AmpSkillExtension | undefined,
+): AmpSkillExtension | undefined => {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Object.freeze({ ...left, ...right });
+};
+
 const unknownField = (source: string, field: string): Diagnostic => ({
   code: 'AB3006',
   message: `Skill frontmatter field ${JSON.stringify(field)} is not a portable Agent Skills field or a typed host extension.`,
@@ -264,14 +287,15 @@ const peelTargets = (
   if (!isRecord(value)) {
     diagnostics.push({
       code: 'AB3006',
-      message: 'Skill `targets` must be an object with optional `claude`, `cursor`, and `codex` keys.',
+      message: 'Skill `targets` must be an object with optional `amp`, `claude`, `cursor`, and `codex` keys.',
       recovery: 'Replace `targets` with a typed per-host object.',
       severity: 'error',
       sourcePath: source,
     });
     return {};
   }
-  const unknown = Object.keys(value).filter((key) => key !== 'claude' && key !== 'codex' && key !== 'cursor');
+  const unknown = Object.keys(value).filter((key) =>
+    key !== 'amp' && key !== 'claude' && key !== 'codex' && key !== 'cursor');
   for (const key of unknown) diagnostics.push(unknownField(source, `targets.${key}`));
   if (isRecord(value.claude)) {
     reportUnknownFields(value.claude, claudeTargetKeys, 'targets.claude', source, diagnostics);
@@ -322,6 +346,9 @@ const peelTargets = (
       }
     }
   }
+  if (isRecord(value.amp)) {
+    reportUnknownFields(value.amp, ampTargetKeys, 'targets.amp', source, diagnostics);
+  }
   const claude = isRecord(value.claude)
     ? claudeFrom({
       ...value.claude,
@@ -341,6 +368,9 @@ const peelTargets = (
     : undefined;
   const codex = codexFrom(value.codex);
   return {
+    ...(ampFrom(isRecord(value.amp) ? value.amp : {}) === undefined
+      ? {}
+      : { amp: ampFrom(isRecord(value.amp) ? value.amp : {}) }),
     ...(claude === undefined ? {} : { claude }),
     ...(codex === undefined ? {} : { codex }),
     ...(cursor === undefined ? {} : { cursor }),
@@ -355,23 +385,30 @@ export const parseSkillIr = (document: SkillDocument): SkillIr => {
     !claudeOnlyKeys.has(key) &&
     !sharedKeys.has(key) &&
     !cursorOnlyKeys.has(key) &&
+    !ampOnlyKeys.has(key) &&
     !authoringKeys.has(key)
   );
   for (const key of unknownKeys) diagnostics.push(unknownField(document.source, key));
 
   const peeledClaude: Record<string, unknown> = {};
   const peeledCursor: Record<string, unknown> = {};
+  const peeledAmp: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(frontmatter)) {
     if (claudeOnlyKeys.has(key) || sharedKeys.has(key)) peeledClaude[key] = value;
     if (cursorOnlyKeys.has(key) || sharedKeys.has(key)) peeledCursor[key] = value;
+    if (ampOnlyKeys.has(key)) peeledAmp[key] = value;
   }
 
   const fromFrontmatter: SkillIrExtensions = {
+    ...(ampFrom(peeledAmp) === undefined ? {} : { amp: ampFrom(peeledAmp) }),
     ...(claudeFrom(peeledClaude) === undefined ? {} : { claude: claudeFrom(peeledClaude) }),
     ...(cursorFrom(peeledCursor) === undefined ? {} : { cursor: cursorFrom(peeledCursor) }),
   };
   const fromTargets = peelTargets(frontmatter.targets ?? document.authoredTargets, document.source, diagnostics);
   const extensions: SkillIrExtensions = Object.freeze({
+    ...(mergeAmp(fromFrontmatter.amp, fromTargets.amp) === undefined
+      ? {}
+      : { amp: mergeAmp(fromFrontmatter.amp, fromTargets.amp) }),
     ...(mergeClaude(fromFrontmatter.claude, fromTargets.claude) === undefined
       ? {}
       : { claude: mergeClaude(fromFrontmatter.claude, fromTargets.claude) }),
@@ -385,7 +422,8 @@ export const parseSkillIr = (document: SkillDocument): SkillIr => {
     Object.freeze({ ...occurrence, required: true as const }),
   );
   const sidecar = sidecarFromResource(document);
-  const hasExtensions = extensions.claude !== undefined ||
+  const hasExtensions = extensions.amp !== undefined ||
+    extensions.claude !== undefined ||
     extensions.codex !== undefined ||
     extensions.cursor !== undefined;
   const passThrough = diagnostics.every((diagnostic) => diagnostic.severity !== 'error') &&

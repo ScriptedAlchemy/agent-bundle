@@ -46,6 +46,8 @@ import {
 import { recordInstalledState } from './state-root.ts';
 
 export type InstallHost = BundleIdentityHost;
+export type DevInstallHost = Exclude<InstallHost, 'amp'>;
+export type PublicInstallHost = Exclude<InstallHost, 'amp' | 'cursor'>;
 export type InstallScope = 'local' | 'project' | 'user';
 /**
  * `adopted`: a byte-identical pre-receipt Cursor copy gained its receipt under
@@ -90,6 +92,8 @@ export interface InstallBundleOptions {
   readonly replace?: boolean;
   /** Cursor only; defaults to `local`. Other hosts reject an explicit mode. */
   readonly mode?: InstallMode;
+  /** Amp project-scope destination; defaults to the calling process cwd. */
+  readonly projectRoot?: string;
   readonly scope?: InstallScope;
 }
 
@@ -147,7 +151,7 @@ export const defaultCommandRunner: InstallCommandRunner = Object.freeze({
 export const runHostCommand = async (
   runner: InstallCommandRunner,
   identity: PluginIdentity,
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   args: readonly string[],
   operation: 'installation' | 'removal' = 'installation',
 ): Promise<InstallCommandResult> => {
@@ -173,7 +177,7 @@ export const runHostCommand = async (
  * where Agent Bundle keeps its own `agent-bundle/receipts` store for them.
  */
 export const publicHostRoot = (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
 ): string => host === 'claude'
@@ -185,7 +189,7 @@ export const publicHostRoot = (
  * the real-host install proofs and shared with the development install sync.
  */
 export const publicHostCacheRoot = (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
 ): string => join(publicHostRoot(host, environment, home), 'plugins', 'cache');
@@ -234,7 +238,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * host's inventory identically.
  */
 export const parsePublicHostInventory = (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   stdout: string,
   options: {
     readonly cacheRoot: string;
@@ -306,7 +310,7 @@ export const parsePublicHostInventory = (
 export const readPublicHostInventory = async (
   runner: InstallCommandRunner,
   identity: PluginIdentity,
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   scope: InstallScope,
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
@@ -337,7 +341,7 @@ export const readPublicHostInventory = async (
  * "already installed" nor a fresh install may report it as healthy (`AB7006`).
  */
 const refusedInstallFailure = (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   id: string,
   entry: PublicHostInstalledEntry,
   phase: 'existing' | 'installed',
@@ -357,7 +361,7 @@ const refusedInstallFailure = (
  * durable data explicitly (`--purge-data`) instead of letting the host decide.
  */
 export const publicHostUninstallArguments = (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   id: string,
   scope: InstallScope,
 ): readonly string[] => host === 'claude'
@@ -370,7 +374,7 @@ export const publicHostMarketplaceRemoveArguments = (marketplace: string): reado
 
 /** The registrations `install <host>` performs for a public host CLI, in order. */
 export const publicHostRegistrations = (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   id: string,
   marketplace: string,
   scope: InstallScope,
@@ -393,7 +397,7 @@ export const publicHostRegistrations = (
  * host verbs ran in (the bundle root), so each project keeps its own receipt.
  */
 export const publicHostReceiptPath = (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   plugin: string,
   marketplace: string,
   scope: InstallScope,
@@ -408,7 +412,7 @@ export const publicHostReceiptPath = (
 
 /** The project root a Claude `project` / `local` registration belongs to: the cwd the host verbs run in. */
 export const publicHostProjectRoot = (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   scope: InstallScope,
   identity: PluginIdentity,
 ): string | undefined => host === 'claude' && scope !== 'user' ? identity.bundleRoot : undefined;
@@ -419,7 +423,7 @@ export interface PublicHostMarketplaceEntry {
 }
 
 export const parsePublicHostMarketplaces = (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   stdout: string,
 ): readonly PublicHostMarketplaceEntry[] | undefined => {
   let document: unknown;
@@ -491,7 +495,7 @@ export const readCodexMarketplaceSource = async (
 export const readPublicHostMarketplaceState = async (
   runner: InstallCommandRunner,
   identity: PluginIdentity,
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   marketplace: string,
 ): Promise<'absent' | 'present' | 'unknown'> => {
   let stdout: string;
@@ -516,7 +520,7 @@ export const cursorMarketplaceReceiptPath = (cursorRoot: string, plugin: string)
 const installPublicCli = async (
   options: InstallBundleOptions,
   identity: PluginIdentity,
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   scope: InstallScope,
 ): Promise<InstallResult> => {
   if (host === 'codex' && scope !== 'user') {
@@ -1098,6 +1102,135 @@ const installCursor = Effect.fnUntraced(function*(
   return yield* program.pipe(Effect.mapError(installFailure('cursor')));
 });
 
+const ampNextSteps = Object.freeze([
+  'Open Amp’s command palette with Ctrl+O and run `plugins: reload`.',
+  'Run `amp plugins list` in a shell to inspect the installed plugin.',
+]);
+
+export const ampInstallLocation = (
+  options: InstallBundleOptions,
+  identity: PluginIdentity,
+  scope: InstallScope,
+): {
+  readonly destination: string;
+  readonly hostDirectories: readonly string[];
+  readonly hostRoot: string;
+  readonly installRoot: string;
+  readonly registration: 'amp-project-plugin' | 'amp-system-plugin';
+} => {
+  if (scope === 'local') {
+    throw failure('AB7003', 'Amp plugin installation supports project or user scope, not local.', 'amp');
+  }
+  const home = options.home ?? homedir();
+  const environment = options.environment ?? process.env;
+  const project = resolve(options.projectRoot ?? process.cwd());
+  const hostRoot = scope === 'project'
+    ? project
+    : join(environment['XDG_CONFIG_HOME'] ?? join(home, '.config'), 'amp');
+  const installRoot = scope === 'project'
+    ? join(hostRoot, '.amp', 'plugins')
+    : join(hostRoot, 'plugins');
+  return {
+    destination: join(installRoot, identity.plugin),
+    hostDirectories: scope === 'project'
+      ? Object.freeze(['.amp', '.amp/plugins'])
+      : Object.freeze(['plugins']),
+    hostRoot,
+    installRoot,
+    registration: scope === 'project' ? 'amp-project-plugin' : 'amp-system-plugin',
+  };
+};
+
+const installAmp = async (
+  options: InstallBundleOptions,
+  identity: PluginIdentity,
+  scope: InstallScope,
+): Promise<InstallResult> => {
+  const entry = identity.documents.entry;
+  if (entry === undefined) throw failure('AB7001', 'The Amp projection has no plugin entry.', 'amp');
+  const source = join(identity.bundleRoot, dirname(entry));
+  const artifact = await treeInventory(source);
+  const location = ampInstallLocation(options, identity, scope);
+  const base = {
+    bundleRoot: identity.bundleRoot,
+    contentHash: artifact.hash,
+    destination: location.destination,
+    host: 'amp',
+    mode: 'local',
+    nextSteps: ampNextSteps,
+    plugin: identity.plugin,
+    receipt: join(location.destination, installReceiptFile),
+    version: identity.version,
+  } as const;
+  if (resolve(source) === resolve(location.destination)) {
+    return { ...base, state: 'already-installed' };
+  }
+  const created = [];
+  for (const relativePath of location.hostDirectories) {
+    if (!await exists(join(location.hostRoot, relativePath))) created.push(relativePath);
+  }
+  await mkdir(location.installRoot, { recursive: true });
+  const receipt: InstallReceiptIdentity = {
+    host: 'amp',
+    hostDirectories: created,
+    mode: 'local',
+    plugin: identity.plugin,
+    registrations: [{ kind: location.registration }],
+    scope,
+    version: identity.version,
+  };
+  if (!await exists(location.destination)) {
+    await runPromise(withStagedArtifact(
+      () => stageArtifact({
+        artifactRoot: source,
+        destination: location.destination,
+        inventory: artifact,
+        receipt,
+        stageRoot: location.installRoot,
+      }),
+      (staged) => rename(staged.root, location.destination),
+    ));
+    return { ...base, state: 'installed' };
+  }
+  const comparison = await compareInstalledTree({
+    artifact,
+    destination: location.destination,
+    plugin: identity.plugin,
+    version: identity.version,
+  });
+  if (comparison.status === 'current') return { ...base, state: 'already-installed' };
+  if (comparison.status === 'foreign') {
+    throw failure('AB7005', collisionMessage(location.destination, identity, comparison), 'amp');
+  }
+  if (comparison.status === 'version-mismatch' && options.replace !== true) {
+    throw failure('AB7005', collisionMessage(location.destination, identity, comparison), 'amp');
+  }
+  const replacement: InstallReceiptIdentity = {
+    ...receipt,
+    hostDirectories: comparison.receipt?.hostDirectories ?? [],
+  };
+  await runPromise(withStagedArtifact(
+    () => stageArtifact({
+      artifactRoot: source,
+      destination: location.destination,
+      inventory: artifact,
+      receipt: replacement,
+      stageRoot: location.installRoot,
+    }),
+    (staged) => replaceInstalledTree({
+      comparison,
+      destination: location.destination,
+      receipt: replacement,
+      staged,
+    }),
+  ));
+  return {
+    ...base,
+    previousContentHash: comparison.installedContentHash,
+    state: 'replaced',
+  };
+};
+
 /**
  * The install program. The Cursor branch is Effect-native with a
  * `DiagnosticError` channel; `readBundleIdentity` and the public-CLI installers are
@@ -1118,6 +1251,8 @@ const installProgram = Effect.fnUntraced(function*(
   }
   const identity = yield* liftPromise(() => readBundleIdentity(options.from, options.host));
   switch (options.host) {
+    case 'amp':
+      return yield* liftPromise(() => installAmp(options, identity, scope));
     case 'claude':
     case 'codex': {
       const host = options.host;

@@ -13,6 +13,7 @@ import { liftPromise } from '../effect/lift.ts';
 import { cacheHasPlugin, readHeadCommit } from './cursor-hooks-registration.ts';
 import { cursorMarketplaceName, cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
 import {
+  ampInstallLocation,
   cursorMarketplaceReceiptPath,
   defaultCommandRunner,
   publicHostMarketplaceRemoveArguments,
@@ -32,6 +33,7 @@ import {
   type InstallHost,
   type InstallMode,
   type InstallScope,
+  type PublicInstallHost,
   type PublicHostInstalledEntry,
 } from './install.ts';
 import { installedBundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
@@ -1052,7 +1054,7 @@ const readClaudeInstalledPluginsRegistry = async (hostRoot: string): Promise<rea
 const marketplaceDependents = async (
   runner: InstallCommandRunner,
   identity: PluginIdentity,
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   marketplace: string,
   id: string,
   scope: InstallScope,
@@ -1140,7 +1142,7 @@ interface PublicHostData {
 }
 
 const publicHostData = async (
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   policy: UninstallDataPolicy,
   entry: PublicHostInstalledEntry | undefined,
   hostRoot: string,
@@ -1258,7 +1260,7 @@ const publicHostData = async (
 const uninstallPublicCli = async (
   options: UninstallBundleOptions,
   identity: PluginIdentity,
-  host: Exclude<InstallHost, 'cursor'>,
+  host: PublicInstallHost,
   scope: InstallScope,
   policy: UninstallDataPolicy,
 ): Promise<UninstallResult> => {
@@ -1545,6 +1547,123 @@ const uninstallPublicCli = async (
   });
 };
 
+const uninstallAmp = async (
+  options: UninstallBundleOptions,
+  identity: PluginIdentity,
+  scope: InstallScope,
+  policy: UninstallDataPolicy,
+): Promise<UninstallResult> => {
+  const force = options.force === true;
+  const location = ampInstallLocation(options, identity, scope);
+  const receiptPath = join(location.destination, installReceiptFile);
+  const receipt = await readInstallReceipt(location.destination);
+  const registration = scope === 'project' ? 'amp-project-plugin' as const : 'amp-system-plugin' as const;
+  const base = {
+    bundleRoot: identity.bundleRoot,
+    data: Object.freeze({
+      detail: 'Amp directory plugins have no Agent Bundle-owned durable state; unowned files are retained.',
+      outcome: 'unavailable' as const,
+      paths: Object.freeze([]),
+      policy,
+    }),
+    destination: location.destination,
+    forced: force,
+    host: 'amp',
+    mode: 'local' as const,
+    plugin: identity.plugin,
+    scope,
+    version: identity.version,
+  } as const;
+  if (await realDirectory(location.destination, 'amp') === undefined) {
+    return Object.freeze({
+      ...base,
+      receipt: receiptReport(receiptPath, undefined, 'missing'),
+      registrations: Object.freeze([Object.freeze({ action: 'already-absent' as const, kind: registration })]),
+      removed: Object.freeze({ directories: Object.freeze([]), files: Object.freeze([]) }),
+      retained: Object.freeze([]),
+      state: 'not-installed',
+    });
+  }
+  if (receipt === undefined) {
+    throw failure(
+      'AB7009',
+      `Refusing to uninstall Amp plugin directory ${location.destination}: no Agent Bundle install receipt exists, ` +
+        'so none of its files are proven owned. Remove the foreign directory manually.',
+      'amp',
+    );
+  }
+  if (
+    receipt.host !== 'amp'
+    || receipt.plugin !== identity.plugin
+    || receipt.scope !== scope
+    || !receipt.registrations.some((entry) => entry.kind === registration)
+  ) {
+    throw failure(
+      'AB7007',
+      `Refusing to uninstall Amp plugin directory ${location.destination}: its receipt does not match this plugin, scope, and registration.`,
+      'amp',
+    );
+  }
+  const installedHash = await hashOwnedFiles(location.destination, receipt.files);
+  const status: UninstallReceiptStatus = installedHash === receipt.contentHash
+    ? receipt.migratedFrom === undefined ? 'consumed' : 'migrated'
+    : 'forced-mismatch';
+  if (installedHash !== receipt.contentHash && !force) {
+    throw failure(
+      'AB7007',
+      `Refusing to uninstall Amp plugin directory ${location.destination}: owned content changed after installation. ` +
+        'Re-run with --force to remove the receipt-owned files; unowned files are still retained.',
+      'amp',
+    );
+  }
+  await assertRealAncestors(location.destination, receipt.files);
+  const inventory = await treeInventory(location.destination);
+  const owned = new Set([...receipt.files, installReceiptFile]);
+  const retained = inventory.files.filter((file) => !owned.has(file));
+  const files = [...receipt.files.map((file) => join(location.destination, file)), receiptPath];
+  const internalDirectories = [...receipt.directories]
+    .sort((left, right) => right.split('/').length - left.split('/').length)
+    .map((directory) => join(location.destination, directory));
+  const hostDirectories = [...receipt.hostDirectories]
+    .sort((left, right) => right.split('/').length - left.split('/').length)
+    .map((directory) => join(location.hostRoot, directory));
+  const registrationReport = Object.freeze({
+    action: options.plan === true ? 'planned' as const : 'removed' as const,
+    detail: 'The receipt-owned directory plugin is removed; run `plugins: reload` interactively in a running Amp session.',
+    kind: registration,
+  });
+  const result = {
+    ...base,
+    receipt: receiptReport(receiptPath, receipt, status),
+    registrations: Object.freeze([registrationReport]),
+    retained: Object.freeze(retained),
+  };
+  if (options.plan === true) {
+    return Object.freeze({
+      ...result,
+      removed: Object.freeze({
+        directories: Object.freeze([...internalDirectories, location.destination, ...hostDirectories]),
+        files: Object.freeze(files),
+      }),
+      state: 'planned',
+    });
+  }
+  for (const file of receipt.files) await rm(join(location.destination, file), { force: true });
+  await rm(receiptPath, { force: true });
+  const removedDirectories: string[] = [];
+  for (const directory of [...internalDirectories, location.destination, ...hostDirectories]) {
+    if (await pruneEmptyDirectory(directory)) removedDirectories.push(directory);
+  }
+  return Object.freeze({
+    ...result,
+    removed: Object.freeze({
+      directories: Object.freeze(removedDirectories),
+      files: Object.freeze(files),
+    }),
+    state: 'uninstalled',
+  });
+};
+
 const uninstallProgram = Effect.fnUntraced(function*(
   options: UninstallBundleOptions,
 ): Effect.fn.Return<UninstallResult, unknown> {
@@ -1559,6 +1678,8 @@ const uninstallProgram = Effect.fnUntraced(function*(
   const policy = resolveDataPolicy(options);
   const identity = yield* liftPromise(() => readBundleIdentity(options.from, options.host));
   switch (options.host) {
+    case 'amp':
+      return yield* liftPromise(() => uninstallAmp(options, identity, scope, policy));
     case 'claude':
       return yield* liftPromise(() => uninstallPublicCli(options, identity, 'claude', scope, policy));
     case 'codex':

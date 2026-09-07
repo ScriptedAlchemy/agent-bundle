@@ -141,6 +141,8 @@ export interface ArtifactManifestProjectionSchema {
  * documents when the projection emitted them. Every path is a `files[]` entry.
  */
 export interface ArtifactManifestProjectionDocuments {
+  /** The host's executable plugin entry when it has no JSON plugin manifest. */
+  readonly entry?: string;
   readonly hooks?: string;
   readonly marketplace?: string;
   readonly mcp?: string;
@@ -162,7 +164,7 @@ export interface ArtifactManifestProjectionMarketplace {
  * Claude projection" the way the build did — by adapter, never by the name
  * the project selected it under (#578 audit: names are selection, not identity).
  */
-export type ArtifactManifestBuiltInHost = 'claude' | 'codex' | 'cursor' | 'portable';
+export type ArtifactManifestBuiltInHost = 'amp' | 'claude' | 'codex' | 'cursor' | 'portable';
 
 export interface ArtifactManifestProjection {
   /** The shipped adapter that planned this projection; absent for an advanced-registry adapter. */
@@ -689,10 +691,11 @@ const parseProjectionSchemas = (value: unknown, location: string): readonly Arti
 
 const parseProjectionDocuments = (value: unknown, location: string): ArtifactManifestProjectionDocuments => {
   const documents = requireRecord(value, location);
-  requireExactKeys(documents, location, [], ['hooks', 'marketplace', 'mcp', 'plugin']);
-  const optionalPath = (key: 'hooks' | 'marketplace' | 'mcp' | 'plugin'): Record<string, string> =>
+  requireExactKeys(documents, location, [], ['entry', 'hooks', 'marketplace', 'mcp', 'plugin']);
+  const optionalPath = (key: 'entry' | 'hooks' | 'marketplace' | 'mcp' | 'plugin'): Record<string, string> =>
     documents[key] === undefined ? {} : { [key]: requirePath(documents[key], `${location}.${key}`) };
   return {
+    ...optionalPath('entry'),
     ...optionalPath('hooks'),
     ...optionalPath('marketplace'),
     ...optionalPath('mcp'),
@@ -722,7 +725,7 @@ const parseProjections = (value: unknown): readonly ArtifactManifestProjection[]
     }
     return {
       ...(projection.builtInHost === undefined ? {} : {
-        builtInHost: requireOneOf(projection.builtInHost, `${location}.builtInHost`, ['claude', 'codex', 'cursor', 'portable'] as const),
+        builtInHost: requireOneOf(projection.builtInHost, `${location}.builtInHost`, ['amp', 'claude', 'codex', 'cursor', 'portable'] as const),
       }),
       documents,
       host: requireString(projection.host, `${location}.host`),
@@ -1392,6 +1395,7 @@ const referencedPaths = (manifest: {
   };
   for (const projection of manifest.projections) {
     const location = `projections[${projection.host}].documents`;
+    reference(`${location}.entry`, projection.documents.entry);
     reference(`${location}.plugin`, projection.documents.plugin);
     reference(`${location}.marketplace`, projection.documents.marketplace);
     reference(`${location}.mcp`, projection.documents.mcp);

@@ -85,7 +85,7 @@ export default defineConfig({
 
 ## targets
 
-`build` 铺进组合插件根目录的宿主投影：`claude`、`codex`、`cursor` 与 `portable` 的任意组合。顺序无关——
+`build` 铺进组合插件根目录的宿主投影：`amp`、`claude`、`codex`、`cursor` 与 `portable` 的任意组合。顺序无关——
 选择会按名称排序，因此 `['codex', 'claude']` 与 `['claude', 'codex']` 构建出相同的字节。省略该键时只输出
 `portable` 投影。命令行上的 `--target` 会在单次运行中替换配置里的列表。其他任何名字（包括 `plugin`）都是
 未知 target（`AB4100`）。每个投影在根目录中放置什么，见 [Target 与产物](./targets-artifacts.mdx)。

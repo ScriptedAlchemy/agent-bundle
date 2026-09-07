@@ -10,7 +10,7 @@ import { DiagnosticError } from '../core/diagnostics.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
 import { manifestInventory, treeInventory, type TreeInventory } from './receipt.ts';
 
-export type BundleIdentityHost = 'claude' | 'codex' | 'cursor';
+export type BundleIdentityHost = 'amp' | 'claude' | 'codex' | 'cursor';
 
 export interface PluginIdentity {
   readonly bundleRoot: string;
@@ -88,20 +88,24 @@ export const readBundleIdentity = async (
           host,
         );
       }
-      const pluginDocument = projection.documents.plugin;
+      const pluginDocument = host === 'amp' ? projection.documents.entry : projection.documents.plugin;
       if (pluginDocument === undefined) {
-        throw failure('AB7001', `The ${host} projection at ${result.root} has no host plugin manifest.`, host);
+        throw failure(
+          'AB7001',
+          `The ${host} projection at ${result.root} has no host ${host === 'amp' ? 'plugin entry' : 'plugin manifest'}.`,
+          host,
+        );
       }
       const marketplace = projection.marketplace?.name;
-      if (host !== 'cursor' && marketplace === undefined) {
+      if (host !== 'amp' && host !== 'cursor' && marketplace === undefined) {
         throw failure('AB7001', `${host} bundle has no marketplace identity.`, host);
       }
       const plugin = result.manifest.application.name;
       if (
-        host === 'cursor' &&
-        (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(plugin) || plugin.length > 64)
+        (host === 'amp' || host === 'cursor') &&
+        (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(plugin) || (host === 'cursor' && plugin.length > 64))
       ) {
-        throw failure('AB7001', `Cursor plugin name ${JSON.stringify(plugin)} is not a safe local plugin name.`, host);
+        throw failure('AB7001', `${host} plugin name ${JSON.stringify(plugin)} is not a safe local plugin name.`, host);
       }
       await requireDocument(result.root, pluginDocument, host);
       if (projection.documents.marketplace !== undefined) {

@@ -206,7 +206,7 @@ export type AgentEventPayload<E extends CanonicalAgentEvent = CanonicalAgentEven
 };
 
 /** The hosts whose native envelopes the framework maps into canonical payloads. */
-export type AgentEventPayloadHost = 'claude' | 'codex' | 'cursor';
+export type AgentEventPayloadHost = 'amp' | 'claude' | 'codex' | 'cursor';
 
 /**
  * How a host spells one canonical field. `decode` names a transformation
@@ -305,6 +305,13 @@ const cursorTool = [...cursorSession, 'cwd', 'toolName', 'toolInput', 'toolUseId
 export const agentEventPayloadNativeKeys: Readonly<
   Record<AgentEventPayloadHost, Readonly<Partial<Record<CanonicalAgentEvent, NativeKeyTable>>>>
 > = deepFreeze({
+  amp: Object.freeze({
+    'prompt/submit': pick(standardKeys, ['sessionId', 'prompt']),
+    'session/start': pick(standardKeys, ['sessionId']),
+    stop: pick(standardKeys, ['sessionId']),
+    'tool/after': pick(standardKeys, ['sessionId', 'toolName', 'toolInput', 'toolUseId', 'toolResponse']),
+    'tool/before': pick(standardKeys, ['sessionId', 'toolName', 'toolInput', 'toolUseId']),
+  }),
   claude: Object.freeze({
     'agent/idle': pick(standardKeys, [...claudeSession, 'teammateName', 'teamName']),
     'agent/start': pick(standardKeys, claudeSession),
@@ -362,4 +369,4 @@ export const agentEventPayloadNativeKeys: Readonly<
 });
 
 export const isAgentEventPayloadHost = (target: string): target is AgentEventPayloadHost =>
-  target === 'claude' || target === 'codex' || target === 'cursor';
+  target === 'amp' || target === 'claude' || target === 'codex' || target === 'cursor';

@@ -1,6 +1,6 @@
 # agent-bundle
 
-Compile a typed Agent Bundle configuration into portable, Codex, Claude Code, and Cursor artifacts. Node.js 22.19 or later is required.
+Compile a typed Agent Bundle configuration into Amp, portable, Codex, Claude Code, and Cursor artifacts. Node.js 22.19 or later is required.
 
 Full documentation: [scriptedalchemy.github.io/agent-bundle](https://scriptedalchemy.github.io/agent-bundle/).
 
@@ -189,6 +189,7 @@ so their public CLIs can install the emitted directory directly:
 ```sh
 agent-bundle install claude --from artifact --scope user
 agent-bundle install codex --from artifact
+agent-bundle install amp --from artifact --scope user
 ```
 
 The installer delegates to `claude plugin marketplace add` /
@@ -204,6 +205,11 @@ agent-bundle install cursor --from artifact
 # or, from the emitted root:
 node ./install.mjs
 ```
+
+Amp installs only `artifact/.amp/plugins/<name>/` into the project or system
+plugin root. The generated `index.js` default-exports the async PluginAPI
+factory, registers each bundled Skill once, and imports no Amp runtime.
+Reloading remains the interactive Ctrl+O → `plugins: reload` action.
 
 Cursor loads the copied `.cursor-plugin/plugin.json` and its manifest-declared
 `.cursor-plugin/hooks.json` from that directory; plugin hooks run from the plugin root
@@ -227,8 +233,9 @@ the shipped document in the install receipt (`cursorExpansion`), and
 `agent-bundle doctor --host cursor` proves the expansion (`AB7326`). The bundle
 itself stays spec-conformant for other Agent Plugins clients.
 
-Cursor installation is user-scoped. Claude also accepts `--scope project` and
-`--scope local`; Codex is user-scoped. `--from` names the composite root itself —
+Cursor installation is user-scoped. Amp accepts project scope and user scope
+(its system root). Claude also accepts `--scope project` and `--scope local`;
+Codex is user-scoped. `--from` names the composite root itself —
 the directory that holds `agent-bundle.manifest.json` — and a source-free copy
 of that root is accepted. Identity (name, version, marketplace) and the host
 plugin document come from that manifest's `application` and `projections[]`
@@ -305,7 +312,7 @@ Receipts (`agent-bundle-install-receipt/2`) are the single source of truth for
 an install's lifecycle: version, content hash, delivery mode, scope, owned files
 and directories, the host directories the installer created, the host
 registrations it performed in order, and install/update timestamps. Cursor
-local copies carry the receipt in-tree; Claude, Codex, and Cursor
+local and Amp project/system copies carry the receipt in-tree; Claude, Codex, and Cursor
 marketplace-mode installs keep theirs under `<host root>/agent-bundle/receipts/`
 (`~/.claude`, `~/.codex`, `~/.cursor`, honouring `CLAUDE_CONFIG_DIR` and
 `CODEX_HOME`). `agent-bundle uninstall <host> --from <bundle-dir>`, the package

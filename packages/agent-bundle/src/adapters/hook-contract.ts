@@ -52,6 +52,8 @@ export interface TargetHookDocumentEntryInput {
 export interface TargetHookContract {
   readonly hostContractRevision?: string;
   readonly commandRoot: string;
+  /** `api` when the host entry registers callbacks directly instead of emitting a native hook manifest. */
+  readonly registration?: 'api';
   /**
    * Shapes one generated hook command into the host's per-event array entry.
    * Defaults to the Claude/Codex grouped shape; Cursor's document keeps flat

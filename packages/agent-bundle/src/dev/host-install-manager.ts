@@ -26,6 +26,7 @@ import {
   publicHostRoot,
   type InstallBundleOptions,
   type InstallCommandRunner,
+  type DevInstallHost,
   type InstallHost,
   type InstallResult,
 } from '../install/install.ts';
@@ -54,7 +55,7 @@ export interface DevHostInstallManagerOptions {
   readonly epochStore: EpochReferenceSource | Pick<EpochStore, 'acquireEpochReference'>;
   readonly eventHub: ProjectEventHub;
   readonly home?: string;
-  readonly hosts: readonly InstallHost[];
+  readonly hosts: readonly DevInstallHost[];
   readonly installBundle?: (options: InstallBundleOptions) => Promise<InstallResult>;
   readonly projectRoot: string;
   readonly uninstallBundle?: (options: UninstallBundleOptions) => Promise<unknown>;
@@ -64,14 +65,14 @@ export interface DevHostInstallManagerOptions {
 
 interface InstalledDevHost {
   readonly destination: string;
-  readonly host: InstallHost;
+  readonly host: DevInstallHost;
   readonly plugin?: string;
   epochId: string;
 }
 
 interface DevInstallMarker {
   readonly epochId: string;
-  readonly host: InstallHost;
+  readonly host: DevInstallHost;
   readonly projectRoot: string;
   readonly schemaVersion: 1;
 }
@@ -82,7 +83,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const rewriteMcpDocument = async (
   bundleRoot: string,
   documentPath: string,
-  host: InstallHost,
+  host: DevInstallHost,
   projectRoot: string,
   run: PlatformRun,
 ): Promise<void> => {
@@ -113,7 +114,7 @@ const rewriteMcpDocument = async (
 
 const marker = (
   epochId: string,
-  host: InstallHost,
+  host: DevInstallHost,
   projectRoot: string,
 ): DevInstallMarker => Object.freeze({
   epochId,
@@ -129,7 +130,7 @@ const marker = (
  */
 const prepareDevBundle = async (
   source: string,
-  host: InstallHost,
+  host: DevInstallHost,
   epochId: string,
   projectRoot: string,
   run: PlatformRun,
@@ -174,7 +175,7 @@ const prepareDevBundle = async (
   }
 };
 
-const stableDevBundle = (projectRoot: string, host: InstallHost): string =>
+const stableDevBundle = (projectRoot: string, host: DevInstallHost): string =>
   join(projectRoot, '.agent-bundle', 'dev', host);
 
 const ensureStableDevBundle = async (preparedRoot: string, stableRoot: string): Promise<void> => {
@@ -330,7 +331,7 @@ const pruneGenerations = async (
   }
 };
 
-const syncDiagnostic = (host: InstallHost, epochId: string, error: unknown): Diagnostic => Object.freeze({
+const syncDiagnostic = (host: DevInstallHost, epochId: string, error: unknown): Diagnostic => Object.freeze({
   code: 'AB7202',
   message: `Failed to sync ${host} development install to epoch ${epochId}: ${
     error instanceof Error ? error.message : String(error)
@@ -347,9 +348,9 @@ export class DevHostInstallManager {
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
   readonly #eventHub: ProjectEventHub;
   readonly #home: string | undefined;
-  readonly #hosts: readonly InstallHost[];
+  readonly #hosts: readonly DevInstallHost[];
   readonly #installBundle: (options: InstallBundleOptions) => Promise<InstallResult>;
-  readonly #installed = new Map<InstallHost, InstalledDevHost>();
+  readonly #installed = new Map<DevInstallHost, InstalledDevHost>();
   readonly #projectRoot: string;
   readonly #run: PlatformRun;
   readonly #uninstallBundle: (options: UninstallBundleOptions) => Promise<unknown>;
@@ -380,7 +381,7 @@ export class DevHostInstallManager {
     this.#uninstallBundle = options.uninstallBundle ?? defaultUninstallBundle;
   }
 
-  attached(host: InstallHost): Readonly<{ readonly destination: string; readonly epochId: string }> | undefined {
+  attached(host: DevInstallHost): Readonly<{ readonly destination: string; readonly epochId: string }> | undefined {
     const installed = this.#installed.get(host);
     return installed === undefined || installed.epochId.length === 0
       ? undefined
@@ -479,7 +480,7 @@ export class DevHostInstallManager {
     if (failures.length > 0) throw new AggregateError(failures, 'Failed to remove development host installs.');
   }
 
-  async #syncHost(epochRoot: string, epochId: string, host: InstallHost): Promise<void> {
+  async #syncHost(epochRoot: string, epochId: string, host: DevInstallHost): Promise<void> {
     // Every selected host installs from the composite epoch root (#555).
     const prepared = await prepareDevBundle(epochRoot, host, epochId, this.#projectRoot, this.#run);
     try {

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
+import { resolveArtifactLayoutDirectory } from '../adapters/types.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
@@ -26,15 +27,16 @@ export const manifestTargets = (manifest: ArtifactManifest): readonly string[] =
  * by every selected host and must satisfy each host's frontmatter contract.
  */
 const skillDirectories = (
-  targets: readonly string[],
+  manifest: ArtifactManifest,
   registry: TargetRegistry,
 ): ReadonlyMap<string, readonly string[]> => {
   const directories = new Map<string, string[]>();
-  for (const target of targets) {
+  for (const target of manifestTargets(manifest)) {
     if (!registry.has(target)) continue;
     const directory = registry.artifactLayout(target).skills;
     if (directory === undefined) continue;
-    directories.set(directory, [...(directories.get(directory) ?? []), target]);
+    const resolved = resolveArtifactLayoutDirectory(directory, manifest.application.name);
+    directories.set(resolved, [...(directories.get(resolved) ?? []), target]);
   }
   return directories;
 };
@@ -51,16 +53,47 @@ const emittedSkillFor = (
   file: ArtifactFile,
   directories: ReadonlyMap<string, readonly string[]>,
 ): EmittedSkill | undefined => {
-  const segments = file.path.split('/');
-  const [layout, name, document] = segments;
-  if (layout === undefined || name === undefined || document !== 'SKILL.md' || segments.length !== 3) return undefined;
-  const targets = directories.get(layout);
-  if (targets === undefined) return undefined;
-  return { name, path: file.path, root: `${layout}/${name}`, targets };
+  for (const [layout, targets] of directories) {
+    if (!file.path.startsWith(`${layout}/`)) continue;
+    const segments = file.path.slice(layout.length + 1).split('/');
+    const [name, document] = segments;
+    if (name !== undefined && document === 'SKILL.md' && segments.length === 2) {
+      return { name, path: file.path, root: `${layout}/${name}`, targets };
+    }
+  }
+  return undefined;
+};
+
+const ampFrontmatterValidator = (frontmatter: unknown): readonly AgentSkillsFrontmatterIssue[] => {
+  if (typeof frontmatter !== 'object' || frontmatter === null || Array.isArray(frontmatter)) {
+    return validateAgentSkillsFrontmatter(frontmatter);
+  }
+  const record = frontmatter as Readonly<Record<string, unknown>>;
+  const portable = Object.fromEntries(Object.entries(record).filter(([key]) =>
+    ['allowed-tools', 'compatibility', 'description', 'license', 'metadata', 'name'].includes(key)));
+  const issues: AgentSkillsFrontmatterIssue[] = [...validateAgentSkillsFrontmatter(portable)];
+  if (
+    record['builtin-tools'] !== undefined
+    && (
+      !Array.isArray(record['builtin-tools'])
+      || !record['builtin-tools'].every((tool) => typeof tool === 'string' && tool.length > 0)
+    )
+  ) {
+    issues.push({ instancePath: '/builtin-tools', keyword: 'type', message: 'must be an array of nonempty strings' });
+  }
+  if (
+    record.mcpServers !== undefined
+    && (typeof record.mcpServers !== 'object' || record.mcpServers === null || Array.isArray(record.mcpServers))
+  ) {
+    issues.push({ instancePath: '/mcpServers', keyword: 'type', message: 'must be an object' });
+  }
+  return Object.freeze(issues);
 };
 
 const frontmatterValidatorFor = (target: string): (frontmatter: unknown) => readonly AgentSkillsFrontmatterIssue[] => {
   switch (target) {
+    case 'amp':
+      return ampFrontmatterValidator;
     case 'claude':
       return validateClaudeSkillFrontmatter;
     case 'cursor':
@@ -82,7 +115,7 @@ export const validateEmittedSkills = async (options: {
   readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
-  const directories = skillDirectories(manifestTargets(options.manifest), options.registry);
+  const directories = skillDirectories(options.manifest, options.registry);
   const skills = options.files
     .map((file) => emittedSkillFor(file, directories))
     .filter((skill): skill is EmittedSkill => skill !== undefined);
@@ -92,7 +125,7 @@ export const validateEmittedSkills = async (options: {
     if (!file.path.endsWith('/SKILL.md') || emittedSkillFor(file, directories) !== undefined) continue;
     diagnostics.push(diagnostic(
       'AB6015',
-      `Emitted Skill document ${JSON.stringify(file.path)} does not use the canonical skills/<name>/SKILL.md layout.`,
+      `Emitted Skill document ${JSON.stringify(file.path)} does not use a selected target's registered Skill layout.`,
       file.path,
       undefined,
       skillRecovery,
@@ -101,11 +134,15 @@ export const validateEmittedSkills = async (options: {
 
   const resourceFilesBySkill = new Map<string, readonly ArtifactFile[]>();
   for (const file of options.files) {
-    const [layout, name] = file.path.split('/');
-    if (layout === undefined || name === undefined || !directories.has(layout)) continue;
-    const root = `${layout}/${name}`;
-    const existing = resourceFilesBySkill.get(root) ?? [];
-    resourceFilesBySkill.set(root, [...existing, file]);
+    for (const layout of directories.keys()) {
+      if (!file.path.startsWith(`${layout}/`)) continue;
+      const [name] = file.path.slice(layout.length + 1).split('/');
+      if (name === undefined) continue;
+      const root = `${layout}/${name}`;
+      const existing = resourceFilesBySkill.get(root) ?? [];
+      resourceFilesBySkill.set(root, [...existing, file]);
+      break;
+    }
   }
 
   for (const [root, files] of resourceFilesBySkill) {

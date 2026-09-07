@@ -53,7 +53,7 @@ export const validateHookCoherence = async (options: {
     const manifestFile = manifestFiles.get(hook.path);
     if (
       contract === undefined ||
-      !isDirectOutputLayoutPath(hook.path, layout) ||
+      (contract.registration !== 'api' && !isDirectOutputLayoutPath(hook.path, layout)) ||
       file === undefined ||
       manifestFile === undefined ||
       !matchesManifestFile(file, manifestFile)
@@ -72,6 +72,7 @@ export const validateHookCoherence = async (options: {
     const contract = options.registry.hookContract(target);
     if (contract === undefined) continue;
     const hooks = indexedByTarget.get(target) ?? [];
+    if (contract.registration === 'api') continue;
     // Every selected host's document lives at its contract path inside the
     // one composite root; the wrappers it names are the host's own (#555).
     const manifestPath = contract.manifestPath;

@@ -2,7 +2,7 @@ import { Command, InvalidArgumentError } from 'commander';
 
 import type { DoctorHost, runDoctor } from './doctor.ts';
 import { formatDoctorReport, formatInstallResult, formatUninstallResult } from './format.ts';
-import type { installBundle, InstallHost, InstallMode, InstallScope } from './install.ts';
+import type { DevInstallHost, installBundle, InstallHost, InstallMode, InstallScope } from './install.ts';
 import type { uninstallBundle } from './uninstall.ts';
 
 /**
@@ -58,12 +58,17 @@ interface DoctorCommandOptions {
 }
 
 export const installHost = (value: string): InstallHost => {
-  if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
-  throw new InvalidArgumentError('Install host must be claude, codex, or cursor.');
+  if (value === 'amp' || value === 'claude' || value === 'codex' || value === 'cursor') return value;
+  throw new InvalidArgumentError('Install host must be amp, claude, codex, or cursor.');
 };
 
-export const collectInstallHost = (value: string, previous: readonly InstallHost[]): readonly InstallHost[] =>
-  [...previous, installHost(value)];
+const devInstallHost = (value: string): DevInstallHost => {
+  if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
+  throw new InvalidArgumentError('Development install host must be claude, codex, or cursor.');
+};
+
+export const collectInstallHost = (value: string, previous: readonly DevInstallHost[]): readonly DevInstallHost[] =>
+  [...previous, devInstallHost(value)];
 
 const installMode = (value: string): InstallMode => {
   if (value === 'local' || value === 'marketplace') return value;
@@ -92,7 +97,7 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
   const installCommand = fromOption(
     program.command('install')
       .description('Install a built bundle into a supported host')
-      .argument('<host>', 'Destination host: claude, codex, or cursor', installHost),
+      .argument('<host>', 'Destination host: amp, claude, codex, or cursor', installHost),
     'Target bundle directory or artifact root',
     true,
   )
@@ -120,7 +125,7 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
   const uninstallCommand = fromOption(
     program.command('uninstall')
       .description('Remove a receipt-owned host install of a built bundle, and nothing else')
-      .argument('<host>', 'Host to uninstall from: claude, codex, or cursor', installHost),
+      .argument('<host>', 'Host to uninstall from: amp, claude, codex, or cursor', installHost),
     'Target bundle directory or artifact root that identifies the plugin',
     true,
   )
