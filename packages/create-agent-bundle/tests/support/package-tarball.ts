@@ -17,8 +17,8 @@ const applyHeaderChecksum = (header: Buffer): void => {
 };
 
 /**
- * The smallest archive `localTarballPackageName` accepts: one ustar entry for
- * `package/package.json` naming the package, then the end-of-archive blocks.
+ * The smallest archive `localTarballPackageManifest` accepts: one ustar entry
+ * for `package/package.json`, then the end-of-archive blocks.
  */
 export const packageTarArchive = (name: string, version = '0.0.0'): Buffer => {
   const manifest = Buffer.from(JSON.stringify({ name, version }));

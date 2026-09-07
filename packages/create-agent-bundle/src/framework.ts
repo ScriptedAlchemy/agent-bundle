@@ -109,11 +109,6 @@ const tarHeaderChecksumMatches = (header: Buffer): boolean => {
   return stored === unsigned || stored === signed;
 };
 
-/**
- * `baseDirectory` is the scaffolded project root, because a relative `file:`
- * spec is written verbatim into that project's `package.json` and npm resolves
- * it from there — never from this CLI's working directory.
- */
 interface PackedPackageManifest {
   readonly name: string;
   readonly version: string;
@@ -157,6 +152,11 @@ const packedPackageManifest = Effect.fnUntraced(function* (
   return packageManifest;
 });
 
+/**
+ * `baseDirectory` is the scaffolded project root, because a relative `file:`
+ * spec is written verbatim into that project's `package.json` and npm resolves
+ * it from there — never from this CLI's working directory.
+ */
 const localTarballPackageManifest = Effect.fnUntraced(function* (
   packageSpec: string,
   baseDirectory: string,

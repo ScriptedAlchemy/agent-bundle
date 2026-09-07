@@ -70,11 +70,9 @@ it('scaffolds with differently versioned release tarballs and runs after source 
 }, 600_000);
 
 /**
- * Per-PR scaffolder smoke: one template through the full consumer journey —
- * installed scaffolder bin, template scaffold, scaffolder-driven npm install,
- * project check, clean validate. The mcp-server and cli-tool templates run in
- * the release-boundary matrix (scaffold-packed-matrix.e2e.test.ts) via
- * `test:packed:release` and the nightly schedule.
+ * The minimal-template smoke covers the scaffolder-driven install and full
+ * project check. The release-boundary matrix runs every check for the routed
+ * templates through `test:packed:release` and the nightly schedule.
  */
 it('scaffolds the minimal template, auto-installs, and passes its own check', async () => {
   // No --no-install: this run covers the scaffolder-driven `npm install` path.
