@@ -98,9 +98,10 @@ product; it is not a promise that consumer install scripts are ignored during in
 
 Check the generated `dist/package.json`, its `bin`/`exports`, and the tarball file list. Do not
 patch the generated manifest by hand. Update authored package/configuration inputs and rebuild.
-The starters are private development packages; an intentional public release also needs suitable
-authored package metadata and removal of `private: true` before rebuilding. This guide does not
-publish anything automatically.
+The `minimal` and `mcp-server` starters are private development packages; an intentional public
+release also needs suitable authored package metadata and removal of their `private: true`. The
+`cli-tool` starter is publishable as scaffolded. This guide does not publish anything
+automatically.
 
 A static plugin distributed as a built directory does not need to invent a library or executable
 just to use native installation. See [package entries](../authoring/package-entries.mdx) when

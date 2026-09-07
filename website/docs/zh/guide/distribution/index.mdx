@@ -84,8 +84,9 @@ npm pack ./dist --ignore-scripts
 
 检查生成的 `dist/package.json`、`bin` / `exports` 和 tarball 文件清单。
 不要手改生成清单；修改手写的包或配置输入，再重新构建。
-Starter 是私有开发包；有意进行公开发布时，还需要合适的包元数据，并在重新构建前移除
-`private: true`。本指南不会自动发布任何内容。
+`minimal` 与 `mcp-server` starter 是私有开发包；有意进行公开发布时，还需要合适的包元数据，
+并移除它们的 `private: true`。`cli-tool` starter 脚手架产出即可发布。本指南不会自动发布任何
+内容。
 
 以构建目录分发的静态插件不需要为了原生安装而虚构一个库或可执行入口。
 选择 npm 分发及其可选入口时，请阅读[包入口](../authoring/package-entries.mdx)。

@@ -38,9 +38,12 @@ selection and the separately versioned compiler/runtime pairing used by released
 | `cli-tool` | A standalone routed CLI, with a script and library example. |
 
 The current scaffolder accepts `portable`, `claude`, `codex`, and `cursor`. The compiler also
-supports `amp`; select an accepted scaffold target, then explicitly set the desired targets in
-`agent-bundle.config.ts` when using Amp. Adding a native target does not imply support for that
-host in the live-development proxy. See [host installation](../distribution/installation.mdx).
+supports `amp`, and an existing project selects it in `agent-bundle.config.ts` — but not this MCP
+starter: Amp's skill-scoped MCP contract refuses the starter's compiler-owned local `status`
+server, so `targets: ['amp']` here fails the build with `amp.mcp.generated-local`. Scaffold
+`minimal` for an Amp project, or author a remote or globally resolvable command server beside
+exactly one Skill. Adding a native target also does not imply support for that host in the
+live-development proxy. See [host installation](../distribution/installation.mdx).
 
 ## Add your first tool
 

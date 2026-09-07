@@ -18,8 +18,7 @@ ordinary imported module when that makes the code easier to read. A registration
 route-file script, custom `McpServer`, or string-keyed dispatcher is not required.
 
 ```tsx
-// src/mcp/tools/tools/hello.tsx
-import React from 'react';
+// src/mcp/greeter/tools/hello.tsx
 import { Agent } from '@agent-bundle/runtime';
 import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
 import { z } from 'zod';
@@ -41,8 +40,8 @@ export default async function Hello({ input }: ToolRouteProps<typeof inputSchema
 }
 ```
 
-Here the server name is `tools`, the protocol tool name is `hello`, and the canonical route ID
-is `tool:tools/hello`. You do not separately register those identities. A meaningful server name
+Here the server name is `greeter`, the protocol tool name is `hello`, and the canonical route ID
+is `tool:greeter/hello`. You do not separately register those identities. A meaningful server name
 can group the tools your plugin actually provides; creating one server per operation is not
 required.
 
@@ -54,7 +53,7 @@ permission-sensitive decisions and side-effect guards in the operation's actual 
 Add a sibling projection, not a second handler:
 
 ```ts
-// src/mcp/tools/tools/hello.cli.ts
+// src/mcp/greeter/tools/hello.cli.ts
 import type { CliProjectionConfig } from 'agent-bundle/routes';
 
 export const config = {
@@ -109,7 +108,7 @@ import { createAppClient } from 'agent-bundle/app';
 import { name, version } from 'agent-bundle/meta';
 
 const client = createAppClient({ appInfo: { name, version } });
-const result = await client.call('tool:tools/hello', { name: 'Ada' });
+const result = await client.call('tool:greeter/hello', { name: 'Ada' });
 ```
 
 This excerpt illustrates the typed call, not a complete App startup sequence. In a real App,

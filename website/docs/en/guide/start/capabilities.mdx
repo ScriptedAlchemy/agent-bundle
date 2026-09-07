@@ -46,8 +46,9 @@ to overwrite one projection with another. Reordering the target list does not re
 See [composition rules](../../reference/targets-artifacts.mdx).
 
 The current scaffolder's target choices lag the compiler's Amp support. To build for Amp, use
-an appropriate existing/static project and set `targets` explicitly; do not assume the generated
-MCP starter's local server is compatible with Amp's skill-scoped MCP contract. See the current
+an appropriate existing/static project and set `targets` explicitly; the generated MCP starter's
+compiler-owned local server is refused under Amp's skill-scoped MCP contract
+(`amp.mcp.generated-local`). See the current
 [installation guide](../distribution/installation.mdx) for the nested install root and reload
 procedure.
 

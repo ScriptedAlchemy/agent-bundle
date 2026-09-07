@@ -16,8 +16,7 @@ description: '用同一个工具提供 CLI 与 App 表面，复用契约、事�
 不需要注册数组、生成路由文件的脚本、自定义 `McpServer` 或按字符串名字派发的执行器。
 
 ```tsx
-// src/mcp/tools/tools/hello.tsx
-import React from 'react';
+// src/mcp/greeter/tools/hello.tsx
 import { Agent } from '@agent-bundle/runtime';
 import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
 import { z } from 'zod';
@@ -39,7 +38,7 @@ export default async function Hello({ input }: ToolRouteProps<typeof inputSchema
 }
 ```
 
-这里服务器名是 `tools`，协议工具名是 `hello`，规范路由 ID 是 `tool:tools/hello`。
+这里服务器名是 `greeter`，协议工具名是 `hello`，规范路由 ID 是 `tool:greeter/hello`。
 不需要再次注册这些身份。可以按产品的实际工具分组选择有意义的服务器名，不必每个操作创建一个服务器。
 
 `readOnlyHint` 是描述性元数据，不会替代安全策略执行。校验、权限敏感决定和副作用保护仍必须存在于
@@ -50,7 +49,7 @@ export default async function Hello({ input }: ToolRouteProps<typeof inputSchema
 添加同目录投影，而不是第二个处理器：
 
 ```ts
-// src/mcp/tools/tools/hello.cli.ts
+// src/mcp/greeter/tools/hello.cli.ts
 import type { CliProjectionConfig } from 'agent-bundle/routes';
 
 export const config = {
@@ -95,7 +94,7 @@ import { createAppClient } from 'agent-bundle/app';
 import { name, version } from 'agent-bundle/meta';
 
 const client = createAppClient({ appInfo: { name, version } });
-const result = await client.call('tool:tools/hello', { name: 'Ada' });
+const result = await client.call('tool:greeter/hello', { name: 'Ada' });
 ```
 
 这个片段只说明类型化调用，不是完整 App 启动顺序。在真正的 App 中，先注册 opening-input、result、error

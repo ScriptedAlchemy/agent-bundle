@@ -43,7 +43,8 @@ npx --no-install agent-bundle build --target claude --target codex
 参见[组合规则](../../reference/targets-artifacts.mdx)。
 
 当前脚手架的 target 选项尚未跟上编译器的 Amp 支持。构建 Amp 插件时，请在适合的现有项目或静态项目中
-显式设置 `targets`；不要假设生成式 MCP 模板的本地服务器符合 Amp 的 Skill 级 MCP 契约。
+显式设置 `targets`；生成式 MCP 模板中由编译器拥有的本地服务器会被 Amp 的 Skill 级 MCP 契约拒绝
+（`amp.mcp.generated-local`）。
 嵌套安装根目录和重新加载步骤见[安装指南](../distribution/installation.mdx)。
 
 ## 权威能力矩阵
