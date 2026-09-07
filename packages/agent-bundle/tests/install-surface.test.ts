@@ -192,7 +192,7 @@ const portableServer = {
 // portable bundle can have. The claim is the emitted plan, not the record.
 it.each([
   {
-    agentPlugins: 'installs this bundle as one plugin. Reads: `plugin.json`.',
+    agentPlugins: 'loads this bundle as one plugin. Reads: `plugin.json`.',
     inventory: 'no component',
     swivalPartial: false,
     swivalTier: 'loads the components it recognizes without reading the manifest. This bundle emits none of'
@@ -203,7 +203,7 @@ it.each([
       + ' the paths it reads, so there is nothing to install there.',
   },
   {
-    agentPlugins: 'installs this bundle as one plugin. Reads: `plugin.json`, `skills`.',
+    agentPlugins: 'loads this bundle as one plugin. Reads: `plugin.json`, `skills`.',
     inventory: 'skills only',
     swivalPartial: true,
     swivalTier: 'loads the components it recognizes without reading the manifest. Reads: `skills`.'
@@ -215,7 +215,7 @@ it.each([
       + ' Install: `qoder plugins install <plugin directory> --scope user`.',
   },
   {
-    agentPlugins: 'installs this bundle as one plugin. Reads: `mcp.json`, `plugin.json`.',
+    agentPlugins: 'loads this bundle as one plugin. Reads: `mcp.json`, `plugin.json`.',
     inventory: 'MCP only',
     swivalPartial: false,
     // Swival's registration hands over the skill tree alone, so an MCP-only
@@ -228,7 +228,7 @@ it.each([
       + ' Install: `qoder plugins install <plugin directory> --scope user`.',
   },
   {
-    agentPlugins: 'installs this bundle as one plugin. Reads: `mcp.json`, `plugin.json`, `skills`.',
+    agentPlugins: 'loads this bundle as one plugin. Reads: `mcp.json`, `plugin.json`, `skills`.',
     inventory: 'skills and MCP',
     swivalPartial: true,
     swivalTier: 'loads the components it recognizes without reading the manifest. Reads: `skills`.'
@@ -279,7 +279,7 @@ it('reads a shadow this build actually wrote as fact, not as a hypothetical', ()
   }).get('INSTALL.md');
 
   expect(install).toContain('- **Devin CLI** (Agent Plugins 1.0.0; docs retrieved 2026-09-06,'
-    + ' plugins documented as closed beta) installs this bundle as one plugin, but this build also'
+    + ' plugins documented as closed beta) loads this bundle as one plugin, but this build also'
     + ' writes `.claude-plugin/plugin.json`, which it reads as the plugin instead.');
   expect(install).toContain('- **Qoder CLI** (docs retrieved 2026-09-06; no CLI version is published on'
     + ' any page) loads the components it recognizes without reading the manifest. Reads: `skills`.'
@@ -301,7 +301,7 @@ it('reads a shadow this build actually wrote as fact, not as a hypothetical', ()
   // the composite root it shares with Claude is still read from the root — but
   // .mcp.json is its own published MCP location, so that surface moves (#728).
   expect(clientLineFor(install!, 'GitHub Copilot CLI')).toBe(
-    '- **GitHub Copilot CLI** (@github/copilot 1.0.83, installed and exercised 2026-09-06) installs this'
+    '- **GitHub Copilot CLI** (@github/copilot 1.0.83, installed and exercised 2026-09-06) loads this'
     + ' bundle as one plugin. Reads: `plugin.json`, `skills`.'
     + ' Install: `copilot plugin install <plugin directory>`. Not loaded: hooks.'
     + ' This build also writes `.mcp.json`, which it uses for mcp instead.'
@@ -365,7 +365,7 @@ it.each([
   // published order puts ahead of the emitted root, and the MCP location it
   // publishes for a plugin, neither of which a portable-only build writes.
   expect(clientLineFor(install, 'GitHub Copilot CLI')).toBe(
-    '- **GitHub Copilot CLI** (@github/copilot 1.0.83, installed and exercised 2026-09-06) installs this'
+    '- **GitHub Copilot CLI** (@github/copilot 1.0.83, installed and exercised 2026-09-06) loads this'
     + ` bundle as one plugin. ${expected.reads}`
     + ' Install: `copilot plugin install <plugin directory>`. Not loaded: hooks.'
     + ' A root that also carries `.plugin/plugin.json` uses it for manifest and still reads the rest.'
@@ -374,7 +374,7 @@ it.each([
   // VS Code registers the emitted directory where it lies; nothing is copied.
   expect(clientLineFor(install, 'VS Code (Copilot agent plugins)')).toBe(
     '- **VS Code (Copilot agent plugins)** (code.visualstudio.com/docs/agent-customization/agent-plugins,'
-    + ` page footer 9/2/2026, retrieved 2026-09-06) installs this bundle as one plugin. ${expected.reads}`
+    + ` page footer 9/2/2026, retrieved 2026-09-06) loads this bundle as one plugin. ${expected.reads}`
     + ' Register: `"chat.pluginLocations": { "<plugin directory>": true }`.'
     + ' Not loaded: placeholders, hooks.',
   );
@@ -383,7 +383,7 @@ it.each([
   // recorded command leaves the plugin disabled.
   expect(clientLineFor(install, 'Hermes Agent')).toBe(
     '- **Hermes Agent** (hermes-agent.nousresearch.com developer guide retrieved 2026-09-06; no version is'
-    + ` printed on the page) installs this bundle as one plugin. ${expected.reads}`
+    + ` printed on the page) loads this bundle as one plugin. ${expected.reads}`
     + ' Install from a Git repository (no local-directory install is verified for this artifact):'
     + ' `hermes plugins install <owner>/<repository> --no-enable`. Not loaded: hooks.',
   );
@@ -402,11 +402,21 @@ it.each([
   // remote policy, which needs a declaration ordinary portable output omits.
   const copilotStdio = '  - Partial `mcp`: 2026-09-06: the probe listed one stdio server: no streamable-http'
     + ' server from an emitted mcp.json was registered, launched, or authenticated on 1.0.83';
+  // Recording the configuration a client keeps is not proof that it ran it.
+  const copilotUnspawned = '  - Partial `placeholders`: 2026-09-06: the probe proved the configuration Copilot'
+    + ' records, not a spawned server';
   const codewhaleRemote = '  - Partial `mcp`: 2026-09-06: CodeWhale narrows the standard at the plugin boundary.';
+  const codewhaleEndpoint = 'A remote server emitted into mcp.json is narrower still: the URL must be HTTPS'
+    + ' (or explicit loopback HTTP) with no user information, query, or fragment, a literal header is'
+    + " rejected in favor of CodeWhale's own env_headers or bearer_token_env_var keys, redirects must stay"
+    + ' on the reviewed origin';
+  // The missing host declaration fails the bundle, it does not narrow it.
   const codewhaleHosts = 'declare exactly the normalized endpoint host set in capabilities.network_hosts.'
     + ' That declaration rides in extensions["net.codewhale"], which this projection writes only when the'
-    + ' author authors portable.extensions; a remote server emitted without it is a validation error';
-  for (const claim of [copilotStdio, codewhaleRemote, codewhaleHosts]) {
+    + ' author authors portable.extensions; a remote server emitted without it is a validation error, and'
+    + ' "an active bundle must be … free of validation errors", so the whole bundle stays inactive there'
+    + ' until the author declares the matching host set.';
+  for (const claim of [copilotStdio, copilotUnspawned, codewhaleRemote, codewhaleEndpoint, codewhaleHosts]) {
     if (expected.withMcpDocument) expect(install).toContain(claim);
     else expect(install).not.toContain(claim);
   }
@@ -424,7 +434,7 @@ it('documents recorded Agent Plugins clients for the portable profile', () => {
   expect(install).toContain('### Other recorded clients');
   expect(install).toContain('**Devin CLI**');
   expect(install).toContain('`devin plugins install <plugin directory>`');
-  expect(install).toContain('installs this bundle as one plugin');
+  expect(install).toContain('loads this bundle as one plugin');
   expect(install).toContain('Not loaded: hooks.');
   expect(install).toContain(
     'A root that also carries `.devin-plugin/plugin.json` is read as that plugin instead.',

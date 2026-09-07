@@ -244,7 +244,9 @@ const portableClients: readonly ClientCompatibilityRecord[] =
 const clientTierSentence = (record: ClientCompatibilityRecord): string => {
   switch (record.tier) {
     case 'agent-plugins':
-      return 'installs this bundle as one plugin';
+      // "Loads", not "installs": the recorded action below says whether the
+      // client copies the bundle or reads it where it lies.
+      return 'loads this bundle as one plugin';
     case 'skills':
       // Not "skills only": a skills-tier client is one that does not read the
       // manifest, and several of them read the MCP document as well.
