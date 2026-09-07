@@ -51,6 +51,7 @@ describe('the CLI surface projection of tool:harness/submit', () => {
         expect.objectContaining({ description: 'The command line to run.', key: 'argv', kind: 'string', option: 'argv', positional: 0, repeated: true, required: true }),
         expect.objectContaining({ description: 'Working directory of the command (default: the current directory).', key: 'cwd', kind: 'string', option: 'cwd', repeated: false, required: false }),
         expect.objectContaining({ description: 'Lane the work is queued under.', key: 'laneKey', kind: 'string', option: 'lane', repeated: false, required: false }),
+        expect.objectContaining({ choices: ['eu', 'us'], description: 'Region the work may run in (repeatable, or comma-separated).', key: 'regions', kind: 'enum', option: 'region', repeated: true, required: false }),
         expect.objectContaining({ description: 'Tag attached to the request (repeatable; duplicates are dropped).', key: 'tags', kind: 'string', option: 'tag', repeated: true, required: false }),
       ],
       path: ['submit'],
@@ -137,6 +138,27 @@ describe('the CLI surface projection of tool:harness/submit', () => {
 
     expect(run.exitCode).toBe(0);
     expect(cliJson(run)).toMatchObject({ tags: ['a', 'b'] });
+  });
+
+  it('defers enum choices to the canonical schema so mapInput can split a comma-separated list', async () => {
+    const split = await invokeCli(['submit', '--region', 'eu,us', '--json', '--', 'cargo', 'check']);
+    expect(split.exitCode).toBe(0);
+    expect(cliJson(split)).toMatchObject({ regions: ['eu', 'us'] });
+
+    const repeated = await invokeCli(['submit', '--region', 'us', '--region', 'eu', '--json', '--', 'cargo', 'check']);
+    expect(repeated.exitCode).toBe(0);
+    expect(cliJson(repeated)).toMatchObject({ regions: ['us', 'eu'] });
+
+    // The choices are still enforced, by the schema after mapInput, under the CLI spelling.
+    const rejected = await invokeCli(['submit', '--region', 'mars', '--', 'cargo', 'check']);
+    expect(rejected.exitCode).toBe(2);
+    expect(rejected.stdout).toBe('');
+    expect(rejected.stderr).toBe([
+      'Invalid value for --region[0]: expected one of: "eu", "us"; received "mars".',
+      usage,
+      helpHint,
+      '',
+    ].join('\n'));
   });
 
   it('reports a thrown mapInput as an input failure: exit 2, nothing written to stdout, no value', async () => {

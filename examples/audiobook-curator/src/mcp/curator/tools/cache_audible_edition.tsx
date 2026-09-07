@@ -1,6 +1,7 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
 
 import type { AudibleCacheReceipt } from '../../../audible.js';
 import { Callout, DataList } from '../../../components/primitives.js';
@@ -12,7 +13,13 @@ export const config = {
   annotations: { openWorldHint: true, readOnlyHint: false },
   description: 'Cache a reviewed Audible edition and retained source evidence.',
 };
-export const inputSchema = operation.inputSchema;
+export const inputSchema = z.object({
+  asin: z.string().min(1).max(64),
+  attempts: z.number().int().min(1).max(10).optional(),
+  cacheDirectory: z.string().min(1).max(4096),
+  receipt: z.string().min(1).max(4096).optional(),
+  region: z.enum(['au', 'ca', 'de', 'es', 'fr', 'in', 'it', 'jp', 'uk', 'us']).optional(),
+}).strict();
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {

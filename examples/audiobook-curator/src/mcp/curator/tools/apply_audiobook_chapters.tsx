@@ -1,6 +1,7 @@
 import { Agent, agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
 
 import { ChapterOutline, chaptersFromApplyReceipt } from '../../../components/chapter-outline.js';
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
@@ -16,7 +17,12 @@ export const config = {
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan or explicitly apply verified chapter rows while preserving all non-chapter media state.',
 };
-export const inputSchema = operation.inputSchema;
+export const inputSchema = z.object({
+  apply: z.boolean().optional(),
+  chapters: z.string().min(1).max(4096),
+  file: z.string().min(1).max(4096),
+  receipt: z.string().min(1).max(4096).optional(),
+}).strict();
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {

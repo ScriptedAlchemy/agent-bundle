@@ -115,51 +115,34 @@ describe('the Workbench surface of the audiobook curator', () => {
     expect(search === undefined ? undefined : workbenchLeafPath(search)).toBe('/routes/mcp/curator/tool/search_audible');
   });
 
-  it('lists the 16 authored commands beside one projected command per tool', async () => {
+  it('lists one projected command per tool and no authored command', async () => {
     const surface = await surfacePromise;
     const cli = groupNamed(surface, 'CLI commands');
     const routeIds = cli.entries.map((entry) => entry.route.id);
-    const authored = routeIds.filter((routeId) => routeId.startsWith('cli:'));
-    const projected = routeIds.filter((routeId) => routeId.startsWith('tool:'));
 
     expect(cli.mode).toBe('generated');
-    expect(authored).toEqual([
-      'cli:acoustic-identify',
-      'cli:acoustic-verify',
-      'cli:apply-chapters',
-      'cli:apply-metadata',
-      'cli:audible-cache',
-      'cli:audible-search',
-      'cli:audible-select',
-      'cli:audit',
-      'cli:convert',
-      'cli:inspect',
-      'cli:inventory',
-      'cli:library-audit',
-      'cli:prepare',
-      'cli:select',
-      'cli:shelf',
-      'cli:whisper-verify',
-    ]);
-    expect(projected).toEqual(groupNamed(surface, 'curator · Tools').entries.map((entry) => entry.route.id));
-    expect(new Set(routeIds).size).toBe(routeIds.length);
-    expect(routeIds).toHaveLength(authored.length + projected.length);
+    // Every command is a `<tool>.cli.ts` projection (#725): the CLI group
+    // carries the tools' identities, in the tools' order, and nothing else.
+    expect(routeIds.filter((routeId) => routeId.startsWith('cli:'))).toEqual([]);
+    expect(routeIds).toEqual(groupNamed(surface, 'curator · Tools').entries.map((entry) => entry.route.id));
+    expect(new Set(routeIds).size).toBe(16);
     const byId = new Map(cli.entries.map((entry) => [entry.route.id, entry]));
-    expect(byId.get('cli:library-audit')?.route.source).toBe('src/cli/library-audit.tsx');
-    expect(byId.get('cli:shelf')?.route.source).toBe('src/cli/shelf.tsx');
-    expect(byId.get('cli:library-audit')?.commandUsage)
-      .toBe('library-audit <sources...> [--concurrency <number>] --report <string> [--strict]');
-    expect(byId.get('cli:inspect')?.commandUsage).toBe('inspect <root> [--max-files <number>]');
-    // Projected commands carry their MCP provenance and the annotation-derived
-    // confirmation policy: read-only tools run without --yes, mutation-capable
-    // tools fail closed without it.
+    expect(byId.get('tool:curator/audit_library')?.route.source).toBe('src/mcp/curator/tools/audit_library.tsx');
+    expect(byId.get('tool:curator/audit_library')?.command?.projection)
+      .toEqual({ mapInput: false, module: 'src/mcp/curator/tools/audit_library.cli.ts' });
+    expect(byId.get('tool:curator/audit_library')?.commandUsage)
+      .toBe('library-audit <sources...> [--concurrency <number>] [--report <string>] [--strict]');
+    expect(byId.get('tool:curator/inspect_sources')?.commandUsage).toBe('inspect <root> [--max-files <number>]');
+    expect(byId.get('tool:curator/search_audible')?.commandUsage).toContain('[--duration <number>]');
+    // The projections keep the authored CLI's policy: plan-first commands
+    // gate mutation on --apply, so no command asks for --yes.
     expect(byId.get('tool:curator/inspect_sources')?.command?.mcp).toEqual({
       confirm: false,
       server: 'curator',
       tool: 'inspect_sources',
     });
     expect(byId.get('tool:curator/convert_audiobook')?.command?.mcp).toEqual({
-      confirm: true,
+      confirm: false,
       server: 'curator',
       tool: 'convert_audiobook',
     });
@@ -168,8 +151,8 @@ describe('the Workbench surface of the audiobook curator', () => {
   it('reports the route graph identity and invents nothing', async () => {
     const surface = await surfacePromise;
 
-    // 18 MCP routes plus 16 authored and 16 projected CLI routes.
-    expect(surface.catalog.routeCount).toBe(50);
+    // 18 MCP routes plus 16 projected CLI commands.
+    expect(surface.catalog.routeCount).toBe(34);
     expect(surface.catalog.groups.map((group) => group.kind)).not.toContain('event-route');
     expect(surface.catalog.groups.map((group) => group.kind)).not.toContain('script');
     expect(surface.catalog.providers).toEqual([{ id: 'provider:library', name: 'library', source: 'src/providers/library.ts' }]);

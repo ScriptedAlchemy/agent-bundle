@@ -520,7 +520,13 @@ export interface ParsedGeneratedCliArgv {
   readonly ndjson: boolean;
 }
 
-const coerceValue = (option: CompiledCliOption, value: string): unknown => {
+/**
+ * `deferChoices` is true for a command whose projection exports `mapInput`:
+ * the mapper may still split or rename an enum value (`--regions us,uk`), so
+ * the canonical schema judges the choices after it runs, with the same
+ * `Invalid value for --<option>` report every other schema issue gets.
+ */
+const coerceValue = (option: CompiledCliOption, value: string, deferChoices: boolean): unknown => {
   switch (option.kind) {
     case 'boolean':
       throw new CliUsageError(`--${option.option} is a flag and takes no value.`);
@@ -532,7 +538,7 @@ const coerceValue = (option: CompiledCliOption, value: string): unknown => {
       return parsed;
     }
     case 'enum': {
-      if (!(option.choices ?? []).includes(value)) {
+      if (!deferChoices && !(option.choices ?? []).includes(value)) {
         throw new CliUsageError(`--${option.option} must be one of: ${(option.choices ?? []).join(', ')}.`);
       }
       return value;
@@ -546,7 +552,7 @@ const coerceValue = (option: CompiledCliOption, value: string): unknown => {
   }
 };
 
-const coercePositional = (option: CompiledCliOption, value: string): unknown => {
+const coercePositional = (option: CompiledCliOption, value: string, deferChoices: boolean): unknown => {
   switch (option.kind) {
     case 'number': {
       const parsed = Number(value);
@@ -556,7 +562,7 @@ const coercePositional = (option: CompiledCliOption, value: string): unknown => 
       return parsed;
     }
     case 'enum': {
-      if (!(option.choices ?? []).includes(value)) {
+      if (!deferChoices && !(option.choices ?? []).includes(value)) {
         throw new CliUsageError(`<${option.option}> must be one of: ${(option.choices ?? []).join(', ')}.`);
       }
       return value;
@@ -580,6 +586,7 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
     for (const alias of option.aliases ?? []) options.set(alias, option);
   }
   const positionals = sortedPositionals(command);
+  const deferChoices = command.projection?.mapInput === true;
   const values = new Map<string, unknown>();
   const bare: string[] = [];
   let json = false;
@@ -612,7 +619,7 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
       value = next;
       index += 1;
     }
-    const coerced = coerceValue(option, value);
+    const coerced = coerceValue(option, value, deferChoices);
     if (option.repeated) {
       const existing = values.get(option.key);
       values.set(option.key, Array.isArray(existing) ? [...existing, coerced] : [coerced]);
@@ -643,7 +650,7 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
   let cursor = 0;
   for (const option of positionals) {
     if (option.repeated) {
-      const rest = bare.slice(cursor).map((value) => coercePositional(option, value));
+      const rest = bare.slice(cursor).map((value) => coercePositional(option, value, deferChoices));
       cursor = bare.length;
       if (rest.length === 0) {
         if (option.required) throw new CliUsageError(`Missing required argument: <${option.option}...>.`);
@@ -656,7 +663,7 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
       if (option.required) throw new CliUsageError(`Missing required argument: <${option.option}>.`);
       continue;
     }
-    values.set(option.key, coercePositional(option, bare[cursor]!));
+    values.set(option.key, coercePositional(option, bare[cursor]!, deferChoices));
     cursor += 1;
   }
   if (cursor < bare.length) {

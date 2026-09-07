@@ -1,6 +1,7 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
 
 import type { AudibleSearchReceipt } from '../../../audible.js';
 import { SearchRanking } from '../../../components/candidate-ranking.js';
@@ -14,7 +15,16 @@ export const config = {
   description: 'Search Audible regions and return ranked identity evidence requiring human review.',
   exitCode: 'result',
 };
-export const inputSchema = operation.inputSchema;
+export const inputSchema = z.object({
+  attempts: z.number().int().min(1).max(10).optional(),
+  author: z.string().min(1).max(512).optional(),
+  durationSeconds: z.number().positive().optional(),
+  limit: z.number().int().min(1).max(50).optional(),
+  narrator: z.string().min(1).max(512).optional(),
+  regions: z.array(z.enum(['au', 'ca', 'de', 'es', 'fr', 'in', 'it', 'jp', 'uk', 'us'])).min(1).max(10).optional(),
+  report: z.string().min(1).max(4096).optional(),
+  title: z.string().min(1).max(1024),
+}).strict();
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {

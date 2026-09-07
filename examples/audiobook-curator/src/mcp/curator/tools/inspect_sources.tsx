@@ -1,6 +1,7 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
 
 import { InspectionShelf } from '../../../components/library-shelf.js';
 import type { InspectionReceipt } from '../../../curator-core.js';
@@ -12,7 +13,10 @@ export const config = {
   annotations: { readOnlyHint: true },
   description: 'Inspect a bounded directory tree and report supported audiobook media without changing it.',
 };
-export const inputSchema = operation.inputSchema;
+export const inputSchema = z.object({
+  maxFiles: z.number().int().min(1).max(256).optional(),
+  root: z.string().min(1).max(4096),
+}).strict();
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {

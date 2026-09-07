@@ -52,8 +52,8 @@ and `@agent-bundle/runtime` exports with `workspace:*` dependencies.
 
 ### The route tree is the application
 
-`agent-bundle.config.ts` declares the plugin identity, Node runtime, Claude and
-Codex targets, and MCP-to-CLI projection. File conventions discover the rest.
+`agent-bundle.config.ts` declares the plugin identity, Node runtime, and Claude
+and Codex targets. File conventions discover the rest.
 The MCP tree under `src/mcp/curator/` contains 16 tool routes, one catalog
 resource, and one curation prompt. Each executable route exports static
 `config`, `inputSchema`, and `resultSchema` values plus an async default Server
@@ -62,17 +62,23 @@ Flight worker, and MCP registrations; there is no `src/application.ts`,
 operation-array registry, handwritten `src/mcp/curator.ts`, or per-operation
 server selector.
 
-The routed CLI under `src/cli/` contains 16 authored commands. The
-`routes.mcpCommands` setting projects all 16 MCP tools as
-`audiobook-curator curator <tool>`, giving the compiled graph 32 CLI commands.
-Projected tools accept one optional `--input '<JSON object>'`; tools annotated
-read-only run directly, while mutation-capable tools require `--yes`.
+The CLI is the same 16 tools. Each tool has a colocated `<tool>.cli.ts`
+projection module (#725) that declares its command name, option spellings,
+positionals, and confirmation policy — `search_audible.cli.ts` spells the tool
+as `audible-search` with `--duration` and a comma-separated or repeatable
+`--regions`, `prepare_audiobook.cli.ts` spells `outputRoot` as `--output`, and
+`inspect_sources.cli.ts` takes `<root>` as a positional — so the compiled graph
+carries exactly 16 CLI commands, each with the tool's identity
+(`tool:curator/<tool>`). There is no `src/cli/` directory, no second input
+schema or render body per command, and no `audiobook-curator curator <tool>`
+twin: one operation is one command. Every projection declares `confirm: false`;
+the plan-first commands gate their mutation on `--apply`, never on `--yes`.
 
 ### `src/layout.tsx` is the shared document shell
 
 The conventional layout module wraps every rendered route once — the 16 MCP
-tools, the catalog resource, the curate prompt, the rendered CLI commands, and
-the projected `curator <tool>` commands — so no route imports a wrapper to get
+tools (on both surfaces), the catalog resource, and the curate prompt — so no
+route imports a wrapper to get
 the server's standard document structure. The layout renders a container
 `Agent.Result` and the runtime merges each route's own
 `<Agent.Result value={receipt}>` into it: the structured receipt, the MCP
@@ -95,21 +101,22 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
 
 ### `src/components/` is the shared presentation library
 
-The route modules perform domain work and compose these report components
-instead of maintaining separate MCP and CLI presenters:
+The tool modules perform domain work and compose these report components once;
+the same rendered document serves the MCP client as text content and the
+command line as piped Markdown, so there is no second presenter to drift:
 
-| Component | MCP composition | Rendered authored CLI composition |
-| --- | --- | --- |
-| `DataList`, `Field`, `Callout`, and `FileList` | Provide atomic report fields, prose callouts, and file-list blocks throughout the component library and directly in the catalog resource, curate prompt, cache route, and library audit | Provide the same primitives through the shared components and directly in `library-audit` |
-| `FileCard` and `EditionCard`, fed by `view-models` | Render file and edition models in `audit_library`, shelf, and ranking views | Reached through the receipt-specific shelves and ranking components |
-| `InspectionShelf`, `InventoryShelf`, and `SelectionShelf` | Compose receipt-specific inspection, inventory, and selection reports, each used directly by its MCP route; `audit_library` composes `AuditSummary` and `AuditFileCards` alongside the asynchronous `LibraryAnalysis` instead of a shelf | `InventoryShelf` and `SelectionShelf` compose `inventory` and `select` |
-| `SearchRanking`, `IdentifyRanking`, and `SelectionRanking` | Render the statically typed ranking for `search_audible`, `identify_audible_sample`, and `select_audible_edition` | `SearchRanking` composes `audible-search` |
-| `AcousticTrail`, `IdentifyTrail`, and `WhisperTrail` | Render the statically typed evidence for acoustic verification, acoustic identification, and Whisper verification | No authored rendered counterpart; those compatibility commands remain plain `.ts` routes |
-| `MetadataMutation`, `ChapterMutation`, `ConversionMutation`, and `PrepareMutation` | Render each statically typed metadata, chapter, conversion, or preparation mutation | `ConversionMutation` composes `convert` |
-| `ChapterOutline` with normalized `chapters` props | Composes integrity audit, conversion, and chapter application tools through receipt-specific mappers | Composes `audit` and `convert` |
-| `IntegrityAuditReport`, `MetadataIntegrityReport`, `ChapterIntegrityReport`, and `ConversionIntegrityReport` | Render each statically typed integrity report | `IntegrityAuditReport` and `ConversionIntegrityReport` compose `audit` and `convert` |
-| `CurationShelf` | Composes shelf review, Audible edition selection, and metadata/chapter application | Composes `shelf` |
-| `LibraryAnalysis` and `CandidateGroupCallout` | Resolve asynchronous duplicate and multipart analysis in `audit_library` with shared atomic candidate prose and file lists | Resolve the same analysis and candidate-group presentation in `library-audit` |
+| Component | Composition |
+| --- | --- |
+| `DataList`, `Field`, `Callout`, and `FileList` | Atomic report fields, prose callouts, and file-list blocks throughout the component library and directly in the catalog resource, curate prompt, and cache route |
+| `FileCard` and `EditionCard`, fed by `view-models` | File and edition models in `audit_library`, shelf, and ranking views |
+| `InspectionShelf`, `InventoryShelf`, and `SelectionShelf` | Receipt-specific inspection, inventory, and selection reports for `inspect_sources`, `inventory_sources`, and `select_sources`; `audit_library` composes `AuditSummary` and `AuditFileCards` alongside the asynchronous `LibraryAnalysis` instead of a shelf |
+| `SearchRanking`, `IdentifyRanking`, and `SelectionRanking` | The statically typed ranking for `search_audible`, `identify_audible_sample`, and `select_audible_edition` |
+| `AcousticTrail`, `IdentifyTrail`, and `WhisperTrail` | The statically typed evidence for `verify_audible_sample`, `identify_audible_sample`, and `verify_with_whisper` |
+| `MetadataMutation`, `ChapterMutation`, `ConversionMutation`, and `PrepareMutation` | Each statically typed metadata, chapter, conversion, or preparation mutation |
+| `ChapterOutline` with normalized `chapters` props | Integrity audit, conversion, and chapter application through receipt-specific mappers |
+| `IntegrityAuditReport`, `MetadataIntegrityReport`, `ChapterIntegrityReport`, and `ConversionIntegrityReport` | Each statically typed integrity report |
+| `CurationShelf` | Shelf review, Audible edition selection, and metadata/chapter application |
+| `LibraryAnalysis` and `CandidateGroupCallout` | Asynchronous duplicate and multipart analysis in `audit_library` with shared atomic candidate prose and file lists |
 
 The catalog resource at `src/mcp/curator/resources/catalog.tsx` and the prompt at
 `src/mcp/curator/prompts/curate.tsx` are compositions too: both return their
@@ -133,9 +140,9 @@ The conventional state module defines the workspace-durable
 `mutationApplied`, and `shelfCleared`. `select_audible_edition` dispatches the
 selection event; `apply_audiobook_metadata` and `apply_audiobook_chapters`
 dispatch mutation records and render the updated shelf. The read-only
-`review_curation_shelf` MCP tool and rendered `shelf` CLI command expose the
-same mounted state. If state is not mounted, both surfaces return an empty
-structured shelf and render an explicit unavailable notice.
+`review_curation_shelf` tool — `shelf` on the command line — exposes the
+mounted state. If state is not mounted, it returns an empty structured shelf
+and renders an explicit unavailable notice on both surfaces.
 
 ### Suspense becomes MCP progress
 
@@ -146,27 +153,25 @@ node — and that node is the whole progress story: the generated MCP projector
 turns the streamed fallback into `notifications/progress` for a client that
 sent a progress token, then replaces it with the completed analysis without
 changing the final structured `LibraryAuditReceipt`. No `progress.report()`
-call repeats the fallback's message. The rendered `library-audit` CLI route
-composes the same analysis and fallback.
+call repeats the fallback's message. On an interactive terminal the
+`library-audit` command draws the same fallback in place.
 
-### CLI routes have rendered and plain modes
+### Every command renders its tool's document
 
-Seven authored `.tsx` commands render Agent Documents:
-`inventory`, `select`, `audible-search`, `convert`, `audit`, `library-audit`,
-and `shelf`. Interactive terminals can update reported progress in place;
-piped output is one final Markdown document. Nine compatibility commands remain
-plain `.ts` routes: `acoustic-identify`, `acoustic-verify`, `apply-chapters`,
-`apply-metadata`, `audible-cache`, `audible-select`, `inspect`, `prepare`, and
-`whisper-verify`.
+Each command runs its tool's component: piped output is one final Markdown
+document — the same headline and report the MCP client receives as text
+content — and an interactive terminal draws the streamed `Agent.Progress`
+fallback in place. `--json` selects machine output and emits one
+result-schema-validated JSON value followed by a newline: the canonical final
+`Agent.Result` value, never the Markdown presentation or an intermediate
+Suspense fallback, and byte for byte the `structuredContent` of the tool call.
+`--report` and `--receipt` are optional on the command line exactly as they are
+on the tool; a command that gets one still writes the receipt file.
 
-The 16 projected MCP commands render the same tool components as their MCP
-counterparts. Across plain and rendered commands, `--json` selects machine
-output and emits one result-schema-validated JSON value followed by a newline.
-For rendered commands that value is the canonical final `Agent.Result` value,
-not the Markdown presentation or an intermediate Suspense fallback, so existing
-receipt consumers do not change when a command becomes rendered.
-
-`src/operations/` owns shared operation handlers and schemas;
+Each tool module declares its `inputSchema` as an inline zod literal, because
+the argv projection is compiled statically from that literal; it is the only
+input schema. `src/operations/` keeps each operation's handler and result
+schema;
 `src/cli-command.ts` names the `{ signal }` context every handler receives. Domain logic
 remains in `src/` over `foundation.ts` and `media-process.ts`, while
 `src/index.ts` remains the package library entry.
@@ -229,7 +234,8 @@ The completion contract and real-volume checklist are in
 
 This example is the reference consumer of the framework-owned package build:
 one `agent-bundle.config.ts` declares the structure, conventional
-`src/skills/**`, `src/mcp/**`, `src/cli/**`, `src/providers/**`, and
-`src/state.ts` modules supply the application surfaces, and agent-bundle owns
+`src/skills/**`, `src/mcp/**` (tool routes and their `<tool>.cli.ts`
+projections), `src/providers/**`, and `src/state.ts` modules supply the
+application surfaces, and agent-bundle owns
 the generated package and host artifacts. See
 [`docs/entry-conventions.md`](../../docs/entry-conventions.md) for the contract.

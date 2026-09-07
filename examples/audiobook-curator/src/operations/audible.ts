@@ -10,13 +10,12 @@ import {
   searchAudible,
   selectAudibleEdition,
   type AudibleCacheReceipt,
-  type AudibleRegion,
   type AudibleSearchReceipt,
   type AudibleSelectionReceipt,
 } from '../audible.ts';
 import type { CliCommandContext } from '../cli-command.js';
 import { readJson, writeReceipt } from '../foundation.ts';
-import { audibleRegions, audibleRegionSchema, parityReceiptSchema, pathSchema } from './schemas.ts';
+import { audibleRegionSchema, parityReceiptSchema } from './schemas.ts';
 
 const audibleEvidenceSchema = z.object({
   authorMatch: z.boolean(), durationDifferencePercent: z.number().nonnegative().optional(), language: z.string().optional(),
@@ -35,23 +34,10 @@ export const audibleSearchResultSchema: z.ZodType<AudibleSearchReceipt> = z.obje
 const audibleSelectResultSchema = parityReceiptSchema<AudibleSelectionReceipt>('audible-select');
 const audibleCacheResultSchema = parityReceiptSchema<AudibleCacheReceipt>('audible-cache');
 
-/** Parses the CLI's comma-separated `--regions` list; shared with the routed `audible-search` command. */
-export const audibleRegionList = (value: string): readonly AudibleRegion[] => value.split(',').map((region) => {
-  const candidate = region.trim().toLowerCase();
-  if (!audibleRegions.includes(candidate as AudibleRegion)) throw new Error(`Unsupported Audible region: ${candidate}.`);
-  return candidate as AudibleRegion;
-});
-
 export const audibleOperations = Object.freeze({
   audibleSearch: {
     handler: searchAudible,
     id: 'audible-search',
-    inputSchema: z.object({
-      attempts: z.number().int().min(1).max(10).optional(), author: z.string().min(1).max(512).optional(),
-      durationSeconds: z.number().positive().optional(), limit: z.number().int().min(1).max(50).optional(),
-      narrator: z.string().min(1).max(512).optional(), regions: z.array(audibleRegionSchema).min(1).max(10).optional(),
-      report: pathSchema.optional(), title: z.string().min(1).max(1024),
-    }).strict(),
     resultSchema: audibleSearchResultSchema,
   },
   audibleSelect: {
@@ -69,16 +55,11 @@ export const audibleOperations = Object.freeze({
       return receipt;
     },
     id: 'audible-select',
-    inputSchema: z.object({ candidate: z.number().int().min(1).max(500), candidates: pathSchema, note: z.string().max(4096).optional(), receipt: pathSchema.optional() }).strict(),
     resultSchema: audibleSelectResultSchema,
   },
   audibleCache: {
     handler: cacheAudibleEdition,
     id: 'audible-cache',
-    inputSchema: z.object({
-      asin: z.string().min(1).max(64), attempts: z.number().int().min(1).max(10).optional(), cacheDirectory: pathSchema,
-      receipt: pathSchema.optional(), region: audibleRegionSchema.optional(),
-    }).strict(),
     resultSchema: audibleCacheResultSchema,
   },
 });

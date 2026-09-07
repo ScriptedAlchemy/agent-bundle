@@ -31,8 +31,8 @@ describe('audiobook curator filesystem application', () => {
     expect(config.targets).toEqual(['claude', 'codex']);
     expect(config.mcp).toBeUndefined();
     // The manual CLI dispatcher and its explicit `scripts` shipping are
-    // retired (#102 stage 3); the routed src/cli/ commands feed the package
-    // executable instead.
+    // retired (#102 stage 3); the tools' `<tool>.cli.ts` projections feed
+    // the package executable instead (#725).
     expect(config.scripts).toBeUndefined();
     expect(config.skills).toBeUndefined();
 
@@ -45,18 +45,12 @@ describe('audiobook curator filesystem application', () => {
     expect(graph.servers[0]!.routes.filter((route) => route.kind === 'prompt').map((route) => route.id)).toEqual(['prompt:curator/curate']);
   });
 
-  it('derives the complete routed CLI and projected MCP toolset', async () => {
+  it('derives one projected CLI command per tool and nothing else', async () => {
     const graph = await compileRouteGraph(root, config);
     expect(graph.cli).toMatchObject({ mode: 'generated' });
-    expect(graph.cli!.commands).toHaveLength(32);
-    const customCommands = graph.cli!.commands!.filter((command) => command.mcp === undefined);
-    const projectedCommands = graph.cli!.commands!.filter((command) => command.mcp !== undefined);
-    expect(customCommands).toHaveLength(16);
-    expect(projectedCommands.map((command) => command.path.join(' '))).toEqual(
-      toolNames.map((tool) => `curator ${tool}`),
-    );
-    expect(customCommands.filter((command) => command.rendered).map((command) => command.path.join(' ')))
-      .toEqual(['audible-search', 'audit', 'convert', 'inventory', 'library-audit', 'select', 'shelf']);
-    expect(projectedCommands.every((command) => command.rendered)).toBe(true);
+    const commands = graph.cli!.commands!;
+    expect(commands).toHaveLength(16);
+    expect(commands.map((command) => command.routeId).sort()).toEqual(toolNames.map((tool) => `tool:curator/${tool}`));
+    expect(commands.every((command) => command.projection !== undefined && command.rendered)).toBe(true);
   });
 });

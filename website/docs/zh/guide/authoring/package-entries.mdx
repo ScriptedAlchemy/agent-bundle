@@ -296,7 +296,11 @@ export const mapInput = (
 `mapInput` 是普通的命名导出，其存在性会被静态记录，并且只由 CLI bin 加载；MCP worker 永远不会看到
 该模块。`mapInput` 是表面适配器，不是领域逻辑：它只把 argv 重塑或补默认值成规范输入（重命名、拆分
 列表、派生工作目录）。领域校验与行为留在操作里——它的 `inputSchema` 精化以及它的组件。在 mapper
-里重写一遍命令逻辑，正是投影要去掉的重复。
+里重写一遍命令逻辑，正是投影要去掉的重复。由于 mapper 仍可能拆分或重命名一个值，投影导出了 `mapInput`
+的命令，其 `z.enum` 取值由规范 schema 在 `mapInput` 运行之后判定——因此 `--regions us,uk` 能到达
+mapper——而枚举之外的值仍以 2 退出，并以 CLI 拼写报告为
+`Invalid value for --<option>[<index>]: expected one of: …`。没有 `mapInput` 的投影则像 `src/cli`
+路由一样在解析 argv 时就拒绝未知的枚举值。
 
 | 键 | 含义 |
 | --- | --- |

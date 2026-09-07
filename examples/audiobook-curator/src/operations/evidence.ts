@@ -16,7 +16,7 @@ import {
   type WhisperReceipt,
 } from '../evidence.ts';
 import { readJson } from '../foundation.ts';
-import { audibleRegionSchema, parityReceiptSchema, pathSchema } from './schemas.ts';
+import { parityReceiptSchema } from './schemas.ts';
 
 const acousticResultSchema = parityReceiptSchema<AcousticReceipt>('audiolocate');
 const acousticIdentifyResultSchema = parityReceiptSchema<AcousticIdentifyReceipt>('acoustic-identify');
@@ -26,11 +26,6 @@ export const evidenceOperations = Object.freeze({
   acousticVerify: {
     handler: verifyAudibleSample,
     id: 'acoustic-verify',
-    inputSchema: z.object({
-      asin: z.string().min(1).max(64), attempts: z.number().int().min(1).max(10).optional(), audiolocatePython: pathSchema.optional(),
-      chunkSeconds: z.number().int().min(1).max(86_400).optional(), file: pathSchema, receipt: pathSchema.optional(),
-      region: audibleRegionSchema.optional(), sampleUrl: z.url().optional(), verbose: z.boolean().optional(),
-    }).strict(),
     resultSchema: acousticResultSchema,
   },
   acousticIdentify: {
@@ -48,22 +43,11 @@ export const evidenceOperations = Object.freeze({
       }, options);
     },
     id: 'acoustic-identify',
-    inputSchema: z.object({
-      all: z.boolean().optional(), attempts: z.number().int().min(1).max(10).optional(), candidates: pathSchema,
-      chunkSeconds: z.number().int().min(1).max(86_400).optional(), file: pathSchema, receipt: pathSchema.optional(),
-      top: z.number().int().min(1).max(10).optional(), verbose: z.boolean().optional(),
-    }).strict(),
     resultSchema: acousticIdentifyResultSchema,
   },
   whisperVerify: {
     handler: verifyWithWhisper,
     id: 'whisper-verify',
-    inputSchema: z.object({
-      author: z.string().max(512).optional(), file: pathSchema, language: z.string().min(1).max(64).optional(),
-      maxWindows: z.number().int().min(5).max(11).optional(), minimumChars: z.number().int().min(1).max(16_384).optional(),
-      model: pathSchema, receipt: pathSchema.optional(), threads: z.number().int().min(1).max(256).optional(), title: z.string().max(1024).optional(),
-      whisperCli: pathSchema.optional(), windowSeconds: z.number().int().min(1).max(3600).optional(),
-    }).strict(),
     resultSchema: whisperResultSchema,
   },
 });
