@@ -34,7 +34,6 @@ export const audibleSearchResultSchema: z.ZodType<AudibleSearchReceipt> = z.obje
 const audibleSelectResultSchema = parityReceiptSchema<AudibleSelectionReceipt>('audible-select');
 const audibleCacheResultSchema = parityReceiptSchema<AudibleCacheReceipt>('audible-cache');
 
-/** Parses the CLI's comma-separated `--regions` list; shared with the routed `audible-search` command. */
 export const audibleOperations = Object.freeze({
   audibleSearch: {
     handler: searchAudible,
