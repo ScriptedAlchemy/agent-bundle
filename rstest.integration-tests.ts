@@ -163,6 +163,7 @@ export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/packed-consumer.test.ts',
   'packages/agent-bundle/tests/packed-consumer-typescript.test.ts',
   'packages/agent-bundle/tests/packed-host-install-proof.test.ts',
+  'packages/agent-bundle/tests/packed-install-bin.test.ts',
   'packages/agent-bundle/tests/packed-native-smoke.test.ts',
   'packages/agent-bundle/tests/packed-readonly-state-root.test.ts',
   'packages/agent-bundle/tests/packed-small-plugin.test.ts',

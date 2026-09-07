@@ -79,6 +79,32 @@ npm 包根目录包含组合插件清单拥有的全部字节，并额外带有 
 打包宿主证明会从已安装包重建清单拥有的产物，并在删除源 checkout 后执行
 `agent-bundle install --from`。
 
+### 与包绑定的安装器 bin
+
+已发布的插件若希望提供 `<name> install <host>`，又不想要求用户安装 `agent-bundle` CLI，只需声明一个
+[`bin`](../authoring/package-entries.mdx#bin-与-lib) 入口并委托给 `agent-bundle/install`：
+
+```ts
+// src/install-bin.ts —— 包所需的全部安装器代码
+import { fileURLToPath } from 'node:url';
+
+import { runInstallCli } from 'agent-bundle/install';
+
+export const main = (argv: readonly string[]): Promise<number> =>
+  runInstallCli(argv, {
+    // npm 包根目录就是产物，因此 bin/ 下的 bin 绑定其父目录。
+    from: fileURLToPath(new URL('..', import.meta.url)),
+    name: 'my-plugin-install',
+  });
+```
+
+`runInstallCli` 就是 `agent-bundle` CLI 自己的 `install <host>`、`uninstall <host>` 与 `doctor`
+命令——同样的标志、回执、替换规则、`--plan`、数据策略、`--json` 输出与退出码（0；1 并在 stderr
+输出一行诊断；2 表示用法错误）——只是把 bundle 根目录固定为 `from`，因此该 bin 不暴露 `--from`，也不做任何探测。
+包构建会把生命周期实现内联进可执行文件；已安装的包在运行时不需要 `agent-bundle`。
+该入口还导出 `installBundle`、`uninstallBundle`、`runDoctor` 与 `format*` 助手，供自行组合命令面的 bin 使用。
+要只读地预览 `install` 会做什么，请运行 `doctor --host <host>`，它会报告已安装副本是最新、过期、版本不匹配、外来还是缺失。
+
 ## 开发期安装是另一回事
 
 `agent-bundle dev --install-host <host>` 维护的是一个*标记为开发用*的安装，它跟随成功的重建 epoch，
