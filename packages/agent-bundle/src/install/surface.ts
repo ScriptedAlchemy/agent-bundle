@@ -1,7 +1,12 @@
 import { stateOwnershipMarkerFile, type NormalizedPlugin } from '../core/types.ts';
 import { preservedRuntimeEntries } from '../core/paths.ts';
 import { type BuiltInHost, builtInHostNames } from '../adapters/composite-layout.ts';
-import { clientCompatibilityFrom, type ClientCompatibilityRecord } from '../adapters/capability-state.ts';
+import {
+  clientCompatibilityFrom,
+  CLIENT_SURFACE_PATHS,
+  type ClientCompatibilityRecord,
+  type ClientShadow,
+} from '../adapters/capability-state.ts';
 import portableCapabilityTable from '../adapters/capabilities/portable-1.0.0.json' with { type: 'json' };
 import { sourceInputs, type TargetArtifactWrite } from '../adapters/types.ts';
 import {
@@ -241,7 +246,9 @@ const clientTierSentence = (record: ClientCompatibilityRecord): string => {
     case 'agent-plugins':
       return 'installs this bundle as one plugin';
     case 'skills':
-      return 'loads its skill tree only';
+      // Not "skills only": a skills-tier client is one that does not read the
+      // manifest, and several of them read the MCP document as well.
+      return 'loads the components it recognizes without reading the manifest';
     case 'none':
       return 'loads nothing from this bundle as published';
     default:
@@ -249,60 +256,70 @@ const clientTierSentence = (record: ClientCompatibilityRecord): string => {
   }
 };
 
-/**
- * The paths a client reads that this build actually wrote. A record names the
- * client's fixed discovery locations; the planned entries say which of them
- * exist here, so the line never promises a file the compiler did not emit.
- */
-const clientReads = (record: ClientCompatibilityRecord, planned: readonly string[]): readonly string[] =>
-  record.discovery.required.filter((path) => planned.some((entry) => entry === path || entry.startsWith(`${path}/`)));
+/** Whether this build wrote the recorded path, directory or file. */
+const planContains = (planned: readonly string[], path: string): boolean =>
+  planned.some((entry) => entry === path || entry.startsWith(`${path}/`));
 
-/** The client's own install command, taken from its declared role, never from list order. */
-const clientInstallSentence = (record: ClientCompatibilityRecord): string => {
-  if (record.install === undefined) return '';
-  const command = record.install.actions.find((action) => action.role === 'install')!.command;
-  return record.install.source === 'marketplace'
-    ? ` Install (its own documentation shows no local-directory form): \`${command}\`.`
-    : ` Install: \`${command}\`.`;
-};
+/** The read surfaces a record can claim, in the order the table declares them. */
+const readSurfaces = Object.keys(CLIENT_SURFACE_PATHS);
 
 /**
- * Precedence is per file: a manifest that wins replaces the plugin the client
- * reads, while a file that wins for one surface leaves the rest discovered.
+ * One rendered client: what it reads in this build, how to install it, what it
+ * withholds, and which of its precedence files this build actually wrote. A
+ * shadow the build emitted is a fact about this artifact, not a hypothetical:
+ * the surfaces it takes are removed from what the client reads here, and a
+ * file that takes every read surface means this root is read as that plugin.
  */
-const clientShadowSentences = (record: ClientCompatibilityRecord): string => {
-  const wholePlugin = record.discovery.shadowedBy.filter((shadow) => shadow.surfaces.includes('manifest'));
-  const perSurface = record.discovery.shadowedBy.filter((shadow) => !shadow.surfaces.includes('manifest'));
-  return [
-    wholePlugin.length === 0
-      ? ''
-      : ` A root that also carries \`${wholePlugin.map((shadow) => shadow.path).join('`, `')}\` is read as that plugin instead.`,
-    ...perSurface.map((shadow) => ` A root that also carries \`${shadow.path}\` uses it for ${shadow.surfaces.join(', ')} and still reads the rest.`),
-  ].join('');
-};
-
-/** One line per recorded client: what it reads here, how to install it, and what it withholds. */
 const clientLine = (planned: readonly string[]) => (record: ClientCompatibilityRecord): readonly string[] => {
-  const surfaces = Object.entries(record.surfaces);
-  const withheld = surfaces
-    .filter(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
-    .map(([surface]) => surface);
-  const reads = clientReads(record, planned);
+  const takesEveryRead = (shadow: ClientShadow): boolean =>
+    readSurfaces.every((surface) => shadow.surfaces.includes(surface));
+  const emitted = record.discovery.shadowedBy.filter((shadow) => planned.includes(shadow.path));
+  const absent = record.discovery.shadowedBy.filter((shadow) => !planned.includes(shadow.path));
+  const replacement = emitted.find((shadow) => takesEveryRead(shadow));
+  const taken = new Set(emitted.flatMap((shadow) => shadow.surfaces));
+  const surfaces = Object.entries(record.surfaces)
+    .filter(([surface]) => !taken.has(surface));
+  const reads = record.discovery.required.filter((path) =>
+    planContains(planned, path)
+    && !readSurfaces.some((surface) => taken.has(surface) && CLIENT_SURFACE_PATHS[surface] === path));
+  const install = record.install?.actions.find((action) => action.role === 'install')?.command;
+  const hypothetical = (shadow: ClientShadow): string => takesEveryRead(shadow)
+    ? ` A root that also carries \`${shadow.path}\` is read as that plugin instead.`
+    : ` A root that also carries \`${shadow.path}\` uses it for ${shadow.surfaces.join(', ')} and still reads the rest.`;
+
+  if (replacement !== undefined) {
+    return [
+      `- **${record.name}** (${record.observed}) ${clientTierSentence(record)}, but this build also writes`
+      + ` \`${replacement.path}\`, which it reads as the plugin instead.`,
+    ];
+  }
   return [
     [
       `- **${record.name}** (${record.observed}) ${clientTierSentence(record)}.`,
       record.tier === 'none'
         ? ''
         : reads.length === 0
-          ? ' This bundle emits none of the paths it reads.'
+          ? ' This bundle emits none of the paths it reads, so there is nothing to install there.'
           : ` Reads: \`${reads.join('`, `')}\`.`,
-      clientInstallSentence(record),
-      withheld.length === 0 ? '' : ` Not loaded: ${withheld.join(', ')}.`,
-      clientShadowSentences(record),
+      // An install command for a bundle it reads nothing of is not an install.
+      install === undefined || reads.length === 0
+        ? ''
+        : record.install!.source === 'marketplace'
+          ? ` Install (no local-directory install is verified for this artifact): \`${install}\`.`
+          : ` Install: \`${install}\`.`,
+      ...surfaces.some(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
+        ? [` Not loaded: ${surfaces
+            .filter(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
+            .map(([surface]) => surface).join(', ')}.`]
+        : [],
+      ...emitted.map((shadow) => ` This build also writes \`${shadow.path}\`, which it uses for ${shadow.surfaces.join(', ')} instead.`),
+      ...absent.map(hypothetical),
     ].join(''),
     // A narrowed surface loads with a documented limit; the limit is the point.
+    // A limit on a document this build did not write is not a limit here.
     ...surfaces
-      .filter(([, row]) => row.state === 'degraded')
+      .filter(([surface, row]) => row.state === 'degraded'
+        && (CLIENT_SURFACE_PATHS[surface] === undefined || reads.includes(CLIENT_SURFACE_PATHS[surface]!)))
       .map(([surface, row]) => `  - Partial \`${surface}\`: ${row.reason}`),
   ];
 };

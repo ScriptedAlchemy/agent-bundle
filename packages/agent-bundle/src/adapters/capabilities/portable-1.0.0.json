@@ -15,7 +15,7 @@
         "2026-09-03: the emitted install.mjs --uninstall removes the receipt-owned files and installer-created directories from ~/.cursor/plugins/local/<name>, leaving an isolated Cursor home byte-identical to its pre-install snapshot (tests/host-install-proof.test.ts); other Agent Plugins clients own their own install locations and are uninstalled through the client (#101)."
       ],
       "state": "degraded",
-      "reason": "Only the Cursor local copy the bundled installer places is receipt-owned; native clients other than Cursor manage their own copies."
+      "reason": "Only the Cursor local copy the bundled installer places is receipt-owned; the other recorded clients manage their own copies."
     },
     "keepData": {
       "evidence": [
@@ -374,12 +374,6 @@
               "mcp",
               "placeholders"
             ]
-          },
-          {
-            "path": ".mcp.json",
-            "surfaces": [
-              "mcp"
-            ]
           }
         ],
         "evidence": [
@@ -403,9 +397,11 @@
         },
         "mcp": {
           "evidence": [
-            "2026-09-06: https://docs.devin.ai/cli/extensibility/mcp/configuration documents the spec `type` discriminator (stdio, streamable-http, sse) accepted \"instead of transport\", and the root mcp.json as a plugin MCP source for root-manifest plugins."
+            "2026-09-06: https://docs.devin.ai/cli/extensibility/mcp/configuration documents the spec `type` discriminator (stdio, streamable-http, sse) accepted \"instead of transport\", and the root mcp.json as a plugin MCP source for root-manifest plugins.",
+            "2026-09-06: the plugins overview states the root mcp.json \"is read as a conventional MCP source (after .mcp.json, which wins on a server-name collision)\", so both documents are read rather than one replacing the other."
           ],
-          "state": "supported"
+          "reason": "2026-09-06: the emitted document is read, and applied after a composite root's .mcp.json, \"which wins on a server-name collision\" — a server this bundle names identically to one there is overridden.",
+          "state": "degraded"
         },
         "placeholders": {
           "evidence": [
@@ -429,11 +425,11 @@
         "actions": [
           {
             "role": "install",
-            "command": "grok plugin install <marketplace plugin name>"
+            "command": "grok plugin install <marketplace plugin name> --trust"
           },
           {
             "role": "trust",
-            "command": "grok plugin install <marketplace plugin name> --trust"
+            "command": "/hooks-trust"
           },
           {
             "role": "enable",
@@ -463,8 +459,8 @@
           "evidence": [
             "2026-09-06: https://raw.githubusercontent.com/xai-org/plugin-marketplace/main/README.md repeats that \"An optional plugin.json manifest adds metadata or overrides component paths\", and the example layout places it at the plugin root."
           ],
-          "reason": "2026-09-06: the root manifest is documented only as optional metadata and path overrides, with no published field list, validation rule, or precedence order, so nothing about Grok's handling of the emitted manifest is pinned.",
-          "state": "degraded"
+          "reason": "2026-09-06: unproven. The root manifest is documented only as optional metadata and path overrides, with no published field list, validation rule, or precedence order, so nothing about Grok's handling of the emitted manifest is pinned.",
+          "state": "unavailable"
         },
         "skills": {
           "evidence": [
@@ -569,8 +565,7 @@
           "evidence": [
             "2026-09-06: https://docs.openclaw.ai/plugins/bundles states \"Immediate child directories of skills/ that contain a SKILL.md load as skills\" — the exact flat layout this projection emits — and https://docs.openclaw.ai/tools/skills requires at minimum a name and description, both of which it emits."
           ],
-          "reason": "2026-09-06: for this bundle format \"deeper directories are not scanned\", so only the emitted top-level skill directories load; a nested skill tree would be silently skipped.",
-          "state": "degraded"
+          "state": "supported"
         },
         "mcp": {
           "evidence": [
@@ -648,8 +643,7 @@
           "evidence": [
             "2026-09-06: https://docs.qoder.com/cli/mcp-reference states Qoder is \"Compatible with mcp.json (without a leading dot) as a fallback for .mcp.json\", reads the top-level mcpServers key, and accepts type values stdio and http/streamable-http — the transports this projection emits."
           ],
-          "reason": "2026-09-06: mcp.json is read only as a fallback: \"If both exist, .mcp.json takes precedence, and they are not merged\", so a composite root that also carries .mcp.json hides the emitted document.",
-          "state": "degraded"
+          "state": "supported"
         },
         "placeholders": {
           "reason": "2026-09-06: QODER_PLUGIN_ROOT and QODER_PLUGIN_DATA are documented only for hooks (https://docs.qoder.com/cli/hooks-reference), and no ${...} placeholder is documented for MCP server configuration, so the emitted ${PLUGIN_ROOT} and ${PLUGIN_DATA} tokens are not proven to expand.",

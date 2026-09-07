@@ -317,6 +317,15 @@ const CLIENT_COMPATIBILITY_TIERS: readonly string[] =
   Object.freeze(['agent-plugins', 'skills', 'none']);
 
 /**
+ * The artifact path each surface is read from, so a record that says it loads
+ * a surface has to name the file it loads, and a renderer can tell which
+ * surfaces a build actually wrote. `placeholders` and `hooks` are behaviors of
+ * the MCP document rather than files of their own.
+ */
+export const CLIENT_SURFACE_PATHS: Readonly<Record<string, string>> =
+  Object.freeze({ manifest: 'plugin.json', mcp: 'mcp.json', skills: 'skills' });
+
+/**
  * What a recorded install command does. A command's role is declared, never
  * inferred from its position: a client whose verifier is listed first must not
  * be documented as installing with it.
@@ -586,6 +595,14 @@ export const clientCompatibilityFrom = (
       }
       if (entry.tier === 'none' && (required.length > 0 || CLIENT_COMPATIBILITY_SURFACES.some((surface) => supported(surface)))) {
         throw new CapabilityStateError(`Client ${id} claims no tier in the pinned ${target} table while recording a path or surface it reads.`);
+      }
+      // Every loaded surface names the file it is loaded from, so a rendered
+      // claim about a surface is a claim about a path the build either wrote
+      // or did not.
+      for (const [surface, path] of Object.entries(CLIENT_SURFACE_PATHS)) {
+        if (supported(surface) && !required.includes(path)) {
+          throw new CapabilityStateError(`Client ${id} loads the ${surface} surface in the pinned ${target} table without reading ${path}.`);
+        }
       }
       const install = clientInstall(target, id, entry.install);
       const discoveryEvidence = entry.discovery?.evidence ?? [];

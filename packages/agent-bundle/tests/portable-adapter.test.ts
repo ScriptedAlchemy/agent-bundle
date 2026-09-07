@@ -699,11 +699,25 @@ it('refuses a client record that claims a tier its own rows do not support', () 
     },
   });
 
+  const skillsOnlySurfaces = {
+    hooks: { reason: '2026-09-06: no hooks document is emitted.', state: 'unavailable' },
+    manifest: { reason: '2026-09-06: the root manifest is not read.', state: 'unavailable' },
+    mcp: { reason: '2026-09-06: no MCP file is read.', state: 'unavailable' },
+    placeholders: { reason: '2026-09-06: no placeholder expansion is documented.', state: 'unavailable' },
+    skills: { evidence: ['2026-09-06: skills/ is a documented discovery root.'], state: 'supported' },
+  };
+  const unavailableSurfaces = {
+    ...skillsOnlySurfaces,
+    skills: { reason: '2026-09-06: the skill tree is not read.', state: 'unavailable' },
+  };
+
   expect(() => clientCompatibilityFrom('portable', record({}))).not.toThrow();
   expect(() => clientCompatibilityFrom('portable', record({ tier: 'agent-plugins' })))
     .toThrow(/without reading plugin\.json as a manifest it loads/u);
   expect(() => clientCompatibilityFrom('portable', record({ tier: 'none' })))
     .toThrow(/while recording a path or surface it reads/u);
+  expect(() => clientCompatibilityFrom('portable', record({ surfaces: unavailableSurfaces })))
+    .toThrow(/without reading the skill tree/u);
   expect(() => clientCompatibilityFrom('portable', record({ tier: 'native' })))
     .toThrow(/Unsupported tier "native"/u);
   // A tier is held to the paths as well as the rows: a client recorded at the
@@ -723,6 +737,16 @@ it('refuses a client record that claims a tier its own rows do not support', () 
   expect(() => clientCompatibilityFrom('portable', record({
     install: { actions: [{ command: 'demo plugins add <plugin directory>', role: 'add' }], source: 'local-directory' },
   }))).toThrow(/install action with role "add"/u);
+  expect(() => clientCompatibilityFrom('portable', record({
+    install: { actions: [{ command: '   ', role: 'install' }], source: 'local-directory' },
+  }))).toThrow(/install action with no verbatim command/u);
+  // A client that reads nothing this artifact emits cannot install it locally.
+  expect(() => clientCompatibilityFrom('portable', record({
+    discovery: { evidence: ['2026-09-06: read from the vendor docs.'] },
+    install: { actions: [{ command: 'demo plugins install <plugin directory>', role: 'install' }], source: 'local-directory' },
+    surfaces: unavailableSurfaces,
+    tier: 'none',
+  }))).toThrow(/records a local-directory install .* while reading nothing this artifact emits/u);
   // A shadow takes named surfaces; it never silently replaces the whole root.
   expect(() => clientCompatibilityFrom('portable', record({
     discovery: {
@@ -731,6 +755,23 @@ it('refuses a client record that claims a tier its own rows do not support', () 
       shadowedBy: [{ path: '.mcp.json' }],
     },
   }))).toThrow(/without naming the surfaces it takes/u);
+  expect(() => clientCompatibilityFrom('portable', record({
+    discovery: {
+      evidence: ['2026-09-06: read from the vendor docs.'],
+      required: ['skills'],
+      shadowedBy: [{ path: '.mcp.json', surfaces: ['prompts'] }],
+    },
+  }))).toThrow(/without naming the surfaces it takes/u);
+  expect(() => clientCompatibilityFrom('portable', record({
+    discovery: { evidence: ['2026-09-06: read from the vendor docs.'], required: ['skills'], shadowedBy: '.mcp.json' },
+  }))).toThrow(/discovery\.shadowedBy for client demo as something other than a list/u);
+  // A surface a client loads names the file it is loaded from.
+  expect(() => clientCompatibilityFrom('portable', record({
+    surfaces: {
+      ...skillsOnlySurfaces,
+      mcp: { evidence: ['2026-09-06: it reads mcp.json.'], state: 'supported' },
+    },
+  }))).toThrow(/loads the mcp surface .* without reading mcp\.json/u);
   // A path that only resolves on one platform is not an artifact-relative path.
   expect(() => clientCompatibilityFrom('portable', record({
     discovery: { evidence: ['2026-09-06: read from the vendor docs.'], required: ['skills\\review'] },
