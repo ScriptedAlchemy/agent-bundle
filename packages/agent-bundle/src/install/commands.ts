@@ -85,15 +85,16 @@ const collectDoctorHost = (value: string, previous: readonly DoctorHost[]): read
 
 export const registerLifecycleCommands = (program: Command, options: LifecycleCommandOptions): void => {
   const { from: pinned, lifecycle, machine, setExitCode, show } = options;
-  const fromOption = (command: Command, help: string, defaultValue?: string): Command =>
-    pinned === undefined ? command.option('--from <bundle-dir>', help, defaultValue) : command;
+  // `process.cwd()` is read only when the option exists: a pinned bin must work from a deleted cwd.
+  const fromOption = (command: Command, help: string, defaultToCwd = false): Command =>
+    pinned === undefined ? command.option('--from <bundle-dir>', help, defaultToCwd ? process.cwd() : undefined) : command;
 
   const installCommand = fromOption(
     program.command('install')
       .description('Install a built bundle into a supported host')
       .argument('<host>', 'Destination host: claude, codex, or cursor', installHost),
     'Target bundle directory or artifact root',
-    process.cwd(),
+    true,
   )
     .option('--scope <scope>', 'Host install scope', installScope, 'user')
     .option(
@@ -121,7 +122,7 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
       .description('Remove a receipt-owned host install of a built bundle, and nothing else')
       .argument('<host>', 'Host to uninstall from: claude, codex, or cursor', installHost),
     'Target bundle directory or artifact root that identifies the plugin',
-    process.cwd(),
+    true,
   )
     .option('--scope <scope>', 'Host install scope', installScope, 'user')
     .option('--mode <mode>', 'Cursor delivery mode to uninstall: local (default) or marketplace', installMode)
