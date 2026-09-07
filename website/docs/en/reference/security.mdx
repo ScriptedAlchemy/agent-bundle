@@ -61,16 +61,18 @@ authority as in the Workbench (`--allow` pre-approves named capabilities on the 
 It is a local preview host, not a deployment target.
 
 Inside the App document, the `agent-bundle/app` client trusts no arbitrary `postMessage` sender.
-The sandbox is an opaque, no-referrer `srcdoc`, so the document cannot know its host's origin
-before the first frame: each `connect()` handshake attempt sends one framework-owned
-`ui/initialize` request to `'*'`, accepts a response only from the configured parent window with that request's id and a
-valid initialize result, pins the responding origin — it must be an exact `http:`/`https:`
-origin; an opaque `null`, empty, or other-scheme origin fails the handshake — and from then on
-sends to and accepts from that exact `source` and `origin` only. A host that can name its origin
-passes `targetOrigin` (an exact `http:`/`https:` origin; `'*'` is rejected) and no wildcard frame
-is ever sent. `rebind()` and `dispose()` revoke the pin and reject every request still pending, a
-handshake still in flight included, so a stale generation cannot receive a later host's messages.
-Author code has no wildcard send path.
+The Workbench and `serve-app` use a separate loopback HTTP sandbox proxy, while hosts such as
+Codex can provide an opaque parent, so the document cannot know its parent's origin before the
+first frame. Each `connect()` handshake attempt sends one framework-owned `ui/initialize` request
+to `'*'` and accepts a response only from the configured parent window with that request's id and
+a valid initialize result. An exact `http:`/`https:` response origin is pinned for inbound and
+outbound traffic. An opaque `"null"` response from that same parent instead pins opaque mode:
+later inbound messages must keep the same source and `"null"` origin, while outbound messages use
+`'*'` because opaque targets cannot be addressed by origin. Empty and other-scheme origins fail
+the handshake. A host that can name its origin passes `targetOrigin` (an exact `http:`/`https:`
+origin; both `'*'` and `"null"` are rejected) and no wildcard frame is sent. `rebind()` and
+`dispose()` revoke either pin and reject every request still pending, a handshake still in flight
+included, so a stale generation cannot receive a later host's messages.
 
 The host relay is the security boundary. The App client speaks only to its expected parent; the
 Workbench, `serve-app`, or an embedding MCP host forwards permitted requests to the one server the

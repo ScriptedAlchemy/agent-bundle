@@ -123,7 +123,7 @@ const refused = async (url: string): Promise<boolean> => {
   }
 };
 
-it('serves the MCP App example standalone over its packed server and relays the MCP Apps protocol through the Workbench routes', async () => {
+it('serves the real MCP App and accepts Codex opaque-origin client traffic through the Workbench routes', async () => {
   const opened: string[] = [];
   const served = await serveApp({
     app: 'status/status',
@@ -232,6 +232,7 @@ it('serves the MCP App example standalone over its packed server and relays the 
     const consentPath = `/api/mcp/apps/${encodeURIComponent(preview.bindingId)}/consent`;
     const hostMethods: string[] = [];
     const openingInputs: unknown[] = [];
+    const targetOrigins: string[] = [];
     let approveCalls = true;
 
     const decideConsent = async (approved: boolean): Promise<readonly JsonRpc[]> => {
@@ -250,7 +251,8 @@ it('serves the MCP App example standalone over its packed server and relays the 
 
     const listeners = new Set<(event: AppMessageEvent) => void>();
     const parent: AppMessageTarget = {
-      postMessage(message) {
+      postMessage(message, targetOrigin) {
+        targetOrigins.push(targetOrigin);
         void (async () => {
           try {
             const relayed = await api('POST', messagesPath, { message }) as {
@@ -271,7 +273,7 @@ it('serves the MCP App example standalone over its packed server and relays the 
                 hostMethods.push(data.method);
               }
               for (const listener of [...listeners]) {
-                listener({ data, origin, source: parent });
+                listener({ data, origin: 'null', source: parent });
               }
             }
           } catch {
@@ -298,6 +300,7 @@ it('serves the MCP App example standalone over its packed server and relays the 
       protocolVersion: MCP_APP_PROTOCOL_VERSION,
     });
     expect(client.connected).toBe(true);
+    expect(targetOrigins[0]).toBe('*');
     await expect.poll(() => openingInputs, { timeout: 5_000 * timeScale }).toEqual([{ service: 'compiler' }]);
     await expect.poll(() => hostMethods.includes('ui/notifications/tool-result'), { timeout: 5_000 * timeScale }).toBe(true);
 
@@ -309,6 +312,7 @@ it('serves the MCP App example standalone over its packed server and relays the 
     const denied = client.call('tool:status/show-status', { service: 'payments-api' });
     await expect(denied).rejects.toBeInstanceOf(AppClientError);
     await expect(denied).rejects.toMatchObject({ code: 'consent-required' });
+    expect(new Set(targetOrigins)).toEqual(new Set(['*']));
     expect(closed).toBe(false);
     client.dispose();
   } finally {

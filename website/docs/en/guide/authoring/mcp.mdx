@@ -898,24 +898,28 @@ that is not a function; `call()` rejects with that `TypeError` for a malformed r
 per-request `timeoutMs`. None of this is an `AB` diagnostic: App-side failures are browser
 errors, not build output.
 
-**Lifecycle and origin pinning.** The Workbench and `serve-app` render the App as an opaque,
-no-referrer `srcdoc` sandbox, so the document cannot know its host's origin up front. `connect()`
-therefore sends exactly one frame to `'*'` — the framework-owned `ui/initialize` — and accepts a
-response only from the configured parent window (`event.source`), with that request's id and a
-valid initialize result (protocol version `2026-01-26`, `hostInfo`, `hostCapabilities`,
-`hostContext`). It pins the responding `event.origin`, which must itself be an exact
-`http:`/`https:` origin — an opaque `null`, empty, or other-scheme origin fails the handshake with
-`invalid-message` — then sends `ui/notifications/initialized` and every later request to that
-exact origin, and ignores every message from any other source or origin. A host that can supply a
-trusted origin passes `targetOrigin` — an exact `http:`/`https:` origin; `'*'` is rejected — and
-no wildcard frame is sent at all. `connect()` is idempotent: a connected client resolves the
-cached result, a connecting one returns the in-flight handshake.
+**Lifecycle and origin pinning.** The Workbench and `serve-app` put the App behind their separate
+loopback HTTP sandbox proxy, while Codex can render it in an opaque sandbox. In either case the
+document cannot know its parent's origin up front. `connect()` therefore sends exactly one frame
+to `'*'` — the framework-owned `ui/initialize` — and accepts a response only from the configured
+parent window (`event.source`), with that request's id and a valid initialize result (protocol
+version `2026-01-26`, `hostInfo`, `hostCapabilities`, `hostContext`). An exact `http:`/`https:`
+response origin is pinned for both inbound and outbound messages. An opaque `"null"` response
+origin from that same parent enters opaque mode: later inbound messages must still come from the
+same parent with origin `"null"`, and outbound messages use `'*'` because an opaque target cannot
+be addressed by origin. Empty and other-scheme origins fail the handshake with `invalid-message`;
+messages from another window or a changed origin are ignored. A host that can supply a trusted
+origin passes `targetOrigin` — an exact `http:`/`https:` origin; both `'*'` and `"null"` are
+rejected — and no wildcard frame is sent at all. `connect()` is idempotent: a connected client
+resolves the cached result, a connecting one returns the in-flight handshake.
 `rebind({ parent?, targetOrigin?, window? })` rejects the previous generation's pending requests
 with `connection-rebound` — a `connect()` still in flight included, which never becomes the live
-connection — clears the pin, keeps the configured `targetOrigin` unless the call names one, and
-performs the handshake again against the new parent. `dispose()`, also idempotent, removes the
-listener, rejects pending requests with `disposed`, and drops every registration; a host's
-`ui/resource-teardown` request is acknowledged and disposes the client. The transport is
+connection — clears either origin mode, keeps the configured `targetOrigin` unless the call names
+one, and performs the handshake again against the new parent. `dispose()`, also idempotent,
+removes the listener, rejects pending requests with `disposed`, and drops every registration; a
+host's `ui/resource-teardown` request is accepted only through the current source-and-origin pin,
+acknowledged, and then disposes the client. Cancellation and teardown replies use that same
+current parent and outbound mode before the connection state is cleared. The transport is
 DOM-shaped rather than bound to the global `window`: `window` and `parent` are injectable, which
 is how tests and non-DOM hosts drive the same client.
 
