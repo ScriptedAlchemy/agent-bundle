@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { fork, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { AgentDocument, AgentDocumentNode, AgentRenderEvent } from '@agent-bundle/runtime';
@@ -603,7 +603,11 @@ const productionBindingFor = (
         && candidate.hosts.some((candidateHost) => eligibleHosts.has(candidateHost))
         && candidate.launch?.worker !== undefined))
       .find((candidate) => candidate !== undefined);
-    const standalone = manifest.files.find((file) => file.path === hooksFlightWorkerPath)?.path;
+    const standalone = [
+      ...(wrapper === undefined ? wrappers : [wrapper])
+        .map((candidate) => posix.join(posix.dirname(candidate.path), posix.basename(hooksFlightWorkerPath))),
+      hooksFlightWorkerPath,
+    ].find((candidate) => manifest.files.some((file) => file.path === candidate));
     const executable = execution.runtime === 'standalone'
       ? standalone
       : shared?.launch?.worker ?? (execution.fallback === 'standalone' ? standalone : undefined);

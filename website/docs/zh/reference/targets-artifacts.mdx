@@ -27,6 +27,8 @@ target 表格——各宿主投影携带什么，以及 portable 标准为何省
 artifact/
 ├── .amp/plugins/<name>/index.js          # Amp PluginAPI 工厂
 ├── .amp/plugins/<name>/skills/           # 显式注册的 Amp Skill
+├── .amp/plugins/<name>/hooks/<hook>.mjs  # Amp 事件回调 wrapper
+├── .amp/plugins/<name>/hooks/hooks-flight.mjs  # 同目录的独立事件 worker
 ├── .agents/plugins/marketplace.json      # Codex 市场
 ├── .claude-plugin/plugin.json            # Claude Code 清单
 ├── .claude-plugin/marketplace.json
@@ -56,10 +58,12 @@ artifact/
 `agent-bundle.compile-evidence.json` 是编译器对每个已编译（`bundle`）文件的记录；
 `validate --artifact` 把已列入清单的记录对照文件表复核（`AB6039`）。
 
-宿主清单位于根目录下各自的点目录中。`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/` 是共享的，
-只输出**一次**——没有逐宿主副本。根目录下不会出现其他任何东西：没有生成的 `AGENTS.md`，也没有
-`hooks/hooks-cursor.json`，也没有 `web/` 目录。已配置 MCP App 的浏览器宿主作为框架拥有的 `web` 命令
-装在 `bin/<plugin>.mjs` 里。该 bin 在 `src/cli/**` 编译出至少一条命令时、在配置了
+宿主清单位于根目录下各自的点目录中。根级 `skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/`
+是共享的，只输出**一次**。Amp 注册的 Skill、事件 wrapper，以及与各 wrapper 目录同级的独立 worker
+都保留在 `.amp/plugins/<name>/` 内，使安装后的插件保持自包含。根目录下不会出现其他任何东西：
+没有生成的 `AGENTS.md`，也没有 `hooks/hooks-cursor.json`，也没有 `web/` 目录。已配置 MCP App 的浏览器
+宿主作为框架拥有的 `web` 命令装在 `bin/<plugin>.mjs` 里。该 bin 在 `src/cli/**` 编译出至少一条命令时、
+在配置了
 [`web`](./configuration.mdx#web) 时（即使没有手写 CLI 命令），或两者兼有时输出。
 
 ### 各宿主从哪里读取文档

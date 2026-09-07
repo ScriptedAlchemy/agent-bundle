@@ -587,8 +587,7 @@ export const planCompiledHooks = (
     }
   });
   const workerSourceInputs = Object.freeze([...new Set(entries
-    .filter((entry) =>
-      entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone')
+    .filter(requiresStandaloneHookWorker)
     .flatMap((entry) => [entry.hook.provenance.sourcePath, entry.hook.source]))]);
   return deepFreeze(entries.map((entry, index) => ({
     event: entry.event,

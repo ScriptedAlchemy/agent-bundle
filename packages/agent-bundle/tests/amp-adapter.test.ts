@@ -798,7 +798,16 @@ it('runs a relocated standalone event route with its worker inside the Amp plugi
     });
     const wrapper = '.amp/plugins/amp-review/hooks/event-route-tool-before.mjs';
     const worker = '.amp/plugins/amp-review/hooks/hooks-flight.mjs';
+    expect(built.manifest.projections).toEqual([{
+      builtInHost: 'amp',
+      documents: { entry: '.amp/plugins/amp-review/index.js' },
+      host: 'amp',
+    }]);
     expect(built.manifest.files.map((file) => file.path)).toContain(worker);
+    expect(built.manifest.files.map((file) => file.path).filter((path) => path.endsWith('/index.js')))
+      .toEqual(['.amp/plugins/amp-review/index.js']);
+    expect(built.manifest.compiler.provenance).toContainEqual(expect.objectContaining({ path: worker }));
+    expect(built.compileEvidence.assets).toContainEqual(expect.objectContaining({ path: worker }));
     expect(await validateArtifact({ artifactRoot: outputRoot, registry })).toEqual([]);
 
     await rename(outputRoot, relocated);
