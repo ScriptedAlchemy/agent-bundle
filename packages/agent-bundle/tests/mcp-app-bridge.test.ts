@@ -172,6 +172,15 @@ it('leaves the opening result pending when automatic publication is deferred', a
     method: 'ui/notifications/tool-cancelled',
     params: { reason: 'user-dismissed' },
   });
+
+  await bridge.receive(initialize('init:pending-rebound'));
+  await bridge.receive(initialized());
+
+  expect(fixture.sent.at(-3)?.id).toBe('init:pending-rebound');
+  expect(fixture.sent.slice(-2)).toEqual([
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', units: 'metric' } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-cancelled', params: { reason: 'user-dismissed' } },
+  ]);
 });
 
 it('accepts the stable parameterless initialized notification before flushing host traffic', async () => {
