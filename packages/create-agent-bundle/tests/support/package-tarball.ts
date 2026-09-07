@@ -20,8 +20,8 @@ const applyHeaderChecksum = (header: Buffer): void => {
  * The smallest archive `localTarballPackageName` accepts: one ustar entry for
  * `package/package.json` naming the package, then the end-of-archive blocks.
  */
-export const packageTarArchive = (name: string): Buffer => {
-  const manifest = Buffer.from(JSON.stringify({ name }));
+export const packageTarArchive = (name: string, version = '0.0.0'): Buffer => {
+  const manifest = Buffer.from(JSON.stringify({ name, version }));
   const archive = Buffer.alloc(
     tarBlockSize + Math.ceil(manifest.length / tarBlockSize) * tarBlockSize + tarBlockSize * 2,
   );
@@ -40,15 +40,16 @@ export const packageTarArchive = (name: string): Buffer => {
   return archive;
 };
 
-export const packageTarball = (name: string): Buffer => gzipSync(packageTarArchive(name));
+export const packageTarball = (name: string, version = '0.0.0'): Buffer =>
+  gzipSync(packageTarArchive(name, version));
 
 /**
  * A gzip stream that still inflates cleanly, carrying a header whose mode was
  * rewritten without refreshing the checksum. The parser never reads the mode,
  * so only checksum verification can tell this archive from a sound one.
  */
-export const tamperedPackageTarball = (name: string): Buffer => {
-  const archive = packageTarArchive(name);
+export const tamperedPackageTarball = (name: string, version = '0.0.0'): Buffer => {
+  const archive = packageTarArchive(name, version);
   writeOctalField(archive, 0o777, tarModeOffset, 8);
   return gzipSync(archive);
 };
@@ -80,8 +81,8 @@ const writeTarEntry = (
  * Like `packageTarArchive`, but adds a trailing entry after `package/package.json`
  * so callers can tamper with a later header without touching the manifest block.
  */
-export const packageTarArchiveWithTrailingEntry = (name: string): Buffer => {
-  const manifest = Buffer.from(JSON.stringify({ name }));
+export const packageTarArchiveWithTrailingEntry = (name: string, version = '0.0.0'): Buffer => {
+  const manifest = Buffer.from(JSON.stringify({ name, version }));
   const trailing = Buffer.from('trailing payload');
   const archive = Buffer.alloc(
     tarBlockSize
@@ -96,9 +97,9 @@ export const packageTarArchiveWithTrailingEntry = (name: string): Buffer => {
 };
 
 /** Manifest checksum is valid; a later tar header checksum is not. */
-export const tamperedTrailingHeaderPackageTarball = (name: string): Buffer => {
-  const archive = packageTarArchiveWithTrailingEntry(name);
-  const manifestBlocks = Math.ceil(Buffer.from(JSON.stringify({ name })).length / tarBlockSize) * tarBlockSize;
+export const tamperedTrailingHeaderPackageTarball = (name: string, version = '0.0.0'): Buffer => {
+  const archive = packageTarArchiveWithTrailingEntry(name, version);
+  const manifestBlocks = Math.ceil(Buffer.from(JSON.stringify({ name, version })).length / tarBlockSize) * tarBlockSize;
   const trailingHeaderOffset = tarBlockSize + manifestBlocks;
   writeOctalField(archive, 0o777, trailingHeaderOffset + tarModeOffset, 8);
   return gzipSync(archive);

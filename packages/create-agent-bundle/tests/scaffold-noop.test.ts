@@ -146,6 +146,7 @@ describe('scaffold over FileSystem.layerNoop', () => {
       const error = yield* Effect.flip(scaffold({
         frameworkSpec: 'file:../agent-bundle-0.4.0.tgz',
         packageName: 'status-plugin',
+        pairing: { framework: '0.4.0', runtime: '0.3.0' },
         pluginName: 'status-plugin',
         targetDirectory: '/project',
         targets: ['portable'],

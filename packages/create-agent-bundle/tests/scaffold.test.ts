@@ -8,6 +8,7 @@ import { assertScaffoldTarget, placeholderName, scaffold } from '../src/scaffold
 import { packageTarball, tamperedPackageTarball } from './support/package-tarball.ts';
 
 const workspaceRoot = process.cwd();
+const testPairing = { framework: '0.0.0', runtime: '0.0.0' } as const;
 const templateRoot = (path: Path.Path, template: string): string =>
   path.join(workspaceRoot, 'packages', 'create-agent-bundle', 'templates', template);
 
@@ -44,6 +45,7 @@ const scaffoldTemplate = Effect.fnUntraced(function* (
   const files = yield* scaffold({
     frameworkSpec,
     packageName: overrides.packageName ?? 'status-plugin',
+    pairing: testPairing,
     pluginName: overrides.pluginName ?? 'status-plugin',
     targetDirectory: path.join(root, 'project'),
     targets: overrides.targets ?? ['portable', 'codex', 'claude'],
@@ -247,7 +249,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
       readonly devDependencies: Record<string, string>;
     }>(path.join(root, 'package.json'));
     expect(manifest.dependencies).toBeUndefined();
-    expect(manifest.devDependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
+    expect(manifest.devDependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec, testPairing));
     expect(manifest.devDependencies['zod']).toBeDefined();
   }));
 
@@ -272,7 +274,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     expect(manifest.devDependencies['agent-bundle']).toBe(frameworkSpec);
     expect(files).toContain('src/cli/greet.ts');
     expect(manifest.dependencies).toBeUndefined();
-    expect(manifest.devDependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
+    expect(manifest.devDependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec, testPairing));
     expect(manifest.bin).toBeUndefined();
     const config = yield* readText(path.join(root, 'agent-bundle.config.ts'));
     expect(config).toContain("name: 'status-plugin'");
@@ -329,6 +331,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     const error = yield* Effect.flip(scaffold({
       frameworkSpec: `file:${frameworkTarball}`,
       packageName: 'status-plugin',
+      pairing: testPairing,
       pluginName: 'status-plugin',
       targetDirectory,
       targets: ['portable', 'codex', 'claude'],
@@ -440,6 +443,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     const files = yield* scaffold({
       frameworkSpec: 'file:../agent-bundle-0.0.0.tgz',
       packageName: 'status-plugin',
+      pairing: testPairing,
       pluginName: 'status-plugin',
       targetDirectory,
       targets: ['portable'],

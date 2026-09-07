@@ -39,8 +39,10 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 迁移提示，因为这些模板从一开始就是按照 entry 约定编写的。`mcp-server` 模板还自带消费者测试 harness，
 每个测试池都标注了自己承载的证明级别。
 
-脚手架生成的项目会把 `agent-bundle` 固定到与脚手架自身同一提交的预览包，因此脚手架与它所固定的框架
-永远不会互相冲突。全部参数见
+预览脚手架会把 `agent-bundle` 与 `@agent-bundle/runtime` 固定到同一个提交 SHA。通过 npm 安装的脚手架则
+从自身打包后的可选 peer 元数据读取精确的 compiler/runtime 配对；两者版本彼此独立，因此 compiler `0.2.0`
+可以正确选择 runtime `0.1.0`。对需要 runtime 的模板使用 `--framework-version` 时，取值必须与记录的
+compiler 版本一致，否则脚手架会在写入文件之前停止。全部参数见
 [create-agent-bundle README](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/packages/create-agent-bundle/README.md)。
 
 ## 或者手写配置

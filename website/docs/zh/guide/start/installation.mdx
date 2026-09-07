@@ -65,6 +65,12 @@ npm install --save-dev agent-bundle
 npm create agent-bundle@latest my-plugin
 ```
 
+打包后的 `create-agent-bundle` 版本会把兼容的 `agent-bundle` 与 `@agent-bundle/runtime` 版本记录为可选
+peer。`npm create` 会分别固定这两个记录值，而不是把 compiler 版本复制给 runtime 包。例如 compiler
+可以是 `0.2.0`，而对应 runtime 是 `0.1.0`。带 runtime 的模板会拒绝超出该发布配对的
+`--framework-version`；此时应安装与 compiler 匹配的脚手架版本。本地 compiler tarball 会在相邻
+runtime tarball 的文件名中使用记录的 runtime 版本，并在写入项目之前校验两个包的清单。
+
 首个 npm 版本将使用 npm package provenance。在发布负责人确定最终包名与许可证之前，pkg.pr.new 预览
 就是发布通道。
 

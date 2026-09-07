@@ -97,15 +97,17 @@ because they change no publishable package.
   package needs to move when the other does. Preview tarballs pin the peer to
   the same commit (`docs/preview-packages.md`), which is a preview concern,
   not a version-coupling one. Revisit if the peer range ever becomes exact.
-- `create-agent-bundle` versions independently; its templates pin
-  `agent-bundle` explicitly rather than through a workspace range.
+- `create-agent-bundle` versions independently, but its optional
+  `workspace:*` peers on `agent-bundle` and `@agent-bundle/runtime` are the
+  release pairing record. `pnpm pack` rewrites them to the two exact published
+  versions; the installed scaffolder reads that record instead of assuming
+  the packages share a version.
 - `updateInternalDependencies: "patch"` with
   `bumpVersionsWithWorkspaceProtocolOnly: true`: only `workspace:` ranges
-  between publishable packages trigger dependent patch bumps. The one such
-  range is `@agent-bundle/runtime`'s `rsc-markdown-stream: workspace:^`, so
-  a `rsc-markdown-stream` release also patch-bumps the runtime and
-  re-publishes it with the new caret (`pnpm publish` rewrites `workspace:^`
-  to `^<version>` in the shipped manifest).
+  between publishable packages trigger dependent patch bumps. The runtime's
+  `rsc-markdown-stream: workspace:^` edge republishes it with the renderer's
+  new caret. The scaffolder's two optional `workspace:*` peers patch-bump and
+  republish it whenever either member of its exact release pair moves.
 - `access` stays `"restricted"` at the repository level until the release
   owner decides the npm package names and access policy
   (`docs/preview-packages.md`). `@agent-bundle/runtime` and

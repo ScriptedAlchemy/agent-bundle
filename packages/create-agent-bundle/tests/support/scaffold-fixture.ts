@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,6 +10,7 @@ import {
   cachedNpmInstallArguments,
   installedEnvironment,
   npmInstallArguments,
+  packOutputFromJson,
   sharedPackedTarball,
 } from '../../../agent-bundle/tests/support/shared-pack.ts';
 
@@ -17,9 +18,12 @@ const execFile = promisify(executeFile);
 
 interface PackedFixture {
   readonly frameworkTarball: string;
+  readonly frameworkVersion: string;
   readonly markdownStreamTarball: string;
   readonly root: string;
   readonly runnerRoot: string;
+  readonly runtimeTarball: string;
+  readonly runtimeVersion: string;
   readonly scaffolderBin: string;
 }
 
@@ -35,9 +39,9 @@ interface PackedFixture {
 const packFixture = async (): Promise<PackedFixture> => {
   const root = await mkdtemp(join(tmpdir(), 'create-agent-bundle-e2e-'));
   const [
-    { tarball: frameworkTarball },
+    { packOutput: frameworkPack, tarball: frameworkTarball },
     { tarball: scaffolderTarball },
-    { tarball: runtimeTarball },
+    { packOutput: runtimePack, tarball: runtimeTarball },
     { tarball: markdownStreamTarball },
   ] = await Promise.all([
     sharedPackedTarball('agent-bundle'),
@@ -47,9 +51,9 @@ const packFixture = async (): Promise<PackedFixture> => {
   ]);
   const pairedRuntimeTarball = join(
     dirname(frameworkTarball),
-    basename(frameworkTarball).replace(/^agent-bundle-/u, 'agent-bundle-runtime-'),
+    basename(runtimeTarball),
   );
-  await copyFile(runtimeTarball, pairedRuntimeTarball);
+  if (pairedRuntimeTarball !== runtimeTarball) await copyFile(runtimeTarball, pairedRuntimeTarball);
 
   const runnerRoot = join(root, 'runner');
   await mkdir(runnerRoot, { recursive: true });
@@ -60,9 +64,12 @@ const packFixture = async (): Promise<PackedFixture> => {
   });
   return {
     frameworkTarball,
+    frameworkVersion: frameworkPack.version,
     markdownStreamTarball,
     root,
     runnerRoot,
+    runtimeTarball,
+    runtimeVersion: runtimePack.version,
     scaffolderBin: join(runnerRoot, 'node_modules', '.bin', 'create-agent-bundle'),
   };
 };
@@ -113,15 +120,47 @@ export const scaffoldProject = async (
   return join(runnerRoot, projectName);
 };
 
+export const scaffoldReleasePairing = async (): Promise<Readonly<{
+  framework: string;
+  runtime: string;
+}>> => {
+  const { frameworkVersion: framework, runtimeVersion: runtime } = await fixture();
+  return { framework, runtime };
+};
+
 export const scaffoldProjectWithMismatchedRuntime = async (projectName: string): Promise<void> => {
-  const { frameworkTarball, root, runnerRoot, scaffolderBin } = await fixture();
+  const {
+    frameworkTarball,
+    frameworkVersion,
+    root,
+    runnerRoot,
+    runtimeTarball,
+    runtimeVersion,
+    scaffolderBin,
+  } = await fixture();
   const mismatchedDirectory = join(root, 'mismatched-pair');
-  const mismatchedFramework = join(mismatchedDirectory, 'agent-bundle-mismatched.tgz');
-  const mismatchedRuntime = join(mismatchedDirectory, 'agent-bundle-runtime-mismatched.tgz');
+  const mismatchedFramework = join(mismatchedDirectory, `agent-bundle-${frameworkVersion}.tgz`);
+  const mismatchedRuntime = join(mismatchedDirectory, `agent-bundle-runtime-${runtimeVersion}.tgz`);
   await mkdir(mismatchedDirectory, { recursive: true });
+  const extracted = join(mismatchedDirectory, 'runtime');
+  await mkdir(extracted);
+  await execFile('tar', ['-xzf', runtimeTarball, '-C', extracted]);
+  const runtimeRoot = join(extracted, 'package');
+  const manifestPath = join(runtimeRoot, 'package.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { version: string };
+  manifest.version = '999.0.0';
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const { stdout } = await execFile('npm', [
+    'pack',
+    '--json',
+    '--ignore-scripts',
+    '--pack-destination',
+    mismatchedDirectory,
+  ], { cwd: runtimeRoot, env: installedEnvironment() });
+  const repackedRuntime = join(mismatchedDirectory, packOutputFromJson(stdout).filename);
   await Promise.all([
     copyFile(frameworkTarball, mismatchedFramework),
-    copyFile(frameworkTarball, mismatchedRuntime),
+    copyFile(repackedRuntime, mismatchedRuntime),
   ]);
 
   await execFile(scaffolderBin, [

@@ -72,6 +72,14 @@ npm install --save-dev agent-bundle
 npm create agent-bundle@latest my-plugin
 ```
 
+The packed `create-agent-bundle` release records its compatible `agent-bundle` and
+`@agent-bundle/runtime` versions as optional peers. `npm create` pins those recorded versions
+independently instead of copying the compiler version onto the runtime package. For example, the
+compiler may be `0.2.0` while its runtime is `0.1.0`. A runtime-bearing template rejects a
+`--framework-version` outside that release pair; install the matching scaffolder release instead.
+Local compiler tarballs use the recorded runtime version in the sibling tarball name and verify
+both packed manifests before writing the project.
+
 The first npm release will use npm package provenance. Until the release owner picks the final
 package name and license, pkg.pr.new previews are the release channel.
 

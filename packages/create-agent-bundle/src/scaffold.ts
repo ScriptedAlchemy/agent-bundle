@@ -3,7 +3,11 @@ import type { PlatformError } from 'effect/PlatformError';
 
 import { liftTry } from './effect/lift.ts';
 import { defaultTargets, UsageError, type TargetName } from './options.ts';
-import { assertLocalFrameworkTarball, validatedRuntimeSpecForFramework } from './framework.ts';
+import {
+  assertLocalFrameworkTarball,
+  type FrameworkRuntimePairing,
+  validatedRuntimeSpecForFramework,
+} from './framework.ts';
 
 /**
  * The literal project name every template is written under. Templates stay
@@ -35,6 +39,7 @@ const installableHostNames: readonly TargetName[] = ['claude', 'codex', 'cursor'
 export interface ScaffoldRequest {
   readonly frameworkSpec: string;
   readonly packageName: string;
+  readonly pairing?: FrameworkRuntimePairing;
   readonly pluginName: string;
   readonly targetDirectory: string;
   readonly targets: readonly TargetName[];
@@ -176,7 +181,11 @@ export const scaffold = Effect.fnUntraced(function* (
     .some((section) => section?.['@agent-bundle/runtime'] === 'workspace:*');
   let runtimeSpec: string | undefined;
   if (usesWorkspaceRuntime) {
-    runtimeSpec = yield* validatedRuntimeSpecForFramework(request.frameworkSpec, request.targetDirectory);
+    runtimeSpec = yield* validatedRuntimeSpecForFramework(
+      request.frameworkSpec,
+      request.targetDirectory,
+      request.pairing,
+    );
   } else {
     yield* assertLocalFrameworkTarball(request.frameworkSpec, request.targetDirectory);
   }

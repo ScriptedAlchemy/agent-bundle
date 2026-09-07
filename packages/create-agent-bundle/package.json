@@ -52,5 +52,17 @@
     "@types/node": "26.4.1",
     "effect": "4.0.0-rc.112",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f"
+  },
+  "peerDependencies": {
+    "@agent-bundle/runtime": "workspace:*",
+    "agent-bundle": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@agent-bundle/runtime": {
+      "optional": true
+    },
+    "agent-bundle": {
+      "optional": true
+    }
   }
 }
