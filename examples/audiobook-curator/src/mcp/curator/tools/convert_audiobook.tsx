@@ -16,7 +16,6 @@ export const config = {
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
 };
-// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   apply: z.boolean().optional(),
   artwork: z.string().min(1).max(4096).optional(),

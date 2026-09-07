@@ -15,7 +15,6 @@ export const config = {
   description: 'Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default.',
   exitCode: 'result',
 };
-// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   all: z.boolean().optional(),
   attempts: z.number().int().min(1).max(10).optional(),

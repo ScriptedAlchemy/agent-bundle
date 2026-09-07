@@ -14,7 +14,6 @@ export const config = {
   annotations: { readOnlyHint: false },
   description: 'Select strongest source encodings while retaining alternates and duration review evidence.',
 };
-// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   inventory: z.string().min(1).max(4096),
   report: z.string().min(1).max(4096).optional(),

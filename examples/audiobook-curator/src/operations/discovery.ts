@@ -27,10 +27,6 @@ const inspectedFileSchema = z.object({
   bytes: z.number().int().nonnegative(),
   path: pathSchema,
 }).strict();
-const inspectInputSchema = z.object({
-  maxFiles: z.number().int().min(1).max(256).optional(),
-  root: pathSchema,
-}).strict();
 const inspectResultSchema = z.object({
   files: z.array(inspectedFileSchema).max(256),
   operation: z.literal('inspect'),
@@ -42,7 +38,6 @@ export const discoveryOperations = Object.freeze({
   inspect: {
     handler: inspectSources,
     id: 'inspect',
-    inputSchema: inspectInputSchema,
     resultSchema: inspectResultSchema,
   },
   inventory: {
@@ -55,7 +50,6 @@ export const discoveryOperations = Object.freeze({
       return receipt;
     },
     id: 'inventory',
-    inputSchema: z.object({ report: pathSchema.optional(), source: pathSchema, strict: z.boolean().optional() }).strict(),
     resultSchema: inventoryResultSchema,
   },
   libraryAudit: {
@@ -68,12 +62,6 @@ export const discoveryOperations = Object.freeze({
       return receipt;
     },
     id: 'library-audit',
-    inputSchema: z.object({
-      concurrency: z.number().int().min(1).max(8).optional(),
-      report: pathSchema.optional(),
-      sources: z.array(pathSchema).min(1).max(64),
-      strict: z.boolean().optional(),
-    }).strict(),
     resultSchema: libraryResultSchema,
   },
   select: {
@@ -87,7 +75,6 @@ export const discoveryOperations = Object.freeze({
       return receipt;
     },
     id: 'select',
-    inputSchema: z.object({ inventory: pathSchema, report: pathSchema.optional() }).strict(),
     resultSchema: selectionResultSchema,
   },
 });

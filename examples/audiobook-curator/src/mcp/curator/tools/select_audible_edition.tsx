@@ -15,7 +15,6 @@ export const config = {
   annotations: { readOnlyHint: false },
   description: 'Record an explicit human-reviewed Audible edition choice from a candidate report.',
 };
-// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   candidate: z.number().int().min(1).max(500),
   candidates: z.string().min(1).max(4096),

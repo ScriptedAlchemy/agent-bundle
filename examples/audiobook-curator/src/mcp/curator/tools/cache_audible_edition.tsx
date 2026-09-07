@@ -13,7 +13,6 @@ export const config = {
   annotations: { openWorldHint: true, readOnlyHint: false },
   description: 'Cache a reviewed Audible edition and retained source evidence.',
 };
-// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   asin: z.string().min(1).max(64),
   attempts: z.number().int().min(1).max(10).optional(),

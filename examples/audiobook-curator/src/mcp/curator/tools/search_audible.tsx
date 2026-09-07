@@ -15,7 +15,6 @@ export const config = {
   description: 'Search Audible regions and return ranked identity evidence requiring human review.',
   exitCode: 'result',
 };
-// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   attempts: z.number().int().min(1).max(10).optional(),
   author: z.string().min(1).max(512).optional(),

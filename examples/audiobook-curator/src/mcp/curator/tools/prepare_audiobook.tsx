@@ -13,7 +13,6 @@ export const config = {
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan an M4B output, or apply the plan only when apply is explicitly true.',
 };
-// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   apply: z.boolean().optional(),
   outputName: z.string().min(5).max(204).optional(),

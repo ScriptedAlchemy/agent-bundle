@@ -46,12 +46,6 @@ export const audibleOperations = Object.freeze({
   audibleSearch: {
     handler: searchAudible,
     id: 'audible-search',
-    inputSchema: z.object({
-      attempts: z.number().int().min(1).max(10).optional(), author: z.string().min(1).max(512).optional(),
-      durationSeconds: z.number().positive().optional(), limit: z.number().int().min(1).max(50).optional(),
-      narrator: z.string().min(1).max(512).optional(), regions: z.array(audibleRegionSchema).min(1).max(10).optional(),
-      report: pathSchema.optional(), title: z.string().min(1).max(1024),
-    }).strict(),
     resultSchema: audibleSearchResultSchema,
   },
   audibleSelect: {
@@ -69,16 +63,11 @@ export const audibleOperations = Object.freeze({
       return receipt;
     },
     id: 'audible-select',
-    inputSchema: z.object({ candidate: z.number().int().min(1).max(500), candidates: pathSchema, note: z.string().max(4096).optional(), receipt: pathSchema.optional() }).strict(),
     resultSchema: audibleSelectResultSchema,
   },
   audibleCache: {
     handler: cacheAudibleEdition,
     id: 'audible-cache',
-    inputSchema: z.object({
-      asin: z.string().min(1).max(64), attempts: z.number().int().min(1).max(10).optional(), cacheDirectory: pathSchema,
-      receipt: pathSchema.optional(), region: audibleRegionSchema.optional(),
-    }).strict(),
     resultSchema: audibleCacheResultSchema,
   },
 });

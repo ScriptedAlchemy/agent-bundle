@@ -13,7 +13,6 @@ export const config = {
   annotations: { readOnlyHint: true },
   description: 'Inspect a bounded directory tree and report supported audiobook media without changing it.',
 };
-// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   maxFiles: z.number().int().min(1).max(256).optional(),
   root: z.string().min(1).max(4096),
