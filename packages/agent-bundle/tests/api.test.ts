@@ -2080,7 +2080,7 @@ it('documents a versioned MCP App resource URI accepted by source validation', a
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-readme-uri-parent-'));
   const root = join(parent, 'project');
   const documentedConfig = await readFile(
-    join(process.cwd(), 'examples', 'mcp-app', 'agent-bundle.config.ts'),
+    join(process.cwd(), 'examples', 'mcp-app', 'src', 'mcp', 'status', 'apps', 'status.ts'),
     'utf8',
   );
   const resourceUri = /resourceUri: '([^']+)'/u.exec(documentedConfig)?.[1];

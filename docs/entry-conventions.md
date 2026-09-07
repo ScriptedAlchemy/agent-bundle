@@ -1841,7 +1841,6 @@ and the host runs the bound server's `find`, or fails. Neither is a compiler
 diagnostic today. Without the augmentation (no tool routes, a handwritten
 server, a program that omits the file) the id is any `tool:<server>/<name>`
 string and input and result are `unknown`; a view may then augment
-`AppRegister` itself with a structural map, as
-`examples/mcp-app/views/status-panel.ts` does. There is no generated
+`AppRegister` itself with a structural map. There is no generated
 `agent-bundle/routes/client` value module: the wire name is derivable from the
 id, so a runtime table would duplicate it.

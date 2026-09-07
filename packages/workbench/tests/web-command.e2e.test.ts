@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
@@ -30,6 +30,7 @@ const healthyCompilerStatus = {
   status: 'healthy',
   summary: 'Compiler service is ready for release.',
 } as const;
+const readinessPolicy = 'Issue `ready` only for a healthy service with current evidence. A degraded service needs an explicit mitigation decision; a blocked service cannot pass; and missing evidence requires a new check rather than an assumption.';
 const seedElementPattern = new RegExp(`<script\\b(?=[^>]*\\btype="application/json")(?=[^>]*\\bid="${WEB_HOST_SEED_ELEMENT_ID}")[^>]*>`, 'u');
 const agentBundleImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"]agent-bundle(?:\/[^'"]*)?['"]/u;
 const effectImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"]effect(?:\/[^'"]*)?['"]/u;
@@ -119,15 +120,20 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     const artifactRoot = join(example.root, 'artifact');
     const built = await build({ output: artifactRoot, root: example.root });
     expect(built.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
+    // The artifact is the whole product: the bin serves the App with no source beside it.
+    await rm(join(example.root, 'src'), { force: true, recursive: true });
     const bin = join(artifactRoot, 'bin', `${pluginName}.mjs`);
     await expect(stat(bin)).resolves.toMatchObject({});
     const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly executables: { readonly mcpServers: readonly Readonly<Record<string, unknown>>[] };
       readonly web?: unknown;
     };
+    // The generated server: one entry plus its flight worker, both under mcp/.
     const mcpEntries = (await readdir(join(artifactRoot, 'mcp'))).filter((name) => name.endsWith('.mjs')).sort();
-    expect(mcpEntries).toHaveLength(1);
-    expect(manifest.executables.mcpServers.map((server) => server['launch'])).toEqual([{ args: [], entry: `mcp/${mcpEntries[0]!}`, env: {} }]);
+    expect(mcpEntries).toHaveLength(2);
+    const [launch] = manifest.executables.mcpServers.map((server) => server['launch'] as { entry: string; worker: string });
+    expect(launch).toMatchObject({ args: [], env: {} });
+    expect(mcpEntries).toEqual([launch!.worker, launch!.entry].map((entry) => entry.slice('mcp/'.length)).sort());
     expect(manifest.web).toEqual({
       apps: [{
         allow: ['call-tool'],
@@ -229,22 +235,21 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     await expect(appFrame.locator('#checks li')).toHaveCount(healthyCompilerStatus.checks.length);
     expect(await appFrame.content()).not.toContain(seed.token);
 
-    // Bridge: `#read-policy` reads `ui://mcp-app-example/readiness-policy`,
-    // which examples/mcp-app/src/mcp/status.ts does not register, so the
-    // relayed error reply is what fills `#bridge-outcome` — a relay that never
-    // answered would leave it empty. `#refresh-status` calls `refresh-status`
-    // (also unregistered) under the pre-approved `call-tool` capability: the
-    // reply arrives without the consent panel ever showing.
+    // Bridge: `#read-policy` reads the generated server's readiness-policy
+    // resource route, and `#refresh-status` calls `show-status` again for the
+    // service on screen under the pre-approved `call-tool` capability: both
+    // replies arrive from the real server without the consent panel showing.
     const consent = page.getByLabel('MCP App consent');
     await expect(consent).toBeHidden();
     const bridgeOutcome = appFrame.locator('#bridge-outcome');
     await expect(bridgeOutcome).toBeEmpty();
     await appFrame.locator('#read-policy').click();
-    await expect(bridgeOutcome).toHaveText('Readiness policy unavailable.', { timeout: browserTimeout });
+    await expect(bridgeOutcome).toHaveText(readinessPolicy, { timeout: browserTimeout });
     await expect.poll(() => relayed('resources/read'), { timeout: browserTimeout }).toBe(true);
     await appFrame.locator('#refresh-status').click();
-    await expect(bridgeOutcome).toHaveText('Refresh unavailable.', { timeout: browserTimeout });
+    await expect(bridgeOutcome).toHaveText('Status refreshed.', { timeout: browserTimeout });
     await expect.poll(() => relayed('tools/call'), { timeout: browserTimeout }).toBe(true);
+    await expect(appFrame.locator('#status')).toHaveText(healthyCompilerStatus.status);
     await expect(consent).toBeHidden();
     await expect(hostStatus).toHaveText(servingStatus);
     await expect(hostStatus).toHaveAttribute('data-tone', 'ok');

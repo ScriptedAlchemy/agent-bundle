@@ -179,20 +179,33 @@ describe('the Workbench surface of the audiobook curator', () => {
 });
 
 /**
- * Configured-only surfaces have no compiled route catalog, but authored
- * hooks, scripts, and Skills still appear as application leaves.
+ * The smaller examples: a conventional graph of three routes, and a
+ * configured-only surface whose authored Skills and rules still appear as
+ * application leaves without any compiled route catalog.
  */
-describe('the Workbench surface of the configured-only examples', () => {
-  it('keeps configured leaves while reporting an empty compiled graph for the MCP App example', async () => {
+describe('the Workbench surface of the smaller examples', () => {
+  it('projects the MCP App example as one generated server with a tool, a resource, and an App', async () => {
     const surface = await inspectWorkbenchSurface({ root: exampleRoot('mcp-app') });
 
-    expect(surface.catalog.routeCount).toBe(0);
-    expect(surface.catalog.groups).toEqual([]);
+    expect(surface.catalog.routeCount).toBe(3);
+    expect(surface.catalog.groups.map((group) => [group.kind, group.entries.map((entry) => entry.route.id)])).toEqual([
+      ['tool', ['tool:status/show-status']],
+      ['resource', ['resource:status/readiness-policy']],
+      ['app', ['app:status/status']],
+    ]);
     expect(surface.catalog.stateDefinition).toBeUndefined();
     expect(surface.application.groups.map((group) => group.kind)).toEqual(['mcp', 'events', 'scripts', 'skills']);
     expect(applicationGroup(surface, 'mcp')).toMatchObject({
       label: 'MCP',
-      servers: [expect.objectContaining({ label: 'status', mode: 'stdio', subgroups: [] })],
+      servers: [expect.objectContaining({
+        label: 'status',
+        mode: 'generated',
+        subgroups: [
+          expect.objectContaining({ label: 'Tools', leaves: [expect.objectContaining({ execution: 'invoke', label: 'show-status' })] }),
+          expect.objectContaining({ label: 'Resources', leaves: [expect.objectContaining({ execution: 'invoke', label: 'readiness-policy' })] }),
+          expect.objectContaining({ label: 'Apps', leaves: [expect.objectContaining({ execution: 'preview', label: 'status' })] }),
+        ],
+      })],
     });
     expect(applicationGroup(surface, 'events')).toMatchObject({ label: 'Events / Hooks' });
     expect(applicationGroup(surface, 'scripts')).toMatchObject({ label: 'Scripts' });

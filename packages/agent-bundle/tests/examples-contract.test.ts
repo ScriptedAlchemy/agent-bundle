@@ -117,7 +117,19 @@ it('publishes the MCP App example service readiness across targets and returns d
       root,
       server: 'status',
       target: 'portable',
-    })).resolves.toMatchObject({ tools: [{ name: 'show-status' }] });
+    })).resolves.toMatchObject({
+      // The listing binds the tool to its App; the generated server stamps
+      // the route's `_meta.ui` there, where MCP Apps hosts read it.
+      tools: [{ _meta: { ui: { resourceUri: 'ui://mcp-app-example/status.html' } }, name: 'show-status' }],
+    });
+    // One generated server, three conventional routes: the App, the readiness
+    // policy resource, and the tool that opens the App (#726).
+    const manifest = JSON.parse(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8')) as {
+      readonly routes: { readonly servers: readonly { readonly mode: string; readonly routes: readonly { readonly id: string }[] }[] };
+    };
+    expect(manifest.routes.servers.map((server) => [server.mode, server.routes.map((route) => route.id)])).toEqual([
+      ['generated', ['app:status/status', 'resource:status/readiness-policy', 'tool:status/show-status']],
+    ]);
     await expect(invokeMcp({
       artifact: output,
       input: { service: 'payments-api' },
@@ -127,7 +139,6 @@ it('publishes the MCP App example service readiness across targets and returns d
       tool: 'show-status',
     })).resolves.toMatchObject({
       result: {
-        _meta: { ui: { resourceUri: 'ui://mcp-app-example/status.html' } },
         content: [{ text: 'Payment latency is above the release threshold.', type: 'text' }],
         structuredContent: {
           checks: [
@@ -143,7 +154,7 @@ it('publishes the MCP App example service readiness across targets and returns d
     expect(inspected).toMatchObject({
       model: {
         hooks: [{ event: 'sessionStart', targets: ['claude', 'codex'] }],
-        mcpApps: [{ name: 'status', targets: ['portable'] }],
+        mcpApps: [{ name: 'status', targets: ['claude', 'codex', 'portable'] }],
         mcpServers: [{ name: 'status', targets: ['claude', 'codex', 'portable'] }],
         scripts: [{ name: 'check-service-fixture', targets: ['claude', 'codex', 'portable'] }],
         skills: [{ name: 'service-readiness', targets: ['claude', 'codex', 'portable'] }],

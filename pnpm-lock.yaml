@@ -138,9 +138,9 @@ importers:
 
   examples/mcp-app:
     devDependencies:
-      '@modelcontextprotocol/server':
-        specifier: 2.0.0
-        version: 2.0.0
+      '@agent-bundle/runtime':
+        specifier: workspace:*
+        version: link:../../packages/rsc-runtime
       '@rstest/browser':
         specifier: 0.11.12
         version: 0.11.12(@rstest/core@0.11.12)(playwright@1.62.1)
@@ -150,12 +150,18 @@ importers:
       '@rstest/playwright':
         specifier: 0.11.12
         version: 0.11.12(@rstest/core@0.11.12)(playwright@1.62.1)
+      '@types/react':
+        specifier: 19.2.18
+        version: 19.2.18
       agent-bundle:
         specifier: workspace:*
         version: link:../../packages/agent-bundle
       playwright:
         specifier: 1.62.1
         version: 1.62.1
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
       zod:
         specifier: 4.5.4
         version: 4.5.4

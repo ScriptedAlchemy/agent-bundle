@@ -10,34 +10,38 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 
 - **在仓库根目录运行：** `pnpm example:mcp-app`
 - **包名：** `@agent-bundle-example/mcp-app`
-- **公开依赖：** `agent-bundle`（`workspace:*`）、`@modelcontextprotocol/server`、`zod`；浏览器端 App
+- **公开依赖：** `agent-bundle`（`workspace:*`）、`@agent-bundle/runtime`、`react`、`zod`；浏览器端 App
   测试还用到 `@rstest/browser`、`@rstest/core`、`@rstest/playwright` 与 `playwright`
-- **Target：** `portable`、`codex`、`claude`——MCP App 只为 `portable` 声明
+- **Target：** `portable`、`codex`、`claude`——每个 target 都带有 `status` 服务器及其 App
 - **凭据：** 不需要——eval 与夹具检查只读取签入的数据
 - **源码：** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
 
 ## 它证明什么
 
-- **MCP 入口约定。** `src/mcp/status.ts` 默认导出 `status` 服务器工厂，而配置没有声明服务器 `entry`——构建
-  通过 `src/mcp/<server-id>.ts` 约定发现它。见
-  [MCP 服务器与 MCP App](../guide/authoring/mcp.mdx)。
-- **生成的 stdio 生命周期不由你来写。** 构建会把那个工厂包进生命周期外壳：console 重定向到 stderr 的
+- **路由就是注册。** 配置里没有写任何服务器、工具、资源或 App。`status` 服务器之所以存在，是因为
+  `src/mcp/status/**` 下有三个路由模块：`tools/show-status.tsx`（一个服务的健康状况）、
+  `resources/readiness-policy.tsx`（位于 `policy://mcp-app-example/readiness` 的发布规则），以及
+  `apps/status.ts` + `status.html`（工具通过 `_meta.ui.resourceUri` 打开的 App，用
+  `appResourceUri('status')` 只拼写一次）。没有手写的 `McpServer`、没有 `registerTool`，也不依赖
+  `@modelcontextprotocol/server`。见[MCP 服务器与 MCP App](../guide/authoring/mcp.mdx)。
+- **生成的 stdio 生命周期不由你来写。** 构建输出服务器入口及其生命周期外壳：console 重定向到 stderr 的
   守卫、信号处理、stdin EOF 退出、有界关停与心跳。
-- **MCP App 是编译出来的资源，不是被服务的页面。** 声明的 app 限定在 `portable`，因此只要选中了该投影
-  它就会被编译——只编译一次，位于产物根目录的 `mcp-apps/status.html`，带有稳定的 `resourceUri`——并被
-  内联进生成的 `status` 服务器入口，而所有选中宿主都从同一个根目录启动这个入口。
-- **降级证据是一等公民。** `status` 服务器提供不可变的 `compiler` 与 `payments-api` 健康记录，而
-  `payments-api` 故意返回降级的延迟数据。有意思的输出是一项被如实报告的失败检查，而不是一张全绿截图。
+- **MCP App 是编译出来的资源，不是被服务的页面。** App 只编译一次，位于产物根目录的
+  `mcp-apps/status.html`，带有稳定的 `resourceUri`，并被内联进生成的 `status` 服务器入口，而所有选中
+  宿主都从同一个根目录启动这个入口。
+- **降级证据是一等公民。** `src/service-status.ts` 持有 schema 以及 `compiler` 与 `payments-api`
+  健康记录，而 `payments-api` 故意返回降级的延迟数据。有意思的输出是一项被如实报告的失败检查，而不是
+  一张全绿截图。
 - **浏览器表面自成一个证明级别。** `tests/browser-app/status-panel.browser.test.ts` 通过
   `agent-bundle/test/browser` 把生产编译出的 App HTML 挂载到产品桥接之上——也就是
   [测试](../guide/development/testing.mdx)中的 `browser-app` 级别。
-- **App 是桥接的客户端，而不是自带 transport。** `views/status-panel.ts` 从 `agent-bundle/app`
+- **App 是桥接的客户端，而不是自带 transport。** `src/mcp/status/apps/status.ts` 从 `agent-bundle/app`
   创建客户端，通过 `onToolInput` / `onToolResult` 接收打开 App 的 `show-status` 输入与结构化结果，并用
-  `onToolError` 展示失败或缺少结构化数据的打开结果，
-  通过 `call('tool:status/refresh-status', …)` 刷新状态，并通过
-  `request('resources/read', …)` 读取就绪度策略。`status` 服务器是手写的，因此不存在生成的路由
-  契约；视图通过结构化的 `AppRegister` augmentation 自行为两条工具声明类型。视图中不再保留
-  JSON-RPC id、pending map、`postMessage('*')` 或 `structuredContent` 解包逻辑。详见
+  注册在 `tool:status/show-status` 上的 `onToolError` 展示失败或缺少结构化数据的打开结果（当宿主的
+  initialize 结果指定 `show-status` 为打开工具时送达）。**Refresh status** 为屏幕上的服务再次调用同一个
+  `show-status` 工具，**Read policy** 通过 `request('resources/read', …)` 读取 `readiness-policy`
+  资源。路由 id、输入与结果由生成的 `.agent-bundle/routes.d.ts` 提供类型，因此 App 自己不声明任何契约
+  表。视图中不再保留 JSON-RPC id、pending map、`postMessage('*')` 或 `structuredContent` 解包逻辑。详见
   [带类型的 App 客户端](../guide/authoring/mcp.mdx#带类型的-app-客户端)。
 - **`web` 表面装在产物里。** 该示例配置了
   `web: { apps: [{ app: 'status/status', tool: 'show-status', allow: ['call-tool'] }] }`，
@@ -55,8 +59,10 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 
 | 路径 | 是什么 |
 | --- | --- |
-| `src/mcp/status.ts` | 按约定被发现的 `status` 服务器工厂，提供那两条健康记录。 |
-| `views/status-panel.ts` / `views/status-panel.html` | 编译为 `mcp-apps/status.html` 的 MCP App 入口与模板。 |
+| `src/service-status.ts` | 服务 schema 与两条健康记录。 |
+| `src/mcp/status/tools/show-status.tsx` | `show-status` 工具路由；其 `_meta.ui.resourceUri` 打开 App。 |
+| `src/mcp/status/resources/readiness-policy.tsx` | `policy://mcp-app-example/readiness` 资源路由。 |
+| `src/mcp/status/apps/status.ts` / `status.html` | 编译为 `mcp-apps/status.html` 的 MCP App 入口与模板。 |
 | `src/skills/service-readiness/` | 做出服务就绪度判断所需的证据、检查与报告。 |
 | `src/hooks/session-start.ts` | 把就绪度工作流加入兼容宿主的会话。 |
 | `src/scripts/check-service-fixture.ts` | 在发布演练之前校验签入的编译器夹具。 |
@@ -70,8 +76,9 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
    以检视规范输入、返回的上下文，以及 Claude 投影。
 3. 在 **Application → Scripts** 下选中 `check-service-fixture` 并运行。输出的检查器会解析自己输出模块
    旁边打包好的状态夹具，因此它的成功与 shell 的工作目录无关。
-4. 在 **Application → MCP → status → Apps** 下选中 `status` App。它的实时预览占据路由工作区。
-   **Advanced → Artifact** 显示复合插件根目录，无论选中哪个 target，`mcp-apps/status.html` 都出现在
+4. 在 **Application → MCP → status → Apps** 下选中 `status` App。工作区会针对已发布的构建打开一个会话，
+   并把 `show-status` 绑定到该 App；选择一个服务并点击 **Call tool and preview**，面板就会渲染在工具结果
+   旁边。**Advanced → Artifact** 显示复合插件根目录，无论选中哪个 target，`mcp-apps/status.html` 都出现在
    这里。
 5. 在存在两次 eval 运行之前，**Advanced → Evals → Compare** 会刻意显示
    `At least two recorded runs are needed before a comparison can be aligned.`——这是精确的空状态，
@@ -79,7 +86,8 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 6. 打开 **Advanced → Protocol**，选择 portable 与 `status` 服务器，打开会话、列出工具、选择
    `show-status`、选中 `payments-api` 并调用它。调用历史会显示降级摘要，以及标注了 Availability 与
    P95 latency 的检查，其中后者失败。打开 App 预览：渲染出的面板通过 MCP Apps 桥接展示同一条记录，
-   并带一个以文字标注的琥珀色 `degraded` 指示。检视协议轨迹、使用 **Restart MCP session**，然后关闭、
+   并带一个以文字标注的琥珀色 `degraded` 指示；**Refresh status** 与 **Read policy** 调用的是真实的工具
+   与资源。检视协议轨迹、使用 **Restart MCP session**，然后关闭、
    重置并重新打开会话，以演练整个生命周期。
    随后打开 **Trace**，查看通过会话 id 与 JSON-RPC 请求 id 关联起来的 MCP 请求、响应、通知与会话活动。
 7. 在 **Advanced → Evals → Runs** 中选中 `mcp-app-status`，运行 `status-is-healthy`，查看归属于

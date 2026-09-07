@@ -11,7 +11,7 @@ type BindingOperations = MountBrowserAppOptions['operations'];
 type ToolCallResult = Awaited<ReturnType<BindingOperations['callTool']>>;
 
 /**
- * The opening tool as `src/mcp/status.ts` registers it. Framework hosts put
+ * The opening tool, `src/mcp/status/tools/show-status.tsx`. Framework hosts put
  * the leased tool definition in the initialize `hostContext.toolInfo`, and the
  * App client delivers `onToolInput`/`onToolResult` only to listeners on that
  * tool's route, so the harness has to open the panel with `show-status` for
@@ -164,7 +164,8 @@ it('mounts the compiled panel, initializes the bridge, and renders the published
     'Availabilitypassing',
     'P95 latencyfailing',
   ]);
-  expect(app.provenance).toMatchObject({ proofLevel: 'browser-app', target: 'portable' });
+  expect(app.provenance).toMatchObject({ proofLevel: 'browser-app' });
+  expect(['claude', 'codex', 'portable']).toContain(app.provenance.target);
   expect(initializeResult(app)).toMatchObject({ hostContext: { toolInfo: { tool: { name: 'show-status' } } } });
   expect(app.traffic.some(({ message }) => message.method === 'ui/notifications/tool-input')).toBe(true);
   expect(app.traffic.some(({ message }) => message.method === 'ui/notifications/tool-result')).toBe(true);
@@ -191,17 +192,18 @@ it('round-trips a resource read from the real App through binding operations', a
   app.document.querySelector<HTMLButtonElement>('#read-policy')!.click();
   await waitFor(() => app.document.querySelector('#bridge-outcome')?.textContent?.includes('passing checks') === true);
 
-  expect(reads).toEqual(['ui://mcp-app-example/readiness-policy']);
+  expect(reads).toEqual(['policy://mcp-app-example/readiness']);
   expect(appToHostMethods(app)).toContain('resources/read');
   expect(app.traffic.some(({ message }) => (
     message.method === 'resources/read'
-    && messageParam(message, 'uri') === 'ui://mcp-app-example/readiness-policy'
+    && messageParam(message, 'uri') === 'policy://mcp-app-example/readiness'
   ))).toBe(true);
 });
 
 it('holds a tool call for consent, resumes approval once, and denies without calling the binding', async () => {
   const approvedCalls: string[] = [];
   const approved = await mountStatus({ operations: operations({ calls: approvedCalls }) });
+  await waitFor(() => approved.document.querySelector('#status')?.textContent === 'degraded');
   approved.document.querySelector<HTMLButtonElement>('#refresh-status')!.click();
   await waitFor(() => approved.pendingConsentChallenges.length === 1);
 
@@ -210,15 +212,16 @@ it('holds a tool call for consent, resumes approval once, and denies without cal
   expect(approvedCalls).toEqual([]);
   await expect(approved.decideConsent(challenge.id, true)).resolves.toBe(true);
   await waitFor(() => approved.document.querySelector('#bridge-outcome')?.textContent === 'Status refreshed.');
-  expect(approvedCalls).toEqual(['refresh-status']);
+  expect(approvedCalls).toEqual(['show-status']);
   expect(appToHostMethods(approved)).toContain('tools/call');
   expect(approved.traffic.some(({ message }) => (
     message.method === 'tools/call'
-    && messageParam(message, 'name') === 'refresh-status'
+    && messageParam(message, 'name') === 'show-status'
   ))).toBe(true);
 
   const deniedCalls: string[] = [];
   const denied = await mountStatus({ operations: operations({ calls: deniedCalls }) });
+  await waitFor(() => denied.document.querySelector('#status')?.textContent === 'degraded');
   denied.document.querySelector<HTMLButtonElement>('#refresh-status')!.click();
   await waitFor(() => denied.pendingConsentChallenges.length === 1);
   await expect(denied.decideConsent(denied.pendingConsentChallenges[0]!.id, false)).resolves.toBe(true);
@@ -238,12 +241,13 @@ it('fails closed when a consented binding operation is unavailable', async () =>
       },
     }),
   });
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'degraded');
   app.document.querySelector<HTMLButtonElement>('#refresh-status')!.click();
   await waitFor(() => app.pendingConsentChallenges.length === 1);
   await app.decideConsent(app.pendingConsentChallenges[0]!.id, true);
   await waitFor(() => app.document.querySelector('#bridge-outcome')?.textContent === 'Refresh unavailable.');
 
-  expect(calls).toEqual(['refresh-status']);
+  expect(calls).toEqual(['show-status']);
   expect(app.traffic.some(({ message }) => message.error?.code === -32000)).toBe(true);
   expect(app.document.querySelector('#bridge-outcome')?.textContent).not.toBe('Status refreshed.');
 });
@@ -254,7 +258,8 @@ const openingToolResults = (app: MountedBrowserApp): readonly BrowserAppTraffic[
   ));
 
 it('exits checking and renders an unavailable outcome when the opening result is an error', async () => {
-  const app = await mountStatus({ toolResult: failedStatusResult });
+  const calls: string[] = [];
+  const app = await mountStatus({ operations: operations({ calls }), toolResult: failedStatusResult });
   await waitFor(() => app.document.querySelector('#status')?.textContent === 'unavailable');
 
   expect(app.bridge.lifecycle).toBe('initialized');
@@ -276,6 +281,17 @@ it('exits checking and renders an unavailable outcome when the opening result is
   expect(app.document.querySelector('#status')?.textContent).not.toBe('healthy');
   expect(app.document.querySelector('#summary')?.textContent).not.toBe('Every check is passing.');
   expect(app.document.querySelectorAll('#checks li')).toHaveLength(0);
+
+  // Refresh retries the requested service after a failed opening call.
+  app.document.querySelector<HTMLButtonElement>('#refresh-status')!.click();
+  await waitFor(() => app.pendingConsentChallenges.length === 1);
+  await expect(app.decideConsent(app.pendingConsentChallenges[0]!.id, true)).resolves.toBe(true);
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'degraded');
+  expect(calls).toEqual(['show-status']);
+  expect(app.traffic.some(({ message }) => {
+    const args = messageParam(message, 'arguments');
+    return message.method === 'tools/call' && isRecord(args) && args['service'] === 'payments-api';
+  })).toBe(true);
 });
 
 it('renders the unavailable outcome when the opening result has no structured content', async () => {

@@ -758,8 +758,8 @@ declare module 'agent-bundle/app' {
 `resultSchema`。该声明以 type-only 方式导入路由模块，所以不会把路由模块、schema 或服务器代码带入 App
 文档。模板已经在 `tsconfig.json` 的 `include` 中列出 `".agent-bundle/routes.d.ts"`；路由项目漏掉它时
 会收到 `AB4834`。没有 augmentation 时——例如手写服务器——`call()` 仍能以 `unknown` 输入与结果工作，视图也可以
-通过同一个结构化 `AppRegister` seam 声明自己的本地契约 map；[MCP App 示例](../../examples/mcp-app.mdx)
-就为手写的 `status` 服务器这样声明 `show-status` 与 `refresh-status`。`AppRouteId`、
+通过同一个结构化 `AppRegister` seam 声明自己的本地契约 map。[MCP App 示例](../../examples/mcp-app.mdx)
+依赖的就是生成文件：它的 App 以路由 schema 声明的输入与结果调用 `tool:status/show-status`。`AppRouteId`、
 `AppRouteInput<Id>` 与 `AppRouteResult<Id>` 为 wrapper 命名同一套类型表面。
 
 **调用与结果。** `call()` 直接返回结构化结果对象；MCP 的 `content`、`_meta` 与 `isError` envelope

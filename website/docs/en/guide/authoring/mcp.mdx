@@ -856,8 +856,9 @@ checked against the compiled tools, `input` is typed from that route, and the re
 route's structured object. The declaration imports the route modules type-only, so no route
 module, schema, or server code enters the App document. Without the augmentation — a handwritten
 server, or a program that omits the file — `call()` still works with `unknown` input and result,
-and a view may declare its own contract map through the same `AppRegister` seam, as the
-[MCP App example](../../examples/mcp-app.mdx) does for its handwritten `status` server.
+and a view may declare its own contract map through the same `AppRegister` seam. The
+[MCP App example](../../examples/mcp-app.mdx) relies on the generated file: its App calls
+`tool:status/show-status` with the input and result the route's schemas declare.
 `AppRouteId`, `AppRouteInput<Id>`, and `AppRouteResult<Id>` name the same surface for wrappers.
 
 **Calls and results.** `call()` returns the structured result **directly**; the MCP `content`,

@@ -1,5 +1,21 @@
-import { type AppClientError, createAppClient } from 'agent-bundle/app';
+import type { AppRouteConfig } from 'agent-bundle';
+import { type AppClientError, type AppRouteInput, type AppRouteResult, createAppClient } from 'agent-bundle/app';
 import { name, version } from 'agent-bundle/meta';
+
+import { readinessPolicyUri } from '../../../readiness-policy.ts';
+
+export const config = {
+  resourceUri: 'ui://mcp-app-example/status.html',
+  template: './status.html',
+} satisfies AppRouteConfig;
+
+const showStatusRoute = 'tool:status/show-status';
+
+type Service = AppRouteInput<typeof showStatusRoute>['service'];
+type ServiceStatus = AppRouteResult<typeof showStatusRoute>;
+
+/** The service the host asked for, so refresh can retry a failed opening call. */
+let currentService: Service | undefined;
 
 const serviceHeading = document.querySelector<HTMLHeadingElement>('#service')!;
 const statusIndicator = document.querySelector<HTMLElement>('#status-indicator')!;
@@ -9,51 +25,11 @@ const checks = document.querySelector<HTMLUListElement>('#checks')!;
 const bridgeOutcome = document.querySelector<HTMLParagraphElement>('#bridge-outcome')!;
 
 /**
- * `checking`, `healthy`, and `degraded` come from the tool; `unavailable` is
- * the panel's own verdict when the opening call fails to produce a status.
+ * `checking` while a call is in flight; `healthy`/`degraded` from the tool;
+ * `unavailable` is the panel's own verdict when the opening call fails to
+ * produce a status.
  */
-type StatusState = 'checking' | 'healthy' | 'degraded' | 'unavailable' | 'unknown';
-
-interface ServiceCheck {
-  readonly label?: string;
-  readonly status?: string;
-}
-
-interface ServiceStatus {
-  readonly checks?: readonly ServiceCheck[];
-  readonly service?: string;
-  readonly status?: string;
-  readonly summary?: string;
-}
-
-interface StatusToolInput {
-  readonly service: string;
-}
-
-/**
- * Config-declared Apps have no generated `AgentBundleRoutes`. This structural
- * map types `createAppClient` through the public `AppRegister` seam.
- */
-type StatusPanelRouteContracts = {
-  readonly 'tool:status/show-status': {
-    readonly input: StatusToolInput;
-    readonly result: ServiceStatus;
-  };
-  readonly 'tool:status/refresh-status': {
-    readonly input: StatusToolInput;
-    readonly result: ServiceStatus;
-  };
-};
-
-declare module 'agent-bundle/app' {
-  interface AppRegister {
-    readonly routes: StatusPanelRouteContracts;
-  }
-}
-
-const showStatusRoute = 'tool:status/show-status';
-const refreshStatusRoute = 'tool:status/refresh-status';
-const readinessPolicyUri = 'ui://mcp-app-example/readiness-policy';
+type StatusState = 'checking' | ServiceStatus['status'] | 'unavailable';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -62,17 +38,6 @@ const resourceText = (value: unknown): string | undefined => {
   if (!isRecord(value) || !Array.isArray(value.contents)) return undefined;
   const content = value.contents[0];
   return isRecord(content) && typeof content.text === 'string' ? content.text : undefined;
-};
-
-const statusState = (value: string | undefined): StatusState => {
-  if (value === 'checking' || value === 'healthy' || value === 'degraded') return value;
-  return 'unknown';
-};
-
-const checkState = (value: string | undefined): StatusState => {
-  if (value === 'passing') return 'healthy';
-  if (value === 'failing') return 'degraded';
-  return 'unknown';
 };
 
 const setStatus = (state: StatusState) => {
@@ -92,15 +57,18 @@ const toolErrorDetail = (error: AppClientError): string => {
   return isRecord(block) && typeof block.text === 'string' ? block.text : error.message;
 };
 
-const renderChecks = (items: readonly ServiceCheck[]) => {
-  checks.replaceChildren(...items.map((check) => {
+const renderStatus = (result: ServiceStatus) => {
+  serviceHeading.textContent = result.service;
+  setStatus(result.status);
+  summary.textContent = result.summary;
+  checks.replaceChildren(...result.checks.map((check) => {
     const item = document.createElement('li');
     const label = document.createElement('span');
-    const result = document.createElement('strong');
-    label.textContent = check.label ?? 'Unnamed check';
-    result.textContent = check.status ?? 'unknown';
-    item.dataset.state = checkState(check.status);
-    item.append(label, result);
+    const outcome = document.createElement('strong');
+    label.textContent = check.label;
+    outcome.textContent = check.status;
+    item.dataset.state = check.status === 'passing' ? 'healthy' : 'degraded';
+    item.append(label, outcome);
     return item;
   }));
 };
@@ -109,20 +77,15 @@ const client = createAppClient({
   appInfo: { name, version },
 });
 
-client.onToolInput(showStatusRoute, (input) => {
-  const service = typeof input.service === 'string' ? input.service : 'service';
+client.onToolInput(showStatusRoute, ({ service }) => {
+  currentService = service;
   serviceHeading.textContent = service;
   setStatus('checking');
   summary.textContent = `Checking readiness for ${service}.`;
-  renderChecks([]);
+  checks.replaceChildren();
 });
 
-client.onToolResult(showStatusRoute, (result) => {
-  serviceHeading.textContent = result.service ?? 'No service selected';
-  setStatus(statusState(result.status));
-  summary.textContent = result.summary ?? 'No readiness summary was returned.';
-  renderChecks(result.checks ?? []);
-});
+client.onToolResult(showStatusRoute, renderStatus);
 
 // A failed opening call — `isError: true`, a malformed result, or one without
 // structured content — never reaches `onToolResult`. Leave the requested
@@ -130,7 +93,7 @@ client.onToolResult(showStatusRoute, (result) => {
 client.onToolError(showStatusRoute, (error) => {
   setStatus('unavailable');
   summary.textContent = `Readiness is unavailable: ${toolErrorDetail(error)}`;
-  renderChecks([]);
+  checks.replaceChildren();
 });
 
 document.querySelector('#toggle-details')!.addEventListener('click', () => {
@@ -146,11 +109,11 @@ document.querySelector('#read-policy')!.addEventListener('click', async () => {
   }
 });
 
+// Refresh re-runs the opening tool for the service on screen.
 document.querySelector('#refresh-status')!.addEventListener('click', async () => {
+  if (currentService === undefined) return;
   try {
-    await client.call(refreshStatusRoute, {
-      service: serviceHeading.textContent ?? 'service',
-    });
+    renderStatus(await client.call(showStatusRoute, { service: currentService }));
     bridgeOutcome.textContent = 'Status refreshed.';
   } catch {
     bridgeOutcome.textContent = 'Refresh unavailable.';
