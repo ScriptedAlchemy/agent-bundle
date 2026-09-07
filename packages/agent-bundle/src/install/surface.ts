@@ -282,7 +282,7 @@ const clientLine = (planned: readonly string[]) => (record: ClientCompatibilityR
   const reads = record.discovery.required.filter((path) =>
     planContains(planned, path)
     && !readSurfaces.some((surface) => taken.has(surface) && CLIENT_SURFACE_PATHS[surface] === path));
-  const install = record.install?.actions.find((action) => action.role === 'install')?.command;
+  const anchor = record.install?.actions.find((action) => action.role === 'install' || action.role === 'register');
   const hypothetical = (shadow: ClientShadow): string => takesEveryRead(shadow)
     ? ` A root that also carries \`${shadow.path}\` is read as that plugin instead.`
     : ` A root that also carries \`${shadow.path}\` uses it for ${shadow.surfaces.join(', ')} and still reads the rest.`;
@@ -302,11 +302,14 @@ const clientLine = (planned: readonly string[]) => (record: ClientCompatibilityR
           ? ' This bundle emits none of the paths it reads, so there is nothing to install there.'
           : ` Reads: \`${reads.join('`, `')}\`.`,
       // An install command for a bundle it reads nothing of is not an install.
-      install === undefined || reads.length === 0
+      anchor === undefined || reads.length === 0
         ? ''
         : record.install!.source === 'marketplace'
-          ? ` Install (no local-directory install is verified for this artifact): \`${install}\`.`
-          : ` Install: \`${install}\`.`,
+          ? ` Install (no local-directory install is verified for this artifact): \`${anchor.command}\`.`
+          // Registration points the client at the emitted tree; nothing is copied.
+          : anchor.role === 'register'
+            ? ` Register: \`${anchor.command}\`.`
+            : ` Install: \`${anchor.command}\`.`,
       ...surfaces.some(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
         ? [` Not loaded: ${surfaces
             .filter(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')

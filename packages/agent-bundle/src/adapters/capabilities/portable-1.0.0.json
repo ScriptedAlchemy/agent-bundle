@@ -654,6 +654,1081 @@
           "state": "unavailable"
         }
       }
+    },
+    "codewhale": {
+      "name": "CodeWhale",
+      "issue": 709,
+      "observed": "Hmbown/CodeWhale main 19d34a5fb6c07b34e0b7234beb74a1cf1969efb4, docs retrieved 2026-09-06 (native Agent Plugins v1.0.0 support since v0.9.4)",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "/plugin install ./<plugin directory>"
+          }
+        ],
+        "location": "~/.codewhale/plugins/<name>/ (user) or <workspace>/.codewhale/plugins/<name>/ (workspace); a local directory is copied"
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: docs/PLUGIN_BUNDLES.md (commit 24ca14efb1615acd5b1646409b2b8d006522194e, 2026-08-29) states \"Codewhale scans only its own roots, looking in each <name>/ directory for a manifest named plugin.json (the native Agent Plugins v1.0.0 format, since v0.9.4)\", and docs/PLUGINS.md documents \"/plugin install ./path/to/bundle # local directory (copied)\".",
+          "2026-09-06: \"A skills/ directory in the bundle root is picked up automatically\" — the emitted layout, with no CodeWhale-specific component paths required."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: docs/PLUGIN_BUNDLES.md states \"The standard's manifest root is closed: $schema, name, and the optional well-known fields (version, description, author, homepage, repository, license, keywords, extensions). An unknown root key is a parse error\" — the closed root this projection emits and validates against the pinned 1.0.0 schema, and \"unknown vendor namespaces are ignored, never rejected\" for the manifest's extensions object."
+          ],
+          "state": "supported"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: docs/SKILLS.md (commit 92547e460f007abf8807705036ca6a40fba5cbb9, 2026-09-01) and PLUGIN_BUNDLES.md both read skills from the bundle-root skills/ directory that this projection emits."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: docs/MCP.md (commit 806d93e826ee615b702629775f0ec3dd19c97854, 2026-08-25) supports all three transports the 1.0.0 MCP schema defines, including the stdio and streamable-http forms this projection emits."
+          ],
+          "reason": "2026-09-06: CodeWhale narrows the standard's env rule — \"Local stdio environment entries must use exact ${SOURCE_ENV} references\" — so an emitted env value that is anything other than one whole variable reference is not accepted there.",
+          "state": "degraded"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: CodeWhale rejects PLUGIN_ROOT and PLUGIN_DATA as env entry names (as the 1.0.0 schema does), but its documentation never states whether it provides those variables or expands ${PLUGIN_ROOT} and ${PLUGIN_DATA} in args, env values, or cwd, so the reserved behavior of §9.1 is unproven there.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: docs/HOOKS.md documents CodeWhale's own hook layout; Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "copilot-cli": {
+      "name": "GitHub Copilot CLI",
+      "issue": 698,
+      "observed": "@github/copilot 1.0.83, installed and exercised 2026-09-06",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "copilot plugin install <plugin directory>"
+          },
+          {
+            "role": "inspect",
+            "command": "copilot plugins list"
+          },
+          {
+            "role": "verify",
+            "command": "copilot --plugin-dir <plugin directory>"
+          }
+        ],
+        "location": "~/.copilot/installed-plugins/_direct/<directory>, recorded in ~/.copilot/config.json"
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: `copilot plugin install /tmp/hostcli/fixture` on 1.0.83 answered \"Plugin \\\"probe-plugin\\\" installed successfully. Installed 1 skill.\" for a hand-built Agent Plugins package (root plugin.json with the 1.0.0 $schema, skills/review/SKILL.md, mcp.json), and `copilot plugins list` then reported the plugin, the plugin-contributed MCP server, and the plugin-contributed skill from that one manifest.",
+          "2026-09-06: the same install printed \"Warning: Direct plugin installs (repos, URLs, local paths) are deprecated. Only plugin@marketplace installs will be supported in a future release\", so the local-path command above is a deprecated path on 1.0.83.",
+          "2026-09-06: the installed copy is a copy, not a link: ~/.copilot/config.json recorded cache_path ~/.copilot/installed-plugins/_direct/fixture with source {\"source\":\"local\",\"path\":\"...\"}."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: 1.0.83 installed the root plugin.json and reported its name and version verbatim (`probe-plugin (v1.0.0)`) with no host-specific manifest present."
+          ],
+          "state": "supported"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: `copilot plugins list` on 1.0.83 reported \"Skills: Plugin-contributed: review -- Review a change\", read from skills/review/SKILL.md in the installed package."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: `copilot plugins list` reported \"MCP servers: Plugin-contributed: probe -- stdio transport\" and `copilot mcp get probe` reported Source: Plugin, Source plugin: probe-plugin (1.0.0) — the emitted mcp.json, read without a .mcp.json present."
+          ],
+          "state": "supported"
+        },
+        "placeholders": {
+          "evidence": [
+            "2026-09-06: `copilot mcp get probe` on 1.0.83 kept the command as `node ${PLUGIN_ROOT}/mcp/probe.mjs` and listed PLUGIN_ROOT, PLUGIN_DATA, COPILOT_PLUGIN_ROOT, COPILOT_PLUGIN_DATA, CLAUDE_PLUGIN_ROOT, and CLAUDE_PLUGIN_DATA in the server environment — the reserved variables of Agent Plugins 1.0.0 §9.1."
+          ],
+          "reason": "2026-09-06: the probe proved the configuration Copilot records, not a spawned server: `copilot mcp get` prints static configuration, and spawning the server requires a GitHub Copilot login that was not performed.",
+          "state": "degraded"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Copilot CLI 1.0.83 exposes hooks (documented separately at https://docs.github.com/en/copilot/reference/hooks-reference), but Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "gemini-cli": {
+      "name": "Gemini CLI",
+      "issue": 695,
+      "observed": "@google/gemini-cli 0.58.0, installed and exercised 2026-09-06",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "gemini skills install <plugin directory>/skills/<skill>"
+          },
+          {
+            "role": "inspect",
+            "command": "gemini skills list --all"
+          }
+        ],
+        "location": "~/.gemini/skills/<skill>/ at user scope"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: `gemini skills install /tmp/hostcli/fixture/skills/review` on 0.58.0 answered \"Searching for skills in .../skills/review... The following agent skill(s) will be installing: * review: Review a change\" and \"Successfully installed skill: review (scope: user, location: ~/.gemini/skills/review)\", so the emitted skill directory installs one skill at a time, not the package as a whole.",
+          "2026-09-06: `gemini extensions install` first blocks on an interactive workspace-trust prompt; past both prompts it reaches the same manifest refusal below."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: `gemini extensions validate /tmp/hostcli/fixture` on 0.58.0 exited 1 with \"Configuration file not found at /tmp/hostcli/fixture/gemini-extension.json\" — Gemini CLI requires its own gemini-extension.json manifest, which this projection does not emit, and `gemini extensions list` then reported \"No extensions installed.\"",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: 0.58.0 parsed the emitted SKILL.md frontmatter and listed the skill as `review [Enabled]` with `Description: Review a change` from ~/.gemini/skills/review/SKILL.md."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "reason": "2026-09-06: Gemini CLI reads MCP servers from the mcpServers map of its own gemini-extension.json manifest or a settings.json (https://geminicli.com/docs/extensions/reference/, last updated May 14, 2026); with the manifest rejected, the emitted mcp.json is never consulted, and the skills install path copies only the skill directory.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: Gemini CLI documents ${extensionPath} for portability inside its own manifest, not the reserved ${PLUGIN_ROOT} and ${PLUGIN_DATA} of Agent Plugins 1.0.0 §9.1; no emitted document that carries those tokens is read at this tier.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Gemini CLI loads extension hooks from hooks/hooks.json and states \"hooks are not defined in the gemini-extension.json manifest\" (https://geminicli.com/docs/extensions/reference/); Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "cline": {
+      "name": "Cline",
+      "issue": 705,
+      "observed": "@cline/cli 0.0.13 exercised 2026-09-06; docs.cline.bot retrieved 2026-09-06 (@cline/sdk 0.0.82)",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "cp -R skills/<skill> ~/.cline/skills/<skill>"
+          }
+        ],
+        "location": "~/.cline/skills/<skill>/ (global) or .cline/skills/<skill>/, .clinerules/skills/, .claude/skills/ (project)"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://docs.cline.bot/customization/skills lists the skill roots verbatim — project `.cline/skills/` (recommended), `.clinerules/skills/`, `.claude/skills/`; global `~/.cline/skills/` — and states that a global skill takes precedence over a project skill of the same name.",
+          "2026-09-06: Cline does not read `.agents/skills/`; the only cross-tool root on that page is `.claude/skills/`.",
+          "2026-09-06: `@cline/cli` 0.0.13 (bin `clite`) exposes no plugin, skill, or extension subcommand — its full command list is auth, config, connect, mcp, doctor, history, hook, schedule, hub, update, version, kanban — so the copy above is the only install path proven for the CLI, and https://docs.cline.bot/customization/plugins scopes the native plugin tier to \"Cline SDK, CLI, and Kanban\" and states it \"is not applicable on VSCode and JetBrains Extension for now\"."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: a Cline plugin is installed from an npm, git, remote, or local source into ~/.cline/plugins/_installed/ with Cline's own layout; no upstream page documents reading a root Agent Plugins plugin.json, and `@cline/cli` 0.0.13 exposes no plugin subcommand to offer it to.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://docs.cline.bot/customization/skills requires frontmatter `name` that \"must exactly match the directory name\" and a `description` of at most 1024 characters — both emitted, and the name always equals the directory name, by the pinned Agent Skills lowering."
+          ],
+          "reason": "2026-09-06: the skill tree must be copied into one of Cline's own roots; the emitted package is not a Cline install unit, and no CLI verb in @cline/cli 0.0.13 performs the copy.",
+          "state": "degraded"
+        },
+        "mcp": {
+          "reason": "2026-09-06: Cline reads mcpServers from its own configuration and the retrieved pages give three unreconciled paths for it (~/.cline/mcp.json, .cline/mcp.json, ~/.cline/data/settings/cline_mcp_settings.json); none is a plugin-root mcp.json, and Cline's remote transport is spelled `streamableHttp` rather than the standard's `streamable-http`.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: no ${VAR} interpolation syntax is documented for Cline MCP configuration, and no emitted document carrying the Agent Plugins 1.0.0 §9.1 tokens is read at this tier.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Cline loads hooks from its own hooks directory (`--hooks-dir`, default ~/.cline/hooks); Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "hermes-agent": {
+      "name": "Hermes Agent",
+      "issue": 697,
+      "observed": "hermes-agent.nousresearch.com developer guide retrieved 2026-09-06; no version is printed on the page",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "marketplace",
+        "actions": [
+          {
+            "role": "install",
+            "command": "hermes plugins install <owner>/<repository> --no-enable"
+          }
+        ],
+        "location": "~/.hermes/plugins/<name>/ with the root plugin.json at that level; \"Anything deeper is ignored\". No local-directory install form is published for a portable package."
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/ states \"Portable packages use root plugin.json in the same locations\" as native packages (~/.hermes/plugins/<name>/) and \"Anything deeper is ignored\".",
+          "2026-09-06: the only documented install spec for a portable package is `hermes plugins install owner/repository`; no local-directory install form is published, so installing the emitted directory in place is unproven.",
+          "2026-09-06: the same page scopes the whole tier — \"This is a compatibility adapter for the portable components Hermes already owns… an explicit supported subset, not a claim of full Agent Plugins conformance.\""
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: \"Hermes validates plugin.json, Agent Skills frontmatter, fixed component locations, mcp.json, resolved paths, and symlink containment locally. It does not fetch JSON schemas while loading a package\", and it \"keys behavior on the canonical v1.0.0 schema identifiers and normative text\" — the identifiers this projection emits."
+          ],
+          "reason": "2026-09-06: the validation rule set is not published: the page never states that the manifest root is treated as closed or what happens to an unknown root key.",
+          "state": "degraded"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: \"An enabled package may provide immediate skills/*/SKILL.md directories\" — the flat layout this projection emits — and \"A bad skill or MCP entry is skipped at its own boundary\"."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: the same page reads stdio MCP servers from the root mcp.json and supports stdio and streamable-http, the only two transports this projection emits; the standard's legacy sse form is documented as not supported, and the compiler never emits it."
+          ],
+          "state": "supported"
+        },
+        "placeholders": {
+          "evidence": [
+            "2026-09-06: the page states both reserved variables are provided to stdio servers and that a command is run as \"one executable token … never through a shell\", which is the containment this projection emits."
+          ],
+          "reason": "2026-09-06: the expansion sites are unpublished — the page does not say whether ${PLUGIN_ROOT} and ${PLUGIN_DATA} are expanded in args, env values, and cwd as §9.1 requires, only that the variables are provided.",
+          "state": "degraded"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Hermes runs hooks from native plugin.yaml plus register(ctx) Python plugins, which the portable tier explicitly does not replace; Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document either.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "opencode": {
+      "name": "OpenCode",
+      "issue": 693,
+      "observed": "opencode-ai 1.18.29 exercised 2026-09-06; opencode.ai/docs retrieved 2026-09-06",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "cp -R skills/<skill> .agents/skills/<skill>"
+          }
+        ],
+        "location": ".agents/skills/<skill>/ (project) or ~/.agents/skills/<skill>/ (global)"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://opencode.ai/docs/skills/ lists six skill roots verbatim, including \"Project agent-compatible: .agents/skills/<name>/SKILL.md\" and \"Global agent-compatible: ~/.agents/skills/<name>/SKILL.md\", so the emitted skill directories load once copied into either root.",
+          "2026-09-06: `opencode plugin /tmp/hostcli/fixture` on 1.18.29 failed with \"Plugin directory /tmp/hostcli/fixture is missing package.json or index file\" — an OpenCode plugin is an npm module, so the emitted package is not an install unit for it.",
+          "2026-09-06: `opencode mcp list` on 1.18.29 reported \"No MCP servers configured\" after that attempt: the emitted mcp.json was never consulted."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: `opencode plugin <dir>` requires a package.json or index file and refused the emitted package on 1.18.29; OpenCode reads no root plugin.json.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://opencode.ai/docs/skills/ requires frontmatter `name` matching `^[a-z0-9]+(-[a-z0-9]+)*$` and the containing directory name, plus a `description` of 1–1024 characters, and states \"Unknown frontmatter fields are ignored\" — every field the pinned Agent Skills lowering emits is either read or ignored."
+          ],
+          "reason": "2026-09-06: the skill tree must be copied into one of OpenCode's own roots; the emitted package as a whole is not an OpenCode install unit, and skill names must be unique across all roots (\"Ensure skill names are unique across all locations\").",
+          "state": "degraded"
+        },
+        "mcp": {
+          "reason": "2026-09-06: https://opencode.ai/docs/mcp-servers/ configures servers under the `mcp` key of opencode.json with OpenCode's own `type: \"local\" | \"remote\"` shape and a `command` array, not a standalone mcp.json with the standard's `stdio` and `streamable-http` types.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: OpenCode substitutes {env:VAR} and {file:path} in its own configuration; it documents no expansion of the reserved ${PLUGIN_ROOT} and ${PLUGIN_DATA} of Agent Plugins 1.0.0 §9.1, and no emitted document carrying them is read.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: OpenCode's event hooks are JavaScript functions returned by a plugin module (https://opencode.ai/docs/plugins/); Agent Plugins 1.0.0 defines no hooks, and this projection emits no plugin module for it to load.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "kiro-powers": {
+      "name": "Kiro (Powers)",
+      "issue": 707,
+      "observed": "kiro.dev/docs/powers pages updated September 2, 2026 and August 4, 2026, retrieved 2026-09-06",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "Powers panel -> Add Custom Power -> Import power from a folder -> select <plugin directory> -> Install"
+          }
+        ],
+        "location": "Kiro's own power store; the IDE, CLI, and Web tabs share the same import flow"
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://kiro.dev/docs/powers/ states \"A power is a directory with a required manifest and optional components: 1. plugin.json … 2. skills/ — Agent Skills … 3. mcp.json — MCP server configuration for tool integrations (optional) 4. dev.kiro/\", which is the emitted layout with an optional Kiro-only directory this projection does not write.",
+          "2026-09-06: https://kiro.dev/docs/powers/installation/ states \"Each power must have a valid plugin.json or POWER.md file at its package root\" and selects the format by manifest filename, not by the $schema value."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: https://kiro.dev/docs/powers/create/ lists $schema with the canonical value https://agent-plugins.org/schemas/1.0.0/plugin.schema.json among its required fields, and its optional list (homepage, repository, license) matches the closed 1.0.0 root; no Kiro key appears at the manifest root."
+          ],
+          "reason": "2026-09-06: Kiro's \"Required fields\" table additionally requires version, description, author, and keywords, where the canonical schema requires only $schema and name — so a bundle that declares no portable author or keywords metadata does not meet Kiro's tightened manifest, and Kiro publishes no validation-error behavior to say what happens then.",
+          "state": "degraded"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://kiro.dev/docs/powers/ documents skills/<skill>/SKILL.md with a references/ subdirectory, the exact tree this projection emits, and https://kiro.dev/docs/skills/ governs the frontmatter it validates."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: https://kiro.dev/docs/powers/ reads MCP server configuration from the power-root mcp.json, and https://kiro.dev/docs/mcp/ documents the stdio form this projection emits."
+          ],
+          "reason": "2026-09-06: only stdio is documented for a power's mcp.json; no Kiro page states that a streamable-http server in that file is read, so an emitted remote server is unproven there.",
+          "state": "degraded"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: no Kiro page documents ${PLUGIN_ROOT} or ${PLUGIN_DATA} expansion, or the provision of those variables to a power's MCP subprocess, so the reserved behavior of Agent Plugins 1.0.0 §9.1 is unproven there.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: https://kiro.dev/docs/hooks/ documents Kiro's own hook configuration; Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "pi": {
+      "name": "Pi",
+      "issue": 694,
+      "observed": "@mariozechner/pi-coding-agent 0.73.1 installed from npm 2026-09-07; packaged docs/skills.md and docs/packages.md read from that release",
+      "tier": "skills",
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-07: `npm view @mariozechner/pi-coding-agent version bin` returns 0.73.1 with `bin = { pi: 'dist/cli.js' }`, and the installed CLI's own `--help` lists \"--skill <path>  Load a skill file or directory (can be used multiple times)\" and \"--no-skills, -ns  Disable skills discovery and loading\".",
+          "2026-09-07: docs/skills.md of that release lists the scanned roots (~/.pi/agent/skills/, ~/.agents/skills/, .pi/skills/, .agents/skills/ in cwd and ancestors, package skills/ directories, settings entries, and \"CLI: --skill <path> (repeatable, additive even with --no-skills)\") and states \"In all skill locations, directories containing SKILL.md are discovered recursively\".",
+          "2026-09-07: docs/packages.md of that release states \"skills/ recursively finds SKILL.md folders and loads top-level .md files as skills\" for a package with no pi manifest — the emitted layout.",
+          "2026-09-07: a turn could not be run against the emitted tree because the release requires a provider API key (\"No API key found for the selected model\"), so only the discovery contract of the installed release is recorded here."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-07: Pi's package manifest is the `pi` field of package.json (docs/packages.md of 0.73.1); no documented path reads an Agent Plugins root plugin.json, so the emitted manifest has no reader there.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-07: docs/skills.md of the installed 0.73.1 release requires \"A skill is a directory with a `SKILL.md` file\" whose frontmatter carries name and description, and reads an extra directory named with --skill."
+          ],
+          "reason": "2026-09-07: the emitted skills/ root is not one of the scanned default roots, so it loads only when it is named with --skill or added to the `skills` settings array; discovery inside it is recursive once named.",
+          "state": "degraded"
+        },
+        "mcp": {
+          "reason": "2026-09-07: the installed release's documentation set carries no MCP page and its CLI --help exposes no MCP option, so the emitted mcp.json has no reader there.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-07: with no MCP document read, no ${PLUGIN_ROOT} or ${PLUGIN_DATA} placeholder of Agent Plugins 1.0.0 §9.1 is expanded.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-07: Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for Pi to read.",
+          "state": "unavailable"
+        }
+      },
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "register",
+            "command": "pi --skill <plugin directory>/skills"
+          },
+          {
+            "role": "inspect",
+            "command": "pi --help"
+          }
+        ],
+        "location": "the emitted skills/ tree is read where it lies; ~/.pi/agent/skills/, ~/.agents/skills/, .pi/skills/, and .agents/skills/ are the scanned roots, and `skills` in settings makes an extra directory persistent"
+      }
+    },
+    "qoder-cli": {
+      "name": "Qoder CLI",
+      "issue": 696,
+      "observed": "docs retrieved 2026-09-06; no CLI version is published on any page",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "qoder plugins install <plugin directory> --scope user"
+          },
+          {
+            "role": "verify",
+            "command": "qoder plugins validate <plugin directory>"
+          },
+          {
+            "role": "inspect",
+            "command": "qoder plugins list --json"
+          }
+        ],
+        "location": "the --scope target (user, project, or local); enablement is recorded in settings.json as enabledPlugins"
+      },
+      "discovery": {
+        "required": [
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [
+          {
+            "path": ".mcp.json",
+            "surfaces": [
+              "mcp"
+            ]
+          }
+        ],
+        "evidence": [
+          "2026-09-06: https://docs.qoder.com/cli/plugins-reference states the manifest \"is located at .qoder-plugin/plugin.json and must not be placed in the plugin root directory\", and that without a manifest \"the CLI loads components from conventional directories and uses the plugin directory name as the plugin name\".",
+          "2026-09-06: https://docs.qoder.com/cli/plugins states \"plugins install for a local plugin requires at least one recognizable component or resource\", which the emitted skills/ tree and mcp.json satisfy.",
+          "2026-09-06: no manifest-precedence order is published, so the behavior of a composite root carrying both .qoder-plugin/plugin.json and plugin.json is unproven.",
+          "2026-09-06: precedence that is published is per file, not per root: https://docs.qoder.com/cli/mcp-reference states \"If both exist, .mcp.json takes precedence, and they are not merged\", which withholds the emitted mcp.json alone and leaves the shared skills/ tree discovered."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: https://docs.qoder.com/cli/plugins-reference states the manifest \"must not be placed in the plugin root directory\", so the emitted root plugin.json is not a recognized manifest and the plugin is identified only by its directory name.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://docs.qoder.com/cli/Skills documents plugin skills/ with the same structure as ~/.qoder/skills/, requiring frontmatter name (lowercase, numbers, hyphens, max 64) and description (max 1024) — both emitted, within both bounds, by the pinned Agent Skills lowering."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: https://docs.qoder.com/cli/mcp-reference states Qoder is \"Compatible with mcp.json (without a leading dot) as a fallback for .mcp.json\", reads the top-level mcpServers key, and accepts type values stdio and http/streamable-http — the transports this projection emits."
+          ],
+          "state": "supported"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: QODER_PLUGIN_ROOT and QODER_PLUGIN_DATA are documented only for hooks (https://docs.qoder.com/cli/hooks-reference), and no ${...} placeholder is documented for MCP server configuration, so the emitted ${PLUGIN_ROOT} and ${PLUGIN_DATA} tokens are not proven to expand.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Qoder reads plugin hooks from hooks/hooks.json and requires the extra { \"hooks\": ... } wrapper (https://docs.qoder.com/cli/hooks-reference); Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "codewhale": {
+      "name": "CodeWhale",
+      "issue": 709,
+      "observed": "Hmbown/CodeWhale main 19d34a5fb6c07b34e0b7234beb74a1cf1969efb4, docs retrieved 2026-09-06 (native Agent Plugins v1.0.0 support since v0.9.4)",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "/plugin install ./<plugin directory>"
+          }
+        ],
+        "location": "~/.codewhale/plugins/<name>/ (user) or <workspace>/.codewhale/plugins/<name>/ (workspace); a local directory is copied"
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: docs/PLUGIN_BUNDLES.md (commit 24ca14efb1615acd5b1646409b2b8d006522194e, 2026-08-29) states \"Codewhale scans only its own roots, looking in each <name>/ directory for a manifest named plugin.json (the native Agent Plugins v1.0.0 format, since v0.9.4)\", and docs/PLUGINS.md documents \"/plugin install ./path/to/bundle # local directory (copied)\".",
+          "2026-09-06: \"A skills/ directory in the bundle root is picked up automatically\" — the emitted layout, with no CodeWhale-specific component paths required."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: docs/PLUGIN_BUNDLES.md states \"The standard's manifest root is closed: $schema, name, and the optional well-known fields (version, description, author, homepage, repository, license, keywords, extensions). An unknown root key is a parse error\" — the closed root this projection emits and validates against the pinned 1.0.0 schema, and \"unknown vendor namespaces are ignored, never rejected\" for the manifest's extensions object."
+          ],
+          "state": "supported"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: docs/SKILLS.md (commit 92547e460f007abf8807705036ca6a40fba5cbb9, 2026-09-01) and PLUGIN_BUNDLES.md both read skills from the bundle-root skills/ directory that this projection emits."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: docs/MCP.md (commit 806d93e826ee615b702629775f0ec3dd19c97854, 2026-08-25) supports all three transports the 1.0.0 MCP schema defines, including the stdio and streamable-http forms this projection emits."
+          ],
+          "reason": "2026-09-06: CodeWhale narrows the standard's env rule — \"Local stdio environment entries must use exact ${SOURCE_ENV} references\" — so an emitted env value that is anything other than one whole variable reference is not accepted there.",
+          "state": "degraded"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: CodeWhale rejects PLUGIN_ROOT and PLUGIN_DATA as env entry names (as the 1.0.0 schema does), but its documentation never states whether it provides those variables or expands ${PLUGIN_ROOT} and ${PLUGIN_DATA} in args, env values, or cwd, so the reserved behavior of §9.1 is unproven there.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: docs/HOOKS.md documents CodeWhale's own hook layout; Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "copilot-cli": {
+      "name": "GitHub Copilot CLI",
+      "issue": 698,
+      "observed": "@github/copilot 1.0.83, installed and exercised 2026-09-06",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "copilot plugin install <plugin directory>"
+          },
+          {
+            "role": "inspect",
+            "command": "copilot plugins list"
+          },
+          {
+            "role": "verify",
+            "command": "copilot --plugin-dir <plugin directory>"
+          }
+        ],
+        "location": "~/.copilot/installed-plugins/_direct/<directory>, recorded in ~/.copilot/config.json"
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: `copilot plugin install /tmp/hostcli/fixture` on 1.0.83 answered \"Plugin \\\"probe-plugin\\\" installed successfully. Installed 1 skill.\" for a hand-built Agent Plugins package (root plugin.json with the 1.0.0 $schema, skills/review/SKILL.md, mcp.json), and `copilot plugins list` then reported the plugin, the plugin-contributed MCP server, and the plugin-contributed skill from that one manifest.",
+          "2026-09-06: the same install printed \"Warning: Direct plugin installs (repos, URLs, local paths) are deprecated. Only plugin@marketplace installs will be supported in a future release\", so the local-path command above is a deprecated path on 1.0.83.",
+          "2026-09-06: the installed copy is a copy, not a link: ~/.copilot/config.json recorded cache_path ~/.copilot/installed-plugins/_direct/fixture with source {\"source\":\"local\",\"path\":\"...\"}."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: 1.0.83 installed the root plugin.json and reported its name and version verbatim (`probe-plugin (v1.0.0)`) with no host-specific manifest present."
+          ],
+          "state": "supported"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: `copilot plugins list` on 1.0.83 reported \"Skills: Plugin-contributed: review -- Review a change\", read from skills/review/SKILL.md in the installed package."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: `copilot plugins list` reported \"MCP servers: Plugin-contributed: probe -- stdio transport\" and `copilot mcp get probe` reported Source: Plugin, Source plugin: probe-plugin (1.0.0) — the emitted mcp.json, read without a .mcp.json present."
+          ],
+          "state": "supported"
+        },
+        "placeholders": {
+          "evidence": [
+            "2026-09-06: `copilot mcp get probe` on 1.0.83 kept the command as `node ${PLUGIN_ROOT}/mcp/probe.mjs` and listed PLUGIN_ROOT, PLUGIN_DATA, COPILOT_PLUGIN_ROOT, COPILOT_PLUGIN_DATA, CLAUDE_PLUGIN_ROOT, and CLAUDE_PLUGIN_DATA in the server environment — the reserved variables of Agent Plugins 1.0.0 §9.1."
+          ],
+          "reason": "2026-09-06: the probe proved the configuration Copilot records, not a spawned server: `copilot mcp get` prints static configuration, and spawning the server requires a GitHub Copilot login that was not performed.",
+          "state": "degraded"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Copilot CLI 1.0.83 exposes hooks (documented separately at https://docs.github.com/en/copilot/reference/hooks-reference), but Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "gemini-cli": {
+      "name": "Gemini CLI",
+      "issue": 695,
+      "observed": "@google/gemini-cli 0.58.0, installed and exercised 2026-09-06",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "gemini skills install <plugin directory>/skills/<skill>"
+          },
+          {
+            "role": "inspect",
+            "command": "gemini skills list --all"
+          }
+        ],
+        "location": "~/.gemini/skills/<skill>/ at user scope"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: `gemini skills install /tmp/hostcli/fixture/skills/review` on 0.58.0 answered \"Searching for skills in .../skills/review... The following agent skill(s) will be installing: * review: Review a change\" and \"Successfully installed skill: review (scope: user, location: ~/.gemini/skills/review)\", so the emitted skill directory installs one skill at a time, not the package as a whole.",
+          "2026-09-06: `gemini extensions install` first blocks on an interactive workspace-trust prompt; past both prompts it reaches the same manifest refusal below."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: `gemini extensions validate /tmp/hostcli/fixture` on 0.58.0 exited 1 with \"Configuration file not found at /tmp/hostcli/fixture/gemini-extension.json\" — Gemini CLI requires its own gemini-extension.json manifest, which this projection does not emit, and `gemini extensions list` then reported \"No extensions installed.\"",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: 0.58.0 parsed the emitted SKILL.md frontmatter and listed the skill as `review [Enabled]` with `Description: Review a change` from ~/.gemini/skills/review/SKILL.md."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "reason": "2026-09-06: Gemini CLI reads MCP servers from the mcpServers map of its own gemini-extension.json manifest or a settings.json (https://geminicli.com/docs/extensions/reference/, last updated May 14, 2026); with the manifest rejected, the emitted mcp.json is never consulted, and the skills install path copies only the skill directory.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: Gemini CLI documents ${extensionPath} for portability inside its own manifest, not the reserved ${PLUGIN_ROOT} and ${PLUGIN_DATA} of Agent Plugins 1.0.0 §9.1; no emitted document that carries those tokens is read at this tier.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Gemini CLI loads extension hooks from hooks/hooks.json and states \"hooks are not defined in the gemini-extension.json manifest\" (https://geminicli.com/docs/extensions/reference/); Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "cline": {
+      "name": "Cline",
+      "issue": 705,
+      "observed": "@cline/cli 0.0.13 exercised 2026-09-06; docs.cline.bot retrieved 2026-09-06 (@cline/sdk 0.0.82)",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "cp -R skills/<skill> ~/.cline/skills/<skill>"
+          }
+        ],
+        "location": "~/.cline/skills/<skill>/ (global) or .cline/skills/<skill>/, .clinerules/skills/, .claude/skills/ (project)"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://docs.cline.bot/customization/skills lists the skill roots verbatim — project `.cline/skills/` (recommended), `.clinerules/skills/`, `.claude/skills/`; global `~/.cline/skills/` — and states that a global skill takes precedence over a project skill of the same name.",
+          "2026-09-06: Cline does not read `.agents/skills/`; the only cross-tool root on that page is `.claude/skills/`.",
+          "2026-09-06: `@cline/cli` 0.0.13 (bin `clite`) exposes no plugin, skill, or extension subcommand — its full command list is auth, config, connect, mcp, doctor, history, hook, schedule, hub, update, version, kanban — so the copy above is the only install path proven for the CLI, and https://docs.cline.bot/customization/plugins scopes the native plugin tier to \"Cline SDK, CLI, and Kanban\" and states it \"is not applicable on VSCode and JetBrains Extension for now\"."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: a Cline plugin is installed from an npm, git, remote, or local source into ~/.cline/plugins/_installed/ with Cline's own layout; no upstream page documents reading a root Agent Plugins plugin.json, and `@cline/cli` 0.0.13 exposes no plugin subcommand to offer it to.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://docs.cline.bot/customization/skills requires frontmatter `name` that \"must exactly match the directory name\" and a `description` of at most 1024 characters — both emitted, and the name always equals the directory name, by the pinned Agent Skills lowering."
+          ],
+          "reason": "2026-09-06: the skill tree must be copied into one of Cline's own roots; the emitted package is not a Cline install unit, and no CLI verb in @cline/cli 0.0.13 performs the copy.",
+          "state": "degraded"
+        },
+        "mcp": {
+          "reason": "2026-09-06: Cline reads mcpServers from its own configuration and the retrieved pages give three unreconciled paths for it (~/.cline/mcp.json, .cline/mcp.json, ~/.cline/data/settings/cline_mcp_settings.json); none is a plugin-root mcp.json, and Cline's remote transport is spelled `streamableHttp` rather than the standard's `streamable-http`.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: no ${VAR} interpolation syntax is documented for Cline MCP configuration, and no emitted document carrying the Agent Plugins 1.0.0 §9.1 tokens is read at this tier.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Cline loads hooks from its own hooks directory (`--hooks-dir`, default ~/.cline/hooks); Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "hermes-agent": {
+      "name": "Hermes Agent",
+      "issue": 697,
+      "observed": "hermes-agent.nousresearch.com developer guide retrieved 2026-09-06; no version is printed on the page",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "marketplace",
+        "actions": [
+          {
+            "role": "install",
+            "command": "hermes plugins install <owner>/<repository> --no-enable"
+          }
+        ],
+        "location": "~/.hermes/plugins/<name>/ with the root plugin.json at that level; \"Anything deeper is ignored\". No local-directory install form is published for a portable package."
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/ states \"Portable packages use root plugin.json in the same locations\" as native packages (~/.hermes/plugins/<name>/) and \"Anything deeper is ignored\".",
+          "2026-09-06: the only documented install spec for a portable package is `hermes plugins install owner/repository`; no local-directory install form is published, so installing the emitted directory in place is unproven.",
+          "2026-09-06: the same page scopes the whole tier — \"This is a compatibility adapter for the portable components Hermes already owns… an explicit supported subset, not a claim of full Agent Plugins conformance.\""
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: \"Hermes validates plugin.json, Agent Skills frontmatter, fixed component locations, mcp.json, resolved paths, and symlink containment locally. It does not fetch JSON schemas while loading a package\", and it \"keys behavior on the canonical v1.0.0 schema identifiers and normative text\" — the identifiers this projection emits."
+          ],
+          "reason": "2026-09-06: the validation rule set is not published: the page never states that the manifest root is treated as closed or what happens to an unknown root key.",
+          "state": "degraded"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: \"An enabled package may provide immediate skills/*/SKILL.md directories\" — the flat layout this projection emits — and \"A bad skill or MCP entry is skipped at its own boundary\"."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: the same page reads stdio MCP servers from the root mcp.json and supports stdio and streamable-http, the only two transports this projection emits; the standard's legacy sse form is documented as not supported, and the compiler never emits it."
+          ],
+          "state": "supported"
+        },
+        "placeholders": {
+          "evidence": [
+            "2026-09-06: the page states both reserved variables are provided to stdio servers and that a command is run as \"one executable token … never through a shell\", which is the containment this projection emits."
+          ],
+          "reason": "2026-09-06: the expansion sites are unpublished — the page does not say whether ${PLUGIN_ROOT} and ${PLUGIN_DATA} are expanded in args, env values, and cwd as §9.1 requires, only that the variables are provided.",
+          "state": "degraded"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Hermes runs hooks from native plugin.yaml plus register(ctx) Python plugins, which the portable tier explicitly does not replace; Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document either.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "opencode": {
+      "name": "OpenCode",
+      "issue": 693,
+      "observed": "opencode-ai 1.18.29 exercised 2026-09-06; opencode.ai/docs retrieved 2026-09-06",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "cp -R skills/<skill> .agents/skills/<skill>"
+          }
+        ],
+        "location": ".agents/skills/<skill>/ (project) or ~/.agents/skills/<skill>/ (global)"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://opencode.ai/docs/skills/ lists six skill roots verbatim, including \"Project agent-compatible: .agents/skills/<name>/SKILL.md\" and \"Global agent-compatible: ~/.agents/skills/<name>/SKILL.md\", so the emitted skill directories load once copied into either root.",
+          "2026-09-06: `opencode plugin /tmp/hostcli/fixture` on 1.18.29 failed with \"Plugin directory /tmp/hostcli/fixture is missing package.json or index file\" — an OpenCode plugin is an npm module, so the emitted package is not an install unit for it.",
+          "2026-09-06: `opencode mcp list` on 1.18.29 reported \"No MCP servers configured\" after that attempt: the emitted mcp.json was never consulted."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: `opencode plugin <dir>` requires a package.json or index file and refused the emitted package on 1.18.29; OpenCode reads no root plugin.json.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://opencode.ai/docs/skills/ requires frontmatter `name` matching `^[a-z0-9]+(-[a-z0-9]+)*$` and the containing directory name, plus a `description` of 1–1024 characters, and states \"Unknown frontmatter fields are ignored\" — every field the pinned Agent Skills lowering emits is either read or ignored."
+          ],
+          "reason": "2026-09-06: the skill tree must be copied into one of OpenCode's own roots; the emitted package as a whole is not an OpenCode install unit, and skill names must be unique across all roots (\"Ensure skill names are unique across all locations\").",
+          "state": "degraded"
+        },
+        "mcp": {
+          "reason": "2026-09-06: https://opencode.ai/docs/mcp-servers/ configures servers under the `mcp` key of opencode.json with OpenCode's own `type: \"local\" | \"remote\"` shape and a `command` array, not a standalone mcp.json with the standard's `stdio` and `streamable-http` types.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: OpenCode substitutes {env:VAR} and {file:path} in its own configuration; it documents no expansion of the reserved ${PLUGIN_ROOT} and ${PLUGIN_DATA} of Agent Plugins 1.0.0 §9.1, and no emitted document carrying them is read.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: OpenCode's event hooks are JavaScript functions returned by a plugin module (https://opencode.ai/docs/plugins/); Agent Plugins 1.0.0 defines no hooks, and this projection emits no plugin module for it to load.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "kiro-powers": {
+      "name": "Kiro (Powers)",
+      "issue": 707,
+      "observed": "kiro.dev/docs/powers pages updated September 2, 2026 and August 4, 2026, retrieved 2026-09-06",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "Powers panel -> Add Custom Power -> Import power from a folder -> select <plugin directory> -> Install"
+          }
+        ],
+        "location": "Kiro's own power store; the IDE, CLI, and Web tabs share the same import flow"
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://kiro.dev/docs/powers/ states \"A power is a directory with a required manifest and optional components: 1. plugin.json … 2. skills/ — Agent Skills … 3. mcp.json — MCP server configuration for tool integrations (optional) 4. dev.kiro/\", which is the emitted layout with an optional Kiro-only directory this projection does not write.",
+          "2026-09-06: https://kiro.dev/docs/powers/installation/ states \"Each power must have a valid plugin.json or POWER.md file at its package root\" and selects the format by manifest filename, not by the $schema value."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: https://kiro.dev/docs/powers/create/ lists $schema with the canonical value https://agent-plugins.org/schemas/1.0.0/plugin.schema.json among its required fields, and its optional list (homepage, repository, license) matches the closed 1.0.0 root; no Kiro key appears at the manifest root."
+          ],
+          "reason": "2026-09-06: Kiro's \"Required fields\" table additionally requires version, description, author, and keywords, where the canonical schema requires only $schema and name — so a bundle that declares no portable author or keywords metadata does not meet Kiro's tightened manifest, and Kiro publishes no validation-error behavior to say what happens then.",
+          "state": "degraded"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://kiro.dev/docs/powers/ documents skills/<skill>/SKILL.md with a references/ subdirectory, the exact tree this projection emits, and https://kiro.dev/docs/skills/ governs the frontmatter it validates."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: https://kiro.dev/docs/powers/ reads MCP server configuration from the power-root mcp.json, and https://kiro.dev/docs/mcp/ documents the stdio form this projection emits."
+          ],
+          "reason": "2026-09-06: only stdio is documented for a power's mcp.json; no Kiro page states that a streamable-http server in that file is read, so an emitted remote server is unproven there.",
+          "state": "degraded"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: no Kiro page documents ${PLUGIN_ROOT} or ${PLUGIN_DATA} expansion, or the provision of those variables to a power's MCP subprocess, so the reserved behavior of Agent Plugins 1.0.0 §9.1 is unproven there.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: https://kiro.dev/docs/hooks/ documents Kiro's own hook configuration; Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "pi": {
+      "name": "Pi",
+      "issue": 694,
+      "observed": "npm probed 2026-09-06; no installable release exists",
+      "tier": "none",
+      "discovery": {
+        "required": [],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: `npm view @earendil-works/pi version` returned \"npm error 404\", and `pi-coding-agent@0.0.1` is a \"Placeholder package name reservation for pi-coding-agent\" with no `bin` field, so no Pi executable is installable from npm under either name and nothing about Pi's handling of this artifact can be exercised.",
+          "2026-09-06: the documented content contract (project and global `.agents/skills/`, `AGENTS.md`) is recorded in issue #694; it is not recorded here as a loaded surface because no release exists to prove it against."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: no installable Pi release exists on npm, so no manifest handling can be established.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "reason": "2026-09-06: unproven. Pi's repository documents project and global `.agents/skills/` roots, but no installable release exists to exercise the emitted skill tree against.",
+          "state": "unavailable"
+        },
+        "mcp": {
+          "reason": "2026-09-06: Pi's own documentation states it has no MCP support at all, so the emitted mcp.json has no reader there.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: with no document of this artifact read, no placeholder of Agent Plugins 1.0.0 §9.1 is expanded.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for Pi to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "vs-code": {
+      "name": "VS Code (Copilot agent plugins)",
+      "issue": 706,
+      "observed": "code.visualstudio.com/docs/agent-customization/agent-plugins, page footer 9/2/2026, retrieved 2026-09-06",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "\"chat.pluginLocations\": { \"<plugin directory>\": true }"
+          }
+        ],
+        "location": "the plugin directory itself; a marketplace plugin instead installs through the Extensions view filter @agentPlugins"
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://code.visualstudio.com/docs/agent-customization/agent-plugins states \"If you manually clone or download a plugin, you can register it with the chat.pluginLocations setting. This setting maps local plugin directory paths to an enabled or disabled state\", so the emitted directory is loaded in place with no copy step.",
+          "2026-09-06: the same page publishes no manifest-precedence order and calls .plugin/plugin.json \"Legacy OpenPlugin\", so the behavior of a root that carries both a canonical plugin.json and another client's manifest is unstated — unlike GitHub Copilot CLI, which orders .plugin/plugin.json ahead of the root manifest.",
+          "2026-09-06: no `code --install-plugin`-style CLI verb for agent plugins is documented; installation is the setting above or the Extensions view."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: the page discriminates formats by the root manifest's $schema and links the canonical manifest, MCP, and client-extension documents at agent-plugins.org, plus the 1.0.0 specification text — the identifiers this projection emits."
+          ],
+          "state": "supported"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: the page states \"Skills are discovered from the skills/ folder, and MCP server configuration is discovered from the mcp.json file. You don't list these component paths in the manifest\" — the fixed locations this projection emits."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: the page states \"Place MCP server definitions in the mcp.json file at the plugin root and follow the portable MCP configuration format\", linking the canonical portable MCP document."
+          ],
+          "state": "supported"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: the page contradicts itself on the reserved placeholders — it names ${PLUGIN_ROOT} and ${PLUGIN_DATA} and in one place says they are expanded and in another that they are preserved — so §9.1 expansion in args, env values, and cwd is not established for the emitted mcp.json.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: VS Code reads plugin hooks from com.github.copilot/hooks/hooks.json, a client-specific namespace directory this projection does not write, and Agent Plugins 1.0.0 defines no hooks; the surface is also documented as Preview.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "zed-agent": {
+      "name": "Zed Agent",
+      "issue": 708,
+      "observed": "zed.dev/docs retrieved 2026-09-06; no page publishes a version or last-updated date",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "cp -R skills/<skill> ~/.agents/skills/<skill>"
+          }
+        ],
+        "location": "~/.agents/skills/<skill>/ (global) or .agents/skills/<skill>/ (project, trusted worktrees only)"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://zed.dev/docs/ai/skills documents the install verbatim — \"To install a skill, copy the skill's folder into ~/.agents/skills/ for global use, or into your project's .agents/skills/ folder for project-local use\" — and states \"Each skill is a direct child of the skills root. Nesting skills inside subfolders is not supported\", which is the flat layout this projection emits.",
+          "2026-09-06: the same page states \"Project-local skills only load from trusted worktrees\" and \"Zed does not discover or load skills from remote locations at runtime, and custom search paths are not supported\", so the copy above is the whole install contract."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: no Zed page documents a plugin manifest of any shape for the Zed Agent; skills are installed as folders and MCP servers are configured in Zed's settings, so the emitted plugin.json has no reader.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://zed.dev/docs/ai/skills requires frontmatter `name` (lowercase letters, numbers, hyphens, max 64, matching the folder) and `description`, and cites the Agent Skills specification the portable lowering already validates against."
+          ],
+          "reason": "2026-09-06: only the skill folders load, one copy at a time, and the catalog is capped — \"50KB catalog budget… Skills that don't fit are dropped from the catalog with a warning in the UI\" — so a large emitted skill set is not guaranteed to be wholly visible.",
+          "state": "degraded"
+        },
+        "mcp": {
+          "reason": "2026-09-06: https://zed.dev/docs/ai/mcp configures servers under the `context_servers` key of Zed's own settings file, and no page documents auto-discovery of a project-local or plugin-root MCP file, so the emitted mcp.json has no reader.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: with no emitted MCP document read, none of the reserved ${PLUGIN_ROOT} or ${PLUGIN_DATA} placeholders of Agent Plugins 1.0.0 §9.1 is expanded.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: none of the retrieved Zed Agent pages documents a lifecycle or hook mechanism, and Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document either.",
+          "state": "unavailable"
+        }
+      }
     }
   },
   "specificationSections": {

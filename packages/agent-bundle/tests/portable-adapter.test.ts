@@ -662,9 +662,23 @@ it('emits the artifact paths every recorded client reads, and none of the manife
   const emitted = plan.entries.map((entry) => entry.relativePath);
   const clients = clientCompatibilityFrom('portable', capabilityTable.clients);
 
-  expect(clients.map((client) => client.id)).toEqual(
-    ['antigravity', 'devin-cli', 'grok-build', 'openclaw', 'qoder-cli'],
-  );
+  expect(clients.map((client) => client.id)).toEqual([
+    'antigravity',
+    'cline',
+    'codewhale',
+    'copilot-cli',
+    'devin-cli',
+    'gemini-cli',
+    'grok-build',
+    'hermes-agent',
+    'kiro-powers',
+    'openclaw',
+    'opencode',
+    'pi',
+    'qoder-cli',
+    'vs-code',
+    'zed-agent',
+  ]);
   for (const client of clients) {
     for (const required of client.discovery.required) {
       expect(
@@ -733,7 +747,7 @@ it('refuses a client record that claims a tier its own rows do not support', () 
     .toThrow(/install block with no actions/u);
   expect(() => clientCompatibilityFrom('portable', record({
     install: { actions: [{ command: 'demo plugins validate <plugin directory>', role: 'verify' }], source: 'local-directory' },
-  }))).toThrow(/without exactly one install action/u);
+  }))).toThrow(/without exactly one install or register action/u);
   expect(() => clientCompatibilityFrom('portable', record({
     install: { actions: [{ command: 'demo plugins add <plugin directory>', role: 'add' }], source: 'local-directory' },
   }))).toThrow(/install action with role "add"/u);

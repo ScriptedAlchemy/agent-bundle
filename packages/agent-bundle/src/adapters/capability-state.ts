@@ -319,11 +319,16 @@ const CLIENT_COMPATIBILITY_TIERS: readonly string[] =
 /**
  * The artifact path each surface is read from, so a record that says it loads
  * a surface has to name the file it loads, and a renderer can tell which
- * surfaces a build actually wrote. `placeholders` and `hooks` are behaviors of
- * the MCP document rather than files of their own.
+ * surfaces a build actually wrote. `placeholders` is a behavior of the MCP
+ * document, so it is read from the same file; `hooks` has no file at all,
+ * because Agent Plugins 1.0.0 defines none.
  */
-export const CLIENT_SURFACE_PATHS: Readonly<Record<string, string>> =
-  Object.freeze({ manifest: 'plugin.json', mcp: 'mcp.json', skills: 'skills' });
+export const CLIENT_SURFACE_PATHS: Readonly<Record<string, string>> = Object.freeze({
+  manifest: 'plugin.json',
+  mcp: 'mcp.json',
+  placeholders: 'mcp.json',
+  skills: 'skills',
+});
 
 /**
  * What a recorded install command does. A command's role is declared, never
@@ -331,7 +336,14 @@ export const CLIENT_SURFACE_PATHS: Readonly<Record<string, string>> =
  * be documented as installing with it.
  */
 const CLIENT_INSTALL_ROLES: readonly string[] =
-  Object.freeze(['install', 'trust', 'enable', 'verify', 'inspect', 'remove']);
+  Object.freeze(['install', 'register', 'trust', 'enable', 'verify', 'inspect', 'remove']);
+
+/**
+ * The one action that makes the artifact loadable: `install` for a client that
+ * takes a copy into its own store, `register` for one that reads the emitted
+ * tree where it lies once a path or setting names it.
+ */
+const CLIENT_INSTALL_ANCHORS: readonly string[] = Object.freeze(['install', 'register']);
 
 /**
  * Where the recorded install command takes the artifact from. `local-directory`
@@ -481,8 +493,8 @@ const clientInstall = (
     }
     return Object.freeze({ command: action.command, role: action.role! });
   });
-  if (validated.filter((action) => action.role === 'install').length !== 1) {
-    throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block without exactly one install action.`);
+  if (validated.filter((action) => CLIENT_INSTALL_ANCHORS.includes(action.role)).length !== 1) {
+    throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block without exactly one ${CLIENT_INSTALL_ANCHORS.join(' or ')} action.`);
   }
   return Object.freeze({
     actions: Object.freeze(validated),
