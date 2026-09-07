@@ -213,6 +213,7 @@ optional `hookEntries`, and `diagnostics`.
 
 | Host | Planner | Capability table |
 | --- | --- | --- |
+| `amp` | `ampAdapter.plan` in `adapters/amp.ts` | `adapters/capabilities/amp-0.0.0-20260907001852-gf348fed.json` |
 | `claude` | `planClaudeArtifacts` in `adapters/claude.ts` | `adapters/capabilities/claude-2.1.260.json` |
 | `codex` | `planCodexArtifacts` in `adapters/codex.ts` | `adapters/capabilities/codex-0.147.0.json` |
 | `cursor` | `planCursorArtifacts` in `adapters/cursor.ts` | `adapters/capabilities/cursor-2026-08-28.json` |
@@ -230,7 +231,20 @@ are wired from that intersection so they advertise the same routes.
 
 `TargetRegistry` (`adapters/registry.ts`) is the only place adapters are
 registered. `createDefaultRegistry` registers `portable` as the default,
-then `codex`, `claude`, and `cursor`. There is no `plugin` adapter.
+then `codex`, `claude`, `cursor`, and `amp`. Registration order is not
+target precedence: `planComposite` sorts the selection
+(`sortedProjections`) before planning it, and the composite identity is the
+sorted name join. There is no `plugin` adapter.
+
+`amp` is the one built-in host whose plugin is a generated directory rather
+than a set of declarative documents. Its plan writes an `index.js` PluginAPI
+factory under `.amp/plugins/{plugin}/` that registers Skills and event
+callbacks through the API, and its MCP configuration is skill-scoped: a
+canonical server needs exactly one Amp Skill, and a compiler-owned local
+server is refused because the pinned contract documents no plugin-root
+placeholder to run it from. The per-surface evidence stays on the generated
+[Hosts](../../reference/hosts.md) page; the author-facing selection map is
+[Targets and capability map](../start/capabilities.mdx).
 
 ### What compose hands to artifact assembly
 
@@ -470,7 +484,9 @@ harness.
 | `index.ts` | re-exports the types, `parse` / `serialize` / `assemble` / `read`, and the schema | Public API |
 
 There is no portable `install` / `doctor` host
-(`BundleIdentityHost` is `claude` \| `codex` \| `cursor`).
+(`BundleIdentityHost` is `amp` \| `claude` \| `codex` \| `cursor`).
+`doctor` covers `claude`, `codex`, and `cursor`; Amp has no lifecycle
+probe (`DoctorHost` excludes it).
 
 ### What step 3 landed
 
@@ -513,9 +529,9 @@ handwritten MCP entries are parallel collections on `DiscoveredProject` /
 `NormalizedPlugin`. A later consumer that needs "every surface" still walks
 several fields.
 
-**Four planners, one merge.** `planClaudeArtifacts`, `planCodexArtifacts`,
-`planCursorArtifacts`, and `portableAdapter.plan` each walk the whole
-model and emit host documents. `compose.ts` merges bytes; it does not
+**Five planners, one merge.** `planClaudeArtifacts`, `planCodexArtifacts`,
+`planCursorArtifacts`, `portableAdapter.plan`, and `ampAdapter.plan` each
+walk the whole model and emit host documents. `compose.ts` merges bytes; it does not
 replace those planners with a single `project(application, capabilities)`
 function.
 
