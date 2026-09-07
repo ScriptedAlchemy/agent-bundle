@@ -348,10 +348,13 @@ const CLIENT_INSTALL_ANCHORS: readonly string[] = Object.freeze(['install', 'reg
 /**
  * Where the recorded install command takes the artifact from. `local-directory`
  * is only for a client whose own documentation installs a directory path;
- * `marketplace` records a client that publishes no verified local form, so the
- * install surface never prints an unproven recipe against the emitted bundle.
+ * `marketplace` and `repository` record a client that publishes no verified
+ * local form, so the install surface never prints an unproven recipe against
+ * the emitted bundle. An indexed marketplace name and a Git `owner/repository`
+ * are separate inputs wherever a client's own documentation separates them.
  */
-const CLIENT_INSTALL_SOURCES: readonly string[] = Object.freeze(['local-directory', 'marketplace']);
+const CLIENT_INSTALL_SOURCES: readonly string[] =
+  Object.freeze(['local-directory', 'marketplace', 'repository']);
 
 /** One authored client row from a pinned table's `clients` block. */
 export interface ClientCompatibilityTableEntry {

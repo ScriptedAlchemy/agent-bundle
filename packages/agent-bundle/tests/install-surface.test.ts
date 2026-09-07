@@ -293,10 +293,116 @@ it('reads a shadow this build actually wrote as fact, not as a hypothetical', ()
   // A client with no verified local install prints its own marketplace command,
   // which its documentation shows carrying the trust flag.
   expect(install).toContain(
-    'Install (no local-directory install is verified for this artifact):'
+    'Install from a marketplace (no local-directory install is verified for this artifact):'
     + ' `grok plugin install <marketplace plugin name> --trust`.',
   );
   expect(install).not.toContain('grok plugin install ./');
+  // Copilot CLI checks the root manifest before .claude-plugin/plugin.json, so
+  // the composite root it shares with Claude is still read from the root (#728).
+  expect(clientLineFor(install!, 'GitHub Copilot CLI')).toBe(
+    '- **GitHub Copilot CLI** (@github/copilot 1.0.83, installed and exercised 2026-09-06) installs this'
+    + ' bundle as one plugin. Reads: `mcp.json`, `plugin.json`, `skills`.'
+    + ' Install: `copilot plugin install <plugin directory>`. Not loaded: hooks.'
+    + ' A root that also carries `.plugin/plugin.json` uses it for manifest and still reads the rest.',
+  );
+});
+
+/** The one rendered line for a client, so a claim is checked where it is made. */
+const clientLineFor = (install: string, name: string): string =>
+  install.split('\n').find((line) => line.startsWith(`- **${name}**`))!;
+
+// The four records #728 corrects, rendered against every inventory a portable
+// bundle can have: the tier sentence, the paths this build wrote, the action
+// with the role its own documentation gives it, the source that action takes
+// the artifact from, and the narrowing of a document this build actually wrote.
+it.each([
+  {
+    inventory: 'no component',
+    mcpServers: [],
+    reads: 'Reads: `plugin.json`.',
+    // Cline copies the skill tree; a bundle without one has nothing to copy.
+    skills: [],
+    skillsClient: 'This bundle emits none of the paths it reads, so there is nothing to install there.',
+    withMcpDocument: false,
+  },
+  {
+    inventory: 'skills only',
+    mcpServers: [],
+    reads: 'Reads: `plugin.json`, `skills`.',
+    skills: [portableSkill],
+    skillsClient: 'Reads: `skills`. Install: `cp -R skills/<skill> ~/.cline/skills/<skill>`.',
+    withMcpDocument: false,
+  },
+  {
+    inventory: 'MCP only',
+    mcpServers: [portableServer],
+    reads: 'Reads: `mcp.json`, `plugin.json`.',
+    skills: [],
+    skillsClient: 'This bundle emits none of the paths it reads, so there is nothing to install there.',
+    withMcpDocument: true,
+  },
+  {
+    inventory: 'skills and MCP',
+    mcpServers: [portableServer],
+    reads: 'Reads: `mcp.json`, `plugin.json`, `skills`.',
+    skills: [portableSkill],
+    skillsClient: 'Reads: `skills`. Install: `cp -R skills/<skill> ~/.cline/skills/<skill>`.',
+    withMcpDocument: true,
+  },
+])('renders the corrected client records against a portable bundle with $inventory', (expected) => {
+  const install = writesFor('portable', {
+    ...modelFor('portable'),
+    mcpServers: expected.mcpServers,
+    skills: expected.skills,
+  }).get('INSTALL.md')!;
+
+  // Copilot CLI: a local-directory install, and the one manifest location its
+  // published order puts ahead of the emitted root.
+  expect(clientLineFor(install, 'GitHub Copilot CLI')).toBe(
+    '- **GitHub Copilot CLI** (@github/copilot 1.0.83, installed and exercised 2026-09-06) installs this'
+    + ` bundle as one plugin. ${expected.reads}`
+    + ' Install: `copilot plugin install <plugin directory>`. Not loaded: hooks.'
+    + ' A root that also carries `.plugin/plugin.json` uses it for manifest and still reads the rest.',
+  );
+  // VS Code registers the emitted directory where it lies; nothing is copied.
+  expect(clientLineFor(install, 'VS Code (Copilot agent plugins)')).toBe(
+    '- **VS Code (Copilot agent plugins)** (code.visualstudio.com/docs/agent-customization/agent-plugins,'
+    + ` page footer 9/2/2026, retrieved 2026-09-06) installs this bundle as one plugin. ${expected.reads}`
+    + ' Register: `"chat.pluginLocations": { "<plugin directory>": true }`.'
+    + ' Not loaded: placeholders, hooks.',
+  );
+  expect(install).not.toContain('Install: `"chat.pluginLocations"');
+  // Hermes takes a Git repository, not an indexed marketplace name, and the
+  // recorded command leaves the plugin disabled.
+  expect(clientLineFor(install, 'Hermes Agent')).toBe(
+    '- **Hermes Agent** (hermes-agent.nousresearch.com developer guide retrieved 2026-09-06; no version is'
+    + ` printed on the page) installs this bundle as one plugin. ${expected.reads}`
+    + ' Install from a Git repository (no local-directory install is verified for this artifact):'
+    + ' `hermes plugins install <owner>/<repository> --no-enable`. Not loaded: hooks.',
+  );
+  expect(install).not.toContain('Install from a marketplace (no local-directory install is verified for'
+    + ' this artifact): `hermes plugins install');
+  // Cline's own action is a copy, so its role stays an install (#728 §3).
+  expect(clientLineFor(install, 'Cline')).toBe(
+    '- **Cline** (@cline/cli 0.0.13 exercised 2026-09-06; docs.cline.bot retrieved 2026-09-06'
+    + ' (@cline/sdk 0.0.82)) loads the components it recognizes without reading the manifest.'
+    + ` ${expected.skillsClient} Not loaded: manifest, mcp, placeholders, hooks.`,
+  );
+  expect(install).not.toContain('Register: `cp -R skills/<skill>');
+
+  // A narrowing of the MCP document is only a limit here once this build wrote
+  // that document: the stdio subset Copilot was proven on, and CodeWhale's
+  // remote policy, which needs a declaration ordinary portable output omits.
+  const copilotStdio = '  - Partial `mcp`: 2026-09-06: the probe listed one stdio server: no streamable-http'
+    + ' server from an emitted mcp.json was registered, launched, or authenticated on 1.0.83';
+  const codewhaleRemote = '  - Partial `mcp`: 2026-09-06: CodeWhale narrows the standard at the plugin boundary.';
+  const codewhaleHosts = 'declare exactly the normalized endpoint host set in capabilities.network_hosts.'
+    + ' That declaration rides in extensions["net.codewhale"], which this projection writes only when the'
+    + ' author authors portable.extensions';
+  for (const claim of [copilotStdio, codewhaleRemote, codewhaleHosts]) {
+    if (expected.withMcpDocument) expect(install).toContain(claim);
+    else expect(install).not.toContain(claim);
+  }
 });
 
 it('documents recorded Agent Plugins clients for the portable profile', () => {

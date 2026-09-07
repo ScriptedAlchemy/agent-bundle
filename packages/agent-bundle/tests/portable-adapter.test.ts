@@ -697,6 +697,53 @@ it('emits the artifact paths every recorded client reads, and none of the manife
   expect(clients.find((client) => client.id === 'antigravity')?.discovery.required).toEqual([]);
 });
 
+/**
+ * The corrections #728 asks for, read back from the pinned table: precedence
+ * that its upstream publishes, evidence held to the subset it proves, an action
+ * whose role follows the behavior, and the source that action really takes.
+ */
+it('holds the corrected client records to the source each one is pinned to', () => {
+  const clients = clientCompatibilityFrom('portable', capabilityTable.clients);
+  const client = (id: string) => clients.find((record) => record.id === id)!;
+
+  // Copilot CLI checks .plugin/plugin.json before the emitted root manifest and
+  // the emitted root before .claude-plugin/plugin.json, and its published order
+  // is for the manifest file alone.
+  expect(client('copilot-cli').discovery.shadowedBy).toEqual([{ path: '.plugin/plugin.json', surfaces: ['manifest'] }]);
+  expect(client('copilot-cli').discovery.evidence.join('\n')).toContain('checked in this order');
+  // A listed stdio server is not a launched remote one.
+  expect(client('copilot-cli').surfaces.mcp).toMatchObject({ state: 'degraded' });
+  expect(client('copilot-cli').surfaces.mcp!.reason).toContain('no streamable-http server from an emitted mcp.json'
+    + ' was registered, launched, or authenticated');
+  // The deprecation of the local install and the unlaunched server stay visible.
+  expect(client('copilot-cli').discovery.evidence.join('\n')).toContain('Direct plugin installs (repos, URLs, local paths) are deprecated');
+  expect(client('copilot-cli').surfaces.placeholders).toMatchObject({ state: 'degraded' });
+
+  // CodeWhale's plugin boundary restricts a remote server beyond the env rule,
+  // and the host declaration it requires is not ordinary portable output.
+  expect(client('codewhale').surfaces.mcp!.reason).toContain('redirects must stay on the reviewed origin');
+  expect(client('codewhale').surfaces.mcp!.reason).toContain('capabilities.network_hosts');
+  expect(client('codewhale').surfaces.mcp!.reason).toContain('extensions["net.codewhale"]');
+
+  // Registering a directory in place is not installing a copy of it.
+  expect(client('vs-code').install).toMatchObject({
+    actions: [{ command: '"chat.pluginLocations": { "<plugin directory>": true }', role: 'register' }],
+    source: 'local-directory',
+  });
+  // Cline's action copies the tree, so its role follows the behavior, not the wording.
+  expect(client('cline').install).toMatchObject({
+    actions: [{ command: 'cp -R skills/<skill> ~/.cline/skills/<skill>', role: 'install' }],
+    source: 'local-directory',
+  });
+
+  // A Git repository is not an indexed marketplace entry.
+  expect(client('hermes-agent').install).toMatchObject({
+    actions: [{ command: 'hermes plugins install <owner>/<repository> --no-enable', role: 'install' }],
+    source: 'repository',
+  });
+  expect(client('hermes-agent').discovery.evidence.join('\n')).toContain('never touch the index');
+});
+
 it('records every client once, since JSON keeps only the last of a repeated key', async () => {
   // A record added twice is not a duplicate that a reader can spot: the parser
   // drops every copy but the last, so the earlier one is text nothing reads.
@@ -772,6 +819,13 @@ it('refuses a client record that claims a tier its own rows do not support', () 
   expect(() => clientCompatibilityFrom('portable', record({
     install: { actions: [{ command: '   ', role: 'install' }], source: 'local-directory' },
   }))).toThrow(/install action with no verbatim command/u);
+  // A Git repository is a recorded source; an unlisted spelling of it is not.
+  expect(() => clientCompatibilityFrom('portable', record({
+    install: { actions: [{ command: 'demo plugins install <owner>/<repository>', role: 'install' }], source: 'repository' },
+  }))).not.toThrow();
+  expect(() => clientCompatibilityFrom('portable', record({
+    install: { actions: [{ command: 'demo plugins install <git url>', role: 'install' }], source: 'git' },
+  }))).toThrow(/install block with source "git" \(expected local-directory or marketplace or repository\)/u);
   // A client that reads nothing this artifact emits cannot install it locally.
   expect(() => clientCompatibilityFrom('portable', record({
     discovery: { evidence: ['2026-09-06: read from the vendor docs.'] },
