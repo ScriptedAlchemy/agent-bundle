@@ -134,6 +134,7 @@ export const integrationTestFiles: readonly string[] = [
  */
 export const nativeHostTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/host-adapters.native.test.ts',
+  'packages/agent-bundle/tests/native-codex-app-server.test.ts',
   'packages/agent-bundle/tests/native-host-sessions.test.ts',
 ];
 

@@ -1,9 +1,9 @@
-import { execFile as executeFile } from 'node:child_process';
+import { execFile as executeFile, spawn } from 'node:child_process';
 import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
@@ -36,11 +36,12 @@ import {
 } from '../../src/test/contract.ts';
 import { openInstalledHostMcpServer } from '../../src/test/installed.ts';
 import { DEV_INSTALL_MARKER, DevHostInstallManager } from '../../src/dev/host-install-manager.ts';
+import { withCodexAppServer } from '../../src/dev/codex-app-server.ts';
 import { ProjectEventHub } from '../../src/dev/events.ts';
 import type { ArtifactEpoch } from '../../src/dev/types.ts';
 import { startDevServer } from '../../src/dev/workbench-server.ts';
 import { runDoctor, type DoctorCommandRunner } from '../../src/install/doctor.ts';
-import { installBundle, type InstallHost } from '../../src/install/install.ts';
+import { installBundle, publicHostRoot, type InstallHost } from '../../src/install/install.ts';
 import { manifestInventory, readInstallReceipt } from '../../src/install/receipt.ts';
 import { uninstallBundle } from '../../src/install/uninstall.ts';
 import {
@@ -687,7 +688,7 @@ export const disposeHostInstallFixture = async (fixture: BuiltFixtureProject): P
   await rm(fixture.root, { force: true, recursive: true });
 };
 
-/** Proves initial host-owned installation followed by direct cache re-sync without another host CLI call. */
+/** Proves initial host-owned installation followed by the host-specific development re-sync. */
 export const runDevHostInstallProof = async (
   fixture: BuiltHostInstallFixture,
   host: InstallHost,
@@ -1853,6 +1854,12 @@ export const runPortableHostInstallProof = async (
 };
 
 export interface DevLiveHostProofReport {
+  readonly codexAppServer?: {
+    readonly hookDocumentHashes: readonly [string, string];
+    readonly mcpServers: readonly ['probe'];
+    readonly registrationCount: 1;
+    readonly startedBeforeInstall: true;
+  };
   readonly connection: {
     readonly initialized: 1;
     readonly observations: readonly [string, string];
@@ -2060,13 +2067,104 @@ const withProcessEnvironment = async <Value>(
   }
 };
 
+interface CodexAppServerClient {
+  close(): Promise<void>;
+  request<Result>(method: string, params: Readonly<Record<string, unknown>>): Promise<Result>;
+}
+
+const startCodexAppServer = async (
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<CodexAppServerClient> => {
+  const codexRoot = publicHostRoot('codex', environment, environment.HOME ?? homedir());
+  const child = spawn(environment.AGENT_BUNDLE_REAL_HOST_BINARY ?? 'codex', ['app-server', '--listen', 'unix://'], {
+    cwd,
+    env: environment,
+    stdio: ['ignore', 'ignore', 'pipe'],
+    windowsHide: true,
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => {
+    stderr = `${stderr}${chunk}`.slice(-8_192);
+  });
+  const exited = new Promise<void>((resolvePromise) => {
+    child.once('exit', () => resolvePromise());
+  });
+  try {
+    await waitFor(
+      async () => access(join(codexRoot, 'app-server-control', 'app-server-control.sock')).then(
+        () => true,
+        () => false,
+      ),
+      'Codex app-server control socket did not start.',
+      10_000,
+    );
+  } catch (error) {
+    if (child.exitCode === null) child.kill('SIGTERM');
+    await exited;
+    throw new Error(`Codex app-server control socket did not start: ${stderr.trim()}`, { cause: error });
+  }
+  return Object.freeze({
+    close: async () => {
+      if (child.exitCode !== null) return;
+      child.kill('SIGTERM');
+      await exited;
+    },
+    request: async <Result>(method: string, params: Readonly<Record<string, unknown>>) => {
+      const result = await withCodexAppServer(codexRoot, (request) => request<Result>(method, params));
+      if (result === undefined) throw new Error('Codex app-server control socket disappeared.');
+      return result;
+    },
+  });
+};
+
+interface CodexAppServerComponents {
+  readonly hookDocumentHash: string;
+  readonly mcpServers: readonly ['probe'];
+}
+
+const readCodexAppServerComponents = async (
+  appServer: CodexAppServerClient,
+  cwd: string,
+  installedRoot: string,
+): Promise<CodexAppServerComponents> => {
+  const stableRoot = join(cwd, '.agent-bundle', 'dev', 'codex');
+  const marketplacePath = join(stableRoot, codexArtifactPaths.marketplace);
+  const pluginReadResult = await appServer.request<unknown>('plugin/read', { marketplacePath, pluginName: plugin });
+  const pluginDocument = record(record(pluginReadResult)?.plugin);
+  const hooks = pluginDocument?.hooks;
+  const servers = pluginDocument?.mcpServers;
+  assertProof(
+    Array.isArray(hooks) && hooks.length > 0,
+    `Codex app-server did not load the development hook: ${JSON.stringify(pluginReadResult)}`,
+  );
+  assertProof(
+    Array.isArray(servers) && servers.length === 1 && servers[0] === 'probe',
+    `Codex app-server did not load the development MCP component: ${JSON.stringify(pluginReadResult)}`,
+  );
+  return Object.freeze({
+    hookDocumentHash: createHash('sha256')
+      .update(await readFile(join(installedRoot, codexArtifactPaths.hooksManifest)))
+      .digest('hex'),
+    mcpServers: Object.freeze(['probe'] as const),
+  });
+};
+
 const runLiveHostScenario = async (
   fixture: BuiltHostInstallFixture,
   host: InstallHost,
-  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+  options: {
+    readonly environment: Readonly<NodeJS.ProcessEnv>;
+    readonly persistentCodexAppServer?: boolean;
+  },
   observe?: (context: LiveHostObservationContext) => Promise<void>,
 ): Promise<LiveHostScenarioResult> => {
-  const scenarioRoot = await mkdtemp(join(tmpdir(), `agent-bundle-dev-live-${host}-`));
+  const scenarioRoot = await mkdtemp(
+    host === 'codex' && options.persistentCodexAppServer === true
+      ? join(tmpdir(), 'codex-live-')
+      : join(tmpdir(), `agent-bundle-dev-live-${host}-`),
+  );
   const projectRoot = dirname(fixture.artifactRoot);
   const roots = Object.freeze({
     claudeConfig: join(scenarioRoot, 'claude'),
@@ -2078,6 +2176,9 @@ const runLiveHostScenario = async (
     mkdir(roots.codexHome, { recursive: true }),
     mkdir(join(roots.home, '.cursor'), { recursive: true }),
   ]);
+  if (host === 'codex' && options.persistentCodexAppServer === true) {
+    await writeFile(join(roots.codexHome, 'config.toml'), '[features]\nplugins = true\nhooks = true\n');
+  }
   let environment = isolatedEnvironment(options.environment, {
     CLAUDE_CONFIG_DIR: roots.claudeConfig,
     CODEX_HOME: roots.codexHome,
@@ -2091,6 +2192,16 @@ const runLiveHostScenario = async (
     commandLog = recorded.log;
     hostBinaryVersion = recorded.version;
   }
+  const configSource = join(projectRoot, 'agent-bundle.config.ts');
+  let rebuiltConfig: string | undefined;
+  if (host === 'codex' && options.persistentCodexAppServer === true) {
+    const initialConfig = (await readFile(configSource, 'utf8')).replace(
+      "sessionStart: { handler: './src/hooks/session-start.ts' },",
+      "sessionStart: { handler: './src/hooks/session-start.ts', timeout: 1 },",
+    );
+    await writeFile(configSource, initialConfig);
+    rebuiltConfig = initialConfig.replace('timeout: 1', 'timeout: 2');
+  }
   const mcpSource = join(projectRoot, 'src', 'mcp', 'probe.ts');
   const skillSource = join(projectRoot, 'src', 'skills', 'probe', 'SKILL.md');
   const hookSource = join(projectRoot, 'src', 'hooks', 'session-start.ts');
@@ -2100,10 +2211,18 @@ const runLiveHostScenario = async (
     writeFile(hookSource, liveHookSource('v1')),
   ]);
   const destination = liveHostDestination(host, roots);
+  let appServer: CodexAppServerClient | undefined;
+  let firstAppServerComponents: CodexAppServerComponents | undefined;
+  let secondAppServerComponents: CodexAppServerComponents | undefined;
+  let codexRegistrationCount: number | undefined;
   let client: Client | undefined;
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   try {
     return await withProcessEnvironment(environment, async () => {
+      if (host === 'codex' && options.persistentCodexAppServer === true) {
+        appServer = await startCodexAppServer(projectRoot, environment);
+        await appServer.request('hooks/list', { cwds: [projectRoot] });
+      }
       server = await startDevServer({ installHosts: [host], open: false, port: 0, root: projectRoot });
       const markerBefore = parseJson<{ readonly epochId: string }>(
         await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8'),
@@ -2138,12 +2257,18 @@ const runLiveHostScenario = async (
       assertProof(listed.tools.some((tool) => tool.name === 'echo'), `${host} live proxy did not list echo.`);
       const first = textToolResult(await client.callTool({ arguments: { message: host }, name: 'echo' }));
       assertProof(first === `v1:${host}`, `${host} live proxy did not observe v1.`);
+      if (appServer !== undefined) {
+        firstAppServerComponents = await readCodexAppServerComponents(appServer, projectRoot, destination);
+      }
       await observe?.({ environment, installedRoot: destination, version: 'v1' });
       const installCommandsBeforeRebuild = await hostCliInstallCommandCount(commandLog);
       await Promise.all([
         replaceWatchedSource(projectRoot, mcpSource, liveMcpSource('v2')),
         replaceWatchedSource(projectRoot, skillSource, liveSkillSource('v2')),
         replaceWatchedSource(projectRoot, hookSource, liveHookSource('v2')),
+        ...(rebuiltConfig === undefined
+          ? []
+          : [replaceWatchedSource(projectRoot, configSource, rebuiltConfig)]),
       ]);
       await Promise.race([
         changed.promise,
@@ -2164,12 +2289,39 @@ const runLiveHostScenario = async (
         async () => (await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).includes('proof v2'),
         `${host} installed skill did not re-sync to v2.`,
       );
-      const hookName = (await readdir(join(destination, 'hooks'))).find((name) => name.endsWith('.mjs'));
-      assertProof(hookName !== undefined, `${host} installed hooks contained no executable module.`);
+      let hookName: string | undefined;
+      await waitFor(async () => {
+        try {
+          hookName = (await readdir(join(destination, 'hooks'))).find((name) => name.endsWith('.mjs'));
+          return hookName !== undefined;
+        } catch {
+          return false;
+        }
+      }, `${host} installed hooks contained no executable module.`);
+      const installedHookPath = hookName === undefined
+        ? fail(`${host} installed hooks contained no executable module.`)
+        : join(destination, 'hooks', hookName);
       await waitFor(
-        async () => (await readFile(join(destination, 'hooks', hookName), 'utf8')).includes('proof v2'),
+        async () => (await readFile(installedHookPath, 'utf8')).includes('proof v2'),
         `${host} installed hook did not re-sync to v2.`,
       );
+      if (appServer !== undefined) {
+        secondAppServerComponents = await readCodexAppServerComponents(appServer, projectRoot, destination);
+        if (secondAppServerComponents.hookDocumentHash === firstAppServerComponents?.hookDocumentHash) {
+          throw new Error('Codex hook document digest did not change after rebuild.');
+        }
+        const listed = await run(
+          environment.AGENT_BUNDLE_REAL_HOST_BINARY ?? 'codex',
+          ['plugin', 'list', '--json'],
+          { cwd: projectRoot, environment },
+        );
+        assertProof(listed.exitCode === 0, `Codex plugin listing failed after rebuild: ${commandDetail(listed)}`);
+        const installed = record(parseJson<unknown>(listed.stdout, 'Codex plugin listing'))?.installed;
+        codexRegistrationCount = Array.isArray(installed)
+          ? installed.filter((row) => record(row)?.pluginId === `${plugin}@${marketplace}`).length
+          : 0;
+        assertProof(codexRegistrationCount === 1, `Codex retained ${String(codexRegistrationCount)} development registrations.`);
+      }
       const installCommandsAfterRebuild = await hostCliInstallCommandCount(commandLog);
       assertProof(
         installCommandsAfterRebuild === installCommandsBeforeRebuild,
@@ -2182,6 +2334,21 @@ const runLiveHostScenario = async (
           ? 'unavailable: Codex exec authenticates non-interactively but exposes no inline plugin loader for the isolated dev install; exact installed proxy observed v1→v2 on one connection'
           : 'host-owned installation and exact installed proxy observed v1→v2 on one connection';
       const report: DevLiveHostProofReport = Object.freeze({
+        ...(firstAppServerComponents === undefined || secondAppServerComponents === undefined
+          ? {}
+          : {
+            codexAppServer: Object.freeze({
+              hookDocumentHashes: Object.freeze([
+                firstAppServerComponents.hookDocumentHash,
+                secondAppServerComponents.hookDocumentHash,
+              ] as const),
+              mcpServers: secondAppServerComponents.mcpServers,
+              registrationCount: codexRegistrationCount === 1
+                ? 1
+                : fail('Codex app-server proof did not retain one registration.'),
+              startedBeforeInstall: true,
+            }),
+          }),
         connection: Object.freeze({
           initialized: 1,
           observations: Object.freeze([first, second] as const),
@@ -2209,6 +2376,7 @@ const runLiveHostScenario = async (
   } finally {
     await client?.close().catch(() => undefined);
     await server?.close().catch(() => undefined);
+    await appServer?.close().catch(() => undefined);
     await rm(scenarioRoot, { force: true, recursive: true });
   }
 };
@@ -2216,7 +2384,10 @@ const runLiveHostScenario = async (
 export const runDevLiveHostProof = async (
   fixture: BuiltHostInstallFixture,
   host: InstallHost,
-  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+  options: {
+    readonly environment: Readonly<NodeJS.ProcessEnv>;
+    readonly persistentCodexAppServer?: boolean;
+  },
 ): Promise<DevLiveHostProofReport> => (await runLiveHostScenario(fixture, host, options)).report;
 
 export const runClaudeLiveDevSessionProof = async (
