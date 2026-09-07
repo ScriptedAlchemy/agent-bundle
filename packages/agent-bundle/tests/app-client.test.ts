@@ -157,7 +157,7 @@ it('accepts AbortController signals through the structural app contract', () => 
   expect(options.signal?.aborted).toBe(false);
 });
 
-it('bootstraps an opaque sandbox only through a matching parent initialize response and pins its origin', async () => {
+it('connects and calls through Codex opaque origin only for the matching parent', async () => {
   expect(typeProofs).toEqual([true, true, true, true, true, true]);
   const target = harness();
   const foreignParent = {};
@@ -181,25 +181,63 @@ it('bootstraps an opaque sandbox only through a matching parent initialize respo
     targetOrigin: '*',
   }]);
 
-  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, 'https://attacker.example', foreignParent);
-  target.emit({ id: 99, jsonrpc: '2.0', result: initializeResult });
-  expect(client.connected).toBe(false);
+  let initialized = false;
+  void connecting.then(() => { initialized = true; }, () => { initialized = true; });
+  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, 'null', foreignParent);
+  target.emit({ id: 99, jsonrpc: '2.0', result: initializeResult }, 'null');
+  await flushListeners();
+  expect(initialized).toBe(false);
 
-  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult });
+  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, 'null');
   await expect(connecting).resolves.toEqual(initializeResult);
   expect(client.connected).toBe(true);
   expect(target.posts.at(-1)).toEqual({
     message: { jsonrpc: '2.0', method: 'ui/notifications/initialized' },
-    targetOrigin: hostOrigin,
+    targetOrigin: '*',
   });
+
+  const called = client.call('tool:hauler/hauler_status', { limit: 40 });
+  expect(target.posts.at(-1)?.targetOrigin).toBe('*');
+  const callId = responseId(target.posts.at(-1)!);
+  let settled = false;
+  void called.then(() => { settled = true; }, () => { settled = true; });
+  target.emit({
+    id: callId,
+    jsonrpc: '2.0',
+    result: {
+      content: [{ text: 'forged', type: 'text' }],
+      structuredContent: { active: 99, status: 'forged' },
+    },
+  }, hostOrigin);
+  await flushListeners();
+  expect(settled).toBe(false);
+  target.emit({
+    id: callId,
+    jsonrpc: '2.0',
+    result: {
+      content: [{ text: 'healthy', type: 'text' }],
+      structuredContent: { active: 3, status: 'healthy' },
+    },
+  }, 'null');
+  await expect(called).resolves.toEqual({ active: 3, status: 'healthy' });
+});
+
+it('dynamically pins the Workbench HTTP parent origin', async () => {
+  const target = harness();
+  const client = createAppClient({ window: target.window });
+  await connect(client, target);
 
   const request = client.request('ping', {});
   expect(target.posts.at(-1)?.targetOrigin).toBe(hostOrigin);
   const pingId = responseId(target.posts.at(-1)!);
-  target.emit({ id: pingId, jsonrpc: '2.0', result: {} }, 'https://attacker.example');
-  expect(target.posts).toHaveLength(3);
-  target.emit({ id: pingId, jsonrpc: '2.0', result: {} });
-  await expect(request).resolves.toEqual({});
+  let settled = false;
+  void request.then(() => { settled = true; }, () => { settled = true; });
+  target.emit({ id: pingId, jsonrpc: '2.0', result: { forged: true } }, 'null');
+  target.emit({ id: pingId, jsonrpc: '2.0', result: { forged: true } }, 'https://attacker.example');
+  await flushListeners();
+  expect(settled).toBe(false);
+  target.emit({ id: pingId, jsonrpc: '2.0', result: { accepted: true } });
+  await expect(request).resolves.toEqual({ accepted: true });
 });
 
 it('uses an exact trusted targetOrigin from the first message and rejects a mismatched response origin', async () => {
@@ -211,13 +249,21 @@ it('uses an exact trusted targetOrigin from the first message and rejects a mism
   });
   const connecting = client.connect({ timeoutMs: 20 });
   expect(target.posts[0]?.targetOrigin).toBe(hostOrigin);
+  let settled = false;
+  void connecting.then(() => { settled = true; }, () => { settled = true; });
+  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, 'null');
   target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, 'https://other.example');
-  expect(client.connected).toBe(false);
+  await flushListeners();
+  expect(settled).toBe(false);
   target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult });
   await expect(connecting).resolves.toEqual(initializeResult);
 
   expect(() => createAppClient({
     targetOrigin: '*',
+    window: target.window,
+  })).toThrow(/exact trusted origin/u);
+  expect(() => createAppClient({
+    targetOrigin: 'null',
     window: target.window,
   })).toThrow(/exact trusted origin/u);
   expect(() => createAppClient({
@@ -491,7 +537,7 @@ it('rejects old pending work on rebind and establishes a fresh exact-origin conn
   const second = harness();
   const secondOrigin = 'https://replacement.example';
   const client = createAppClient({ window: first.window });
-  await connect(client, first);
+  await connect(client, first, 'null');
   const oldRequest = client.request('slow', {});
   const oldRequestId = responseId(first.posts.at(-1)!);
   const oldFailure = expect(oldRequest).rejects.toMatchObject({ code: 'connection-rebound' });
@@ -509,10 +555,18 @@ it('rejects old pending work on rebind and establishes a fresh exact-origin conn
       method: 'notifications/cancelled',
       params: { reason: 'connection-rebound', requestId: oldRequestId },
     },
-    targetOrigin: hostOrigin,
+    targetOrigin: '*',
   });
-  expect(first.posts.at(-1)?.targetOrigin).not.toBe('*');
   expect(second.posts[0]?.targetOrigin).toBe(secondOrigin);
+  let reboundSettled = false;
+  void rebound.then(() => { reboundSettled = true; }, () => { reboundSettled = true; });
+  second.emit({
+    id: responseId(second.posts[0]!),
+    jsonrpc: '2.0',
+    result: initializeResult,
+  }, secondOrigin, first.parent);
+  await flushListeners();
+  expect(reboundSettled).toBe(false);
   second.emit({
     id: responseId(second.posts[0]!),
     jsonrpc: '2.0',
@@ -521,6 +575,7 @@ it('rejects old pending work on rebind and establishes a fresh exact-origin conn
   await expect(rebound).resolves.toEqual(initializeResult);
   await oldFailure;
   expect(client.connected).toBe(true);
+  expect(second.posts.at(-1)?.targetOrigin).toBe(secondOrigin);
 });
 
 it('validates a rebind origin before changing the live connection', async () => {
@@ -587,21 +642,35 @@ it('keeps wildcard initialization cancellation local on dispose', async () => {
 it('acknowledges host teardown before disposing and makes disposal idempotent', async () => {
   const target = harness();
   const client = createAppClient({ window: target.window });
-  await connect(client, target);
+  await connect(client, target, 'null');
   const pending = client.request('slow', {});
   const pendingId = responseId(target.posts.at(-1)!);
   const pendingFailure = expect(pending).rejects.toMatchObject({ code: 'disposed' });
+
+  target.emit({
+    id: 'foreign-close',
+    jsonrpc: '2.0',
+    method: 'ui/resource-teardown',
+    params: {},
+  }, 'null', {});
+  target.emit({
+    id: 'changed-origin-close',
+    jsonrpc: '2.0',
+    method: 'ui/resource-teardown',
+    params: {},
+  }, hostOrigin);
+  expect(client.disposed).toBe(false);
 
   target.emit({
     id: 'close-1',
     jsonrpc: '2.0',
     method: 'ui/resource-teardown',
     params: {},
-  });
+  }, 'null');
   expect(target.posts.slice(-2)).toEqual([
     {
       message: { id: 'close-1', jsonrpc: '2.0', result: {} },
-      targetOrigin: hostOrigin,
+      targetOrigin: '*',
     },
     {
       message: {
@@ -609,10 +678,9 @@ it('acknowledges host teardown before disposing and makes disposal idempotent', 
         method: 'notifications/cancelled',
         params: { reason: 'disposed', requestId: pendingId },
       },
-      targetOrigin: hostOrigin,
+      targetOrigin: '*',
     },
   ]);
-  expect(target.posts.at(-1)?.targetOrigin).not.toBe('*');
   await pendingFailure;
   expect(client.disposed).toBe(true);
   expect(client.connected).toBe(false);

@@ -363,7 +363,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
 
   const post = (message: JsonObject, targetOrigin: string): void => {
     try {
-      parent.postMessage(message, targetOrigin);
+      parent.postMessage(message, targetOrigin === 'null' ? '*' : targetOrigin);
     } catch {
       throw new AppClientError('invalid-message', 'The App host rejected a JSON-RPC message.');
     }
@@ -451,7 +451,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
       let responseOrigin: string | undefined;
       if (request.initialize && configuredOrigin === undefined) {
         try {
-          responseOrigin = trustedOrigin(event.origin);
+          responseOrigin = event.origin === 'null' ? 'null' : trustedOrigin(event.origin);
         } catch {
           request.reject(new AppClientError('invalid-message', 'The App host returned an unpinnable origin.'));
           return;
