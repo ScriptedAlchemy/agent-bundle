@@ -11,13 +11,18 @@ import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 
 const pluginName = 'amp-install-fixture';
 
-const writeBundle = async (root: string, version: string, marker: string): Promise<void> => {
-  const plugin = join(root, '.amp', 'plugins', pluginName);
+const writeBundle = async (
+  root: string,
+  version: string,
+  marker: string,
+  name = pluginName,
+): Promise<void> => {
+  const plugin = join(root, '.amp', 'plugins', name);
   await mkdir(join(plugin, 'skills', 'review'), { recursive: true });
   await writeFile(join(plugin, 'index.js'), `export default async function () { /* ${marker} */ }\n`);
   await writeFile(join(plugin, 'skills', 'review', 'SKILL.md'), '---\nname: review\ndescription: Review code.\n---\n');
   await writeFile(join(root, 'outside.txt'), 'must not be installed\n');
-  await writeInstallFixtureManifest(root, { name: pluginName, version }, [{ host: 'amp' }]);
+  await writeInstallFixtureManifest(root, { name, version }, [{ host: 'amp' }]);
 };
 
 const forbiddenRunner = (): InstallCommandRunner => ({
@@ -158,6 +163,28 @@ it('uses the documented XDG system and project plugin roots without touching Amp
       scope: 'project',
     });
     await expect(readFile(join(projectRoot, '.amp', 'settings.json'), 'utf8')).resolves.toBe('{"trusted":false}\n');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('installs a mixed-case portable plugin name accepted by the Amp planner', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-amp-portable-name-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const name = 'My_Plugin';
+  await mkdir(bundle, { recursive: true });
+  await writeBundle(bundle, '1.0.0', 'portable', name);
+
+  try {
+    const installed = await installBundle({
+      commandRunner: forbiddenRunner(),
+      from: bundle,
+      home,
+      host: 'amp',
+      scope: 'user',
+    });
+    expect(installed.destination).toBe(join(home, '.config', 'amp', 'plugins', name));
   } finally {
     await rm(root, { force: true, recursive: true });
   }

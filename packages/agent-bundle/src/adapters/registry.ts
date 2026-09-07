@@ -437,8 +437,11 @@ const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | 
   if (capabilityIsSupported(adapter.capabilities.mcp) && mcpRuntime === undefined && !skillScoped) {
     throw new Error(`Target adapter "${adapter.name}" declares mcp capability without an MCP runtime contract.`);
   }
-  if (!capabilityIsSupported(adapter.capabilities.mcp) && (mcpRuntime !== undefined || skillScoped)) {
-    throw new Error(`Target adapter "${adapter.name}" declares an MCP runtime contract or scope without mcp capability.`);
+  if (!capabilityIsSupported(adapter.capabilities.mcp) && mcpRuntime !== undefined) {
+    throw new Error(`Target adapter "${adapter.name}" declares an MCP runtime contract without mcp capability.`);
+  }
+  if (!capabilityIsSupported(adapter.capabilities.mcp) && skillScoped) {
+    throw new Error(`Target adapter "${adapter.name}" declares skill-scoped MCP without mcp capability.`);
   }
   if (mcpRuntime !== undefined && skillScoped) {
     throw new Error(`Target adapter "${adapter.name}" cannot declare both a plugin-root MCP runtime and skill-scoped MCP.`);

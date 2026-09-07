@@ -347,7 +347,7 @@ describe('composite plugin root (#555)', () => {
   it('defaults to the portable projection when targets are omitted (acceptance 4)', { timeout: 120_000 }, async () => {
     const { output, result } = await buildFixture(undefined);
 
-    expect(result.build.manifest.manifestVersion).toBe(3);
+    expect(result.build.manifest.manifestVersion).toBe(4);
     expect(result.build.manifest.projections.map((projection) => projection.host)).toEqual(['portable']);
     expect(result.build.manifest.projections[0]!.documents.plugin).toBe('plugin.json');
     expect(result.build.manifest.projections[0]!.documents.mcp).toBe('mcp.json');
@@ -623,7 +623,7 @@ describe('composite plugin root (#555)', () => {
     await writeProject(root, { targets: ['claude', 'synthetic'] });
     const refused = {
       code: 'AB4106',
-      message: 'Target "synthetic" cannot share one composite root with the other selected targets (claude): only the built-in hosts (claude, codex, cursor, portable) project into a shared root.',
+      message: 'Target "synthetic" cannot share one composite root with the other selected targets (claude): only the built-in hosts (amp, claude, codex, cursor, portable) project into a shared root.',
       recovery: 'Build "synthetic" alone — targets: ["synthetic"] — into its own --output, and the other targets into another.',
       severity: 'error',
       sourcePath: join(root, 'agent-bundle.config.ts'),

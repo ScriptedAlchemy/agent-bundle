@@ -8,6 +8,7 @@ import type {
 } from '../build/manifest.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
+import { isPortablePathSegment } from '../core/paths.ts';
 import { manifestInventory, treeInventory, type TreeInventory } from './receipt.ts';
 
 export type BundleIdentityHost = 'amp' | 'claude' | 'codex' | 'cursor';
@@ -102,8 +103,11 @@ export const readBundleIdentity = async (
       }
       const plugin = result.manifest.application.name;
       if (
-        (host === 'amp' || host === 'cursor') &&
-        (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(plugin) || (host === 'cursor' && plugin.length > 64))
+        (host === 'amp' && !isPortablePathSegment(plugin)) ||
+        (host === 'cursor' && (
+          !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(plugin) ||
+          plugin.length > 64
+        ))
       ) {
         throw failure('AB7001', `${host} plugin name ${JSON.stringify(plugin)} is not a safe local plugin name.`, host);
       }

@@ -90,6 +90,10 @@ it('registers Amp as a built-in directory-plugin target with pinned evidence', (
   expect(registry.supports('amp', 'mcp')).toBe(true);
   expect(registry.supports('amp', 'skills')).toBe(true);
   expect(registry.supports('amp', 'install')).toBe(true);
+  expect(registry.supports('amp', 'event:session/start')).toBe(true);
+  expect(registry.supports('amp', 'events.sessionStart.context')).toBe(false);
+  expect(registry.supports('amp', 'events.toolAfter.context')).toBe(false);
+  expect(registry.supports('amp', 'events.toolBefore.deny')).toBe(true);
   expect(registry.mcpRuntime('amp')).toBeUndefined();
   expect(registry.artifactLayout('amp')).toMatchObject({
     rootDirectories: ['.amp'],
@@ -99,6 +103,10 @@ it('registers Amp as a built-in directory-plugin target with pinned evidence', (
   expect(capabilityTable.pluginApi.package).toBe('@ampcode/plugin');
   expect(capabilityTable.pluginApi.version).toBe('0.0.0-20260907001852-gf348fed');
   expect(capabilityTable.runtimeProof.state).toBe('unverified');
+  expect(capabilityTable.lifecycle.activationState).toMatchObject({
+    observable: ['placed', 'registered'],
+    unavailable: ['enabled', 'active'],
+  });
   expect(capabilityTable.plugins.precedence).toEqual(['project', 'system', 'personal', 'workspace']);
   expect(capabilityTable.skills.discoveryPrecedence).toEqual([
     '~/.config/agents/skills',
@@ -163,12 +171,32 @@ it('keeps content-only skills free of compiled runtimes', () => {
   ]);
 });
 
-it('emits a valid private factory name for every portable plugin path segment', () => {
+it('emits compilable private factory names for punctuation and reserved bindings', async () => {
   const model = plugin();
   const dotted = { ...model, metadata: { ...model.metadata, name: 'amp.review-tools' } };
   expect(writes(dotted)['.amp/plugins/amp.review-tools/index.js']).toContain(
     'export default async function ampReviewTools(amp)',
   );
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-amp-identifiers-'));
+  try {
+    const cases = [
+      ['arguments', 'pluginArguments'],
+      ['await', 'pluginAwait'],
+      ['class', 'pluginClass'],
+      ['eval', 'pluginEval'],
+      ['My_Plugin', 'My_Plugin'],
+    ] as const;
+    for (const [name, identifier] of cases) {
+      const entry = writes({ ...model, metadata: { ...model.metadata, name } })[`.amp/plugins/${name}/index.js`]!;
+      expect(entry).toContain(`export default async function ${identifier}(amp)`);
+      const path = join(root, `${name}.mjs`);
+      await writeFile(path, entry);
+      const loaded = await import(`${pathToFileURL(path).href}?reserved=${name}`) as { readonly default?: unknown };
+      expect(typeof loaded.default).toBe('function');
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 it('preserves native frontmatter and sibling MCP precedence over generated skill MCP', () => {
@@ -249,6 +277,14 @@ it('refuses generated local MCP, ambiguous skill scope, and unregistered prebuil
     ...model,
     mcpServers: [{ ...model.mcpServers[0]!, command: './server.mjs' }],
   });
+  const remotePathTokens = ampAdapter.plan({
+    ...model,
+    mcpServers: [{
+      ...model.mcpServers[1]!,
+      headers: { Authorization: 'agent-bundle:path:plugin-root/token' },
+      url: 'agent-bundle:path:plugin-root/mcp',
+    }],
+  });
   const secondSkill = {
     ...model.skills[0]!,
     id: 'skill:other',
@@ -291,6 +327,14 @@ it('refuses generated local MCP, ambiguous skill scope, and unregistered prebuil
   }));
   expect(commandPath.diagnostics).toContainEqual(expect.objectContaining({
     code: 'amp.mcp.command',
+    severity: 'error',
+  }));
+  expect(remotePathTokens.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'amp.mcp.path-token.url',
+    severity: 'error',
+  }));
+  expect(remotePathTokens.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'amp.mcp.path-token.headers-authorization',
     severity: 'error',
   }));
   expect(ambiguous.diagnostics).toContainEqual(expect.objectContaining({

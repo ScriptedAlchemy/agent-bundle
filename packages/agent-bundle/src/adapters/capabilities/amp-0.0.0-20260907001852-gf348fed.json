@@ -43,14 +43,14 @@
     "activationState": {
       "state": "degraded",
       "observable": [
-        "placed"
+        "placed",
+        "registered"
       ],
       "unavailable": [
-        "registered",
         "enabled",
         "active"
       ],
-      "reason": "Without an Amp account, amp plugins list cannot load global plugins; live registration, enabled state, and activation remain unverified.",
+      "reason": "The documented project/system directory is the registration; without an Amp account, enabled state and live activation remain unverified.",
       "evidence": [
         "2026-09-07: amp plugins list with @ampcode/cli@0.0.1788739286-gf348fe returned an account-dependent connection error."
       ]

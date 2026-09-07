@@ -44,12 +44,23 @@ const { errorDiagnostic } = createTargetDiagnostics(ampName, 'Amp');
 
 const ampPluginRoot = (plugin: string): string => `.amp/plugins/${plugin}`;
 
+const reservedFactoryNames = new Set([
+  'arguments', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue',
+  'debugger', 'default', 'delete', 'do', 'else', 'enum', 'eval', 'export',
+  'extends', 'false', 'finally', 'for', 'function', 'if', 'implements', 'import',
+  'in', 'instanceof', 'interface', 'let', 'new', 'null', 'package', 'private',
+  'protected', 'public', 'return', 'static', 'super', 'switch', 'this', 'throw',
+  'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield',
+]);
+
 const factoryName = (name: string): string => {
   const identifier = name.replace(
     /[^A-Za-z\d_$]+([A-Za-z\d_$])?/gu,
     (_, character: string | undefined) => character?.toUpperCase() ?? '',
   );
-  return /^[A-Za-z_$]/u.test(identifier) ? identifier : `plugin${identifier}`;
+  return /^[A-Za-z_$]/u.test(identifier) && !reservedFactoryNames.has(identifier)
+    ? identifier
+    : `plugin${identifier[0]?.toUpperCase() ?? ''}${identifier.slice(1)}`;
 };
 
 const mcpServerPlan = (
@@ -64,7 +75,27 @@ const mcpServerPlan = (
     ));
     return { diagnostics };
   }
+  const values = server.transport === 'streamable-http'
+    ? [
+        ['url', server.url],
+        ...Object.entries(server.headers ?? {}).map(([name, value]) => [`headers.${name}`, value] as const),
+      ] as const
+    : [
+        ['command', server.command],
+        ...(server.args ?? []).map((value, index) => [`args[${index}]`, value] as const),
+        ...Object.entries(server.env ?? {}).map(([name, value]) => [`env.${name}`, value] as const),
+      ] as const;
+  for (const [location, value] of values) {
+    if (value !== undefined && hasPathToken(value)) {
+      diagnostics.push(errorDiagnostic(
+        `amp.mcp.path-token.${location.replaceAll(/[^a-z\d]+/giu, '-').toLowerCase()}`,
+        `Amp skill MCP server ${JSON.stringify(server.name)} ${location} uses an Agent Bundle path token, ` +
+          'but the pinned Amp contract documents no plugin-root token.',
+      ));
+    }
+  }
   if (server.transport === 'streamable-http') {
+    if (diagnostics.length > 0) return { diagnostics };
     return {
       diagnostics,
       value: {
@@ -89,20 +120,6 @@ const mcpServerPlan = (
       'amp.mcp.command',
       `Amp skill MCP server ${JSON.stringify(server.name)} must use a nonempty globally resolvable command, not a filesystem path.`,
     ));
-  }
-  const values = [
-    ['command', server.command],
-    ...(server.args ?? []).map((value, index) => [`args[${index}]`, value] as const),
-    ...Object.entries(server.env ?? {}).map(([name, value]) => [`env.${name}`, value] as const),
-  ] as const;
-  for (const [location, value] of values) {
-    if (value !== undefined && hasPathToken(value)) {
-      diagnostics.push(errorDiagnostic(
-        `amp.mcp.path-token.${location.replaceAll(/[^a-z\d]+/giu, '-').toLowerCase()}`,
-        `Amp skill MCP server ${JSON.stringify(server.name)} ${location} uses an Agent Bundle path token, ` +
-          'but the pinned Amp contract documents no plugin-root token.',
-      ));
-    }
   }
   if (diagnostics.length > 0) return { diagnostics };
   return {
@@ -530,6 +547,8 @@ export const ampAdapter: TargetAdapter = Object.freeze({
   }),
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.eventRoutes, evidence),
+    'events.sessionStart.context': unavailableCapability('Amp session.start is fire-and-forget and has no context result channel.'),
+    'events.toolAfter.context': unavailableCapability('Amp tool.result can replace the result but has no separate additional-context channel.'),
     commands: unavailableCapability(capabilityTable.plugin.commands.reason),
     hooks: supportedCapability(evidence),
     'hooks.timeout': unavailableCapability('PluginAPI event handlers expose no per-handler timeout setting.'),
