@@ -1,10 +1,10 @@
-import { stat } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { join } from 'node:path';
 
 import WebSocket from 'ws';
 
 import { isErrno } from '../core/errors.ts';
+import { exists } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 
 const requestTimeoutMs = 30_000;
@@ -20,12 +20,7 @@ export const withCodexAppServer = async <Result>(
   action: (request: CodexAppServerRequest) => Promise<Result>,
 ): Promise<Result | undefined> => {
   const socketPath = join(codexRoot, 'app-server-control', 'app-server-control.sock');
-  try {
-    await stat(socketPath);
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return undefined;
-    throw error;
-  }
+  if (!await exists(socketPath)) return undefined;
 
   const socket = new WebSocket('ws://localhost/', {
     createConnection: () => createConnection(socketPath),
