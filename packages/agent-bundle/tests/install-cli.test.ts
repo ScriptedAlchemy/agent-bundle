@@ -82,22 +82,29 @@ describe('package-bound lifecycle commands', () => {
     }]);
   });
 
-  it('runs doctor against the pinned root and exits 1 on an error diagnostic', async () => {
+  it('runs doctor against the pinned root, keeps the report on stdout, and exits 1 on an error diagnostic', async () => {
     const calls: unknown[] = [];
-    const { code, stdout } = await runPinned(['doctor', '--host', 'cursor', '--json'], {
-      runDoctor: async (options) => {
-        calls.push(options);
-        return {
-          diagnostics: [{ code: 'AB7300', message: 'boom', recovery: 'fix', severity: 'error' }],
-          endpoints: { status: 'clean', summary: { live: 0, staleLocks: 0, staleSockets: 0 } },
-          hosts: [],
-          summary: { errors: 1, infos: 0, warnings: 0 },
-        } as never;
-      },
-    });
-    expect(code).toBe(1);
+    const runDoctor = (async (options: unknown) => {
+      calls.push(options);
+      return {
+        diagnostics: [{ code: 'AB7300', message: 'boom', recovery: 'fix', severity: 'error' }],
+        endpoints: { status: 'clean', summary: { live: 0, staleLocks: 0, staleSockets: 0 } },
+        hosts: [],
+        summary: { errors: 1, infos: 0, warnings: 0 },
+      };
+    }) as unknown as LifecycleApi['runDoctor'];
+    const json = await runPinned(['doctor', '--host', 'cursor', '--json'], { runDoctor });
+    expect(json.code).toBe(1);
     expect(calls).toEqual([{ from: '/pkg', hosts: ['cursor'] }]);
-    expect(JSON.parse(stdout())).toMatchObject({ summary: { errors: 1 } });
+    expect(json.stderr()).toBe('');
+    expect(JSON.parse(json.stdout())).toMatchObject({ summary: { errors: 1 } });
+
+    // The exit code reports the finding; the report itself never moves to stderr.
+    const human = await runPinned(['doctor', '--host', 'cursor'], { runDoctor });
+    expect(human.code).toBe(1);
+    expect(human.stderr()).toBe('');
+    expect(human.stdout()).toContain('AB7300: boom\nRecovery: fix\n');
+    expect(human.stdout()).toContain('Doctor summary: 1 error(s)');
   });
 
   it('exposes no --from once the root is pinned', async () => {

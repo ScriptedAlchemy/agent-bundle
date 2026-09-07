@@ -118,13 +118,17 @@ export const main = (argv: readonly string[]): Promise<number> =>
 
 `runInstallCli` is the `agent-bundle` CLI's own `install <host>`, `uninstall <host>`, and
 `doctor` commands — the same flags, receipts, replacement rules, `--plan`, data policy, `--json`
-output, and exit codes (0, 1 with one diagnostics line on stderr, 2 for usage) — with the bundle
-root pinned to `from`, so the bin exposes no `--from` and probes nothing. The package build inlines
-the lifecycle into the executable; the installed package needs no `agent-bundle` at run time. The
-entry also exports `installBundle`, `uninstallBundle`, `runDoctor`, and the `format*` helpers for a
-bin that composes its own command surface. A read-only preview of what `install` would do is
-`doctor --host <host>`, which reports the installed copy as current, stale, version-mismatched,
-foreign, or absent.
+output, and exit codes — with the bundle root pinned to `from`, so the bin exposes no `--from` and never searches for another artifact
+root. The package build inlines the lifecycle into the executable; the installed package needs no
+`agent-bundle` at run time. The entry also exports `installBundle`, `uninstallBundle`, `runDoctor`,
+and the `format*` helpers for a bin that composes its own command surface. The read-only status
+check is `doctor --host <host>`: it reports the installed copy as current, stale,
+version-mismatched, foreign, or absent.
+
+Exit codes follow the `agent-bundle` CLI. 0 is success. `doctor` always writes its report (human
+or `--json`) to stdout and exits 1 when that report carries an error diagnostic — read the report,
+not stderr. An `install` or `uninstall` that fails, or any command that throws, writes its
+diagnostics as one JSON line to stderr and exits 1. A usage error exits 2.
 
 ## Development installs are a different thing
 

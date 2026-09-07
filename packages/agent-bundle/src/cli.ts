@@ -35,8 +35,7 @@ import type { installBundle, InstallHost } from './install/install.ts';
 import type { runDoctor } from './install/doctor.ts';
 import type { uninstallBundle } from './install/uninstall.ts';
 import type { runHostMcpProxy } from './dev/host-mcp-proxy.ts';
-import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
-import { errorMessage } from './core/errors.ts';
+import { DiagnosticError, diagnosticsFor, type Diagnostic } from './core/diagnostics.ts';
 import { collectInstallHost, registerLifecycleCommands } from './install/commands.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
@@ -278,15 +277,6 @@ const parseJsonObject = async (options: JsonInputOptions): Promise<Record<string
     throw new TypeError('Input must be a JSON object.');
   }
   return value as Record<string, unknown>;
-};
-
-const diagnosticsFor = (error: unknown): readonly Diagnostic[] => {
-  if (error instanceof DiagnosticError) return error.diagnostics;
-  return [{
-    code: 'AB5000',
-    message: errorMessage(error),
-    severity: 'error',
-  }];
 };
 
 /** One canonical JSON line: the `--json` document on stdout, or the diagnostics document on stderr. */
@@ -760,18 +750,15 @@ export const runCli = async (
   });
 
   registerLifecycleCommands(program, {
-    lifecycle: async () => {
-      const [install, uninstall, doctor] = await Promise.all([
-        import('./install/install.ts'),
-        import('./install/uninstall.ts'),
-        import('./install/doctor.ts'),
-      ]);
-      return {
-        installBundle: dependencies.installBundle ?? install.installBundle,
-        runDoctor: dependencies.runDoctor ?? doctor.runDoctor,
-        uninstallBundle: dependencies.uninstallBundle ?? uninstall.uninstallBundle,
-      };
-    },
+    // Each implementation loads on first use, so `install` never pays for `doctor`.
+    lifecycle: async () => ({
+      installBundle: dependencies.installBundle
+        ?? (async (options) => (await import('./install/install.ts')).installBundle(options)),
+      runDoctor: dependencies.runDoctor
+        ?? (async (options) => (await import('./install/doctor.ts')).runDoctor(options)),
+      uninstallBundle: dependencies.uninstallBundle
+        ?? (async (options) => (await import('./install/uninstall.ts')).uninstallBundle(options)),
+    }),
     machine,
     setExitCode: (code) => { exitCode = code; },
     show,

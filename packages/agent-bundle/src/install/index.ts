@@ -1,38 +1,19 @@
 import { Command, CommanderError } from 'commander';
 
-import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
+import { diagnosticsFor } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
-import { errorMessage } from '../core/errors.ts';
 import { registerLifecycleCommands } from './commands.ts';
 import { runDoctor } from './doctor.ts';
 import { installBundle } from './install.ts';
 import { uninstallBundle } from './uninstall.ts';
 
 export { runDoctor } from './doctor.ts';
-export type {
-  DoctorHost,
-  DoctorHostReport,
-  DoctorInstallComparison,
-  DoctorInstallComparisonStatus,
-  DoctorOptions,
-  DoctorReport,
-} from './doctor.ts';
+export type * from './doctor.ts';
 export { formatDoctorReport, formatInstallResult, formatUninstallResult } from './format.ts';
 export { installBundle } from './install.ts';
-export type {
-  InstallBundleOptions,
-  InstallHost,
-  InstallMode,
-  InstallResult,
-  InstallResultState,
-  InstallScope,
-} from './install.ts';
+export type * from './install.ts';
 export { uninstallBundle } from './uninstall.ts';
-export type {
-  UninstallBundleOptions,
-  UninstallResult,
-  UninstallResultState,
-} from './uninstall.ts';
+export type * from './uninstall.ts';
 
 /**
  * A package-bound lifecycle CLI (#724): the `agent-bundle` CLI's own
@@ -52,18 +33,14 @@ export interface InstallCliOptions {
   readonly version?: string;
 }
 
-const diagnosticsFor = (error: unknown): readonly Diagnostic[] => {
-  if (error instanceof DiagnosticError) return error.diagnostics;
-  return [{ code: 'AB5000', message: errorMessage(error), severity: 'error' }];
-};
-
 const lifecycle = async () => ({ installBundle, runDoctor, uninstallBundle });
 
 /**
  * Runs `install <host>`, `uninstall <host>`, or `doctor` against the pinned
- * bundle root and returns the process exit code: 0 on success, 1 when the
- * command failed (diagnostics as one JSON line on stderr), 2 on a usage
- * error, exactly like the `agent-bundle` CLI.
+ * bundle root and returns the process exit code, exactly like the
+ * `agent-bundle` CLI: 0 on success; 1 when the command threw (its
+ * diagnostics as one JSON line on stderr) or when `doctor`'s report, written
+ * to stdout, carries an error diagnostic; 2 on a usage error.
  */
 export const runInstallCli = async (argv: readonly string[], options: InstallCliOptions): Promise<number> => {
   const stdout = options.stdout ?? ((text: string): void => void process.stdout.write(text));
