@@ -43,8 +43,11 @@ zero diagnostics — including the `AB473x` migration nudges, because the templa
 against the entry conventions from the start. The `mcp-server` template also starts with the
 consumer test harness, each pool labeled with the proof level it carries.
 
-Scaffolded projects pin `agent-bundle` to an exact preview tarball from the same commit the
-scaffolder came from, so the scaffolder and the framework it pins never disagree. See the
+Preview scaffolders pin `agent-bundle` and `@agent-bundle/runtime` to one commit SHA. An
+npm-installed scaffolder instead reads the exact compiler/runtime pair from its packed optional
+peer metadata; those versions are independent, so a compiler `0.2.0` release can correctly select
+runtime `0.1.0`. A `--framework-version` used with a runtime template must match that recorded
+compiler version, or scaffolding stops before writing files. See the
 [create-agent-bundle README](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/packages/create-agent-bundle/README.md)
 for every flag.
 

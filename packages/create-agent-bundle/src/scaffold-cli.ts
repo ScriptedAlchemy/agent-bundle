@@ -9,7 +9,7 @@ import type { PlatformError } from 'effect/PlatformError';
 
 import { mapCause, runPromise } from './effect/boundary.ts';
 import { liftPromise, liftTry } from './effect/lift.ts';
-import { resolveFrameworkSpec } from './framework.ts';
+import { resolveFrameworkSpec, runtimePairingFromManifest } from './framework.ts';
 import {
   UsageError,
   resolveOptions,
@@ -65,17 +65,19 @@ const clackPrompter: Prompter = {
 const ownDirectory = dirname(fileURLToPath(import.meta.url));
 
 /**
- * The version must be read from disk at run time, not inlined at build time:
- * pkg.pr.new rewrites the manifest version to `<version>-preview-<sha>` when
- * it packs the preview tarball, and that suffix is what pairs the scaffolded
- * project with the matching agent-bundle preview.
+ * The version and release pair must be read from disk at run time, not inlined:
+ * preview and npm packers rewrite this manifest after the build.
  */
-const ownVersion = Effect.gen(function* () {
+interface OwnManifest {
+  readonly peerDependencies?: Readonly<Record<string, unknown>>;
+  readonly version: string;
+}
+
+const ownManifest = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const manifestPath = path.join(ownDirectory, '..', 'package.json');
-  const manifest = JSON.parse(yield* fs.readFileString(manifestPath)) as { readonly version: string };
-  return manifest.version;
+  return JSON.parse(yield* fs.readFileString(manifestPath)) as OwnManifest;
 });
 
 const runInstall = (options: ResolvedOptions, targetDirectory: string): Effect.Effect<number, Error> =>
@@ -105,8 +107,9 @@ const scaffoldProgram = Effect.fnUntraced(function* (
 ): Effect.fn.Return<0 | 1 | 2, PlatformError, FileSystem.FileSystem | Path.Path> {
   // Reading this package's own manifest fails before the intro, exactly as
   // it did as a rejected Promise: no cancel banner, the error leaves runCli.
-  const version = yield* ownVersion;
-  intro(`create-agent-bundle ${version}`);
+  const manifest = yield* ownManifest;
+  const pairing = runtimePairingFromManifest(manifest);
+  intro(`create-agent-bundle ${manifest.version}`);
   const run = Effect.gen(function* () {
     const path = yield* Path.Path;
     const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
@@ -115,7 +118,11 @@ const scaffoldProgram = Effect.fnUntraced(function* (
       prompter: clackPrompter,
       userAgent: process.env['npm_config_user_agent'],
     }));
-    const frameworkSpec = yield* liftTry(() => resolveFrameworkSpec(version, options.frameworkVersion));
+    const frameworkSpec = yield* liftTry(() => resolveFrameworkSpec(
+      manifest.version,
+      options.frameworkVersion,
+      pairing,
+    ));
     const targetDirectory = path.resolve(process.cwd(), options.targetDir);
     yield* assertScaffoldTarget(targetDirectory, options.targetDir);
 
@@ -123,6 +130,7 @@ const scaffoldProgram = Effect.fnUntraced(function* (
     const files = yield* scaffold({
       frameworkSpec,
       packageName: options.packageName,
+      pairing,
       pluginName: options.pluginName,
       targetDirectory,
       targets: options.targets,

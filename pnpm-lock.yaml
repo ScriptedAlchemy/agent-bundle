@@ -346,6 +346,13 @@ importers:
         version: 4.5.4
 
   packages/create-agent-bundle:
+    dependencies:
+      '@agent-bundle/runtime':
+        specifier: workspace:*
+        version: link:../rsc-runtime
+      agent-bundle:
+        specifier: workspace:*
+        version: link:../agent-bundle
     devDependencies:
       '@clack/prompts':
         specifier: 1.7.0

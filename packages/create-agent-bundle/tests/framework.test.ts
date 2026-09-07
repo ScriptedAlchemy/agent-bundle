@@ -1,4 +1,6 @@
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Path } from 'effect';
@@ -8,6 +10,7 @@ import {
   assertLocalFrameworkTarball,
   previewPackageSpec,
   resolveFrameworkSpec,
+  runtimePairingFromManifest,
   runtimeSpecForFramework,
   validatedRuntimeSpecForFramework,
 } from '../src/framework.ts';
@@ -34,6 +37,49 @@ const expectUsageError = (error: unknown, message?: string): void => {
   if (message !== undefined) expect((error as Error).message).toContain(message);
 };
 
+const releasePairing = { framework: '0.2.0', runtime: '0.1.0' } as const;
+
+it('reads release pairing metadata but ignores source and preview peer rewrites', () => {
+  expect(runtimePairingFromManifest({
+    peerDependencies: {
+      '@agent-bundle/runtime': '0.1.0',
+      'agent-bundle': '0.2.0',
+    },
+    version: '0.1.0',
+  })).toEqual(releasePairing);
+  expect(runtimePairingFromManifest({
+    peerDependencies: {
+      '@agent-bundle/runtime': '0.0.0-preview-da5df1d',
+      'agent-bundle': '0.0.0-preview-da5df1d',
+    },
+    version: '0.0.0-preview-da5df1d',
+  })).toBeUndefined();
+  expect(runtimePairingFromManifest({
+    peerDependencies: {
+      '@agent-bundle/runtime': 'workspace:*',
+      'agent-bundle': 'workspace:*',
+    },
+    version: '0.0.0',
+  })).toBeUndefined();
+});
+
+it('declares the compiler/runtime release pair as optional workspace peers', async () => {
+  const manifest = JSON.parse(
+    await readFile(join(process.cwd(), 'packages/create-agent-bundle/package.json'), 'utf8'),
+  ) as {
+    readonly peerDependencies: Record<string, string>;
+    readonly peerDependenciesMeta: Record<string, { readonly optional?: boolean }>;
+  };
+  expect(manifest.peerDependencies).toMatchObject({
+    '@agent-bundle/runtime': 'workspace:*',
+    'agent-bundle': 'workspace:*',
+  });
+  expect(manifest.peerDependenciesMeta).toMatchObject({
+    '@agent-bundle/runtime': { optional: true },
+    'agent-bundle': { optional: true },
+  });
+});
+
 describe('previewPackageSpec', () => {
   it('derives the renamed runtime pkg.pr.new URL', () => {
     expect(previewPackageSpec('@agent-bundle/runtime', 'da5df1d'))
@@ -50,9 +96,13 @@ describe('resolveFrameworkSpec', () => {
   });
 
   it('lets --framework-version win verbatim', () => {
-    expect(resolveFrameworkSpec('0.0.0-preview-da5df1d', 'file:/tmp/agent-bundle.tgz'))
+    expect(resolveFrameworkSpec('0.0.0-preview-da5df1d', 'file:/tmp/agent-bundle.tgz', releasePairing))
       .toBe('file:/tmp/agent-bundle.tgz');
-    expect(resolveFrameworkSpec('0.0.0', ' 0.2.0 ')).toBe('0.2.0');
+    expect(resolveFrameworkSpec('0.1.0', ' 0.2.0 ', releasePairing)).toBe('0.2.0');
+  });
+
+  it('pins the compiler selected by an installed registry scaffolder', () => {
+    expect(resolveFrameworkSpec('0.1.0', undefined, releasePairing)).toBe('0.2.0');
   });
 
   it('refuses to guess outside a preview build (the npm agent-bundle name is unrelated)', () => {
@@ -62,21 +112,35 @@ describe('resolveFrameworkSpec', () => {
 });
 
 describe('runtimeSpecForFramework', () => {
-  it('pairs preview and local tarball framework specs with the runtime package', () => {
-    expect(runtimeSpecForFramework('https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@da5df1d'))
+  it('keeps previews on their exact SHA and uses the recorded runtime version for local tarballs', () => {
+    expect(runtimeSpecForFramework(
+      'https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@da5df1d',
+      releasePairing,
+    ))
       .toBe('https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@da5df1d');
-    expect(runtimeSpecForFramework('file:/tmp/agent-bundle-0.1.0.tgz'))
+    expect(runtimeSpecForFramework('file:/tmp/agent-bundle-0.2.0.tgz', releasePairing))
       .toBe('file:/tmp/agent-bundle-runtime-0.1.0.tgz');
+    expect(runtimeSpecForFramework('file:/tmp/agent-bundle.tgz', releasePairing))
+      .toBe('file:/tmp/agent-bundle-runtime.tgz');
     expect(runtimeSpecForFramework('file:/tmp/agent-bundle.tgz'))
       .toBe('file:/tmp/agent-bundle-runtime.tgz');
   });
 
-  it('mirrors npm registry framework specs onto the runtime package', () => {
-    expect(runtimeSpecForFramework('0.1.0')).toBe('0.1.0');
-    expect(runtimeSpecForFramework('^0.1.0')).toBe('^0.1.0');
-    expect(runtimeSpecForFramework('>=0.1.0 <1')).toBe('>=0.1.0 <1');
-    expect(runtimeSpecForFramework('1.x')).toBe('1.x');
-    expect(runtimeSpecForFramework('next')).toBe('next');
+  it('selects the recorded runtime version for the paired registry compiler', () => {
+    expect(runtimeSpecForFramework('0.2.0', releasePairing)).toBe('0.1.0');
+  });
+
+  it('rejects a registry compiler outside the installed scaffolder pairing', () => {
+    expect(() => runtimeSpecForFramework('0.1.0', releasePairing)).toThrow(UsageError);
+    expect(() => runtimeSpecForFramework('0.1.0', releasePairing))
+      .toThrow('paired with agent-bundle 0.2.0 and @agent-bundle/runtime 0.1.0');
+  });
+
+  it('never copies a registry compiler selector when pairing metadata is absent', () => {
+    expect(() => runtimeSpecForFramework('0.2.0')).toThrow(UsageError);
+    expect(() => runtimeSpecForFramework('0.2.0')).toThrow('same-SHA pkg.pr.new URL');
+    expect(() => runtimeSpecForFramework('file:/tmp/agent-bundle-0.2.0.tgz'))
+      .toThrow('agent-bundle.tgz and agent-bundle-runtime.tgz');
   });
 
   it('rejects package specs that cannot resolve independently under the runtime name', () => {
@@ -91,14 +155,14 @@ describe('runtimeSpecForFramework', () => {
       'agent-bundle.tar.gz',
     ];
     for (const spec of unsupportedSpecs) {
-      expect(() => runtimeSpecForFramework(spec)).toThrow(UsageError);
-      expect(() => runtimeSpecForFramework(spec)).toThrow('cannot be reused for @agent-bundle/runtime');
+      expect(() => runtimeSpecForFramework(spec, releasePairing)).toThrow(UsageError);
+      expect(() => runtimeSpecForFramework(spec, releasePairing)).toThrow('cannot be reused for @agent-bundle/runtime');
     }
   });
 
   it('fails closed when a paired runtime spec cannot be derived', () => {
-    expect(() => runtimeSpecForFramework('file:/tmp/framework.tgz')).toThrow(UsageError);
-    expect(() => runtimeSpecForFramework('file:/tmp/framework.tgz')).toThrow('npm registry version, range, or tag');
+    expect(() => runtimeSpecForFramework('file:/tmp/framework.tgz', releasePairing)).toThrow(UsageError);
+    expect(() => runtimeSpecForFramework('file:/tmp/framework.tgz', releasePairing)).toThrow('npm registry version');
   });
 });
 
@@ -151,37 +215,65 @@ layer(NodeServices.layer, { excludeTestServices: true })('assertLocalFrameworkTa
 });
 
 layer(NodeServices.layer, { excludeTestServices: true })('validatedRuntimeSpecForFramework', (it) => {
-  it.effect('leaves registry and preview specs to npm', () => Effect.gen(function* () {
-    expect(yield* validatedRuntimeSpecForFramework('0.1.0', tmpdir())).toBe('0.1.0');
+  it.effect('selects the installed scaffolder runtime for its registry compiler', () => Effect.gen(function* () {
+    expect(yield* validatedRuntimeSpecForFramework('0.2.0', tmpdir(), releasePairing)).toBe('0.1.0');
+  }));
+
+  it.effect('rejects a registry compiler outside the installed scaffolder pairing', () => Effect.gen(function* () {
+    expectUsageError(
+      yield* Effect.flip(validatedRuntimeSpecForFramework('0.1.0', tmpdir(), releasePairing)),
+      'paired with agent-bundle 0.2.0 and @agent-bundle/runtime 0.1.0',
+    );
   }));
 
   it.effect('fails closed on the typed usage error when no runtime spec can be derived', () => Effect.gen(function* () {
     expectUsageError(
       yield* Effect.flip(validatedRuntimeSpecForFramework('file:/tmp/framework.tgz', tmpdir())),
-      'npm registry version, range, or tag',
+      'npm registry version paired with this create-agent-bundle release',
     );
   }));
 
   it.effect('resolves a relative file: pair against the base directory', () => Effect.gen(function* () {
     const path = yield* Path.Path;
     const directory = yield* tarballDirectory({
-      'agent-bundle-0.0.0.tgz': packageTarball('agent-bundle'),
-      'agent-bundle-runtime-0.0.0.tgz': packageTarball('@agent-bundle/runtime'),
+      'agent-bundle-0.2.0.tgz': packageTarball('agent-bundle', '0.2.0'),
+      'agent-bundle-runtime-0.1.0.tgz': packageTarball('@agent-bundle/runtime', '0.1.0'),
     });
-    const spec = 'file:../agent-bundle-0.0.0.tgz';
-    expect(yield* validatedRuntimeSpecForFramework(spec, path.join(directory, 'project')))
-      .toBe('file:../agent-bundle-runtime-0.0.0.tgz');
-    expectUsageError(yield* Effect.flip(validatedRuntimeSpecForFramework(spec, process.cwd())));
+    const spec = 'file:../agent-bundle-0.2.0.tgz';
+    expect(yield* validatedRuntimeSpecForFramework(spec, path.join(directory, 'project'), releasePairing))
+      .toBe('file:../agent-bundle-runtime-0.1.0.tgz');
+    expectUsageError(yield* Effect.flip(validatedRuntimeSpecForFramework(spec, process.cwd(), releasePairing)));
+  }));
+
+  it.effect('rejects a runtime tarball whose package version violates the recorded pairing', () => Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const directory = yield* tarballDirectory({
+      'agent-bundle-0.2.0.tgz': packageTarball('agent-bundle', '0.2.0'),
+      'agent-bundle-runtime-0.1.0.tgz': packageTarball('@agent-bundle/runtime', '0.2.0'),
+    });
+    expectUsageError(
+      yield* Effect.flip(validatedRuntimeSpecForFramework(
+        `file:${path.join(directory, 'agent-bundle-0.2.0.tgz')}`,
+        directory,
+        releasePairing,
+      )),
+      'expected agent-bundle 0.2.0 and @agent-bundle/runtime 0.1.0, '
+      + 'received agent-bundle 0.2.0 and @agent-bundle/runtime 0.2.0',
+    );
   }));
 
   it.effect('rejects a pair whose runtime tarball has a tampered tar header', () => Effect.gen(function* () {
     const path = yield* Path.Path;
     const directory = yield* tarballDirectory({
-      'agent-bundle-0.0.0.tgz': packageTarball('agent-bundle'),
-      'agent-bundle-runtime-0.0.0.tgz': tamperedPackageTarball('@agent-bundle/runtime'),
+      'agent-bundle-0.2.0.tgz': packageTarball('agent-bundle', '0.2.0'),
+      'agent-bundle-runtime-0.1.0.tgz': tamperedPackageTarball('@agent-bundle/runtime', '0.1.0'),
     });
     expectUsageError(
-      yield* Effect.flip(validatedRuntimeSpecForFramework(`file:${path.join(directory, 'agent-bundle-0.0.0.tgz')}`, directory)),
+      yield* Effect.flip(validatedRuntimeSpecForFramework(
+        `file:${path.join(directory, 'agent-bundle-0.2.0.tgz')}`,
+        directory,
+        releasePairing,
+      )),
       'Invalid tar header checksum',
     );
   }));

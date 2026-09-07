@@ -31,7 +31,7 @@ scripted and asks nothing — the remaining values fall back to their defaults.
 | `--targets <list>` | Comma-separated host targets: `portable`, `claude`, `codex`, `cursor`. Default: `portable,codex,claude`. |
 | `--package-manager <name>` | `npm`, `pnpm`, `yarn`, or `bun`. Default: detected from the invoking client. |
 | `--no-install` | Skip installing dependencies after scaffolding. |
-| `--framework-version <spec>` | Pin the project's `agent-bundle` dependency to this spec (a version, a tarball path, or a URL). |
+| `--framework-version <spec>` | Pin the project's `agent-bundle` dependency to this spec (a version, a tarball path, or a URL). Runtime templates require the compiler version recorded by this scaffolder release. |
 | `-h, --help` | Show usage. |
 
 ## Templates
@@ -59,14 +59,24 @@ anything; its README documents the wiring to add with the first route.
 
 ## The framework dependency
 
-Scaffolded projects pin `agent-bundle` to an exact
-[pkg.pr.new](https://pkg.pr.new) preview tarball. Without
-`--framework-version`, the pin is derived from this scaffolder's own preview
-version: pkg.pr.new publishes every workspace package of one commit under the
-same `-preview-<sha>` suffix, so the scaffolder and the framework it pins
-always come from the same commit. A non-preview build of the scaffolder has
-no derivable default (the `agent-bundle` name on npm currently belongs to an
-unrelated project) and requires `--framework-version` explicitly.
+Preview scaffolders pin `agent-bundle` and `@agent-bundle/runtime` to exact
+[pkg.pr.new](https://pkg.pr.new) tarballs from one commit SHA. A runtime
+template overridden from a preview scaffolder accepts another exact
+pkg.pr.new URL or the unversioned local names `agent-bundle.tgz` and
+`agent-bundle-runtime.tgz`; versioned registry or local overrides require the
+matching npm scaffolder release.
+
+An npm release records its compatible compiler and runtime versions as
+optional peers in the packed `create-agent-bundle` manifest. The scaffolder
+pins those two recorded versions independently — it never derives the runtime
+version from the compiler version — and rejects a runtime-bearing scaffold
+whose `--framework-version` does not match the recorded compiler. A local
+compiler tarball selects the sibling runtime tarball with the recorded runtime
+version and validates both package names and versions before writing the
+project.
+Until this project owns the npm package names, use the preview command above;
+a locally packed release record does not make the unrelated registry package
+safe to install.
 
 ## License
 
