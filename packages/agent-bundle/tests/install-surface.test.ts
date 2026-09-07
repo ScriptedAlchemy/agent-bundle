@@ -205,9 +205,10 @@ it.each([
   {
     agentPlugins: 'installs this bundle as one plugin. Reads: `plugin.json`, `skills`.',
     inventory: 'skills only',
-    swivalPartial: false,
+    swivalPartial: true,
     swivalTier: 'loads the components it recognizes without reading the manifest. Reads: `skills`.'
-      + ' Register: `swival --skills-dir <plugin directory>/skills "<task>"`.',
+      + ' Register: `swival --skills-dir <plugin directory>/skills "<task>"`.'
+      + ' Not loaded: manifest, mcp, placeholders, hooks.',
     mcpServers: [],
     skills: [portableSkill],
     skillsTier: 'loads the components it recognizes without reading the manifest. Reads: `skills`.'
@@ -216,9 +217,11 @@ it.each([
   {
     agentPlugins: 'installs this bundle as one plugin. Reads: `mcp.json`, `plugin.json`.',
     inventory: 'MCP only',
-    swivalPartial: true,
-    swivalTier: 'loads the components it recognizes without reading the manifest. Reads: `mcp.json`.'
-      + ' Register: `swival --skills-dir <plugin directory>/skills "<task>"`.',
+    swivalPartial: false,
+    // Swival's registration hands over the skill tree alone, so an MCP-only
+    // bundle carries nothing it reads and gets no command.
+    swivalTier: 'loads the components it recognizes without reading the manifest. This bundle emits none of'
+      + ' the paths it reads, so there is nothing to install there.',
     mcpServers: [portableServer],
     skills: [],
     skillsTier: 'loads the components it recognizes without reading the manifest. Reads: `mcp.json`.'
@@ -228,8 +231,9 @@ it.each([
     agentPlugins: 'installs this bundle as one plugin. Reads: `mcp.json`, `plugin.json`, `skills`.',
     inventory: 'skills and MCP',
     swivalPartial: true,
-    swivalTier: 'loads the components it recognizes without reading the manifest. Reads: `mcp.json`, `skills`.'
-      + ' Register: `swival --skills-dir <plugin directory>/skills "<task>"`.',
+    swivalTier: 'loads the components it recognizes without reading the manifest. Reads: `skills`.'
+      + ' Register: `swival --skills-dir <plugin directory>/skills "<task>"`.'
+      + ' Not loaded: manifest, mcp, placeholders, hooks.',
     mcpServers: [portableServer],
     skills: [portableSkill],
     skillsTier: 'loads the components it recognizes without reading the manifest. Reads: `mcp.json`, `skills`.'
@@ -250,8 +254,8 @@ it.each([
   // build did not write is not a limit here.
   expect(install).toContain('- **Swival** (docs retrieved 2026-09-06; no product version is published on'
     + ` the documentation pages) ${expected.swivalTier}`);
-  const partial = '  - Partial `mcp`: 2026-09-06: the emitted document is read only when it is passed as'
-    + ' --mcp-config <plugin directory>/mcp.json';
+  const partial = '  - Partial `skills`: 2026-09-06: the emitted skills/ root is not a default location,'
+    + ' so it loads only once registered with --skills-dir';
   if (expected.swivalPartial) expect(install).toContain(partial);
   else expect(install).not.toContain(partial);
   // A client that reads nothing says so whatever the bundle carries.

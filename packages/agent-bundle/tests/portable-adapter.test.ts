@@ -697,6 +697,21 @@ it('emits the artifact paths every recorded client reads, and none of the manife
   expect(clients.find((client) => client.id === 'antigravity')?.discovery.required).toEqual([]);
 });
 
+it('records every client once, since JSON keeps only the last of a repeated key', async () => {
+  // A record added twice is not a duplicate that a reader can spot: the parser
+  // drops every copy but the last, so the earlier one is text nothing reads.
+  const source = await readFile(
+    new URL('../src/adapters/capabilities/portable-1.0.0.json', import.meta.url),
+    'utf8',
+  );
+  const block = source.slice(source.indexOf('\n  "clients": {'));
+  const authored = [...block.slice(0, block.indexOf('\n  },')).matchAll(/^ {4}"([a-z0-9-]+)": \{$/gmu)]
+    .map((match) => match[1]!);
+
+  expect([...authored].sort((left, right) => left.localeCompare(right)))
+    .toEqual(clientCompatibilityFrom('portable', capabilityTable.clients).map((client) => client.id));
+});
+
 it('refuses a client record that claims a tier its own rows do not support', () => {
   const record = (overrides: Record<string, unknown>) => ({
     demo: {
