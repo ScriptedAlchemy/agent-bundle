@@ -46,8 +46,8 @@ const modelFor = (target: string): NormalizedPlugin => ({
 
 // The install surface is written once for the composite root, so the
 // production path is the composed plan, not one adapter's.
-const writesFor = (target: string): ReadonlyMap<string, string> => {
-  const plan = composeProjections(modelFor(target), createDefaultRegistry());
+const writesFor = (target: string, model: NormalizedPlugin = modelFor(target)): ReadonlyMap<string, string> => {
+  const plan = composeProjections(model, createDefaultRegistry());
   return new Map(plan.entries
     .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
     .map((entry) => [entry.relativePath, entry.content]));
@@ -164,7 +164,118 @@ it('documents both Cursor delivery modes without user-level hooks registration',
   expect(install).toContain('`agent-bundle doctor --host cursor`');
 });
 
-it('documents native Agent Plugins clients for the portable profile', () => {
+const portableSkill = {
+  body: 'Review a change.',
+  description: 'Review a change',
+  dir: '/project/src/skills/review',
+  frontmatter: {},
+  id: 'skill:review',
+  markdown: '---\nname: review\n---\n\nReview a change.\n',
+  name: 'review',
+  provenance: { kind: 'conventional', sourcePath: '/project/src/skills/review/SKILL.md' },
+  resources: [],
+  source: '/project/src/skills/review/SKILL.md',
+  targets: ['portable'],
+} as const;
+
+const portableServer = {
+  args: ['./mcp/serve.mjs'],
+  command: 'node',
+  id: 'mcp:stdio',
+  name: 'stdio',
+  provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+  targets: ['portable'],
+  transport: 'stdio',
+} as const;
+
+// What each recorded tier renders for every component inventory a valid
+// portable bundle can have. The claim is the emitted plan, not the record.
+it.each([
+  {
+    agentPlugins: 'installs this bundle as one plugin. Reads: `plugin.json`.',
+    inventory: 'no component',
+    mcpServers: [],
+    skills: [],
+    skillsTier: 'loads the components it recognizes without reading the manifest. This bundle emits none of'
+      + ' the paths it reads, so there is nothing to install there.',
+  },
+  {
+    agentPlugins: 'installs this bundle as one plugin. Reads: `plugin.json`, `skills`.',
+    inventory: 'skills only',
+    mcpServers: [],
+    skills: [portableSkill],
+    skillsTier: 'loads the components it recognizes without reading the manifest. Reads: `skills`.'
+      + ' Install: `qoder plugins install <plugin directory> --scope user`.',
+  },
+  {
+    agentPlugins: 'installs this bundle as one plugin. Reads: `mcp.json`, `plugin.json`.',
+    inventory: 'MCP only',
+    mcpServers: [portableServer],
+    skills: [],
+    skillsTier: 'loads the components it recognizes without reading the manifest. Reads: `mcp.json`.'
+      + ' Install: `qoder plugins install <plugin directory> --scope user`.',
+  },
+  {
+    agentPlugins: 'installs this bundle as one plugin. Reads: `mcp.json`, `plugin.json`, `skills`.',
+    inventory: 'skills and MCP',
+    mcpServers: [portableServer],
+    skills: [portableSkill],
+    skillsTier: 'loads the components it recognizes without reading the manifest. Reads: `mcp.json`, `skills`.'
+      + ' Install: `qoder plugins install <plugin directory> --scope user`.',
+  },
+])('claims only the paths a portable bundle with $inventory emits', (expected) => {
+  const install = writesFor('portable', {
+    ...modelFor('portable'),
+    mcpServers: expected.mcpServers,
+    skills: expected.skills,
+  }).get('INSTALL.md');
+
+  expect(install).toContain(`- **Devin CLI** (Agent Plugins 1.0.0; docs retrieved 2026-09-06,`
+    + ` plugins documented as closed beta) ${expected.agentPlugins}`);
+  expect(install).toContain('- **Qoder CLI** (docs retrieved 2026-09-06; no CLI version is published on'
+    + ` any page) ${expected.skillsTier}`);
+  // A client that reads nothing says so whatever the bundle carries.
+  expect(install).toContain('- **Antigravity** (docs retrieved 2026-09-06; no product or CLI version is'
+    + ' published on any page) loads nothing from this bundle as published.');
+});
+
+it('reads a shadow this build actually wrote as fact, not as a hypothetical', () => {
+  // A claude+portable composite writes .claude-plugin/plugin.json and .mcp.json,
+  // which the records say win over the emitted manifest and MCP document. The
+  // line must say what this artifact does, not what another root might.
+  const install = writesFor('portable', {
+    ...modelFor('portable'),
+    mcpServers: [{ ...portableServer, targets: ['claude', 'portable'] }],
+    skills: [{ ...portableSkill, targets: ['claude', 'portable'] }],
+    targets: ['claude', 'portable'].map((name) => ({
+      id: `target:${name}`,
+      name,
+      provenance: { kind: 'config' as const, sourcePath: '/project/agent-bundle.config.ts' },
+    })),
+  }).get('INSTALL.md');
+
+  expect(install).toContain('- **Devin CLI** (Agent Plugins 1.0.0; docs retrieved 2026-09-06,'
+    + ' plugins documented as closed beta) installs this bundle as one plugin, but this build also'
+    + ' writes `.claude-plugin/plugin.json`, which it reads as the plugin instead.');
+  expect(install).toContain('- **Qoder CLI** (docs retrieved 2026-09-06; no CLI version is published on'
+    + ' any page) loads the components it recognizes without reading the manifest. Reads: `skills`.'
+    + ' Install: `qoder plugins install <plugin directory> --scope user`.'
+    + ' Not loaded: manifest, placeholders, hooks.'
+    + ' This build also writes `.mcp.json`, which it uses for mcp instead.');
+  // The narrowed Devin MCP row is about a document this build hands to another
+  // client, so neither the reads nor the limit may be claimed here.
+  expect(install).not.toContain('  - Partial `mcp`');
+  expect(install).not.toContain('A root that also carries `.mcp.json`');
+  // A client with no verified local install prints its own marketplace command,
+  // which its documentation shows carrying the trust flag.
+  expect(install).toContain(
+    'Install (no local-directory install is verified for this artifact):'
+    + ' `grok plugin install <marketplace plugin name> --trust`.',
+  );
+  expect(install).not.toContain('grok plugin install ./');
+});
+
+it('documents recorded Agent Plugins clients for the portable profile', () => {
   const install = writesFor('portable').get('INSTALL.md');
 
   expect(install).toContain(
@@ -172,7 +283,27 @@ it('documents native Agent Plugins clients for the portable profile', () => {
   );
   expect(install).toContain('`~/.cursor/plugins/local/<name>`');
   expect(install).toContain('Developer: Reload Window');
-  expect(install).toContain('Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT');
+  // Every client sentence comes from a pinned record, never a bare list (#693-#714).
+  expect(install).toContain('### Other recorded clients');
+  expect(install).toContain('**Devin CLI**');
+  expect(install).toContain('`devin plugins install <plugin directory>`');
+  expect(install).toContain('installs this bundle as one plugin');
+  expect(install).toContain('Not loaded: hooks.');
+  expect(install).toContain(
+    'A root that also carries `.devin-plugin/plugin.json` is read as that plugin instead.',
+  );
+  // A client whose own contract rejects the emitted manifest is named as such.
+  expect(install).toContain('**Antigravity**');
+  expect(install).toContain('loads nothing from this bundle as published');
+  expect(install).not.toContain('Kiro');
+  // Reading a document and running what it configures are separate claims.
+  expect(install).toContain('`mcp` records that the client reads the emitted `mcp.json` as MCP configuration');
+  // This fixture carries no component, so a client that reads only components
+  // is told there is nothing to install rather than handed a command.
+  expect(install).toContain('This bundle emits none of the paths it reads, so there is nothing to install there.');
+  expect(install).not.toContain('grok plugin install ./');
+  // Precedence is per file: a file that takes one surface leaves the rest read.
+  expect(install).toContain('A root that also carries `.mcp.json` uses it for mcp and still reads the rest.');
   // The Cursor-only placeholder expansion is documented where the installer is (#426).
   expect(install).toContain('### Cursor placeholder expansion');
   expect(install).toContain('`~/.cursor/agent-bundle/plugin-data/<name>`');

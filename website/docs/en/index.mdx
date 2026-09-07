@@ -206,7 +206,7 @@ and the install verb differ.
 | `claude` | `.claude-plugin/plugin.json` and a local `marketplace.json`, plus `hooks/hooks.json` and `.mcp.json`. | `claude plugin marketplace add` and `claude plugin install`, or `agent-bundle install claude --from artifact`. |
 | `codex` | `.codex-plugin/plugin.json` with its `hooks.json` and `mcp.json`, plus `.agents/plugins/marketplace.json`. | `codex plugin marketplace add` and `codex plugin add`, or `agent-bundle install codex --from artifact`. |
 | `cursor` | `.cursor-plugin/plugin.json` with its `hooks.json` and `mcp.json`. | The generated `install.mjs`, or `agent-bundle install cursor --from artifact`. |
-| `portable` | The [Agent Plugins](https://agent-plugins.org) open standard — `plugin.json` and `mcp.json` over Skills and MCP servers — read natively by Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT. | The generated `install.mjs`. |
+| `portable` | The [Agent Plugins](https://agent-plugins.org) open standard — `plugin.json` and `mcp.json` over Skills and MCP servers — read natively by Cursor. The [hosts reference](/reference/hosts) records the other clients that were checked against it — compatible, partial, and incompatible — with the surfaces each one does and does not load. | The generated `install.mjs`. |
 
 Hosts differ in what they can load, so the compiler says so at build time: a surface you select
 for a target that cannot express it is a reported diagnostic, never a quiet omission. The one

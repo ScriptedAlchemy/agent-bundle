@@ -226,7 +226,7 @@ it('records observed capability versions and rehashes schema snapshots against p
       expect(capabilityTable.install).toMatchObject({
         evidence: [
           expect.stringContaining('Cursor loads Agent Plugins natively'),
-          expect.stringContaining('ChatGPT, Codex, Cursor, GitHub Copilot, Kiro, and VS Code'),
+          expect.stringContaining('agent-plugins.org names launch clients but publishes no per-client discovery'),
           expect.stringContaining('Claude Code is not a native client'),
         ],
         state: 'unavailable',

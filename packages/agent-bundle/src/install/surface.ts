@@ -1,6 +1,13 @@
 import { stateOwnershipMarkerFile, type NormalizedPlugin } from '../core/types.ts';
 import { preservedRuntimeEntries } from '../core/paths.ts';
 import { type BuiltInHost, builtInHostNames } from '../adapters/composite-layout.ts';
+import {
+  clientCompatibilityFrom,
+  CLIENT_SURFACE_PATHS,
+  type ClientCompatibilityRecord,
+  type ClientShadow,
+} from '../adapters/capability-state.ts';
+import portableCapabilityTable from '../adapters/capabilities/portable-1.0.0.json' with { type: 'json' };
 import { sourceInputs, type TargetArtifactWrite } from '../adapters/types.ts';
 import {
   installReceiptFile,
@@ -224,18 +231,121 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
   '',
 ];
 
-const portableInstructions = (): string[] => [
+/**
+ * The third-party clients recorded in the pinned portable capability table
+ * (#693–#714). Every sentence this section prints about a client outside the
+ * four shipped adapters comes from a record there, so the install surface
+ * names what each client's own documentation says it loads — and what it does
+ * not — instead of asserting a bare list of native clients.
+ */
+const portableClients: readonly ClientCompatibilityRecord[] =
+  clientCompatibilityFrom('portable', portableCapabilityTable.clients);
+
+const clientTierSentence = (record: ClientCompatibilityRecord): string => {
+  switch (record.tier) {
+    case 'agent-plugins':
+      return 'installs this bundle as one plugin';
+    case 'skills':
+      // Not "skills only": a skills-tier client is one that does not read the
+      // manifest, and several of them read the MCP document as well.
+      return 'loads the components it recognizes without reading the manifest';
+    case 'none':
+      return 'loads nothing from this bundle as published';
+    default:
+      throw new TypeError(`Unknown client compatibility tier ${JSON.stringify(record.tier)} for ${record.id}.`);
+  }
+};
+
+/** Whether this build wrote the recorded path, directory or file. */
+const planContains = (planned: readonly string[], path: string): boolean =>
+  planned.some((entry) => entry === path || entry.startsWith(`${path}/`));
+
+/** The read surfaces a record can claim, in the order the table declares them. */
+const readSurfaces = Object.keys(CLIENT_SURFACE_PATHS);
+
+/**
+ * One rendered client: what it reads in this build, how to install it, what it
+ * withholds, and which of its precedence files this build actually wrote. A
+ * shadow the build emitted is a fact about this artifact, not a hypothetical:
+ * the surfaces it takes are removed from what the client reads here, and a
+ * file that takes every read surface means this root is read as that plugin.
+ */
+const clientLine = (planned: readonly string[]) => (record: ClientCompatibilityRecord): readonly string[] => {
+  const takesEveryRead = (shadow: ClientShadow): boolean =>
+    readSurfaces.every((surface) => shadow.surfaces.includes(surface));
+  const emitted = record.discovery.shadowedBy.filter((shadow) => planned.includes(shadow.path));
+  const absent = record.discovery.shadowedBy.filter((shadow) => !planned.includes(shadow.path));
+  const replacement = emitted.find((shadow) => takesEveryRead(shadow));
+  const taken = new Set(emitted.flatMap((shadow) => shadow.surfaces));
+  const surfaces = Object.entries(record.surfaces)
+    .filter(([surface]) => !taken.has(surface));
+  const reads = record.discovery.required.filter((path) =>
+    planContains(planned, path)
+    && !readSurfaces.some((surface) => taken.has(surface) && CLIENT_SURFACE_PATHS[surface] === path));
+  const install = record.install?.actions.find((action) => action.role === 'install')?.command;
+  const hypothetical = (shadow: ClientShadow): string => takesEveryRead(shadow)
+    ? ` A root that also carries \`${shadow.path}\` is read as that plugin instead.`
+    : ` A root that also carries \`${shadow.path}\` uses it for ${shadow.surfaces.join(', ')} and still reads the rest.`;
+
+  if (replacement !== undefined) {
+    return [
+      `- **${record.name}** (${record.observed}) ${clientTierSentence(record)}, but this build also writes`
+      + ` \`${replacement.path}\`, which it reads as the plugin instead.`,
+    ];
+  }
+  return [
+    [
+      `- **${record.name}** (${record.observed}) ${clientTierSentence(record)}.`,
+      record.tier === 'none'
+        ? ''
+        : reads.length === 0
+          ? ' This bundle emits none of the paths it reads, so there is nothing to install there.'
+          : ` Reads: \`${reads.join('`, `')}\`.`,
+      // An install command for a bundle it reads nothing of is not an install.
+      install === undefined || reads.length === 0
+        ? ''
+        : record.install!.source === 'marketplace'
+          ? ` Install (no local-directory install is verified for this artifact): \`${install}\`.`
+          : ` Install: \`${install}\`.`,
+      ...surfaces.some(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
+        ? [` Not loaded: ${surfaces
+            .filter(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
+            .map(([surface]) => surface).join(', ')}.`]
+        : [],
+      ...emitted.map((shadow) => ` This build also writes \`${shadow.path}\`, which it uses for ${shadow.surfaces.join(', ')} instead.`),
+      ...absent.map(hypothetical),
+    ].join(''),
+    // A narrowed surface loads with a documented limit; the limit is the point.
+    // A limit on a document this build did not write is not a limit here.
+    ...surfaces
+      .filter(([surface, row]) => row.state === 'degraded'
+        && (CLIENT_SURFACE_PATHS[surface] === undefined || reads.includes(CLIENT_SURFACE_PATHS[surface]!)))
+      .map(([surface, row]) => `  - Partial \`${surface}\`: ${row.reason}`),
+  ];
+};
+
+const portableInstructions = (planned: readonly string[]): string[] => [
   '## Portable Agent Plugin',
   '',
   'Portable is a distribution profile, not a host runtime with one universal install location.',
   'This bundle follows the Agent Plugins open standard (Agent Plugins 1.0.0, https://agent-plugins.org).',
   'Cursor loads this format natively from `~/.cursor/plugins/local/<name>`; restart Cursor or run',
-  '`Developer: Reload Window` after copying it. Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT',
-  'are also native clients. The bundled installer provides the Cursor local copy:',
+  '`Developer: Reload Window` after copying it. The bundled installer provides the Cursor local copy:',
   '',
   '```sh',
   'node ./install.mjs',
   '```',
+  '',
+  '### Other recorded clients',
+  '',
+  'Each line below is pinned to that client\'s own documentation on the date shown, and names only the',
+  'paths this build actually wrote. Recognizing a document and running what it configures are separate:',
+  '`mcp` records that the client reads the emitted `mcp.json` as MCP configuration, while `placeholders`',
+  'records that it expands the reserved `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` and provides them to the',
+  'process it spawns. A client can do the first without the second, and then a plugin-relative server',
+  'is configured but not runnable there.',
+  '',
+  ...portableClients.flatMap(clientLine(planned)),
   '',
   '### Cursor placeholder expansion',
   '',
@@ -249,7 +359,7 @@ const portableInstructions = (): string[] => [
   'it, and every stdio server gains `PLUGIN_ROOT` / `PLUGIN_DATA` in its environment. The bundle itself',
   `stays spec-conformant; the pre-expansion document is kept in \`${installReceiptFile}\` (\`cursorExpansion\`),`,
   'and the optional `agent-bundle doctor --host cursor` verifies the expanded paths (`AB7326`). Nothing is changed for',
-  'other Agent Plugins clients, which expand the placeholders themselves.',
+  'other clients; the recorded clients above name which of them expand the placeholders themselves.',
   '',
   '### Reinstall after a same-version rebuild',
   '',
@@ -257,7 +367,7 @@ const portableInstructions = (): string[] => [
   'place when the same version was rebuilt with different content; runtime state (`state/`) is never',
   'touched. Pass `--replace` (alias `--force`) to replace a different installed version or to adopt a',
   'copy installed before receipts existed. Foreign directories are refused with a content-hash',
-  'comparison. For Codex and other native clients, remove and re-add the plugin through the client',
+  'comparison. For a client that manages its own copy, remove and re-add the plugin through that client',
   'when only content changed at the same version.',
   '',
   '### Uninstall',
@@ -284,7 +394,11 @@ const portableInstructions = (): string[] => [
 const selectedBuiltInTargets = (selected: readonly string[]): readonly BuiltInHost[] =>
   builtInHostNames.filter((target) => selected.includes(target));
 
-const instructionsFor = (model: NormalizedPlugin, target: BuiltInHost): string[] => {
+const instructionsFor = (
+  model: NormalizedPlugin,
+  target: BuiltInHost,
+  planned: readonly string[],
+): string[] => {
   switch (target) {
     case 'claude':
       return claudeInstructions(model);
@@ -293,7 +407,7 @@ const instructionsFor = (model: NormalizedPlugin, target: BuiltInHost): string[]
     case 'cursor':
       return cursorInstructions(model);
     case 'portable':
-      return portableInstructions();
+      return portableInstructions(planned);
     default: {
       const exhaustive: never = target;
       throw new TypeError(`Unknown built-in install target ${String(exhaustive)}.`);
@@ -302,9 +416,13 @@ const instructionsFor = (model: NormalizedPlugin, target: BuiltInHost): string[]
 };
 
 /** One `INSTALL.md` for the composite root: a section per selected built-in host. */
-const installMarkdown = (model: NormalizedPlugin, selected: readonly string[]): string => [
+const installMarkdown = (
+  model: NormalizedPlugin,
+  selected: readonly string[],
+  planned: readonly string[],
+): string => [
   ...header(model),
-  ...selectedBuiltInTargets(selected).flatMap((target) => instructionsFor(model, target)),
+  ...selectedBuiltInTargets(selected).flatMap((target) => instructionsFor(model, target, planned)),
 ].join('\n');
 
 /**
@@ -1694,11 +1812,12 @@ export const installSurfaceRequirements = (
 export const installSurfaceEntries = (
   model: NormalizedPlugin,
   hosts: readonly BuiltInHost[],
+  planned: readonly string[],
 ): readonly TargetArtifactWrite[] => {
   if (hosts.length === 0) return Object.freeze([]);
   return Object.freeze([
     Object.freeze({
-      content: installMarkdown(model, hosts),
+      content: installMarkdown(model, hosts, planned),
       kind: 'write' as const,
       relativePath: 'INSTALL.md',
       sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),

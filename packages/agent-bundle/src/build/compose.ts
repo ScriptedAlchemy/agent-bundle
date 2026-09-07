@@ -255,7 +255,16 @@ export const planComposite = (model: NormalizedPlugin, registry: TargetRegistry)
   });
   const merged = mergeEntries([
     ...projections.map((projection) => ({ entries: projection.plan.entries, owner: projection.name })),
-    { entries: installSurfaceEntries(model, registry.builtInHosts(selected)), owner: 'install surface' },
+    {
+      entries: installSurfaceEntries(
+        model,
+        registry.builtInHosts(selected),
+        // What the host projections actually planned, so the install surface
+        // names the emitted paths instead of the ones a model could imply.
+        projections.flatMap((projection) => projection.plan.entries.map((entry) => entry.relativePath)),
+      ),
+      owner: 'install surface',
+    },
   ]);
   diagnostics.push(...merged.diagnostics, ...scopeLeakDiagnostics(model, registry, selected));
   return Object.freeze({

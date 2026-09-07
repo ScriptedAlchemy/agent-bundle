@@ -2,7 +2,7 @@
   "install": {
     "evidence": [
       "2026-09-01: Cursor loads Agent Plugins natively from ~/.cursor/plugins/local/<name> (https://cursor.com/docs/plugins).",
-      "2026-09-01: Native launch clients are ChatGPT, Codex, Cursor, GitHub Copilot, Kiro, and VS Code (https://agent-plugins.org).",
+      "2026-09-06: agent-plugins.org names launch clients but publishes no per-client discovery or install contract; the `clients` block below records each third-party client of this artifact against that client's own documentation instead.",
       "2026-09-01: Claude Code is not a native client; Agent Plugins installations there require CLI translation."
     ],
     "reason": "Portable is a distribution profile, not a host runtime with one universal plugin installation location.",
@@ -15,7 +15,7 @@
         "2026-09-03: the emitted install.mjs --uninstall removes the receipt-owned files and installer-created directories from ~/.cursor/plugins/local/<name>, leaving an isolated Cursor home byte-identical to its pre-install snapshot (tests/host-install-proof.test.ts); other Agent Plugins clients own their own install locations and are uninstalled through the client (#101)."
       ],
       "state": "degraded",
-      "reason": "Only the Cursor local copy the bundled installer places is receipt-owned; native clients other than Cursor manage their own copies."
+      "reason": "Only the Cursor local copy the bundled installer places is receipt-owned; the other recorded clients manage their own copies."
     },
     "keepData": {
       "evidence": [
@@ -289,6 +289,372 @@
     "pluginData": "${PLUGIN_DATA}",
     "pluginRoot": "${PLUGIN_ROOT}",
     "workspaceRoot": false
+  },
+  "clients": {
+    "antigravity": {
+      "name": "Antigravity",
+      "issue": 714,
+      "observed": "docs retrieved 2026-09-06; no product or CLI version is published on any page",
+      "tier": "none",
+      "discovery": {
+        "required": [],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://www.antigravity.google/docs/cli/plugins documents no manifest-precedence order and no alternate manifest location, so the emitted root plugin.json is the only manifest Antigravity would read.",
+          "2026-09-06: the schema URL the manifest example cites, https://antigravity.google/schemas/v1/plugin.json, returns 404 Not Found; the schema quoted below is the copy embedded in the documentation page."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: unproven. https://www.antigravity.google/docs/cli/plugins requires a root plugin.json and embeds a closed schema for it (\"additionalProperties\": false, \"required\": [\"name\"], properties name and description only) that omits every other Agent Plugins manifest field this artifact emits — including the $schema its own example shows — and the schema URL that example cites returns 404. No page states what install-time validation does with an unknown root key, and no CLI run against the emitted manifest is recorded here.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "reason": "2026-09-06: unproven. The root plugin.json is \"a mandatory manifest located at the root of your plugin directory\" (https://www.antigravity.google/docs/cli/plugins), so component discovery depends on the unproven manifest outcome above; Antigravity does document skills/<skill-name>/SKILL.md in its own plugin layout, and nothing here establishes whether the emitted tree is reached.",
+          "state": "unavailable"
+        },
+        "mcp": {
+          "reason": "2026-09-06: the plugin MCP file is mcp_config.json, not mcp.json, and remote servers key on serverUrl rather than url (https://www.antigravity.google/docs/cli/plugins, https://www.antigravity.google/docs/cli/gcli-migration: \"Legacy schema keys: url or httpUrl -> Modern schema key: serverUrl\").",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: no ${PLUGIN_ROOT}, ${PLUGIN_DATA}, or other path placeholder is documented for Antigravity MCP or hook configuration.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Antigravity reads a root hooks.json as a named-hook map (https://www.antigravity.google/docs/hooks/); Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "devin-cli": {
+      "name": "Devin CLI",
+      "issue": 701,
+      "observed": "Agent Plugins 1.0.0; docs retrieved 2026-09-06, plugins documented as closed beta",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "devin plugins install <plugin directory>"
+          },
+          {
+            "role": "inspect",
+            "command": "devin plugins info <name>"
+          },
+          {
+            "role": "remove",
+            "command": "devin plugins remove <name>"
+          }
+        ],
+        "location": "Devin's own plugin store; the CLI manages the copy"
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [
+          {
+            "path": ".devin-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          },
+          {
+            "path": ".claude-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          }
+        ],
+        "evidence": [
+          "2026-09-06: https://docs.devin.ai/cli/extensibility/plugins/overview states \"Devin also loads plugins packaged in two other layouts, with manifest precedence .devin-plugin/plugin.json > .claude-plugin/plugin.json > root plugin.json\", so a composite root that also carries a Devin or Claude manifest is read as that plugin instead.",
+          "2026-09-06: the same page states the root mcp.json \"is read as a conventional MCP source (after .mcp.json, which wins on a server-name collision)\".",
+          "2026-09-06: https://docs.devin.ai/cli/extensibility/plugins/quickstart documents the local install form verbatim as `devin plugins install ./my-plugin`."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: https://docs.devin.ai/cli/extensibility/plugins/overview states \"plugins packaged per the open Agent Plugins 1.0.0 spec (a plugin.json manifest at the plugin root, MCP servers in a root mcp.json, skills under skills/) load too\", and that \"an unrecognized $schema version is warned about and the plugin still loads best-effort\"."
+          ],
+          "state": "supported"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://docs.devin.ai/cli/extensibility/skills/creating-skills documents the default skills/ directory, with frontmatter entirely optional and name defaulting to the directory name — every field this projection emits is either read or ignored."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: https://docs.devin.ai/cli/extensibility/mcp/configuration documents the spec `type` discriminator (stdio, streamable-http, sse) accepted \"instead of transport\", and the root mcp.json as a plugin MCP source for root-manifest plugins.",
+            "2026-09-06: the plugins overview states the root mcp.json \"is read as a conventional MCP source (after .mcp.json, which wins on a server-name collision)\", so both documents are read rather than one replacing the other."
+          ],
+          "reason": "2026-09-06: the emitted document is read, and applied after a composite root's .mcp.json, \"which wins on a server-name collision\" — a server this bundle names identically to one there is overridden.",
+          "state": "degraded"
+        },
+        "placeholders": {
+          "evidence": [
+            "2026-09-06: https://docs.devin.ai/cli/extensibility/mcp/configuration states ${PLUGIN_ROOT} \"expands to the plugin root like ${CLAUDE_PLUGIN_ROOT}\", that ${PLUGIN_DATA} expands in args, env values, and cwd, that stdio processes \"receive PLUGIN_ROOT and PLUGIN_DATA environment variables\", and that cwd defaults to the plugin root with ./-prefixed commands resolved against it — the reserved behavior of Agent Plugins 1.0.0 §9.1."
+          ],
+          "state": "supported"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Devin reads plugin hooks from a root hooks.json and documents them as \"best effort and fail open\" with SessionStart and SessionEnd excluded; Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "grok-build": {
+      "name": "Grok Build",
+      "issue": 700,
+      "observed": "xai-org/grok-build main 72a61251fcffb464bcc687aeb5a998e5a98ec0c9, docs retrieved 2026-09-06",
+      "tier": "skills",
+      "install": {
+        "source": "marketplace",
+        "actions": [
+          {
+            "role": "install",
+            "command": "grok plugin install <marketplace plugin name> --trust"
+          },
+          {
+            "role": "trust",
+            "command": "/hooks-trust"
+          },
+          {
+            "role": "enable",
+            "command": "grok plugin enable <name>"
+          },
+          {
+            "role": "verify",
+            "command": "grok plugin validate <plugin directory>"
+          }
+        ],
+        "location": "~/.grok/plugins/<name> is trusted automatically; .grok/plugins/<name> requires /hooks-trust or --trust"
+      },
+      "discovery": {
+        "required": [
+          "skills"
+        ],
+        "shadowedBy": [],
+        "evidence": [
+          "2026-09-06: https://raw.githubusercontent.com/xai-org/grok-build/main/crates/codegen/xai-grok-pager/docs/user-guide/09-plugins.md states \"An optional plugin.json manifest can override paths or add metadata; without one, Grok discovers components from these standard directories\", and lists skills/ among them.",
+          "2026-09-06: the documented install spec is a marketplace plugin name (`grok plugin install deploy-tools --trust`). The same pinned file lists \"a local path (`./local-dir` or `/absolute/path`)\" among the accepted source forms, but no page shows that form accepting a directory that is not a Grok plugin or marketplace layout, so no local-directory recipe for this artifact is recorded here.",
+          "2026-09-06: trust is a separate step from installation — \"Enabling a plugin loads its skills, commands, and agents. Trust is separate and controls whether a plugin's code runs\", and \"Grok trusts plugins in `~/.grok/plugins/` automatically; project plugins in `.grok/plugins/` require trust\".",
+          "2026-09-06: no upstream page publishes the manifest's required fields or a precedence order among plugin.json, .grok-plugin/plugin.json, and .claude-plugin/plugin.json."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: https://raw.githubusercontent.com/xai-org/plugin-marketplace/main/README.md repeats that \"An optional plugin.json manifest adds metadata or overrides component paths\", and the example layout places it at the plugin root."
+          ],
+          "reason": "2026-09-06: unproven. The root manifest is documented only as optional metadata and path overrides, with no published field list, validation rule, or precedence order, so nothing about Grok's handling of the emitted manifest is pinned.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://docs.x.ai/build/features/skills-plugins-marketplaces lists \"Any enabled plugin's skills/ directory\" as a discovery root, and states SKILL.md frontmatter \"Extra keys are ignored\" — Grok additionally \"accepts model, effort, license, and compatibility and does not apply them\", all of which this projection may emit."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "reason": "2026-09-06: the only documented plugin MCP file is .mcp.json (https://docs.x.ai/build/features/mcp-servers: \"MCP servers: a .mcp.json file\"); no upstream page states that a root, non-dotted mcp.json is read, so the emitted mcp.json is not proven to load.",
+          "state": "unavailable"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: GROK_PLUGIN_ROOT and GROK_PLUGIN_DATA are documented only as hook environment variables (\"Plugin hooks additionally receive GROK_PLUGIN_ROOT and GROK_PLUGIN_DATA in their environment\"); no ${...} expansion inside plugin MCP configuration is documented.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Grok reads plugin hooks from hooks/hooks.json and runs them only once the plugin is trusted (https://docs.x.ai/build/features/hooks); Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "openclaw": {
+      "name": "OpenClaw",
+      "issue": 702,
+      "observed": "Agent Plugins 1.0.0; docs retrieved 2026-09-06",
+      "tier": "agent-plugins",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "openclaw plugins install <plugin directory>"
+          },
+          {
+            "role": "inspect",
+            "command": "openclaw plugins inspect <id>"
+          },
+          {
+            "role": "remove",
+            "command": "openclaw plugins uninstall <id>"
+          }
+        ],
+        "location": "OpenClaw's own plugin store; `openclaw plugins inspect` reports `Bundle format: agent (Agent Plugins)`"
+      },
+      "discovery": {
+        "required": [
+          "plugin.json",
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [
+          {
+            "path": "openclaw.plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          },
+          {
+            "path": ".claude-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          },
+          {
+            "path": ".codex-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          },
+          {
+            "path": ".cursor-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          }
+        ],
+        "evidence": [
+          "2026-09-06: https://docs.openclaw.ai/plugins/bundles publishes the detection order — a native manifest or a package.json with openclaw.extensions, then client-specific bundle markers (.codex-plugin/, .cursor-plugin/, .claude-plugin/), then \"A root plugin.json -> Agent Plugins bundle\" — and states \"If a package carries both a client-specific marker and a root plugin.json, the client-specific format wins\", so a composite root is read as the client-specific bundle instead.",
+          "2026-09-06: the same page states \"`.mcp.json` (dot-prefixed) and inline manifest `mcpServers` are not read for this format; the standard's closed schema wins\"."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "evidence": [
+            "2026-09-06: https://docs.openclaw.ai/plugins/bundles names the marker \"plugin.json at the package root, per the open Agent Plugins 1.0.0 standard\", requires strict JSON and a non-empty name, and states \"other manifest fields are optional and unknown fields are ignored\"."
+          ],
+          "state": "supported"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://docs.openclaw.ai/plugins/bundles states \"Immediate child directories of skills/ that contain a SKILL.md load as skills\" — the exact flat layout this projection emits — and https://docs.openclaw.ai/tools/skills requires at minimum a name and description, both of which it emits."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: https://docs.openclaw.ai/plugins/bundles states mcp.json \"must declare the 1.0.0 $schema and an mcpServers object only; stdio, streamable-http, and legacy sse transports are supported\" — the document this projection emits."
+          ],
+          "state": "supported"
+        },
+        "placeholders": {
+          "evidence": [
+            "2026-09-06: https://docs.openclaw.ai/plugins/bundles states stdio servers launch with PLUGIN_ROOT and PLUGIN_DATA in their environment and that \"${PLUGIN_ROOT} and ${PLUGIN_DATA} placeholders expand in args, env values, and cwd in a single pass\", with a stdio command required to be \"a bare executable name or a ./-relative path inside the plugin\" — the reserved behavior of Agent Plugins 1.0.0 §9.1 and the containment this projection already emits."
+          ],
+          "state": "supported"
+        },
+        "hooks": {
+          "reason": "2026-09-06: https://docs.openclaw.ai/plugins/bundles supports bundle hooks only as OpenClaw hook packs (HOOK.md plus handler.ts or handler.js) and lists hooks/hooks.json as detect-only; Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document at all.",
+          "state": "unavailable"
+        }
+      }
+    },
+    "qoder-cli": {
+      "name": "Qoder CLI",
+      "issue": 696,
+      "observed": "docs retrieved 2026-09-06; no CLI version is published on any page",
+      "tier": "skills",
+      "install": {
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "qoder plugins install <plugin directory> --scope user"
+          },
+          {
+            "role": "verify",
+            "command": "qoder plugins validate <plugin directory>"
+          },
+          {
+            "role": "inspect",
+            "command": "qoder plugins list --json"
+          }
+        ],
+        "location": "the --scope target (user, project, or local); enablement is recorded in settings.json as enabledPlugins"
+      },
+      "discovery": {
+        "required": [
+          "skills",
+          "mcp.json"
+        ],
+        "shadowedBy": [
+          {
+            "path": ".mcp.json",
+            "surfaces": [
+              "mcp"
+            ]
+          }
+        ],
+        "evidence": [
+          "2026-09-06: https://docs.qoder.com/cli/plugins-reference states the manifest \"is located at .qoder-plugin/plugin.json and must not be placed in the plugin root directory\", and that without a manifest \"the CLI loads components from conventional directories and uses the plugin directory name as the plugin name\".",
+          "2026-09-06: https://docs.qoder.com/cli/plugins states \"plugins install for a local plugin requires at least one recognizable component or resource\", which the emitted skills/ tree and mcp.json satisfy.",
+          "2026-09-06: no manifest-precedence order is published, so the behavior of a composite root carrying both .qoder-plugin/plugin.json and plugin.json is unproven.",
+          "2026-09-06: precedence that is published is per file, not per root: https://docs.qoder.com/cli/mcp-reference states \"If both exist, .mcp.json takes precedence, and they are not merged\", which withholds the emitted mcp.json alone and leaves the shared skills/ tree discovered."
+        ]
+      },
+      "surfaces": {
+        "manifest": {
+          "reason": "2026-09-06: https://docs.qoder.com/cli/plugins-reference states the manifest \"must not be placed in the plugin root directory\", so the emitted root plugin.json is not a recognized manifest and the plugin is identified only by its directory name.",
+          "state": "unavailable"
+        },
+        "skills": {
+          "evidence": [
+            "2026-09-06: https://docs.qoder.com/cli/Skills documents plugin skills/ with the same structure as ~/.qoder/skills/, requiring frontmatter name (lowercase, numbers, hyphens, max 64) and description (max 1024) — both emitted, within both bounds, by the pinned Agent Skills lowering."
+          ],
+          "state": "supported"
+        },
+        "mcp": {
+          "evidence": [
+            "2026-09-06: https://docs.qoder.com/cli/mcp-reference states Qoder is \"Compatible with mcp.json (without a leading dot) as a fallback for .mcp.json\", reads the top-level mcpServers key, and accepts type values stdio and http/streamable-http — the transports this projection emits."
+          ],
+          "state": "supported"
+        },
+        "placeholders": {
+          "reason": "2026-09-06: QODER_PLUGIN_ROOT and QODER_PLUGIN_DATA are documented only for hooks (https://docs.qoder.com/cli/hooks-reference), and no ${...} placeholder is documented for MCP server configuration, so the emitted ${PLUGIN_ROOT} and ${PLUGIN_DATA} tokens are not proven to expand.",
+          "state": "unavailable"
+        },
+        "hooks": {
+          "reason": "2026-09-06: Qoder reads plugin hooks from hooks/hooks.json and requires the extra { \"hooks\": ... } wrapper (https://docs.qoder.com/cli/hooks-reference); Agent Plugins 1.0.0 defines no hooks, so this projection emits no hooks document for it to read.",
+          "state": "unavailable"
+        }
+      }
+    }
   },
   "specificationSections": {
     "clientExtensions": "8",

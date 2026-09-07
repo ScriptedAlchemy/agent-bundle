@@ -1,6 +1,7 @@
 import { CapabilityStateError, unknownCapabilityStateError } from '../core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 import { featureCapabilityName } from '../core/components.ts';
+import { isRelocatablePosixPath } from '../core/paths.ts';
 import type { JsonObject } from '../core/strict-json.ts';
 import {
   NOTICE_DELIVERY_ROUTES,
@@ -301,6 +302,336 @@ export const intersectNoticeDeliveryAdvertisements = (
     })];
   }),
 )) as NoticeDeliveryAdvertisement;
+
+/**
+ * The surfaces every third-party client record is judged on (#693–#714).
+ * A record declares all of them, so a client that loads the manifest but not
+ * the hooks file says so in a row and the install surface never implies a
+ * surface the client's own documentation withholds.
+ */
+const CLIENT_COMPATIBILITY_SURFACES: readonly string[] =
+  Object.freeze(['manifest', 'skills', 'mcp', 'placeholders', 'hooks']);
+
+/** What the client loads from the emitted artifact, and therefore what its record may promise. */
+const CLIENT_COMPATIBILITY_TIERS: readonly string[] =
+  Object.freeze(['agent-plugins', 'skills', 'none']);
+
+/**
+ * The artifact path each surface is read from, so a record that says it loads
+ * a surface has to name the file it loads, and a renderer can tell which
+ * surfaces a build actually wrote. `placeholders` and `hooks` are behaviors of
+ * the MCP document rather than files of their own.
+ */
+export const CLIENT_SURFACE_PATHS: Readonly<Record<string, string>> =
+  Object.freeze({ manifest: 'plugin.json', mcp: 'mcp.json', skills: 'skills' });
+
+/**
+ * What a recorded install command does. A command's role is declared, never
+ * inferred from its position: a client whose verifier is listed first must not
+ * be documented as installing with it.
+ */
+const CLIENT_INSTALL_ROLES: readonly string[] =
+  Object.freeze(['install', 'trust', 'enable', 'verify', 'inspect', 'remove']);
+
+/**
+ * Where the recorded install command takes the artifact from. `local-directory`
+ * is only for a client whose own documentation installs a directory path;
+ * `marketplace` records a client that publishes no verified local form, so the
+ * install surface never prints an unproven recipe against the emitted bundle.
+ */
+const CLIENT_INSTALL_SOURCES: readonly string[] = Object.freeze(['local-directory', 'marketplace']);
+
+/** One authored client row from a pinned table's `clients` block. */
+export interface ClientCompatibilityTableEntry {
+  readonly discovery: {
+    readonly evidence?: readonly string[];
+    /** Per-file precedence: the paths that win, and the surfaces each one takes. */
+    readonly shadowedBy?: readonly { readonly path?: string; readonly surfaces?: readonly string[] }[];
+    /** Artifact-relative paths the client must find for the recorded tier to hold. */
+    readonly required?: readonly string[];
+  };
+  readonly install?: {
+    readonly actions?: readonly { readonly command?: string; readonly role?: string }[];
+    readonly location?: string;
+    readonly source?: string;
+  };
+  readonly issue?: number;
+  readonly name?: string;
+  /** The client version, release channel, or documentation date the rows were read against. */
+  readonly observed?: string;
+  readonly surfaces?: Readonly<Record<string, CapabilityTableRow>>;
+  /** JSON imports widen literals; unknown tiers fail closed below. */
+  readonly tier?: string;
+}
+
+/** One recorded install command with the role its own documentation gives it. */
+export interface ClientInstallAction {
+  readonly command: string;
+  readonly role: string;
+}
+
+/** One path that wins over the emitted artifact, and the surfaces it takes. */
+export interface ClientShadow {
+  readonly path: string;
+  readonly surfaces: readonly string[];
+}
+
+/** A validated client record: the install surface and generated matrix render these. */
+export interface ClientCompatibilityRecord {
+  readonly discovery: {
+    readonly evidence: readonly string[];
+    readonly required: readonly string[];
+    readonly shadowedBy: readonly ClientShadow[];
+  };
+  readonly id: string;
+  readonly install?: {
+    readonly actions: readonly ClientInstallAction[];
+    readonly location?: string;
+    readonly source: string;
+  };
+  readonly issue: number;
+  readonly name: string;
+  readonly observed: string;
+  readonly surfaces: Readonly<Record<string, CapabilityTableRow>>;
+  readonly tier: string;
+}
+
+const CLIENT_ID = /^[a-z\d]+(?:-[a-z\d]+)*$/u;
+
+const clientPaths = (
+  target: string,
+  id: string,
+  field: string,
+  value: readonly string[] | undefined,
+): readonly string[] => {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || !isRelocatablePosixPath(entry))) {
+    throw new CapabilityStateError(
+      `The pinned ${target} table declares ${field} for client ${id} as something other than artifact-relative paths.`,
+    );
+  }
+  return Object.freeze([...value].sort((left, right) => left.localeCompare(right)));
+};
+
+/**
+ * Precedence is per file and per surface: a client that prefers `.mcp.json`
+ * over the emitted `mcp.json` still reads the shared skill tree, so a shadow
+ * names the surfaces it takes rather than replacing the whole root. Authored
+ * order is kept, because a client that publishes a precedence order among
+ * these files publishes it in that order.
+ */
+const clientShadows = (
+  target: string,
+  id: string,
+  value: readonly { readonly path?: string; readonly surfaces?: readonly string[] }[] | undefined,
+): readonly ClientShadow[] => {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value)) {
+    throw new CapabilityStateError(`The pinned ${target} table declares discovery.shadowedBy for client ${id} as something other than a list.`);
+  }
+  return Object.freeze(value
+    .map((shadow): ClientShadow => {
+      if (typeof shadow?.path !== 'string' || !isRelocatablePosixPath(shadow.path)) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table declares a discovery.shadowedBy path for client ${id} that is not an artifact-relative path.`,
+        );
+      }
+      const surfaces = shadow.surfaces ?? [];
+      if (!Array.isArray(surfaces) || surfaces.length === 0 || surfaces.some((surface) => !CLIENT_COMPATIBILITY_SURFACES.includes(surface))) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table shadows ${shadow.path} for client ${id} without naming the surfaces it takes (${CLIENT_COMPATIBILITY_SURFACES.join(', ')}).`,
+        );
+      }
+      return Object.freeze({
+        path: shadow.path,
+        surfaces: Object.freeze(CLIENT_COMPATIBILITY_SURFACES.filter((surface) => surfaces.includes(surface))),
+      });
+    }));
+};
+
+/**
+ * A recorded install block. Every command declares its role, so the install
+ * surface prints the client's own install command instead of whichever one the
+ * record happens to list first, and `source` says whether that command was
+ * documented against a local directory at all.
+ */
+const clientInstall = (
+  target: string,
+  id: string,
+  install: ClientCompatibilityTableEntry['install'],
+): ClientCompatibilityRecord['install'] => {
+  if (install === undefined) return undefined;
+  if (!CLIENT_INSTALL_SOURCES.includes(install.source ?? '')) {
+    throw new CapabilityStateError(
+      `The pinned ${target} table gives client ${id} an install block with source ${JSON.stringify(install.source)} (expected ${CLIENT_INSTALL_SOURCES.join(' or ')}).`,
+    );
+  }
+  const actions = install.actions ?? [];
+  if (!Array.isArray(actions) || actions.length === 0) {
+    throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block with no actions.`);
+  }
+  const validated = actions.map((action): ClientInstallAction => {
+    if (!CLIENT_INSTALL_ROLES.includes(action?.role ?? '')) {
+      throw new CapabilityStateError(
+        `The pinned ${target} table gives client ${id} an install action with role ${JSON.stringify(action?.role)} (expected ${CLIENT_INSTALL_ROLES.join(', ')}).`,
+      );
+    }
+    if (typeof action.command !== 'string' || action.command.trim().length === 0) {
+      throw new CapabilityStateError(`The pinned ${target} table gives client ${id} a ${action.role} action with no verbatim command.`);
+    }
+    return Object.freeze({ command: action.command, role: action.role! });
+  });
+  if (validated.filter((action) => action.role === 'install').length !== 1) {
+    throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block without exactly one install action.`);
+  }
+  return Object.freeze({
+    actions: Object.freeze(validated),
+    ...(install.location === undefined ? {} : { location: install.location }),
+    source: install.source!,
+  });
+};
+
+const clientSurfaces = (
+  target: string,
+  id: string,
+  surfaces: Readonly<Record<string, CapabilityTableRow>> | undefined,
+): Readonly<Record<string, CapabilityTableRow>> => Object.freeze(Object.fromEntries(
+  CLIENT_COMPATIBILITY_SURFACES.map((surface): [string, CapabilityTableRow] => {
+    const row = surfaces?.[surface];
+    if (row === undefined) {
+      throw new CapabilityStateError(`The pinned ${target} table leaves client ${id} silent about its ${surface} surface.`);
+    }
+    const dated = (field: string, value: unknown): readonly string[] => {
+      const notes = value === undefined ? [] : value as readonly string[];
+      if (!Array.isArray(notes) || notes.some((note) => typeof note !== 'string' || !DATED_REASON.test(note))) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table gives client ${id} an undated ${field} note for ${surface} (an ISO date such as 2026-09-06 naming when the client's documentation was read).`,
+        );
+      }
+      return Object.freeze([...notes]);
+    };
+    const requireReason = (): string => {
+      if (typeof row.reason !== 'string' || !DATED_REASON.test(row.reason)) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table marks the ${surface} surface of client ${id} ${row.state} without a dated reason.`,
+        );
+      }
+      return row.reason;
+    };
+    switch (row.state) {
+      case 'supported': {
+        const evidence = dated('evidence', row.evidence);
+        if (evidence.length === 0) {
+          throw new CapabilityStateError(
+            `The pinned ${target} table marks the ${surface} surface of client ${id} supported without evidence.`,
+          );
+        }
+        return [surface, Object.freeze({ evidence, state: 'supported' })];
+      }
+      case 'degraded': {
+        const evidence = dated('evidence', row.evidence);
+        if (evidence.length === 0) {
+          throw new CapabilityStateError(
+            `The pinned ${target} table marks the ${surface} surface of client ${id} degraded without evidence of the part it does load.`,
+          );
+        }
+        return [surface, Object.freeze({ evidence, reason: requireReason(), state: 'degraded' })];
+      }
+      case 'unavailable':
+      case 'prohibited':
+        return [surface, Object.freeze({ reason: requireReason(), state: row.state })];
+      default:
+        throw new CapabilityStateError(
+          `Unsupported ${surface} state ${JSON.stringify(row.state)} for client ${id} in the pinned ${target} table.`,
+        );
+    }
+  }),
+));
+
+/**
+ * Reads a pinned table's optional `clients` block: the third-party clients
+ * that load the artifact this target emits, each pinned to its own
+ * documentation (#693–#714). These clients are not target adapters — nothing
+ * here changes what the compiler writes — so a record is evidence about a
+ * reader of the existing artifact, never a projection. A client whose
+ * contract needs a document Agent Bundle does not emit is recorded at the
+ * tier it really reaches, and the tier is held to the rows and the paths:
+ * `agent-plugins` requires a `plugin.json` the client loads as a manifest,
+ * `skills` requires the skill tree, and `none` may name no path or loaded
+ * surface at all.
+ */
+export const clientCompatibilityFrom = (
+  target: string,
+  clients: Readonly<Record<string, ClientCompatibilityTableEntry>> | undefined,
+): readonly ClientCompatibilityRecord[] => Object.freeze(
+  Object.entries(clients ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, entry]): ClientCompatibilityRecord => {
+      if (!CLIENT_ID.test(id)) {
+        throw new CapabilityStateError(`The pinned ${target} table names a client ${JSON.stringify(id)} that is not a kebab-case id.`);
+      }
+      if (typeof entry.name !== 'string' || entry.name.trim().length === 0) {
+        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} no display name.`);
+      }
+      if (!Number.isInteger(entry.issue)) {
+        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} no tracking issue number.`);
+      }
+      if (typeof entry.observed !== 'string' || !DATED_REASON.test(entry.observed)) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table gives client ${id} no dated observation (the client version or documentation date the rows were read against).`,
+        );
+      }
+      if (!CLIENT_COMPATIBILITY_TIERS.includes(entry.tier ?? '')) {
+        throw new CapabilityStateError(`Unsupported tier ${JSON.stringify(entry.tier)} for client ${id} in the pinned ${target} table.`);
+      }
+      const surfaces = clientSurfaces(target, id, entry.surfaces);
+      const required = clientPaths(target, id, 'discovery.required', entry.discovery?.required);
+      const supported = (surface: string): boolean => surfaces[surface]!.state !== 'unavailable' && surfaces[surface]!.state !== 'prohibited';
+      if (entry.tier === 'agent-plugins' && !(supported('manifest') && required.includes('plugin.json'))) {
+        throw new CapabilityStateError(`Client ${id} claims the agent-plugins tier in the pinned ${target} table without reading plugin.json as a manifest it loads.`);
+      }
+      if (entry.tier === 'skills' && !(supported('skills') && required.includes('skills'))) {
+        throw new CapabilityStateError(`Client ${id} claims the skills tier in the pinned ${target} table without reading the skill tree.`);
+      }
+      if (entry.tier === 'none' && (required.length > 0 || CLIENT_COMPATIBILITY_SURFACES.some((surface) => supported(surface)))) {
+        throw new CapabilityStateError(`Client ${id} claims no tier in the pinned ${target} table while recording a path or surface it reads.`);
+      }
+      // Every loaded surface names the file it is loaded from, so a rendered
+      // claim about a surface is a claim about a path the build either wrote
+      // or did not.
+      for (const [surface, path] of Object.entries(CLIENT_SURFACE_PATHS)) {
+        if (supported(surface) && !required.includes(path)) {
+          throw new CapabilityStateError(`Client ${id} loads the ${surface} surface in the pinned ${target} table without reading ${path}.`);
+        }
+      }
+      const install = clientInstall(target, id, entry.install);
+      const discoveryEvidence = entry.discovery?.evidence ?? [];
+      if (!Array.isArray(discoveryEvidence) || discoveryEvidence.some((note) => typeof note !== 'string' || !DATED_REASON.test(note))) {
+        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an undated discovery note.`);
+      }
+      const shadowedBy = clientShadows(target, id, entry.discovery?.shadowedBy);
+      if (discoveryEvidence.length === 0 && required.length + shadowedBy.length > 0) {
+        throw new CapabilityStateError(`Client ${id} names artifact paths in the pinned ${target} table with no dated evidence that it reads or shadows them.`);
+      }
+      if (install?.source === 'local-directory' && entry.tier === 'none') {
+        throw new CapabilityStateError(`Client ${id} records a local-directory install in the pinned ${target} table while reading nothing this artifact emits.`);
+      }
+      return Object.freeze({
+        discovery: Object.freeze({
+          evidence: Object.freeze([...discoveryEvidence]),
+          required,
+          shadowedBy,
+        }),
+        id,
+        ...(install === undefined ? {} : { install }),
+        issue: entry.issue!,
+        name: entry.name,
+        observed: entry.observed,
+        surfaces,
+        tier: entry.tier!,
+      });
+    }),
+);
 
 export const capabilityStateFromSupport = (
   supported: boolean,
