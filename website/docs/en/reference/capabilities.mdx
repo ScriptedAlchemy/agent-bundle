@@ -1,0 +1,82 @@
+---
+description: 'A practical capability map for every built-in output target, the framework surfaces that vary by host, and how to read supported, degraded, unavailable, prohibited, and unverified evidence.'
+---
+
+# Targets and capabilities
+
+Agent Bundle has **five built-in output targets**. A target is a compiler projection, not a host session, package format, or proof that every feature works identically everywhere:
+
+| Target | Primary generated form | Installation model | Important boundary |
+| --- | --- | --- | --- |
+| `amp` | `.amp/plugins/<name>/index.js` directory plugin | Framework copies the generated Amp directory to the project or user plugin root; reload remains interactive. | Amp MCP is skill-scoped. Generated local MCP entries are rejected because the pinned contract exposes no plugin-root token/cwd for a relocatable entry. |
+| `claude` | `.claude-plugin/plugin.json`, `hooks/hooks.json`, `.mcp.json` | Claude Code marketplace + plugin CLI. | Use the dedicated target for Claude-native hooks, commands, output styles, LSP/settings, and other Claude extensions. |
+| `codex` | `.codex-plugin/plugin.json` with adjacent hooks/MCP documents | Codex marketplace + plugin CLI. | Codex-native metadata, hook contracts, Apps compatibility, and marketplace policy stay in the Codex projection. |
+| `cursor` | `.cursor-plugin/plugin.json` with adjacent hooks/MCP documents | Receipt-owned local copy, or the documented local-marketplace flow. | Cursor can also read a portable Agent Plugins pack, but the native target is what emits Cursor-specific manifests, hooks, MCP documents, rules, and metadata. |
+| `portable` | root `plugin.json` + `mcp.json` using Agent Plugins 1.0.0 | The generated standalone installer is available when selected; other Agent Plugins clients may consume the built root according to their own support. | The standard intentionally does not make every native host feature portable. Skills and MCP are the core portable surfaces; native hooks/rules/commands require a target that actually supports them. |
+
+Omit `targets` and only `portable` is selected. `plugin` is **not** a target. Target order does not change output. The [Targets and artifacts](./targets-artifacts.mdx) page is the byte/layout contract for the composite root.
+
+## Capability map
+
+The table below answers the author question: “I wrote this kind of thing; where does support come from?” It deliberately does not copy hundreds of versioned host rows. The generated [Host capability matrix](./hosts.md), [Event and hook matrix](./events.md), and [Notice delivery matrix](./notices.md) are the exact evidence-backed sources.
+
+| Authoring surface | Framework responsibility | Host-dependent part | Exact source of truth |
+| --- | --- | --- | --- |
+| Skills and Skill resources | Discover, validate, copy/render, preserve resources, compose the selected projections. | Skill metadata/features, discovery, registration, interpolation, skill-scoped MCP. | [Hosts](./hosts.md) plus [Skills](../guide/authoring/skills.mdx). |
+| MCP tools, resources, prompts | Compile conventional routes into one generated server, validate schemas/results, own stdio lifecycle and manifest executable records. | Whether/how the target can launch or register the server, transports, path tokens, tasks and structured-result behavior. | [Hosts](./hosts.md) plus [MCP servers and Apps](../guide/authoring/mcp.mdx). |
+| MCP Apps | Compile the browser App, bind it to a declared server/resource/tool, generate typed App contracts, expose declared web launches. | Native App/resource support and host presentation behavior. | [Hosts](./hosts.md), [MCP servers and Apps](../guide/authoring/mcp.mdx), and the [MCP App example](../examples/mcp-app.mdx). |
+| Canonical event routes and hooks | Normalize canonical events, compile wrappers, run preflight/handler logic, record exact executable ownership. | Native event availability, payload fields, matchers, blocking/rewriting semantics, supported result channels. | [Events](./events.md) and [Hooks](../guide/authoring/hooks.mdx). |
+| Commands and rules | Parse/validate authored documents and place them into compatible selected projections. | Which hosts discover the component and which frontmatter/features survive. | [Hosts](./hosts.md) and [Project structure](../guide/start/project-structure.mdx). |
+| Routed CLI and CLI projections | Build one command graph/bin, validate argv against the canonical route schema, reuse a tool through `.cli.ts` when it is the same operation. | Whether the selected target admits the routed CLI in its plugin root. Rich schemas may require canonical JSON input or a genuinely separate workflow. | [Hosts](./hosts.md), [Package entries](../guide/authoring/package-entries.mdx), and [CLI](./cli.mdx). |
+| Scripts and assets | Compile/copy once into the composite artifact with manifest ownership and provenance. | Host discovery only matters when a component is also projected into a native host surface. | [Scripts and assets](../guide/authoring/scripts-assets.mdx) and [Targets and artifacts](./targets-artifacts.mdx). |
+| Layouts, providers, state, request lineage and terminal context | Wrap framework-executed routes with shared application behavior and request-scoped context. | These are framework execution capabilities, not native manifest components; they exist where the operation executes through the generated runtime. | [Project structure](../guide/start/project-structure.mdx) and [Runtime environment](./runtime-environment.mdx). |
+| Notices | Normalize notice delivery and intersect what selected hosts can advertise/deliver. | Channel availability and delivery semantics. | [Notices](./notices.md). |
+| Native host extensions | Keep host-specific configuration inside its adapter and validate it against pinned evidence. | Everything: the extension exists only for the host that owns it. | [Configuration](./configuration.mdx) and [Hosts](./hosts.md). |
+| Prebuilt payloads | Package opaque bytes and declared runtime dependencies without pretending the compiler analyzed their internals. | Which selected hosts receive the payload and whether the external runtime requirements are present. | [Configuration](./configuration.mdx), [Targets and artifacts](./targets-artifacts.mdx), and [Validation](../guide/distribution/validation.mdx). |
+
+### A useful rule
+
+If two surfaces are **the same operation**, author the operation once and project it. A tool plus an idiomatic CLI command normally means one MCP tool route plus a colocated `.cli.ts` projection. If they are different workflows, keep separate routes. Do not build a second application registry just to feed another surface.
+
+## How to read capability states
+
+The adapter contract has four states:
+
+| State | Meaning |
+| --- | --- |
+| `supported` | The pinned host evidence supports the capability and records the observed host/adapter version. |
+| `degraded` | A useful subset is available, with a recorded limitation. Do not present it as full support. |
+| `unavailable` | The pinned host contract does not provide the capability. |
+| `prohibited` | The host contract or framework policy explicitly forbids the capability. |
+
+A separate **unverified** statement can appear in host evidence or acceptance notes. That does not mean “unsupported.” It means the static/type/fake-host contract may be implemented while live authenticated execution has not been demonstrated in the available environment. Amp live activation is a current example: installation and generated contract behavior are tested, while account-dependent live execution remains unverified.
+
+Do not turn `degraded` or `unverified` into a green “supported” badge, and do not turn `unverified` into “unavailable.”
+
+## Built-in targets versus recorded clients
+
+The five names above are the built-in compiler targets. The [Hosts](./hosts.md) reference also records clients that can consume some portable components. Those rows are **compatibility evidence**, not additional output targets.
+
+For example, a client may read Skills but not hooks, or recognize an MCP document while lacking proof that Agent Bundle path placeholders launch correctly. Select `portable` when the standard is the intended contract; add a native target only when Agent Bundle has a real adapter for the host-specific behavior you need.
+
+This distinction prevents a misleading support count: “recorded client,” “portable reader,” “native compiler target,” “installable native plugin,” and “authenticated runtime proof” are different claims.
+
+## Choose targets from requirements, not popularity
+
+1. Start with `portable` when Skills/MCP through the open format are enough.
+2. Add a native target when the plugin needs that host's hooks, rules, commands, native metadata, installation semantics, or another capability the portable format cannot express.
+3. Check the generated capability matrices for the exact host version before relying on a native event or field.
+4. Use `config.requires` on event routes when the route should exist only where every named capability is supported.
+5. Split builds only when the composite rules require it (`AB4103`, `AB4105`, `AB4106`) or when the product intentionally ships different plugins.
+
+`agent-bundle inspect --root .` shows the normalized selection and planned projections. `validate` checks source declarations; `validate --artifact` checks the emitted bytes. Neither command turns missing native evidence into runtime proof.
+
+## What is not a capability claim
+
+- A successful **build** proves compilation and artifact assembly, not native execution.
+- A successful **route-unit** test proves the route contract at that harness level, not installation.
+- A successful **fake-host** or protocol test proves the simulated contract, not authenticated host behavior.
+- An **npm install** installs package files; it does not register the plugin into an agent host.
+- A browser **MCP App** is not the same JSX surface as an Agent Document. Browser Apps use browser code and `agent-bundle/app`; agent-facing JSX renders `Agent.*` nodes through the server runtime.
+
+Use the proof level that matches the claim, and keep stronger native acceptance separately labelled.
