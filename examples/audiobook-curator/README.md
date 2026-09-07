@@ -168,10 +168,12 @@ Suspense fallback, and byte for byte the `structuredContent` of the tool call.
 `--report` and `--receipt` are optional on the command line exactly as they are
 on the tool; a command that gets one still writes the receipt file
 when it succeeds. This is a
-behavior change from the retired `src/cli/` tree, where `inventory --report`
-and `convert --receipt` were required: both commands now run without a receipt
-path and write no report or receipt file, and their exit codes, `--apply` gating, and error
-output are unchanged either way.
+behavior change from the retired `src/cli/` tree, where every command that
+took a report or receipt path — thirteen of the sixteen, `inventory --report`
+and `convert --receipt` among them — required it: those commands now run
+without the path and write no report or receipt file, and their exit codes,
+`--apply` gating, and error output are unchanged either way. `inspect`,
+`prepare`, and `shelf` never took one.
 
 Each tool module declares its `inputSchema` as an inline zod literal, because
 the argv projection is compiled statically from that literal; it is the only

@@ -77,9 +77,10 @@ emits one result-schema-validated JSON value followed by a newline: the canonica
 and byte for byte the `structuredContent` of the tool call. `--report` and `--receipt` are
 optional on the command line exactly as they are on the tool; a command that gets one still
 writes the receipt file when it succeeds. This is a behavior change from the retired `src/cli/` tree, where
-`inventory --report` and `convert --receipt` were required: both commands now run without a
-receipt path and write no report or receipt file, and their exit codes, `--apply` gating, and error output are
-unchanged either way.
+every command that took a report or receipt path — thirteen of the sixteen, `inventory --report`
+and `convert --receipt` among them — required it: those commands now run without the path and
+write no report or receipt file, and their exit codes, `--apply` gating, and error output are
+unchanged either way. `inspect`, `prepare`, and `shelf` never took one.
 
 ## Working in the workspace
 
