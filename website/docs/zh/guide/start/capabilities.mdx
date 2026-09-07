@@ -1,0 +1,151 @@
+---
+description: '选择全部五个内置输出 target，查阅自动生成的能力矩阵，并区分插件生成、客户端兼容性、浏览器展示与经过验证的执行。'
+---
+
+# Target 与能力地图
+
+本页回答三个问题：**该编写什么、该选择哪种输出，以及能力边界在哪里**。
+要先做出一个可用工具，请从[快速开始](./quick-start.mdx)入手。精确且带版本记录的宿主行为由
+自动生成的矩阵说明；不要假定所有宿主都实现同一种插件接口。
+
+## 全部内置输出 target
+
+以下是 `agent-bundle.config.ts` 的 `targets` 支持的五个内置值。它们选择编译器生成的内容，
+不是账户、模型或正在运行的开发会话。
+
+| Target | 输出与预期读取方 | 重要边界 |
+| --- | --- | --- |
+| `amp` | `.amp/plugins/<name>/` 下的原生目录插件：`index.js` PluginAPI 工厂、显式注册的 Skills，以及映射后的事件回调。 | MCP 配置属于 Skill。适配器支持单个捆绑 Skill 旁边的、受支持的远程服务器或全局可解析命令，不支持编译器拥有的本地 MCP 入口。Amp 安装与真实账户执行是不同的证明级别。 |
+| `claude` | Claude Code：`.claude-plugin/plugin.json`、生成的市场条目，以及适用时的 `hooks/hooks.json` 与 `.mcp.json`。 | 编译后的语义 hook 与显式编写的原生 hook 使用不同的编写契约。LSP 等原生扩展仍是 Claude 专属配置。 |
+| `codex` | Codex：`.codex-plugin/plugin.json`、指向自身 hook/MCP 文档的显式路径，以及 `.agents/plugins/marketplace.json`。 | CLI、编辑器和桌面客户端的行为需要分别限定。提供 MCP App 资源不意味着每个 Codex 客户端都会显示它。 |
+| `cursor` | Cursor：`.cursor-plugin/plugin.json`、自身 hook/MCP 文档，以及可选的市场文档。 | 具有所有权记录的本地复制安装路径不同于原生市场 CLI 安装。不要手工改写 Cursor 的全局 hook 配置。 |
+| `portable` | Agent Plugins 1.0.0：根目录 `plugin.json`、Skills，以及编写了 MCP 时的 `mcp.json`。 | 这是格式 target，不是通用宿主。它不定义原生 hooks、rules 或斜杠命令文档。每个读取客户端支持的子集单独记录。 |
+
+省略 `targets` 时只选择 `portable`。显式配置会替换这个默认值：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'project-tools', description: 'Tools for this project.' },
+  targets: ['claude', 'codex', 'cursor'],
+});
+```
+
+只为某次构建选择其他投影时，重复使用 `--target`。请先在项目中安装正确的框架包：
+
+```sh
+npx --no-install agent-bundle build --target claude --target codex
+```
+
+只有实际组件能够共存时，组合才有效。同一路径的不同内容、或某个宿主意外发现另一个宿主的组件，
+都会导致构建错误，而不是允许后一个投影覆盖前一个。改变 target 顺序不能解决冲突。
+参见[组合规则](../../reference/targets-artifacts.mdx)。
+
+当前脚手架的 target 选项尚未跟上编译器的 Amp 支持。构建 Amp 插件时，请在适合的现有项目或静态项目中
+显式设置 `targets`；不要假设生成式 MCP 模板的本地服务器符合 Amp 的 Skill 级 MCP 契约。
+嵌套安装根目录和重新加载步骤见[安装指南](../distribution/installation.mdx)。
+
+## 权威能力矩阵
+
+以下页面从适配器使用的同一组固定能力记录生成，包含原始文档、观测版本、详细限制和省略原因。
+不要在插件仓库中再维护一套原生支持清单。
+
+| 问题 | 查阅位置 |
+| --- | --- |
+| target 支持哪些组件、传输方式、路径占位符、原生元数据和安装方式？ | [宿主能力矩阵](../../reference/hosts.md) |
+| 有哪些语义事件和普通 hook 事件、哪些 payload 字段存在、工具选择器如何映射？ | [事件与 hook 矩阵](../../reference/events.md) |
+| 支持哪些 notice 通道与接收方身份，什么才算送达？ | [Notice 投递矩阵](../../reference/notices.md) |
+| 会生成哪些文件和可执行记录？ | [Target 与产物](../../reference/targets-artifacts.mdx)和[产物清单](../../reference/artifact-manifest.mdx) |
+| 这一次实际构建选择或省略了哪个组件？ | `agent-bundle inspect --json`；计划记录 selected/skipped 组件、原因和按组件种类划分的能力判断。 |
+
+每项能力判断都限定到具体功能及其证据：
+
+| 状态 | 对作者的含义 |
+| --- | --- |
+| `supported` | 记录的 target/版本有证据支持该行为；不等于你的操作已经在该宿主成功运行。 |
+| `degraded` | 可用的是受限或经转换的行为。依赖它之前先阅读原因。 |
+| `unavailable` | 当前记录下，框架没有受支持的实现路径。原因可能是宿主缺少功能，也可能是缺少证据；两者不是同一结论。 |
+| `prohibited` | 契约明确拒绝这种用法。不要复制私有实现来绕开诊断。 |
+
+运行验证是另一个维度。适配器可以已经实现，但依赖账户的激活仍然是 **unverified**。
+没有账户不是宿主无法执行操作的证据；反过来，文件放置成功也不证明宿主已启用插件或调用工具。
+
+## 框架能构建什么
+
+下表是编写导航，不承诺每个 target 都接受每一种组件。可用性由宿主矩阵和实际构建的 inspection 决定。
+
+| 需求 | 常规编写路径 | 框架职责 / 指南 |
+| --- | --- | --- |
+| 可复用指令与资源 | `src/skills/<name>/SKILL.md` | 发现、校验、打包和投影 Skills；[Skills](../authoring/skills.mdx)。静态 Skill 不需要服务器。 |
+| 生成指令内容 | 文档支持的 rendered Skill 源码 | 构建时渲染为 Skill 产物，不是常驻宿主服务；[Skills](../authoring/skills.mdx)。 |
+| 宿主斜杠命令或规则 | `src/commands/*.md`、`src/rules/*.mdc` | 校验受支持的 frontmatter 与原生发现行为；[配置](../authoring/index.mdx)。Markdown 命令不是可执行 CLI 路由。 |
+| 可调用工具、资源或提示 | `src/mcp/<server>/{tools,resources,prompts}/*` | 生成注册、服务器生命周期、契约和协议投影；[MCP](../authoring/mcp.mdx)。 |
+| 从终端复用工具 | 同目录的 `<tool>.cli.ts` | 将 argv 投影到规范操作；[包入口](../authoring/package-entries.mdx)。 |
+| 独立终端工作流 | `src/cli/**` | 生成命令树、参数处理、输出和退出语义。用于不同的工作流，而不是再复制一遍工具。 |
+| 面向智能体的结构化与可读输出 | 可执行路由返回 `Agent.*` 元素 | 组合 Agent Document 及各表面的输出；领域计算仍属于插件。 |
+| 工具的浏览器视图 | `src/mcp/<server>/apps/*`，加显式工具关联 | 编译 MCP App，通过 `agent-bundle/app` 连接；[MCP Apps 示例](../../examples/mcp-app.mdx)。 |
+| 不通过智能体界面打开 App | `serve-app` 或声明的 `web` 暴露 | 复用本地浏览器宿主和同意边界；[CLI](../../reference/cli.mdx)。它不是新的部署 target。 |
+| 跨宿主事件行为 | `src/events/**`，可选 preflight | 规范化事件并投影受支持的决定/上下文；[hooks](../authoring/hooks.mdx)。 |
+| 轻量普通 hook | 使用公开 hook 类型的配置声明处理器 | 管理原生 stdin/stdout 与结果编码，不要求 Agent renderer；[hooks 与脚本示例](../../examples/hooks-and-scripts.mdx)。 |
+| 共享渲染与请求依赖 | `src/layout.tsx`、服务器布局、`src/providers/*` | 组合受支持的路由并挂载观测到的请求上下文；[项目结构](./project-structure.mdx)。浏览器 App 和事件不会自动成为文档布局的子节点。 |
+| 框架 state 与 notices | `src/state.ts` 和公开请求句柄 | 提供声明的生命周期、journal/notice 机制与真实可用性；[运行环境](../../reference/runtime-environment.mdx)和[notices](../../reference/notices.md)。 |
+| 脚本、静态资源或不透明可执行 payload | `src/scripts/*`、assets 或 `definePrebuilt` | 按声明打包或复制；[脚本/资源](../authoring/scripts-assets.mdx)和[payload](../authoring/package-entries.mdx)。声明 payload 真正需要的运行依赖。 |
+| npm bin/库输出与安装 | 按需使用 `bin`/`lib`；可选 `agent-bundle/install` 入口 | 组装规范包根并复用生命周期所有权；[交付](../distribution/index.mdx)。 |
+| 测试与智能体评估 | 公开 test/browser/Rstest 与 eval 辅助函数 | 区分路由、协议、打包与原生证据；[开发](../development/index.mdx)。 |
+
+高级 custom/command/remote MCP 服务器、原生元数据、原生 hook 文档、预构建 payload 和打包器覆盖仍按文档支持。
+它们解决真实的集成需求，不是编写普通工具之前必须完成的设置。
+
+## 兼容客户端不是额外 target
+
+宿主矩阵中的 **Recorded third-party clients** 部分描述现有输出格式的读取方。
+这些客户端名称不是 `targets` 的额外取值。某宿主的研究 issue 也不代表已经存在可安装的适配器。
+
+同时阅读客户端的 tier 与各表面记录。仅支持 Skills 的客户端可能不读取 `plugin.json`。
+能读取 `mcp.json` 的客户端不一定展开启动服务器所需的路径占位符。安装命令可能只是注册目录，
+而不是复制目录。高优先级清单可能重定向组件路径；单独的 MCP 文件覆盖不一定遮蔽无关的 Skills。
+插件未编写的可选组件不会凭空出现。
+
+详情以[生成的客户端记录](../../reference/hosts.md)中的带日期来源为准。
+笼统地说某客户端“支持插件”，不足以证明它能消费这个具体产物。
+这里不会把尚无已实现或已记录路径的宿主宣传为受支持 target。
+
+## 构建、开发与展示是不同维度
+
+| 表面 | 如何选择 | 不意味着什么 |
+| --- | --- | --- |
+| 编译 | `targets` / 构建 `--target` | 所有选中宿主提供相同功能，或共享完全相同的原生安装根目录。 |
+| 开发安装 | `dev --install-host claude`、`codex` 或 `cursor` | 每个原生 target 都支持实时开发代理。Amp 使用文档中的复制/重新加载路径。 |
+| 嵌入式宿主终端 | 已安装且受支持的 Claude/Codex 会话集成 | 身份验证、信任和成功的模型执行由真实宿主提供，不是 Workbench 模拟出来的。 |
+| App 展示 | 受支持的浏览器宿主 `--profile` | 该 profile 是原生输出 target，或它就是正确的服务器启动投影。 |
+| npm 分发 | 打包生成的 npm 根目录 | 安装 npm 包会自动把插件注册到智能体宿主。 |
+
+通过高级 `TargetRegistry` 注册的第三方适配器，在当前组合契约下单独构建。
+它们不会自动继承内置 target 之间的发现隔离保证。
+
+## 检查自己的插件
+
+各 inspection focus 分开运行，不要在同一次调用中组合多个 focus：
+
+```sh
+npx --no-install agent-bundle inspect --json
+npx --no-install agent-bundle inspect --routes --json
+npx --no-install agent-bundle inspect --hooks --json
+npx --no-install agent-bundle inspect --state --json
+npx --no-install agent-bundle validate
+```
+
+构建之后，不需要重新发现源码即可检查和校验交付物：
+
+```sh
+npx --no-install agent-bundle inspect --artifact artifact --json
+npx --no-install agent-bundle validate --artifact artifact
+```
+
+事件需求是语义性的时，使用受支持的 `config.requires` 能力声明；刻意面向原生行为时，使用显式宿主选择。
+不要通过丢弃阻止决定、虚构上下文或扩大批准范围来宣称支持。
+互斥声明和能力不可用诊断见事件指南。
+
+交付物应保留生成的 `INSTALL.md`，并遵循其中真实的宿主、根目录与 scope 指令。
+成功编译、打包进程测试、原生安装与经过身份验证的智能体调用证明的是不同事情；记录实际执行过的级别。

@@ -1,0 +1,113 @@
+---
+description: 'Diagnose missing routes, weak generated types, incompatible targets, App launch problems, package-root mistakes, runtime state, and test evidence without inventing another registry or installer.'
+---
+
+# Troubleshooting
+
+Start with the failing boundary: authored source, compiled artifact, installed package, or running
+host. Do not repair generated files by hand; correct the owning source declaration and rebuild.
+The [capability map](../start/capabilities.mdx) distinguishes supported output from supported
+client behavior.
+
+## Establish the version and the object being inspected
+
+After installing the intended framework package locally:
+
+```sh
+npx --no-install agent-bundle --version
+npx --no-install agent-bundle validate
+npx --no-install agent-bundle inspect --json
+```
+
+For a copied artifact, inspect that artifact instead of an unrelated checkout:
+
+```sh
+npx --no-install agent-bundle inspect --artifact artifact --json
+npx --no-install agent-bundle validate --artifact artifact
+```
+
+`inspect --artifact` is not combined with source `--root` or `--config`. `validate --artifact`
+takes the bare composite artifact; the manifest-aware installation path also understands an npm
+root. Those roots have different inventory responsibilities. See [shipping](../distribution/index.mdx).
+
+Record the compiler/runtime package selectors and the artifact/application version when reporting
+a problem. Preview packages should come from one immutable build. Published compiler/runtime
+versions can differ; use the pair recorded by the matching scaffolder, not an assumption that
+their numeric versions must be equal.
+
+## Find the smallest correction
+
+| Symptom | Check and correction |
+| --- | --- |
+| A file is not a tool or is missing from Workbench | Check the actual route path, supported extension, private `_`/`.` segments, ignore rules, and explicit server mode. Inspect the route graph. A custom/command/remote server is not a generated route server; do not create a second registration list to compensate. |
+| A supported target is rejected by project creation | Compare the scaffolder's choices with the compiler's target catalog. The current Amp choice gap does not mean the Amp adapter is absent. Use a compatible source project/configuration and consult Amp's MCP limits rather than assuming every starter works for it. |
+| A composite fails with a path/discovery conflict | Read `AB4103`, `AB4105`, or `AB4106` and the affected components. Make shared content compatible or build deliberately incompatible projections separately. Changing target order or overwriting emitted files is not a resolution. |
+| A hook is absent or its native decision differs | Check the generated event/hook matrix, selected host, matcher, required capabilities, and the exact native payload. Use `hooks list` and the documented host-specific simulation. Do not replace missing evidence with a fabricated allow/deny value. |
+| TypeScript accepts an invalid App route ID or loses provider/result types | Check that generation ran successfully and that `.agent-bundle/routes.d.ts` belongs to the actual browser/server/test program consuming it. Inclusion in one sibling tsconfig is not proof of inclusion in another. |
+| A defaulted input field is unexpectedly required by an App type | The current generator uses parsed schema output for some caller contracts. Do not interpret the type error as proof that runtime defaults are unsupported. Keep the canonical schema and distinguish this known type boundary from invalid runtime input. |
+| Adding a named CLI projection rejects a rich schema | Automatic flags use a bounded grammar. Consult the supported canonical-JSON bulk command path; a mapper alone does not extend the named projection grammar. Do not flatten the real domain contract just to satisfy flag extraction. |
+| An App resource exists but the host shows no browser UI | Distinguish serving MCP Apps from rendering them in the particular client/version. Use the MCP App reference and local preview as a separately labelled check; the presence of HTML is not native display proof. |
+| App preview selects a host that cannot launch its server | A build-wide target list is not that server's eligible launch list. Select an actual eligible projection. Never add a fake portable server solely to satisfy the UI. |
+| An App stays loading, or an error looks like an empty success | Register input/result/error/cancellation handling before connecting the public client. Expected tool errors do not necessarily reach the success-result callback. Check the actual opening invocation, not just a subsequent manual call. |
+| An App preview appears only after the opening call completes | The primary Workbench App workspace currently awaits completion. The lower-level pending bridge and browser harness do not by themselves make that workspace a live pending preview. Do not add another client transport to work around the UI lifecycle gap. |
+| npm installation succeeds but the executable is missing | Pack the intended generated npm root and inspect its actual `package.json.bin` and tarball inventory. Generated routed bins use the manifest executable; authored package bins have a different output path. Do not assume the old nested `artifact/` layout. |
+| Installation rejects a manifest revision or changed digest | Align the emitting compiler and consuming lifecycle implementation. Keep public packages coherent; do not independently update a private source reader or edit the closed manifest version/digests. |
+| A read-only installed plugin fails on a write | Keep code/assets immutable and use the observed framework state location plus an explicit domain-data policy. An acquired session or cache is not a packaged asset or a reason to rewrite the installed `.env`. |
+| MCP stdio fails to parse output | Keep application logs off the JSON-RPC stdout channel. Use the generated lifecycle or a correctly scoped custom-server entry, and send diagnostics to stderr. |
+| A green default test did not catch a broken route | Check which tests the script collects. The current MCP starter's `check` includes route/projection pools, while its `npm test` alone excludes them. Use the full documented check until the script contract changes. |
+| A native test was skipped or an account is unavailable | Record the missing prerequisite and the proof not performed. A successful mock, build, or install is not authenticated tool/hook execution; unverified is not the same as unsupported. |
+
+## Generated types on a clean checkout
+
+Generated declarations are intentionally not authored source. Run the current supported generation
+path before a standalone typecheck, and stop if it fails:
+
+```sh
+npx --no-install agent-bundle validate
+npm run typecheck
+```
+
+The project needs its own `typecheck` script and correct tsconfig inclusion. A previous generated
+file can remain after failed preparation; do not describe it as current. The present inclusion
+warning is not a complete audit of every project reference. For solution-style configurations,
+verify each consuming program rather than adding a file to an unrelated root program merely to
+silence a warning. Do not import server implementations into browser runtime code to get types.
+
+The starter's current complete check is:
+
+```sh
+npm run check
+```
+
+See [testing](./testing.mdx) for focused pools and [reuse recipes](../authoring/reuse-framework.mdx)
+for canonical contracts. Static-only plugins should not gain a React/MCP testing dependency solely
+to imitate the MCP starter.
+
+## Installation and replacement
+
+Use the delivered `INSTALL.md` or the supported package-bound installer. Native registration,
+file placement, enablement, and a live running session are distinct states. Read the
+[installation guide](../distribution/installation.mdx) before interpreting a receipt or reload step.
+
+Use `doctor` for a read-only installed-state check. A different version or foreign directory may
+require a deliberate operator decision; do not start with `rm -rf`, global cache edits, or
+pre-validation permission repair. Keep-data and purge have different ownership requirements.
+Missing historical ownership is not authority to delete an inferred directory.
+
+Run packaging tests with temporary data and isolated host roots. Do not put real passwords,
+tracker sessions, private keys, or live operator data in a reproducible fixture.
+
+## Useful bug-report evidence
+
+Include the package selectors and Node version, the smallest relevant config and route, the
+exact command, structured diagnostic, and whether it ran from source, an artifact, an installed
+package, or a native host. Include the expected behavior and actual terminal outcome.
+
+For App/session problems, note the chosen server, tool, launch projection and browser profile
+separately. For a rebuild problem, identify the old and new revision without attaching unrelated
+raw logs. Redact credentials, authorization headers, session cookies, and private command data.
+Do not include an entire environment dump.
+
+Link the [diagnostic reference](../../reference/diagnostics.md) or capability row when applicable.
+A test failure, a documented limitation, and an unexecuted acceptance case require different
+follow-up work; report which one the evidence establishes.

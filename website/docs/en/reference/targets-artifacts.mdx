@@ -1,218 +1,199 @@
 ---
-description: 'The composite plugin root agent-bundle build emits: where each host projection places its manifest, hook, and MCP documents, the hook wrapper naming rule, the AB4103/AB4105/AB4106 composition rules, the optional manifest web section, and the artifact manifest contract.'
+description: 'All five built-in output projections, their native discovery paths, composite constraints, canonical artifact/npm roots, and manifest-owned executable and web bindings.'
 ---
 
 # Targets and artifacts
 
-The target table — what each host projection carries, and why the portable standard omits rules,
-commands, and hooks — is in [Configuration model](../guide/authoring/index.mdx). The source-tree
-layout is in [Project structure](../guide/start/project-structure.mdx). This page is the output
-contract: the one directory `build` emits, and the artifact manifest its bytes have to satisfy.
+Start with the [target and capability map](../guide/start/capabilities.mdx) to choose a surface.
+The [generated host matrix](./hosts.md) records feature support and evidence. This page describes
+what is emitted and which object downstream tools consume.
 
 ## The composite plugin root
 
-`agent-bundle build` writes **one directory** at the artifact output — `artifact/` by default;
-`output.distPath` or `--output` moves it. `targets` selects the **host projections** laid into
-that root: `amp`, `claude`, `codex`, `cursor`, and `portable`, in any combination. Claude Code,
-Codex, Cursor, and portable read the root as their plugin root; Amp reads the one generated
-directory at `.amp/plugins/<name>/`.
+`agent-bundle build` writes one composite artifact root, `artifact/` by default.
+`output.distPath` or CLI `--output` moves the root; it does not redesign the layout inside it.
+The five built-in projections are **`amp`, `claude`, `codex`, `cursor`, and `portable`**.
 
-- Omit `targets` — in config and on the command line — and the build emits only the `portable`
-  projection.
-- Order does not matter. `['codex', 'claude']` and `['claude', 'codex']` produce byte-identical
-  output, and the normalized model, the artifact manifest, and `inspect` list the selection
-  sorted by name.
-- `plugin` is not a target. `targets: ['plugin']` or `--target plugin` is an unknown target
-  (`AB4100`): the composite root is already the output of every build.
+Omitting `targets` selects only `portable`. An explicit selection can combine built-in projections
+when the authored components satisfy their compatibility rules. Target order does not change the
+result. `plugin`, `web`, `npm`, and browser presentation profiles are not extra built-in targets.
 
-Built with all four projections, the host-test example's root looks like this (component
-directories appear only when the project authors them):
+The following is an illustrative combined layout, not a promise that an empty plugin emits
+every file. Read the generated manifest for the actual executable names and included components.
 
 ```text
 artifact/
-├── .amp/plugins/<name>/index.js          # Amp PluginAPI factory
-├── .amp/plugins/<name>/skills/           # explicitly registered Amp skills
-├── .amp/plugins/<name>/hooks/<hook>.mjs  # Amp event callback wrappers
-├── .amp/plugins/<name>/hooks/hooks-flight.mjs  # sibling standalone event worker
-├── .agents/plugins/marketplace.json      # Codex marketplace
-├── .claude-plugin/plugin.json            # Claude Code manifest
+├── .amp/plugins/<name>/
+│   ├── index.js                       # native Amp factory
+│   ├── skills/                        # explicitly registered Skills
+│   └── hooks/                         # mapped callbacks' executable support
+├── .claude-plugin/plugin.json
 ├── .claude-plugin/marketplace.json
-├── .codex-plugin/plugin.json             # Codex manifest
-├── .codex-plugin/hooks.json              # Codex hook document
-├── .codex-plugin/mcp.json                # Codex MCP document
-├── .cursor-plugin/plugin.json            # Cursor manifest
-├── .cursor-plugin/marketplace.json
-├── .cursor-plugin/hooks.json             # Cursor hook document
-├── .cursor-plugin/mcp.json               # Cursor MCP document
-├── .mcp.json                             # Claude Code MCP document
-├── plugin.json                           # portable (Agent Plugins) manifest
-├── mcp.json                              # portable MCP document
-├── hooks/hooks.json                      # Claude Code hook document
-├── hooks/<hook>.mjs                      # wrapper, hook selected for ONE host
-├── hooks/<hook>.<host>.mjs               # wrappers, hook shared by >1 selected host
-├── hooks/hooks-flight.mjs
-├── mcp/mcp-<server>-<hash>.mjs           # compiled MCP entries (+ -flight.mjs)
-├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # routed CLI and/or <plugin> web
-├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # emitted once
-├── INSTALL.md                            # when any built-in host is selected
-├── install.mjs                           # when cursor or portable is selected
-├── agent-bundle.manifest.json            # the artifact index (manifestVersion 4)
-└── agent-bundle.compile-evidence.json    # compiler record per compiled file
+├── .codex-plugin/plugin.json
+├── .codex-plugin/hooks.json
+├── .codex-plugin/mcp.json
+├── .agents/plugins/marketplace.json
+├── .cursor-plugin/plugin.json
+├── .cursor-plugin/hooks.json
+├── .cursor-plugin/mcp.json
+├── .mcp.json                          # Claude MCP document
+├── plugin.json                        # portable manifest
+├── mcp.json                           # portable MCP document
+├── hooks/hooks.json                   # Claude hook document
+├── hooks/                             # compiled, host-bound wrappers/workers
+├── mcp/                               # compiled MCP entries and workers
+├── bin/                               # generated CLI / configured web command
+├── skills/, commands/, rules/
+├── scripts/, assets/, mcp-apps/
+├── INSTALL.md
+├── install.mjs                        # selected Cursor/portable install path
+├── agent-bundle.manifest.json
+└── agent-bundle.compile-evidence.json
 ```
 
-`agent-bundle.compile-evidence.json` is the compiler's record of each compiled
-(`bundle`) file; `validate --artifact` re-checks a listed record against the
-file table (`AB6039`).
+Shared root components are emitted once. Amp's directory plugin keeps its registered Skills and
+execution support inside its nested directory so the installed copy is self-contained. The
+native Amp install root is therefore not the same directory as the composite artifact root.
 
-Host manifests live in their dotfolders at the root. Root-level `skills/`, `hooks/`, `mcp/`,
-`scripts/`, `bin/`, and `assets/` are shared and emitted **once**. Amp's registered skills,
-event wrappers, and the standalone worker beside those wrappers in each directory stay inside
-`.amp/plugins/<name>/` so the installed plugin remains self-contained. Nothing else appears at
-the root: no generated `AGENTS.md`, no `hooks/hooks-cursor.json`, no `web/` directory. The browser
-host for configured MCP Apps ships inside `bin/<plugin>.mjs` as the framework-owned `web` command.
-That bin is emitted when `src/cli/**` compiled at least one command, when
-[`web`](./configuration.mdx#web) is configured (even with no authored CLI commands), or both.
+A static Skills-only plugin does not need empty MCP servers or a Flight/state process. Some empty
+native hook/MCP documents are intentional discovery-isolation barriers when another selected
+host has content at a conventional fallback path. Do not delete those barriers as unused files.
 
 ### Where each host reads its documents
 
-| Host | Manifest | Hook document | MCP document | Marketplace |
+| Target | Entry or manifest | Hook registration | MCP configuration | Marketplace |
 | --- | --- | --- | --- | --- |
-| Amp | —; `index.js` is recorded as `documents.entry` | callbacks registered with `amp.on` | flat `skills/<name>/mcp.json` beside the registered skill | — |
-| Claude Code | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
-| Codex | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
-| Cursor | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | `.cursor-plugin/marketplace.json` when `marketplace: true` |
-| portable | `plugin.json` | — | `mcp.json` | — |
+| `amp` | `.amp/plugins/<name>/index.js` | Native PluginAPI callbacks | Skill-scoped `mcp.json` beside an explicitly registered Skill | None generated |
+| `claude` | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
+| `codex` | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
+| `cursor` | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | `.cursor-plugin/marketplace.json` when requested |
+| `portable` | `plugin.json` | No native-hook component in the format | `mcp.json` | None generated |
 
-The paths are fixed whatever the selection, so a single-host root and a five-host root share one
-layout. Amp's directory is isolated under `.amp/plugins/<name>/`; Claude Code and the portable Agent Plugins format load their documents from the
-conventional plugin-root locations and cannot be redirected; Codex and Cursor manifests carry
-explicit `hooks` and MCP pointers, so their documents sit beside their manifests. Both of those
-hosts also fall back to folder discovery of the conventional paths when the pointer is absent, so
-a Codex or Cursor projection with no document of its own still points at an empty one when a Hook
-or MCP server reaches another selected host's conventional path — Cursor never loads Claude
-Code's `hooks/hooks.json`.
+Paths are stable across valid single-target and multi-target selections. Codex and Cursor use
+explicit pointers to avoid loading another projection's fallback documents. A third-party
+portable client can have different precedence and supported subsets; consult its individual
+record in the [host matrix](./hosts.md), not this native-layout table.
 
 ### Hook wrappers
 
-A hook wrapper bakes in the host it was planned for (its codec, its `target`, its host contract
-revision), so one wrapper cannot serve two hosts:
+A compiled hook wrapper belongs to its selected host codec and contract. The same source hook
+can therefore produce several wrappers. Config-declared hooks reaching one host use the plain
+name; those reaching multiple hosts use host-qualified names. Conventional semantic events and
+standalone workers are also recorded in `executables.hooks`.
 
-- A hook that reaches exactly one selected host keeps the plain name, `hooks/<name>.mjs`.
-- A hook that reaches several selected hosts is emitted once per host as
-  `hooks/<name>.<host>.mjs`, and each host's hook document points at its own wrapper.
-
-Which hosts a config hook reaches is its `targets` (every target, by default) intersected with
-the selection. An event route may instead declare `requires`; the compiler intersects the
-selection with the hosts that support every named capability row. Thus the same source hook is
-`hooks/audit.mjs` in a `claude`-only root and
-`hooks/audit.claude.mjs` plus `hooks/audit.cursor.mjs` in a `claude` + `cursor` root. Native hooks
-are preserved for every selected host. The manifest's `executables.hooks[]` carries one row per
-wrapper per host — there is no separate hook index file — and `hooks list`, `hooks simulate`, and
-artifact validation (`AB6018`) read those rows.
+Use `hooks list` and the manifest rather than constructing wrapper filenames. The native event,
+payload provenance, matcher and return semantics are in the [event matrix](./events.md). Explicit
+targets and supported event `requires` declarations affect selection; neither can manufacture
+an event or decision the host cannot express.
 
 ### Compiled surfaces
 
-MCP entries, scripts, routed CLI bins, and MCP Apps are compiled **once** and attributed to the
-**composite identity** — the selected host names, sorted and joined by `+`, such as
-`claude+codex` — rather than to any one host. `agent-bundle inspect --bundler` shows the same
-thing: its `output.path` is the artifact output, `<output>`, with no host segment beneath it.
+Generated MCP entries, scripts, CLI bins and browser Apps are attributed to the composite
+selection, not independently rebuilt as unrelated applications for each host. An Agent Document
+renderer and a browser App compilation are distinct environments.
 
-Amp's MCP surface is the exception: it is skill-scoped, not a plugin-root runtime document.
-The Amp adapter accepts relocatable remote servers and globally resolvable commands beside exactly
-one bundled skill. It rejects compiler-owned local MCP entries because Amp documents neither a
-plugin-root path token nor an execution cwd for resolving such an entry.
+Amp's MCP projection is skill-scoped. Its current adapter permits supported remote servers and
+globally resolvable command servers associated with exactly one bundled Skill; it rejects
+compiler-owned local MCP entries without a supported native path/cwd contract. Listing Amp as a
+target does not make the ordinary local generated-MCP starter valid for Amp.
+
+A configured `web` surface adds the framework-owned command to `bin/<plugin>.mjs`, even without
+an authored CLI command. It is a local browser host for declared MCP Apps, not a `web` output
+target, a separate generated `web/` application, or permission to bypass App consent.
 
 ### One root, one set of bytes
 
-Merging projections by path only works when the hosts agree on the bytes. Three rules keep the
-root honest; all are errors, and `validate` and `inspect` report them exactly where `build`
-refuses:
-
-| Code | Rule |
+| Diagnostic | Constraint and recovery |
 | --- | --- |
-| `AB4103` | Two selected projections plan the same path with different bytes. Projections are compared in host-name order and paths in path order, so a given selection reports the same collision however `targets` is written. The usual cause is a Skill whose frontmatter carries a host extension (`targets: { claude: … }`), which lowers to different `skills/<name>/SKILL.md` bytes for Claude Code than for the other hosts. Make the component identical for every selected host, or build the conflicting hosts into separate artifacts. |
-| `AB4105` | A component scoped to a subset of the selected hosts — a command or rule with frontmatter `targets` — sits in a conventional directory another selected host scans (`commands/` for Claude Code and Cursor, `rules/` for Cursor). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. Extend `targets` to every selected host that discovers the directory, or build those hosts separately. Skills are never host-scoped: every skill ships to every selected host, and a per-host frontmatter extension that changes its bytes is an `AB4103` collision instead. |
-| `AB4106` | The selection mixes an adapter registered on an advanced `TargetRegistry` — any target whose adapter is not one of the shipped `amp`, `claude`, `codex`, `cursor`, `portable` adapters, judged by adapter identity, so a custom adapter registered under one of those names counts as advanced — with another target. Only the built-in hosts agree on where their unshared documents live, which directories each discovers, and one install surface, so a third-party adapter is built alone: `targets: ['<name>']` into its own `--output`. A single-target selection never triggers it. |
+| `AB4103` | Selected projections disagree on the bytes at a shared path. Make the shared component compatible or build the conflicting projections separately. Target ordering never authorizes overwriting it. |
+| `AB4105` | A host-scoped command/rule would be discovered by another selected host. Correct the scope/content or separate the artifacts. Distinct filenames alone do not prove discovery isolation. |
+| `AB4106` | An advanced third-party adapter is combined with another target. The current custom-adapter contract requires an isolated single-target build; registering an adapter under a built-in name does not grant the built-in layout guarantees. |
 
-All three are listed with `AB4100` in the [Diagnostics reference](./diagnostics.md).
+Skills are shared by the selected targets. A host extension that changes the generated Skill
+bytes can still produce a real `AB4103` conflict. An explicit rejection is safer than shipping a
+composite whose effective behavior depends on which host discovers it first.
 
 ## The root is distributable
 
-The composite root is the unit of distribution: no packaging step follows the build. It carries
-the components the selected hosts read, one generated `INSTALL.md` — a section per selected host,
-written with the bundle's real plugin and marketplace names — and the install surface those hosts
-require, emitted once for the whole selection:
+A copied composite artifact needs no per-host recompilation. It carries its generated installation
+instructions and the required installation support. **npm delivery still needs an npm packaging
+step** using the generated npm root; a directory build is not already a tarball.
 
-| Selected host | Marketplace manifest | Install surface |
-| --- | --- | --- |
-| `amp` | — | Copy `.amp/plugins/<name>/` to the project or system plugin root. |
-| `claude` | `.claude-plugin/marketplace.json`. | `claude plugin marketplace add` + `claude plugin install`. |
-| `codex` | `.agents/plugins/marketplace.json`. | `codex plugin marketplace add` + `codex plugin add`. |
-| `cursor` | `.cursor-plugin/marketplace.json` when `marketplace: true`. | `install.mjs`. |
-| `portable` | — | `install.mjs`. |
+| Selected target | Supported installation direction |
+| --- | --- |
+| `amp` | Install the nested generated directory under the documented project/user plugin location; reload through the host's documented interactive action. |
+| `claude` | Native marketplace registration and plugin installation from the declared composite root. |
+| `codex` | Native marketplace registration and plugin addition from the declared composite root. |
+| `cursor` | Receipt-owned local copy or the explicitly selected marketplace workflow. |
+| `portable` | Follow the recorded reader's instructions. The included `install.mjs` is the documented Cursor-compatible path, not a universal installer for every portable reader. |
 
-`INSTALL.md` is written whenever a built-in host is selected; `install.mjs` when `cursor` or
-`portable` is among them. Artifact validation errors when a required install-surface file is
-missing, so a root cannot ship without the installer its `INSTALL.md` promises. The npm pack
-inventory checks the same paths (`AB7010`).
+The framework's `install --from` resolves the selected native location from the composite root.
+Consumers can follow `INSTALL.md` without installing the compiler. A plugin may additionally
+provide a thin package-bound bin through `agent-bundle/install`; that entry is opt-in, not
+automatically generated for every package.
+
+With package output enabled, `dist/` is a complete npm root: a copy of the validated composite,
+`package.json`, standard package documents, and declared package-only entries. A generated routed
+CLI is copied unchanged and referenced as `bin/<name>.mjs`. An authored package bin instead
+compiles to `bin/<name>.js`. There is no required nested `artifact/` directory inside the tarball.
+See [shipping](../guide/distribution/index.mdx) for `prepack`, actual `npm pack`, and installed-bin
+proof. npm installation does not automatically register a plugin with a host.
 
 ## agent-bundle.manifest.json
 
-One manifest is emitted per root (`manifestVersion: 4`). It is the root's **index** — the one
-document every consumer reads to learn what the root contains — and the input to every later
-integrity check: `validate --artifact`, `prepack`, `install`, `doctor --from`, `serve-app`, `mcp`,
-`hooks`, and the packed and installed-host proof levels. The full field reference is the
-[Artifact manifest](./artifact-manifest.mdx) page; in outline:
+The current closed artifact contract is **`manifestVersion: 4`**. It is the index of the built
+application, not another file the plugin author maintains.
 
-| Section | Contents |
+| Section | Responsibility |
 | --- | --- |
-| `manifestVersion`, `runtime` | `4`, and `{ node }`, the consumer-facing generated-executable floor. |
-| `application` | The identity, once and host-independent: `id`, `name`, `version`, optional `description`. What `install`, `doctor`, and `uninstall` act on. |
-| `files[]` | Every emitted file: `path`, `bytes`, `sha256`, `kind` (`bundle`, `copy`, `generated`, `prebuilt`), optional `mode`. |
-| `projections[]` | One row per selected host, sorted by `host`: `host`, optional `builtInHost`, the `documents` pointers to the host plugin, marketplace, MCP, and hooks documents the projection emitted, and its `marketplace` name. |
-| `routes` | The compiled route graph: `servers[]`, `events[]`, `scripts[]`, `cli`, `providers[]`, `layouts[]`, `contracts[]` (when a route binds one), and its `digest`. A bound route names its contract with `route.contract`. |
-| `executables` | Every process the root can start: `bins[]`, `hooks[]` (one row per wrapper per host), `mcpServers[]` with their `entry` and `apps[]`, and `scripts[]`. |
-| `distribution` | `channels` (`local`, plus `npm` when `compiler.project.packageName` is present), the `install` pointers to `INSTALL.md` / `install.mjs`, and `payloads[]` — each prebuilt payload directory with the hosts it was packaged for and its declared `runtimeDependencies`. |
-| `compiler` | Operational record, versioned by `recordVersion` independently of `manifestVersion`: `producer`, `project` (`configPath`, `configDigest`, `modelDigest`, `revision`, `sourceInputs`, optional `packageName` / `packageVersion`), `provenance[]` (one `{ path, sourceInputs[] }` per `files[]` row), `adapters[]` (`adapterRevision`, `observedVersion`, pinned `schemas` per projection), `agentSkills`, and `validation`. |
-| `web` | **Absent unless [`web`](./configuration.mdx#web) is configured.** `{ open, apps[] }` where each app is `{ allow, app, args, entry, env, name, resourceUri, server, tool?, input? }`. `entry` is the root-relative compiled MCP executable and must name a `files[]` row; `args` are the server's declared `mcp.servers.<id>.args` after the entry and `env` its declared static env, both with `agent-bundle:path:*` tokens left unexpanded. Apps are sorted by `app`; an exposed App whose `targets` fall outside the root's selection is omitted (and the section with it when none remain). The `<plugin> web` command, `agent-bundle dev` `/web/<server>/<app>`, and `doctor` read this section and never rediscover Apps from `src/**`. |
+| `application`, `runtime` | Plugin identity/version and the selected generated-executable Node floor. |
+| `files` | Emitted file inventory, kinds, sizes, digests and applicable modes. |
+| `projections` | Selected host bindings and pointers to native documents/entries. |
+| `routes` | Canonical operation, contract, CLI projection, event, layout and provider records. |
+| `executables` | The exact bins, hooks, MCP servers and scripts, including canonical launch bindings where applicable. |
+| `distribution` | Channels, installation support and declared prebuilt payload requirements. |
+| `compiler` | Producer, source/provenance, adapter and validation evidence, separately versioned from the public artifact contract. |
+| `web` | Optional declared App exposure and policy referencing the existing server/App records. It does not contain a second copy of the server entry, argv or environment. |
 
-Only `build` writes it; everything in it is derived from the configuration, the conventional
-filesystem, and the compiled model, and its bytes are canonical — every reader rejects a
-hand-edited copy. Because every file carries a digest, validation compares **real bytes** rather
-than checking that a path exists, and a hand-edited generated file fails. That contract is what
-makes `validate --artifact`, `mcp`, and `hooks` work against an artifact whose project sources
-have been deleted. The host documents and manifest are serialized from the same compiled model
-in one build, and every host document is a digest-pinned `files[]` row, so a hand edit fails the
-digest check.
+For compiled/prebuilt MCP servers, canonical launch arguments distinguish **artifact references**
+from **literal values**. A slash in a literal does not make it a relocatable artifact path.
+The launcher expands only the supported declared tokens at the appropriate boundary.
+
+The `web.apps` rows contain App identity, server association, allowed capabilities and optional
+opening tool/input. Launch selection comes from the corresponding executable/projection record.
+Do not reconstruct it from browser-profile selection or add `entry`, `args`, and `env` to each
+web App. The exact field definitions are in [Artifact manifest](./artifact-manifest.mdx).
+
+The compiler emits both the native documents and the canonical manifest. Structural validation,
+canonical representation, referenced-file checks and content digests have distinct roles; a
+reader that parses the manifest is not necessarily running every artifact-validation check.
+Use the appropriate public validation command, and do not change digests to bless modified output.
+
+Persisted `agent-bundle.compile-evidence.json` binds compiler evidence to emitted bytes.
+A matching hash is not a universal proof about reflective or unanalyzed runtime loading.
+Residual checks and prebuilt dependency declarations remain necessary where compiler evidence
+cannot establish self-containment. See [validation](../guide/distribution/validation.mdx).
 
 ## Versions and revisions
 
-Four version axes are tracked separately and are expected to agree:
+Keep source package version, built artifact version, installed artifact version and observed
+running-server version distinct when collecting evidence. The installed-host proof compares the
+relevant observations; absent observations must not be invented.
 
-- **Source** — the project's `package.json` release version.
-- **Built artifact** — `compiler.project.packageVersion` in the manifest.
-- **Installed artifact** — the manifest found under a host's installed root.
-- **Running process** — the version a live MCP `initialize` reports.
+An adapter revision and its observed native-host version describe a different contract from the
+plugin's own release version. The compiler record also has an independently versioned shape.
+Do not update a private manifest reader independently of the compiler that emits its input.
+Use a compatible public compiler/runtime/lifecycle package set and validate the actual deliverable.
 
-The `host-install` proof level records all four and fails closed when any is missing or differs.
-`prepack` gates the first two plus normalized plugin metadata and host manifests (`AB7013`), and
-refuses a `package.json` whose installed-dependency fields name packages no packed declaration,
-consumer install script, or prebuilt `runtimeDependencies` proves a consumer needs (`AB7014`) — or that a consumer's npm cannot fetch from a registry
-(`AB7015`). A package merely inlined into a compiled bundle does not count as used. The
-[validation guide](../guide/distribution/validation.mdx) lists every source of evidence.
-
-`compiler.adapters[]` records an `adapterRevision` (monotonic, repository-owned) and an
-`observedVersion` (the host version the capability evidence was recorded against). Neither is
-hashed: Git already versions repository-owned content, and hashing it again inside the repository
-causes churn on every table edit. Hash pins are reserved for vendored external content — host
-document schemas under `src/adapters/schemas/*` with their `PROVENANCE.json`, the Agent Skills
-schema pin, and emitted files and source inputs.
+`prepack` checks the applicable package/manifest version and dependency evidence. A dependency
+inlined into generated JavaScript is not automatically a consumer runtime dependency; prebuilt
+payloads, declarations and supported install scripts can establish real requirements.
 
 ## Next
 
-- [Artifact manifest](./artifact-manifest.mdx) — every field of `agent-bundle.manifest.json`, who writes it, who reads it.
-- [Compiler architecture](../guide/concepts/architecture.mdx) — the three
-  compiler layers and which production readers consume each manifest field.
-- [Artifact validation](../guide/distribution/validation.mdx) — the checks that read this manifest.
-- [Host installation](../guide/distribution/installation.mdx) — installing the root into each host.
-- [Runtime environment](./runtime-environment.mdx) — what the emitted executables assume at run time.
+- [Capability map](../guide/start/capabilities.mdx): supported targets, feature navigation and proof boundaries.
+- [Artifact manifest](./artifact-manifest.mdx): exact fields and canonical ownership.
+- [Compiler architecture](../guide/concepts/architecture.mdx): implementation stages and readers.
+- [Artifact validation](../guide/distribution/validation.mdx): checks over the delivered root.
+- [Host installation](../guide/distribution/installation.mdx): scopes, ownership, replacement and removal.
+- [Runtime environment](./runtime-environment.mdx): execution assumptions and writable state.

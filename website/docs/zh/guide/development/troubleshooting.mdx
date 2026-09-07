@@ -1,0 +1,106 @@
+---
+description: '排查路由缺失、生成类型变弱、target 不兼容、App 启动、包根目录、运行状态和测试证据问题，而不是再写注册表或安装器。'
+---
+
+# 故障排查
+
+先确定失败的边界：编写的源码、编译产物、已安装包，还是正在运行的宿主。
+不要手工修复生成文件；修改拥有该行为的源声明，再重新构建。
+[能力地图](../start/capabilities.mdx)区分受支持输出与受支持的客户端行为。
+
+## 确认版本和正在检查的对象
+
+在项目中安装正确的框架包后：
+
+```sh
+npx --no-install agent-bundle --version
+npx --no-install agent-bundle validate
+npx --no-install agent-bundle inspect --json
+```
+
+对于复制来的产物，应检查该产物，而不是无关的源码工作区：
+
+```sh
+npx --no-install agent-bundle inspect --artifact artifact --json
+npx --no-install agent-bundle validate --artifact artifact
+```
+
+`inspect --artifact` 不与源码 `--root` 或 `--config` 组合。
+`validate --artifact` 接收纯组合产物；清单感知的安装路径也能理解 npm 根目录。
+这些根目录的 inventory 职责不同，参见[交付](../distribution/index.mdx)。
+
+报告问题时记录 compiler/runtime 包选择器，以及 artifact/application 版本。
+预览包应来自同一个不可变构建。正式 compiler/runtime 版本号可以不同；
+使用匹配脚手架记录的配对，不要假定数字版本号必须相同。
+
+## 找到最小修正
+
+| 症状 | 检查与修正 |
+| --- | --- |
+| 文件没有成为工具，或没有出现在 Workbench | 检查实际路由路径、受支持扩展名、私有 `_`/`.` 路径段、ignore 规则和显式服务器模式。检查路由图。custom/command/remote 服务器不是生成路由服务器；不要为补偿它再建一份注册清单。 |
+| 创建项目时拒绝一个受支持 target | 对照脚手架选项与编译器 target 目录。当前 Amp 选项缺口不意味着 Amp 适配器不存在。使用兼容源码项目/配置并查阅 Amp 的 MCP 限制，不要假定每个 starter 都适用。 |
+| 组合因路径或发现冲突失败 | 阅读 `AB4103`、`AB4105` 或 `AB4106` 及受影响组件。让共享内容兼容，或有意分开构建不兼容投影。调整 target 顺序或覆盖生成文件不能解决问题。 |
+| hook 缺失，或原生决定与预期不同 | 检查生成的事件/hook 矩阵、选中宿主、matcher、能力需求及精确原生 payload。使用 `hooks list` 和文档中的宿主专属模拟。不要用虚构 allow/deny 代替缺失证据。 |
+| TypeScript 接受无效 App 路由 ID，或丢失 provider/结果类型 | 确认生成成功，并且 `.agent-bundle/routes.d.ts` 属于实际消费它的浏览器/服务器/测试程序。某个兄弟 tsconfig 包含它，不证明另一个也包含。 |
+| 带默认值的输入字段在 App 类型中意外变成必填 | 当前生成器对部分调用方契约使用了解析后的 schema 输出。不要把这个类型错误当作运行时不支持默认值的证据。保留规范 schema，区分已知类型边界与无效运行输入。 |
+| 添加命名 CLI 投影后复杂 schema 被拒绝 | 自动 flags 使用有界语法。查阅受支持的 canonical-JSON 批量命令路径；单独添加 mapper 不会扩展命名投影语法。不要仅为提取 flags 而拍平真实领域契约。 |
+| App 资源存在，但宿主没有显示浏览器界面 | 区分提供 MCP App 与特定客户端/版本渲染它。按 MCP App 参考使用单独标注的本地预览检查；HTML 存在不是原生展示证据。 |
+| App 预览选择了无法启动该服务器的宿主 | 构建级 target 列表不等于该服务器的合格启动列表。选择实际合格投影。不要仅为满足界面而添加虚假的 portable 服务器。 |
+| App 一直 loading，或错误看起来像空成功 | 连接公开客户端之前注册 input/result/error/cancellation 处理器。预期工具错误不一定进入成功结果回调。检查实际 opening 调用，而不只是后续手工调用。 |
+| App 预览直到 opening 调用结束才出现 | 主要 Workbench App workspace 当前会等待完成。底层 pending bridge 和浏览器 harness 本身不会使该 workspace 成为实时 pending 预览。不要为 UI 生命周期缺口再建客户端传输层。 |
+| npm 安装成功，但可执行文件缺失 | 打包正确的生成 npm 根目录，检查实际 `package.json.bin` 和 tarball inventory。生成路由 bin 使用清单可执行路径；手写包 bin 使用另一种输出路径。不要沿用旧的嵌套 `artifact/` 假设。 |
+| 安装拒绝清单版本或变动的摘要 | 对齐发射编译器与消费它的生命周期实现，保持公开包配对一致。不要独立升级私有源码 reader，也不要编辑封闭的清单版本或 digest。 |
+| 只读安装插件在写入时失败 | 保持代码/assets 不可变，使用观测到的框架 state 位置和明确的领域数据策略。取得的 session 或 cache 不是打包 asset，也不是改写已安装 `.env` 的理由。 |
+| MCP stdio 无法解析输出 | 不要向 JSON-RPC stdout 通道写应用日志。使用生成生命周期或正确限定的自定义服务器入口，诊断写 stderr。 |
+| 默认测试通过，却没发现路由损坏 | 检查脚本收集哪些测试。当前 MCP starter 的 `check` 包含 route/projection pools，但单独 `npm test` 不包含。在脚本契约更新前使用完整的文档 check。 |
+| 原生测试被跳过，或账户不可用 | 记录缺失前提和未完成证明。mock、构建或安装成功不是已认证的工具/hook 执行；unverified 与 unsupported 不同。 |
+
+## 全新工作区中的生成类型
+
+生成声明不是手写源码。在独立 typecheck 前运行当前受支持的生成路径，失败时停止：
+
+```sh
+npx --no-install agent-bundle validate
+npm run typecheck
+```
+
+项目需要自己的 `typecheck` 脚本和正确的 tsconfig inclusion。
+准备失败后可能保留旧生成文件，不要把它描述为最新。
+当前 inclusion 警告并非所有 project references 的完整审计。
+对于 solution-style 配置，验证每个实际消费程序；不要只把文件加进无关根程序以消除警告。
+不要为获取类型而把服务器实现导入浏览器运行时代码。
+
+starter 当前完整检查命令是：
+
+```sh
+npm run check
+```
+
+按需测试池见[测试](./testing.mdx)，规范契约见[复用框架](../authoring/reuse-framework.mdx)。
+纯静态插件不应只为模仿 MCP starter 就增加 React/MCP 测试依赖。
+
+## 安装与替换
+
+使用交付的 `INSTALL.md` 或受支持的包绑定安装器。
+原生注册、文件放置、启用和实时会话是不同状态。
+解释 receipt 或重新加载步骤前，请阅读[安装指南](../distribution/installation.mdx)。
+
+使用 `doctor` 做只读安装状态检查。
+不同版本或外来目录可能要求明确的 operator 决定；不要从 `rm -rf`、全局 cache 编辑或校验前权限修复开始。
+keep-data 与 purge 的所有权要求不同。
+缺少历史所有权，不代表可以删除推导出来的目录。
+
+打包测试使用临时数据和隔离宿主根目录。
+不要把真实密码、tracker session、私钥或正在使用的 operator 数据放进可复现 fixture。
+
+## 有用的问题报告证据
+
+记录包选择器、Node 版本、最小相关配置与路由、精确命令、结构化诊断，以及运行来自源码、artifact、
+已安装包还是原生宿主。写清预期行为与实际终态。
+
+App/session 问题中，分别记录服务器、工具、启动投影和浏览器 profile。
+重建问题标明新旧 revision，不必附上无关原始日志。
+隐藏凭据、authorization header、session cookie 和私有命令数据，不要上传整个环境变量转储。
+
+适用时链接[诊断参考](../../reference/diagnostics.md)或对应能力记录。
+测试失败、文档中的限制与未执行的验收用例，需要不同的后续工作；写明证据实际确立的是哪一种。

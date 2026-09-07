@@ -1,0 +1,173 @@
+---
+description: '用同一个工具提供 CLI 与 App 表面，复用契约、事件 preflight、请求上下文、可写状态、payload 和安装能力，而不是手写框架胶水代码。'
+---
+
+# 复用框架
+
+从能解决问题的最小编写表面开始。路由就是操作；CLI 投影或浏览器 App 是使用它的另一种方式。
+框架负责注册、传输、编译和安装，插件负责自己的产品行为。
+
+完整源码树见[项目结构](../start/project-structure.mdx)。哪些宿主能消费某个表面，见
+[能力地图](../start/capabilities.mdx)。
+
+## 一个工具，一个操作
+
+把操作放在约定路由中；当领域计算较复杂时，将它移到普通的导入模块中以便阅读。
+不需要注册数组、生成路由文件的脚本、自定义 `McpServer` 或按字符串名字派发的执行器。
+
+```tsx
+// src/mcp/tools/tools/hello.tsx
+import React from 'react';
+import { Agent } from '@agent-bundle/runtime';
+import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Greet a person.',
+  annotations: { readOnlyHint: true },
+} satisfies ToolConfig;
+export const inputSchema = z.object({ name: z.string().min(1) }).strict();
+export const resultSchema = z.object({ greeting: z.string() }).strict();
+
+export default async function Hello({ input }: ToolRouteProps<typeof inputSchema>) {
+  const result = { greeting: `Hello, ${input.name}.` };
+  return (
+    <Agent.Result value={result}>
+      <Agent.Text>{result.greeting}</Agent.Text>
+    </Agent.Result>
+  );
+}
+```
+
+这里服务器名是 `tools`，协议工具名是 `hello`，规范路由 ID 是 `tool:tools/hello`。
+不需要再次注册这些身份。可以按产品的实际工具分组选择有意义的服务器名，不必每个操作创建一个服务器。
+
+`readOnlyHint` 是描述性元数据，不会替代安全策略执行。校验、权限敏感决定和副作用保护仍必须存在于
+操作真正执行的路径中。
+
+## 将同一个工具暴露为 CLI 命令
+
+添加同目录投影，而不是第二个处理器：
+
+```ts
+// src/mcp/tools/tools/hello.cli.ts
+import type { CliProjectionConfig } from 'agent-bundle/routes';
+
+export const config = {
+  command: ['hello'],
+  confirm: false,
+} satisfies CliProjectionConfig;
+```
+
+此处 `confirm: false` 是对只读问候操作的明确选择。不要未经审核就把它复制到修改型操作。
+生成的命令调用同一工具，并使用它的规范 schema 校验。
+
+受支持的 aliases、flags、positionals 和同步 `mapInput` 仅用于转换 CLI 语法。
+不要在 mapper 中重复领域操作或结果渲染器。真正独立的聚合工作流仍可使用单独的 `src/cli/**` 路由。
+
+自动 flag 推导使用有界 schema 语法。复杂嵌套或 union schema 即使不能投影为命名 flags，仍然可以是有效工具。
+已有批量 MCP 命令路径支持 JSON 输入；给命名投影添加 `mapInput` 不会让它自动获得该模式。
+请使用[包入口](./package-entries.mdx)记录的实际支持路径，不要削弱工具 schema，也不要假装未实现的选项存在。
+
+## 共享契约，而不是再建 schema 注册表
+
+路由可以导入受支持的本地 schema，并导出为 `inputSchema` 或 `resultSchema`。
+维护一份权威领域契约。生成的声明文件提供路由 ID、App 结果类型与 provider 类型，但不会把刻意宽松的 schema
+自动变成精确契约。
+
+在领域边界校验不可信外部响应，然后渲染规范化后的 receipt。成功、部分数据与预期失败可能需要不同分支。
+不要要求错误分支包含成功字段，不要虚构缺失标识，也不要从已渲染的文本报告中反向解析操作本来就有的数据。
+
+调用方输入与处理器接收到的解析后输入在概念上不同：默认值和转换在解析时执行。
+当前生成的调用类型仍在部分调用方契约中使用 schema 输出。这个限制不意味着应该增加另一份浏览器 schema
+或使用宽泛的 `as any`；参见[故障排查](../development/troubleshooting.mdx)与
+[配置](./index.mdx)中的 schema 说明。
+
+## 添加浏览器 App，不重做传输层
+
+浏览器 App 位于 `src/mcp/<server>/apps/*`。其 `config` 声明资源 URI，以及需要时的 HTML 模板。
+使用受支持的元数据与 `appResourceUri` 辅助函数将工具关联到 App。编译器负责资源注册与资源打包。
+
+浏览器入口使用生成的工具 ID 和公开客户端：
+
+```ts
+import { createAppClient } from 'agent-bundle/app';
+import { name, version } from 'agent-bundle/meta';
+
+const client = createAppClient({ appInfo: { name, version } });
+const result = await client.call('tool:tools/hello', { name: 'Ada' });
+```
+
+这个片段只说明类型化调用，不是完整 App 启动顺序。在真正的 App 中，先注册 opening-input、result、error
+与 cancellation 处理器，再调用 `client.connect()`，并在视图生命周期结束时释放客户端。
+完整的 [MCP App 示例](../../examples/mcp-app.mdx)展示了该顺序及真实工具/资源。
+首次打开通知与后续 `client.call` 的返回结果是不同来源。
+
+不要实现父窗口消息 RPC、第二套初始化握手、另一个 pending-request map，或为约定路由手工声明 `AppRegister`。
+App 仍然负责本地选择、格式化、轮询策略，以及 loading/error 界面。给变量添加生成类型，不会让 TypeScript
+自动校验任意外部消息。
+
+`Agent.*` 树是面向智能体的输出，不是浏览器 DOM。浏览器 App 可以使用普通 DOM 或 React。
+共享领域契约不意味着在浏览器运行时导入服务器模块；生成的仅类型导入必须保持仅类型。
+
+## 有意识地选择语义事件或普通 hook
+
+需要 Agent 输出、请求上下文和可选 preflight 时，使用 `src/events/**` 规范事件路由。
+简单执行加小结果已经足够时，使用配置声明的普通处理器及公开 `HookHandler`/`HookEvent` 类型。
+两种情况下都不需要重复原生 stdin/stdout 包装层。
+
+preflight 门禁应位于昂贵操作或有副作用的工作之前。原生 payload 字段并不跨宿主统一；
+可用时读取规范字段，并如实保留 unknown 或缺失证据。stop、deny、continue 或更新输入必须保留宿主的真实决定语义。
+无关的日志失败不能悄悄把已确定的保护决定变成允许继续。
+
+基于能力的 `requires` 与显式 target 范围解决不同问题。在选择事件、matcher、provider 子集或原生专属行为前，
+查阅[hook 指南](./hooks.mdx)与[事件矩阵](../../reference/events.md)。
+原生 hook 文档是明确的高级扩展路径，不是重建语义事件的默认方式。
+
+## 使用观测到的上下文，分开代码和数据
+
+只有执行中的路由需要请求身份、provider、capability、lineage、state 或 notice 时，才调用 `await agent()`。
+在 `src/providers/*` 声明共享请求依赖，不要另建应用级全局服务定位器。
+provider 值应具有操作预期的请求生命周期。
+
+请求中的插件绑定已经区分代码与框架可写状态。不要再拼接 `CLAUDE_PLUGIN_ROOT`、`CURSOR_PLUGIN_ROOT`
+与猜测的产物目录优先级链。真正独立运行的代码可以使用文档中的公开 resolver，并明确 fallback 策略。
+
+asset 是代码侧不可变输入。缓存、数据库、登录后取得的 session 与操作 receipt 是可变数据。
+选择明确的应用所有可写位置，保留显式 operator override，并由插件管理迁移/保留策略。
+不要在普通执行期间改写已安装包的 `.env`，也不要把框架 kernel 文件当作无结构的领域数据目录。
+参见[运行环境](../../reference/runtime-environment.mdx)。
+
+notice 使用框架 ledger 及[notice 矩阵](../../reference/notices.md)中的受支持通道。
+发布、尝试投递和确认接收是不同状态；写入成功不证明智能体已经看到了 notice。
+
+## 通过声明打包资源和可执行文件
+
+根据输入类型使用 Skill 自带资源目录、`assets`、约定脚本或 `definePrebuilt`。
+预构建 payload 是复制进去的，不会变成编译后的 TypeScript 依赖。
+使用受支持的依赖声明记录 payload 在消费者运行时真正需要的包；不要默认 externalize 普通生成代码。
+
+生成的可执行路径、启动参数和投影绑定由编译器清单拥有。
+消费者不应扫描 `mcp/` 猜文件、假定 `args` 首项始终是 Node 入口、替换输出 JavaScript 字符串，
+或根据未经校验的清单修复权限。
+
+使用生成的原生安装说明或公开的包绑定 `agent-bundle/install` 入口。
+带品牌的 installer 可以是一层薄绑定，但不能再变成原生 cache 管理器、receipt 数据库或生命周期参数解析器。
+参见[交付](../distribution/index.mdx)。
+
+## 测试你改动的那一层
+
+| 改动 | 最小有用证明，以及需要时的更强证明 |
+| --- | --- |
+| 领域计算 | 注入外部服务的确定性领域测试。 |
+| 路由渲染、schema 或上下文 | 使用真实生成图与声明的公开路由测试。 |
+| MCP 注册或 CLI 投影 | 框架协议/CLI 辅助函数，加至少一个编译后的一致性用例。 |
+| 浏览器 App 行为 | 公开浏览器 harness，覆盖 opening 成功/错误/取消，再加真实生成服务器流程。 |
+| 打包、路径或安装 | 真实打包后/删除源码运行，以及基于 receipt 所有权的安装测试。 |
+| 宿主行为 | 单独标注的、使用真实授权的原生宿主测试；mock 不是已认证的模型调用。 |
+
+测试应保留独立的预期身份和安全结果。所有预期都从被测输出本身推导，无法发现错误改名或缺失 annotation。
+反过来，也不应仅为测试插件领域行为，就把框架整个传输实现复制进测试 fixture。
+
+目标是删除重复的所有权：一张路由图、一套领域契约、一个受支持的客户端桥接，以及一套生命周期实现。
+一个有用的领域辅助函数，不会因为框架也有辅助函数就变成缺陷。
