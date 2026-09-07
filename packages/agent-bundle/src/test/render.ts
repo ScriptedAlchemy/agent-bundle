@@ -386,12 +386,13 @@ const componentProps = (
   kind: RenderableRouteKind,
   options: RenderRouteOptions,
   signal: AbortSignal,
+  parsedInput: unknown,
 ): Readonly<Record<string, unknown>> => {
   switch (kind) {
     case 'prompt':
     case 'resource':
     case 'tool':
-      return { input: (invocation.props as { readonly input?: unknown }).input, signal };
+      return { input: parsedInput, signal };
     case 'event-route': {
       // The public event-route contract is `{ canonical, native, signal }`,
       // and the generated Flight worker unwraps the payload into exactly that.
@@ -562,6 +563,16 @@ export interface RouteModuleSchema<Value> extends AgentRouteSchema {
 }
 
 /**
+ * A route's `inputSchema` as the harness sees it: the registration types what
+ * a caller sends (`RouteTargetInput`), which is the schema's input side; what
+ * `parse` returns — the component's props after defaults and transforms — is
+ * not part of the registration, so it stays `unknown` here.
+ */
+export interface RouteModuleInputSchema<Value> extends AgentRouteSchema {
+  readonly parse: (value: Value | unknown) => unknown;
+}
+
+/**
  * The evaluated module `loadRouteModule` returns: the same object the generated
  * server, the routed CLI, and `renderRoute` execute, so `inputSchema` and
  * `resultSchema` are the route's own schema instances by reference (not copies
@@ -573,7 +584,7 @@ export interface LoadedRouteModule<Target extends string = string> {
   readonly [exportName: string]: unknown;
   readonly config?: unknown;
   readonly default?: (props: never) => unknown;
-  readonly inputSchema?: RouteModuleSchema<RouteTargetInput<Target>>;
+  readonly inputSchema?: RouteModuleInputSchema<RouteTargetInput<Target>>;
   readonly resultSchema?: RouteModuleSchema<RouteTargetResult<Target>>;
 }
 
@@ -630,6 +641,35 @@ export const loadRouteModule = async <Target extends string>(
  * validated by the route's own `resultSchema`. A document that renders but
  * whose value the route's schema rejects is a route defect, not a pass.
  */
+/**
+ * The component's `input` prop: the caller's input parsed by the route's own
+ * `inputSchema`, exactly where the generated Flight worker parses it (defaults
+ * filled, transforms applied) — so the registration types what the caller
+ * sends and the component still sees the schema's output. Rejected before the
+ * request scope opens, so no provider or component runs on invalid input.
+ * A module without an `inputSchema` (a script) receives the input as given.
+ */
+const parsedInput = (
+  schema: { readonly parse: (value: unknown) => unknown } | undefined,
+  input: unknown,
+  provenance: RenderedRouteProvenance,
+): unknown => {
+  if (schema === undefined) return input;
+  try {
+    return schema.parse(input);
+  } catch (error) {
+    throw new AgentTestError('invalid-input', "The route's own inputSchema rejected the input.", {
+      cause: error,
+      details: [
+        `cause:        ${error instanceof Error ? error.message : String(error)}`,
+        `received:     ${captured(input)}`,
+      ],
+      provenance,
+      recovery: 'Pass the input the route\'s inputSchema accepts; defaults and transforms are applied by the parse, not by the caller.',
+    });
+  }
+};
+
 const parsedResult = (
   schema: { readonly parse: (value: unknown) => unknown },
   document: AgentDocument,
@@ -1434,6 +1474,9 @@ const prepareRender = async (
   const renderer = await loadRenderer();
   const surface = executableSurface(resolved.kind, resolved.provenance.routeId, resolved.manifest);
   const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, surface, options, resolved.provenance);
+  const input = resolved.kind === 'prompt' || resolved.kind === 'resource' || resolved.kind === 'tool'
+    ? parsedInput(resolved.module.inputSchema, options.input ?? {}, resolved.provenance)
+    : undefined;
   const collected: AgentProgressUpdate[] = [];
   const context = options.context ?? {};
   const signal = options.signal ?? new AbortController().signal;
@@ -1445,7 +1488,7 @@ const prepareRender = async (
   const dispatcher = createFlightDispatcher({
     collected,
     component: resolved.component,
-    componentProps: (request) => componentProps(request.invocation, resolved.kind, options, request.signal),
+    componentProps: (request) => componentProps(request.invocation, resolved.kind, options, request.signal, input),
     contextProgress: context.progress,
     layoutRoute: {
       id: resolved.provenance.routeId,

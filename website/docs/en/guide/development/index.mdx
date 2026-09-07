@@ -38,9 +38,15 @@ as one `AB7103` **warning** on the succeeded build attempt and retries on the ne
 Development also publishes generated route declarations at `.agent-bundle/routes.d.ts` from the
 same compiled graph. Each write goes to a sibling temporary file and is renamed over the prior
 complete declaration atomically, so invalid source keeps the last-good file, and a successful
-route-free preparation removes it. The declaration only types `renderRoute` when the project's
-TypeScript program compiles it: keep `".agent-bundle/routes.d.ts"` in `tsconfig.json` `include`
-(the templates ship it that way; `agent-bundle validate` warns with `AB4834` when it is missing).
+route-free preparation removes it. The declaration only types `renderRoute`, the App client, and
+provider values in a TypeScript program that compiles it: keep `".agent-bundle/routes.d.ts"` in
+the `include` of every tsconfig that imports `agent-bundle/test`, `agent-bundle/app`,
+`agent-bundle/eval`, or `@agent-bundle/runtime` — a solution-style root is judged one referenced
+project at a time, so a server project that includes the file cannot hide a browser project that
+omits it (`agent-bundle validate` warns with `AB4834` per program). `validate` is also the
+lightweight way to publish current declarations before an isolated type check — no dev server or
+production bundle needed — which is why the routed templates' `typecheck` script runs
+`agent-bundle validate && tsc`.
 
 ## The three surfaces
 

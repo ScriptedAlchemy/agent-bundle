@@ -15,13 +15,26 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
+// A route module consumes the registration through `@agent-bundle/runtime` (provider values).
 const routeModule = [
+  "import { agent } from '@agent-bundle/runtime';",
   "import { z } from 'zod';",
   'export const inputSchema = z.object({ service: z.string() });',
   'export const resultSchema = z.object({ status: z.string() });',
-  'export default async () => undefined;',
+  'export default async () => { await agent(); return undefined; };',
   '',
 ].join('\n');
+
+// An App view consumes it through `agent-bundle/app`; it lives in the browser program.
+const appModule = [
+  "import { createAppClient } from 'agent-bundle/app';",
+  "export const config = { resourceUri: 'ui://routes-fixture/panel.html', template: './panel.html' };",
+  "void createAppClient().call('tool:status/report', { service: 'compiler' });",
+  '',
+].join('\n');
+
+// A build-only script imports none of the augmented modules: not a consumer.
+const scriptModule = "export const main = async (): Promise<void> => { console.log('build'); };\n";
 
 const tsconfig = (include: readonly string[], extra: Readonly<Record<string, unknown>> = {}): string =>
   `${JSON.stringify({ compilerOptions: { module: 'NodeNext', strict: true }, include, ...extra }, null, 2)}\n`;
@@ -63,7 +76,7 @@ describe('AB4834 generated route declarations outside the TypeScript program', (
     const warnings = result.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4834');
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatchObject({
-      message: expect.stringContaining('tsconfig.json does not include the generated .agent-bundle/routes.d.ts'),
+      message: expect.stringContaining('tsconfig.json imports agent-bundle/app, agent-bundle/test, agent-bundle/eval, or @agent-bundle/runtime but does not include the generated .agent-bundle/routes.d.ts'),
       recovery: expect.stringContaining('Add ".agent-bundle/routes.d.ts" to the "include" array of tsconfig.json'),
       severity: 'warning',
       sourcePath: join(root, 'tsconfig.json'),
@@ -109,6 +122,47 @@ describe('AB4834 generated route declarations outside the TypeScript program', (
       'tsconfig.src.json': tsconfig(['**/*'], { compilerOptions: { composite: true, module: 'NodeNext' } }),
     });
     expect(codesOf((await validate({ root: wildcardOnly })).diagnostics)).toContain('AB4834');
+  });
+
+  it('judges every consuming program of a solution, so the server project cannot hide the browser project', async () => {
+    const solution = {
+      'src/mcp/status/apps/panel.html': '<!doctype html><html><body></body></html>\n',
+      'src/mcp/status/apps/panel.ts': appModule,
+      'src/mcp/status/tools/report.ts': routeModule,
+      'src/scripts/build.ts': scriptModule,
+      // Nested: the root references a solution file that references the three projects.
+      'tsconfig.json': `${JSON.stringify({ files: [], references: [{ path: './tsconfig.solution.json' }] }, null, 2)}\n`,
+      'tsconfig.solution.json': `${JSON.stringify({ files: [], references: [{ path: './tsconfig.node.json' }, { path: './config/tsconfig.app.json' }, { path: './tsconfig.scripts.json' }] }, null, 2)}\n`,
+      'tsconfig.node.json': tsconfig(['.agent-bundle/routes.d.ts', 'src/mcp/**/tools/*.ts'], { compilerOptions: { composite: true, module: 'NodeNext' } }),
+      'tsconfig.scripts.json': tsconfig(['src/scripts/*.ts'], { compilerOptions: { composite: true, module: 'NodeNext' } }),
+    };
+    const browserOmits = await createProject({
+      ...solution,
+      // Excluding the declaration is as good as omitting it.
+      'config/tsconfig.app.json': tsconfig(['../src/mcp/**/apps/*.ts', '../.agent-bundle/**/*'], { compilerOptions: { composite: true, lib: ['DOM', 'ES2022'], module: 'NodeNext' }, exclude: ['../.agent-bundle/**/*'] }),
+    });
+    const warnings = (await validate({ root: browserOmits })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4834');
+    // One warning, on the browser project; the node project includes the file and the scripts project imports nothing that consumes it.
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      message: expect.stringContaining('config/tsconfig.app.json imports agent-bundle/app'),
+      recovery: expect.stringContaining('Add "../.agent-bundle/routes.d.ts" to the "include" array of config/tsconfig.app.json'),
+      sourcePath: join(browserOmits, 'config', 'tsconfig.app.json'),
+    });
+
+    const browserIncludes = await createProject({
+      ...solution,
+      'config/tsconfig.app.json': tsconfig(['../src/mcp/**/apps/*.ts', '../.agent-bundle/routes.d.ts'], { compilerOptions: { composite: true, lib: ['DOM', 'ES2022'], module: 'NodeNext' } }),
+    });
+    expect(codesOf((await validate({ root: browserIncludes })).diagnostics)).not.toContain('AB4834');
+
+    // A program that imports none of the augmented modules is never asked to include the file.
+    const buildOnly = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      'src/scripts/build.ts': scriptModule,
+      'tsconfig.json': tsconfig(['src/scripts/*.ts']),
+    });
+    expect(codesOf((await validate({ root: buildOnly })).diagnostics)).not.toContain('AB4834');
   });
 
   it('has nothing to report without a tsconfig, without routes, or with an unparsable tsconfig', async () => {

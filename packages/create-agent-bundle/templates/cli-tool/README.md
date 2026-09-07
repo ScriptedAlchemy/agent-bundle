@@ -15,7 +15,8 @@ schemas. `src/index.ts` is the library export with declarations, and
 ```sh
 npm run dev              # local workbench with live rebuilds
 npm run build            # dist/ package build + host artifacts in artifact/
-npm run check            # validate + build + typecheck + both test pools
+npm run check            # build + typecheck + both test pools
+npm run typecheck        # validate (writes .agent-bundle/routes.d.ts) + tsc
 npm run test             # plain module tests
 npm run test:projection  # cli-dispatch + script-dispatch pool
 

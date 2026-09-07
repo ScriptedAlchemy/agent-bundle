@@ -569,6 +569,21 @@ describe('layout composition at the route-unit level', () => {
     });
   });
 
+  it('parses the input through the route\'s own inputSchema before the component runs, as the generated worker does', async () => {
+    // The caller omits the defaulted field; the component receives the default (#752).
+    const defaulted = await renderRoute('tool:harness/layout-probe', { input: {} });
+    expect(defaulted.result).toEqual({ label: 'probe' });
+    expectDocument(defaulted).toContainText('probe: probe');
+
+    // Invalid input is rejected before any provider or component runs: no document, one harness diagnostic.
+    const error = await rejection(renderRoute('tool:harness/layout-probe', { input: { label: 1 } as never }));
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect(error.code).toBe('invalid-input');
+    expect(error.message).toContain("The route's own inputSchema rejected the input.");
+    expect(error.message).toContain('received:     {"label":1}');
+    expect(error.message).toContain('route:        tool:harness/layout-probe (tool)');
+  });
+
   it('applies only the root layout to a rendered CLI command', async () => {
     const rendered = await renderRoute('cli:report', { input: { topic: 'layouts' } });
 

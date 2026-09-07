@@ -754,10 +754,13 @@ declare module 'agent-bundle/app' {
 }
 ```
 
-成员就是项目生成的 MCP **工具**路由：`input` 来自各路由的 `inputSchema`，`result` 来自
-`resultSchema`。该声明以 type-only 方式导入路由模块，所以不会把路由模块、schema 或服务器代码带入 App
-文档。模板已经在 `tsconfig.json` 的 `include` 中列出 `".agent-bundle/routes.d.ts"`；路由项目漏掉它时
-会收到 `AB4834`。没有 augmentation 时——例如手写服务器——`call()` 仍能以 `unknown` 输入与结果工作，视图也可以
+成员就是项目生成的 MCP **工具**路由：`input` 来自各路由 `inputSchema` 的**输入**类型（调用方发送的
+内容：带 `.default()` 的字段是可选的，经 `.transform()` 的字段按 wire 上的写法拼写；路由组件收到的则是
+解析后的输出），`result` 来自 `resultSchema` 的输出。该声明以 type-only 方式导入路由模块，所以不会把路由
+模块、schema 或服务器代码带入 App 文档。模板已经在 `tsconfig.json` 的 `include` 中列出
+`".agent-bundle/routes.d.ts"`；每一个导入了 `agent-bundle/app` 却漏掉它的程序都会收到 `AB4834`。
+`onToolInput` 以同一输入类型交付宿主的 opening 载荷：那是服务器解析之前的消息，因此 schema 会填入的默认值
+并不保证已经存在。没有 augmentation 时——例如手写服务器——`call()` 仍能以 `unknown` 输入与结果工作，视图也可以
 通过同一个结构化 `AppRegister` seam 声明自己的本地契约 map。[MCP App 示例](../../examples/mcp-app.mdx)
 依赖的就是生成文件：它的 App 以路由 schema 声明的输入与结果调用 `tool:status/show-status`。`AppRouteId`、
 `AppRouteInput<Id>` 与 `AppRouteResult<Id>` 为 wrapper 命名同一套类型表面。

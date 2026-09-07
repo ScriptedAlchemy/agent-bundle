@@ -1814,8 +1814,12 @@ injected ports.
 `generateRouteTypes` (`src/routes/typegen.ts`) emits, for a graph with at
 least one tool route, `AppToolRouteId` (the `tool:<server>/<name>` subset of
 `RouteId`), `AgentBundleAppRouteContracts` (one `{ input: RouteInput<Id>;
-result: RouteResult<Id> }` per tool from the module's own `inputSchema` and
-`resultSchema` output), and exactly one augmentation:
+result: RouteResult<Id> }` per tool — `input` from the module's own
+`inputSchema` *input* type, what a caller sends before the server parses it,
+so a defaulted field is optional and a transformed field is spelled as the
+wire carries it; `result` from the `resultSchema` output; a structural schema
+declaring only `_output` uses it for both, #752), and exactly one
+augmentation:
 
 ```ts
 declare module 'agent-bundle/app' {

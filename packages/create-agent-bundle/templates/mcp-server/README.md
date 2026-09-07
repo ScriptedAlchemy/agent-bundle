@@ -10,7 +10,8 @@ the `status` server; no handwritten server factory or server config is needed.
 ```sh
 npm run dev
 npm run build
-npm run check            # validate + build + typecheck + all three test pools
+npm run check            # build + typecheck + all three test pools
+npm run typecheck        # validate (writes .agent-bundle/routes.d.ts) + tsc
 npm run test             # plain module tests
 npm run test:routes      # route-unit pool
 npm run test:projection  # in-memory MCP projection pool

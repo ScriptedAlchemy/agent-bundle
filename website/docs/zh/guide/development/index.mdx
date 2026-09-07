@@ -32,9 +32,12 @@ npx agent-bundle dev --root .
 
 开发期还会从同一份编译后的路由图，把生成的路由声明发布到 `.agent-bundle/routes.d.ts`。每次写入都先
 写入一个同级临时文件，再原子地重命名覆盖先前那份完整声明，因此无效源码会保留上一份可用文件，而一次
-成功的、不含路由的准备过程会移除它。只有当项目的 TypeScript 程序编译了这份声明，它才会为 `renderRoute`
-提供类型：请把 `".agent-bundle/routes.d.ts"` 保留在 `tsconfig.json` 的 `include` 中（模板默认如此；
-缺失时 `agent-bundle validate` 会以 `AB4834` 警告）。
+成功的、不含路由的准备过程会移除它。只有编译了这份声明的 TypeScript 程序，才会为 `renderRoute`、App
+客户端与 provider 值提供类型：请把 `".agent-bundle/routes.d.ts"` 保留在每一个导入了 `agent-bundle/test`、
+`agent-bundle/app`、`agent-bundle/eval` 或 `@agent-bundle/runtime` 的 tsconfig 的 `include` 中——solution
+式根会按被引用项目逐一判断，因此包含了该文件的服务器项目无法掩盖漏掉它的浏览器项目（`agent-bundle validate`
+会按程序逐一以 `AB4834` 警告）。`validate` 也是在独立类型检查之前发布最新声明的轻量方式——无需 dev
+服务器或生产构建——因此带路由的模板把 `typecheck` 脚本写成 `agent-bundle validate && tsc`。
 
 ## 三个表面
 
