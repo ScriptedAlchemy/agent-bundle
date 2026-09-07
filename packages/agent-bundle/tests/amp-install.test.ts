@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { stableJson } from '../src/core/digest.ts';
 import { installBundle, type InstallCommandRunner } from '../src/install/install.ts';
 import { readInstallReceipt } from '../src/install/receipt.ts';
 import { uninstallBundle } from '../src/install/uninstall.ts';
@@ -162,6 +163,14 @@ it('uses the documented XDG system and project plugin roots without touching Amp
       registrations: [{ kind: 'amp-project-plugin' }],
       scope: 'project',
     });
+    const uninstalled = await uninstallBundle({
+      from: bundle,
+      home,
+      host: 'amp',
+      projectRoot,
+      scope: 'project',
+    });
+    expect(uninstalled.state).toBe('uninstalled');
     await expect(readFile(join(projectRoot, '.amp', 'settings.json'), 'utf8')).resolves.toBe('{"trusted":false}\n');
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -185,6 +194,33 @@ it('installs a mixed-case portable plugin name accepted by the Amp planner', asy
       scope: 'user',
     });
     expect(installed.destination).toBe(join(home, '.config', 'amp', 'plugins', name));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects an Amp manifest name that could escape the plugin root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-amp-unsafe-name-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  await mkdir(bundle, { recursive: true });
+  await writeBundle(bundle, '1.0.0', 'unsafe');
+  const manifestPath = join(bundle, 'agent-bundle.manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+    application: { name: string };
+  };
+  manifest.application.name = '../../escape';
+  await writeFile(manifestPath, `${stableJson(manifest)}\n`);
+
+  try {
+    await expect(installBundle({
+      commandRunner: forbiddenRunner(),
+      from: bundle,
+      home,
+      host: 'amp',
+      scope: 'user',
+    })).rejects.toThrow('not a safe local plugin name');
+    await expect(readFile(join(home, '.config', 'escape', 'index.js'), 'utf8')).rejects.toThrow();
   } finally {
     await rm(root, { force: true, recursive: true });
   }

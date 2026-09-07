@@ -92,7 +92,7 @@ export const isPortablePathSegment = (segment: string): boolean =>
   segment.length > 0 &&
   segment !== '.' &&
   segment !== '..' &&
-  !/[<>:"|?*]/u.test(segment) &&
+  !/[<>:"/\\|?*]/u.test(segment) &&
   [...segment].every((character) => character.charCodeAt(0) >= 0x20) &&
   !windowsDeviceName.test(segment) &&
   !segment.endsWith('.') &&

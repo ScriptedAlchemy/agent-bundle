@@ -373,7 +373,7 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
 | `readArtifactManifest(root)` | 打开 `<root>/agent-bundle.manifest.json`，返回 `{ status: 'ok', manifest, path, root }`、`{ status: 'missing', … }` 或 `{ status: 'invalid', detail, … }`。这是框架自身的消费者打开已构建根目录的唯一方式。 |
 | `parseArtifactManifest(bytes)` | 把规范字节解析并校验为冻结的 `ArtifactManifest`；任何违规——包括重复键或非规范字节——都会抛出。 |
 | `artifactManifestName` | `'agent-bundle.manifest.json'`。 |
-| `artifactManifestVersion` | `3`。 |
+| `artifactManifestVersion` | `4`。 |
 | `artifactCompilerRecordVersion` | `1`。 |
 
 类型（`ArtifactManifest`、`ArtifactManifestCompiler`、`ArtifactManifestCompilerAdapter`、
@@ -382,7 +382,7 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
 
 ## 保留键
 
-这些键属于设计的一部分，但**不会输出**，v3 读取方会像对待任何未知键一样拒绝它们。在此列出，是为了让消费者
+这些键属于设计的一部分，但**不会输出**，v4 读取方会像对待任何未知键一样拒绝它们。在此列出，是为了让消费者
 不要自创拼写：
 
 | 保留键 | 预期内容 |
@@ -400,7 +400,8 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
 - `manifestVersion` 为消费者读取的**公开契约**版本化（`application`、`files[]`、`runtime`、
   `projections[]`、`routes`、`executables`、`distribution`）。旧的封闭读取方会拒绝的**任何**变更
   都会使其递增——新增、重命名或删除一个公开契约键（无论是否可选），或更改读取方封闭的枚举值集合。
-  同一版本内键清单冻结。读取方拒绝任何其他 `manifestVersion`。版本 3 标记 npm 根目录保留清单所拥有的
+  同一版本内键清单冻结。读取方拒绝任何其他 `manifestVersion`。版本 4 新增
+  `projections[].documents.entry` 与 `amp` 内置宿主。版本 3 标记 npm 根目录保留清单所拥有的
   字节与可执行文件这一规范保证；版本 2 已预留同样的 `distribution.install` 指针形状。版本 2 把 `targets[]` 重命名为
   `projections[]`，把过去由 `agent-bundle.hooks.json` 承载的钩子行移入 `executables.hooks[]` 并删除了
   该文件，并新增了 `application`、`routes`、`executables`、`distribution` 与

@@ -199,6 +199,19 @@ it('emits compilable private factory names for punctuation and reserved bindings
   }
 });
 
+it('rejects plugin names that are not one portable directory segment', () => {
+  const model = plugin();
+  for (const name of ['../escape', 'a/b', String.raw`a\b`]) {
+    expect(ampAdapter.plan({
+      ...model,
+      metadata: { ...model.metadata, name },
+    }).diagnostics).toContainEqual(expect.objectContaining({
+      code: 'amp.name',
+      severity: 'error',
+    }));
+  }
+});
+
 it('preserves native frontmatter and sibling MCP precedence over generated skill MCP', () => {
   const model = plugin();
   const skill = model.skills[0]!;
@@ -388,9 +401,19 @@ interface SpawnInput {
   readonly tool_name?: unknown;
 }
 
+interface SpawnLaunch {
+  readonly command: readonly string[];
+  readonly environment: Readonly<Record<string, string | undefined>>;
+}
+
 const fakeSpawn = (
   seen: SpawnInput[],
-): ((command: readonly string[]) => Readonly<Record<string, unknown>>) => () => {
+  launches: SpawnLaunch[],
+): ((
+  command: readonly string[],
+  options: { readonly env: Readonly<Record<string, string | undefined>> },
+) => Readonly<Record<string, unknown>>) => (command, options) => {
+  launches.push({ command, environment: options.env });
   let input = '';
   let output = '';
   let settle!: (code: number) => void;
@@ -445,9 +468,10 @@ it('registers inline documented callbacks and maps every native result exactly',
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-amp-factory-'));
   const entry = join(root, 'index.mjs');
   const seen: SpawnInput[] = [];
+  const launches: SpawnLaunch[] = [];
   const handlers = new Map<string, (event: Record<string, unknown>, context: Record<string, unknown>) => unknown>();
   const previousBun = Reflect.get(globalThis, 'Bun');
-  Reflect.set(globalThis, 'Bun', { spawn: fakeSpawn(seen) });
+  Reflect.set(globalThis, 'Bun', { spawn: fakeSpawn(seen, launches) });
   await writeFile(entry, source);
   try {
     const loaded = await import(`${pathToFileURL(entry).href}?run=${Date.now()}`) as {
@@ -505,6 +529,9 @@ it('registers inline documented callbacks and maps every native result exactly',
       thread,
     }, {})).resolves.toEqual({ action: 'continue', userMessage: 'follow up' });
     expect(seen.every((event) => event.hook_event_name !== 'session.end')).toBe(true);
+    expect(launches).toHaveLength(seen.length);
+    expect(launches.every(({ command, environment }) =>
+      command[0] === process.execPath && environment['BUN_BE_BUN'] === '1')).toBe(true);
   } finally {
     if (previousBun === undefined) Reflect.deleteProperty(globalThis, 'Bun');
     else Reflect.set(globalThis, 'Bun', previousBun);
@@ -562,6 +589,12 @@ it('projects only documented Amp event outcomes', () => {
     session_id: 'thread-1',
     status: 'done',
   })).toEqual({ action: 'continue', userMessage: 'verify' });
+  expect(() => projectEventDocument(
+    document({ status: 'done' }),
+    'tool/after',
+    'claude',
+    'PostToolUse',
+  )).toThrow('tool/after does not accept Amp tool-result fields');
   expect(() => projectEventDocument(document(), 'session/end', 'amp', 'session.end', {})).toThrow();
 });
 

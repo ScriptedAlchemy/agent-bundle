@@ -383,7 +383,7 @@ const factorySource = (
     '};',
     '/** @param {string} relativePath @param {Record<string, unknown>} input */',
     'const runHook = async (relativePath, input) => {',
-    '  const child = Bun.spawn([process.execPath, filePath(relativePath)], { stderr: "pipe", stdin: "pipe", stdout: "pipe" });',
+    '  const child = Bun.spawn([process.execPath, filePath(relativePath)], { env: { ...process.env, BUN_BE_BUN: "1" }, stderr: "pipe", stdin: "pipe", stdout: "pipe" });',
     '  const stdout = new Response(child.stdout).text();',
     '  const stderr = new Response(child.stderr).text();',
     '  child.stdin.write(JSON.stringify(input));',

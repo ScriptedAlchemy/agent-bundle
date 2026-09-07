@@ -207,6 +207,8 @@ export interface UninstallBundleOptions {
   readonly mode?: InstallMode;
   /** Compute and report the exact plan without changing anything. */
   readonly plan?: boolean;
+  /** Amp project-scope destination; defaults to the calling process cwd. */
+  readonly projectRoot?: string;
   /** Remove durable runtime state too; refused without `confirmPurge`. */
   readonly purgeData?: boolean;
   readonly scope?: InstallScope;

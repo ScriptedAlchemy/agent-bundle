@@ -563,13 +563,20 @@ export const projectEventDocument = (
   if (
     target !== 'amp' &&
     (
+      parsedValue?.error !== undefined ||
+      parsedValue?.exitCode !== undefined ||
+      parsedValue?.output !== undefined ||
+      parsedValue?.status !== undefined
+    )
+  ) {
+    throw new TypeError(`${event} does not accept Amp tool-result fields.`);
+  }
+  if (
+    target !== 'amp' &&
+    (
       parsedValue?.outcome === 'synthesize'
       || (parsedValue?.outcome === 'allow' && event !== 'tool/before' && event !== 'permission/request' && event !== 'model-switch/before')
       || (parsedValue?.outcome === 'ask' && event !== 'tool/before' && event !== 'model-switch/before')
-      || parsedValue?.error !== undefined
-      || parsedValue?.exitCode !== undefined
-      || parsedValue?.output !== undefined
-      || parsedValue?.status !== undefined
     )
   ) {
     throw new TypeError(

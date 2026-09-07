@@ -392,7 +392,7 @@ The same entry point exports the reader:
 | `readArtifactManifest(root)` | Opens `<root>/agent-bundle.manifest.json` and returns `{ status: 'ok', manifest, path, root }`, `{ status: 'missing', … }`, or `{ status: 'invalid', detail, … }`. This is the one way the framework's own consumers open a built root. |
 | `parseArtifactManifest(bytes)` | Parses and validates canonical bytes into a frozen `ArtifactManifest`; throws on any violation, including a duplicate key or non-canonical bytes. |
 | `artifactManifestName` | `'agent-bundle.manifest.json'`. |
-| `artifactManifestVersion` | `3`. |
+| `artifactManifestVersion` | `4`. |
 | `artifactCompilerRecordVersion` | `1`. |
 
 The types (`ArtifactManifest`, `ArtifactManifestCompiler`, `ArtifactManifestCompilerAdapter`,
@@ -401,7 +401,7 @@ are in the generated [Type API](./api.mdx).
 
 ## Reserved keys
 
-These keys are part of the design but **not emitted**, and a v3 reader rejects them like any
+These keys are part of the design but **not emitted**, and a v4 reader rejects them like any
 other unknown key. They are listed so that a consumer does not invent its own spelling:
 
 | Reserved key | Intended contents |
@@ -421,7 +421,8 @@ lean web reader rejects the version mismatch itself, before it reads a slice).
   `runtime`, `projections[]`, `routes`, `executables`, `distribution`). It bumps on **any**
   change an old closed reader would reject — adding, renaming, or removing a public-contract
   key (optional or not), or changing an enumerated value set a reader closes. Within one
-  version the key inventory is frozen. Readers refuse any other `manifestVersion`. Version 3 marks
+  version the key inventory is frozen. Readers refuse any other `manifestVersion`. Version 4 adds
+  `projections[].documents.entry` and the `amp` built-in host. Version 3 marks
   the canonical npm-root guarantee that packages preserve the manifest-owned bytes and executable;
   version 2 already reserved the same `distribution.install` pointer shape. Version 2
   renamed `targets[]` to `projections[]`, moved the hook rows that `agent-bundle.hooks.json`
