@@ -407,7 +407,9 @@ const clientPaths = (
 /**
  * Precedence is per file and per surface: a client that prefers `.mcp.json`
  * over the emitted `mcp.json` still reads the shared skill tree, so a shadow
- * names the surfaces it takes rather than replacing the whole root.
+ * names the surfaces it takes rather than replacing the whole root. Authored
+ * order is kept, because a client that publishes a precedence order among
+ * these files publishes it in that order.
  */
 const clientShadows = (
   target: string,
@@ -418,7 +420,7 @@ const clientShadows = (
   if (!Array.isArray(value)) {
     throw new CapabilityStateError(`The pinned ${target} table declares discovery.shadowedBy for client ${id} as something other than a list.`);
   }
-  return Object.freeze([...value]
+  return Object.freeze(value
     .map((shadow): ClientShadow => {
       if (typeof shadow?.path !== 'string' || !isRelocatablePosixPath(shadow.path)) {
         throw new CapabilityStateError(
@@ -435,8 +437,7 @@ const clientShadows = (
         path: shadow.path,
         surfaces: Object.freeze(CLIENT_COMPATIBILITY_SURFACES.filter((surface) => surfaces.includes(surface))),
       });
-    })
-    .sort((left, right) => left.path.localeCompare(right.path)));
+    }));
 };
 
 /**

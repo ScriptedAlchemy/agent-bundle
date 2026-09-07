@@ -265,7 +265,7 @@ it('documents recorded Agent Plugins clients for the portable profile', () => {
   expect(install).not.toContain('grok plugin install ./');
   // Precedence is per file: a manifest replaces the plugin, one document does not.
   expect(install).toContain(
-    'A root that also carries `.claude-plugin/plugin.json`, `.devin-plugin/plugin.json` is read as that plugin instead.',
+    'A root that also carries `.devin-plugin/plugin.json`, `.claude-plugin/plugin.json` is read as that plugin instead.',
   );
   expect(install).toContain('A root that also carries `.mcp.json` uses it for mcp and still reads the rest.');
   // A narrowed surface is neither loaded nor withheld, so its reason is printed.
