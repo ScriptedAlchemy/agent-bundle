@@ -114,7 +114,7 @@ export interface InstallResult {
   /** Content hash of the copy a `replaced` install superseded. */
   readonly previousContentHash?: string;
   /**
-   * The install receipt this run wrote or confirmed: inside the plugin root for Cursor local copies,
+   * The install receipt this run wrote or confirmed: inside the plugin root for Cursor/Amp local copies,
    * in the host root's `agent-bundle/receipts` store for host-CLI and marketplace deliveries (#101).
    */
   readonly receipt?: string;

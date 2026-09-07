@@ -52,7 +52,7 @@ export const legacyInstallReceiptFormat = 'agent-bundle-install-receipt/1';
 
 /**
  * How the install was delivered: `local` copies into a host-loaded directory
- * (Cursor `plugins/local`), `marketplace` stages a local marketplace repository
+ * (Cursor `plugins/local`, Amp project/system plugins), `marketplace` stages a local marketplace repository
  * (Cursor Customize import), `host-cli` registered through the host's own
  * plugin CLI (Claude, Codex).
  */

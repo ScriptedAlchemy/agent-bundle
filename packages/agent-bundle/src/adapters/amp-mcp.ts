@@ -21,9 +21,9 @@ export const ampMcpDocumentIssues = (value: unknown): readonly AmpMcpDocumentIss
   if (!isPlainDataRecord(value)) return Object.freeze([issue('', 'must be a flat server map')]);
   const issues: AmpMcpDocumentIssue[] = [];
   for (const [name, candidate] of Object.entries(value)) {
-    const path = `mcpServers.${name}`;
+    const path = name;
     if (name.trim() === '') {
-      issues.push(issue('mcpServers', 'server names must be nonempty'));
+      issues.push(issue('', 'server names must be nonempty'));
       continue;
     }
     if (!isPlainDataRecord(candidate)) {

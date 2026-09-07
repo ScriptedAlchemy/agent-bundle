@@ -90,7 +90,8 @@ export type UninstallDataPolicy = 'keep' | 'purge';
  * cache copy, `state/` included, for its ~14-day grace period) and
  * `removed-by-host` (Codex deletes the cached tree, `state/` included, on
  * `plugin remove`) name the host behaviour that decided instead; `unavailable`
- * means the delivery holds no runtime state (a staged marketplace repository).
+ * means the delivery has no Agent Bundle-owned runtime state (an Amp directory
+ * plugin or a staged marketplace repository).
  */
 export type UninstallDataOutcome =
   | 'absent'

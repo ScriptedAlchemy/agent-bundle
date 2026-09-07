@@ -138,12 +138,15 @@ const validateFrontmatter = (
         ...schemaIssues(host, validateAgentSkillsFrontmatter(portable), source),
         ...schemaIssues(host, frontmatter.mcpServers === undefined
           ? []
-          : ampMcpDocumentIssues(frontmatter.mcpServers).map((issue) => ({
-            field: issue.path,
-            instancePath: `/${issue.path.replaceAll('.', '/')}`,
-            keyword: 'amp-mcp',
-            message: issue.message,
-          })), source),
+          : ampMcpDocumentIssues(frontmatter.mcpServers).map((issue) => {
+            const field = issue.path === '' ? 'mcpServers' : `mcpServers.${issue.path}`;
+            return {
+              field,
+              instancePath: `/${field.replaceAll('.', '/')}`,
+              keyword: 'amp-mcp',
+              message: issue.message,
+            };
+          }), source),
       ];
     }
     case 'claude':

@@ -100,6 +100,19 @@ it('registers Amp as a built-in directory-plugin target with pinned evidence', (
   expect(capabilityTable.pluginApi.version).toBe('0.0.0-20260907001852-gf348fed');
   expect(capabilityTable.runtimeProof.state).toBe('unverified');
   expect(capabilityTable.plugins.precedence).toEqual(['project', 'system', 'personal', 'workspace']);
+  expect(capabilityTable.skills.discoveryPrecedence).toEqual([
+    '~/.config/agents/skills',
+    '~/.agents/skills',
+    '~/.config/amp/skills',
+    '.agents/skills',
+    '.claude/skills',
+    '~/.claude/skills',
+    '~/.claude/plugins/cache',
+    'amp.skills.path',
+    'built-in',
+    'personal repository',
+    'workspace repository',
+  ]);
 });
 
 it('emits one private directory plugin with explicit skill registration and flat skill MCP', () => {
@@ -232,6 +245,10 @@ it('refuses generated local MCP, ambiguous skill scope, and unregistered prebuil
       source: '/workspace/src/mcp/local.ts',
     }],
   });
+  const commandPath = ampAdapter.plan({
+    ...model,
+    mcpServers: [{ ...model.mcpServers[0]!, command: './server.mjs' }],
+  });
   const secondSkill = {
     ...model.skills[0]!,
     id: 'skill:other',
@@ -254,9 +271,26 @@ it('refuses generated local MCP, ambiguous skill scope, and unregistered prebuil
       tools: [],
     }],
   });
+  const timeout = ampAdapter.plan({
+    ...model,
+    hooks: [{
+      event: 'beforeTool',
+      id: 'hook:timeout',
+      name: 'timeout',
+      provenance: { kind: 'config', sourcePath: configPath },
+      source: '/workspace/src/hooks/timeout.ts',
+      targets: ['amp'],
+      timeoutMs: 1_000,
+      tools: [],
+    }],
+  });
 
   expect(generated.diagnostics).toContainEqual(expect.objectContaining({
     code: 'amp.mcp.generated-local',
+    severity: 'error',
+  }));
+  expect(commandPath.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'amp.mcp.command',
     severity: 'error',
   }));
   expect(ambiguous.diagnostics).toContainEqual(expect.objectContaining({
@@ -265,6 +299,10 @@ it('refuses generated local MCP, ambiguous skill scope, and unregistered prebuil
   }));
   expect(prebuilt.diagnostics).toContainEqual(expect.objectContaining({
     code: 'amp.hook.prebuilt',
+    severity: 'error',
+  }));
+  expect(timeout.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'amp.hook.timeout',
     severity: 'error',
   }));
 });

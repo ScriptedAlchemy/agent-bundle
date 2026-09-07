@@ -79,6 +79,17 @@ const mcpServerPlan = (
       `Amp skill MCP server ${JSON.stringify(server.name)} declares cwd, which the pinned skill MCP document does not support.`,
     ));
   }
+  if (
+    typeof server.command !== 'string'
+    || server.command.trim() === ''
+    || server.command.includes('/')
+    || server.command.includes('\\')
+  ) {
+    diagnostics.push(errorDiagnostic(
+      'amp.mcp.command',
+      `Amp skill MCP server ${JSON.stringify(server.name)} must use a nonempty globally resolvable command, not a filesystem path.`,
+    ));
+  }
   const values = [
     ['command', server.command],
     ...(server.args ?? []).map((value, index) => [`args[${index}]`, value] as const),
@@ -408,10 +419,17 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     ));
   }
   for (const hook of model.hooks) {
-    if (selected(hook.targets) && hook.prebuiltPath !== undefined) {
+    if (!selected(hook.targets)) continue;
+    if (hook.prebuiltPath !== undefined) {
       diagnostics.push(errorDiagnostic(
         'amp.hook.prebuilt',
         `Amp hook ${JSON.stringify(hook.name)} is prebuilt, but a directory plugin registers callbacks from its generated factory rather than a native hook command document.`,
+      ));
+    }
+    if (hook.timeoutMs !== undefined) {
+      diagnostics.push(errorDiagnostic(
+        'amp.hook.timeout',
+        `Amp hook ${JSON.stringify(hook.name)} declares a timeout, but PluginAPI event registration exposes no per-handler timeout.`,
       ));
     }
   }

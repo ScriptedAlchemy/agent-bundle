@@ -100,6 +100,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
       scope: 'user',
     });
     expect(planned.state).toBe('planned');
+    expect(planned.removed.directories).not.toContain(destination);
     await expect(readFile(join(destination, 'index.js'), 'utf8')).resolves.toContain('second');
 
     const uninstalled = await uninstallBundle({
