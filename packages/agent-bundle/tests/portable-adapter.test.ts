@@ -663,7 +663,6 @@ it('emits the artifact paths every recorded client reads, and none of the manife
   const clients = clientCompatibilityFrom('portable', capabilityTable.clients);
 
   expect(clients.map((client) => client.id)).toEqual([
-    'amp',
     'antigravity',
     'cline',
     'codewhale',
@@ -748,7 +747,7 @@ it('refuses a client record that claims a tier its own rows do not support', () 
     .toThrow(/install block with no actions/u);
   expect(() => clientCompatibilityFrom('portable', record({
     install: { actions: [{ command: 'demo plugins validate <plugin directory>', role: 'verify' }], source: 'local-directory' },
-  }))).toThrow(/without exactly one install action/u);
+  }))).toThrow(/without exactly one install or register action/u);
   expect(() => clientCompatibilityFrom('portable', record({
     install: { actions: [{ command: 'demo plugins add <plugin directory>', role: 'add' }], source: 'local-directory' },
   }))).toThrow(/install action with role "add"/u);

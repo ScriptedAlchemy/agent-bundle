@@ -299,7 +299,8 @@ it('documents recorded Agent Plugins clients for the portable profile', () => {
   expect(install).toContain('**Kiro (Powers)**');
   expect(install).toContain('Import power from a folder');
   // A client that reads nothing is still named, so its absence is not silence.
-  expect(install).toContain('**Amp**');
+  expect(install).toContain('**Antigravity**');
+  // A client that reads the emitted tree where it lies is registered, not installed.
   expect(install).toContain('**Pi**');
   // Reading a document and running what it configures are separate claims.
   expect(install).toContain('`mcp` records that the client reads the emitted `mcp.json` as MCP configuration');
