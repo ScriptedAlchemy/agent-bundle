@@ -152,8 +152,9 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
     it('runs inventory without --report, as the tool allows, and writes no report file', async () => {
       // Migration note (#734): the retired `src/cli/inventory.tsx` required
       // `--report`; the projected command shares the tool's optional field.
-      const { library, report } = await temporaryLibrary();
+      const { directory, library } = await temporaryLibrary();
       const run = await invokeCli(['inventory', library, '--strict', '--json']);
+      expect(await readdir(directory)).toEqual(['library']);
       const receipt = inventoryResultSchema.parse(cliJson(run));
       const tool = await invokeMcpTool('inventory_sources', { input: { source: library, strict: true } });
 
@@ -162,7 +163,6 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       expect(run.value).toEqual(receipt);
       expect(tool.isError).toBe(false);
       expect(withoutGeneratedAt(tool.structuredContent)).toEqual(withoutGeneratedAt(receipt));
-      await expect(readFile(report, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
     it('uses a failing inventory receipt exit code as the process exit code without ffprobe', async () => {
@@ -381,7 +381,7 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       const receipt = join(directory, 'convert-receipt.json');
       const withReceipt = await invokeCli([...argv, '--receipt', receipt, '--json']);
       expect(withReceipt.exitCode).toBe(1);
-      expect(withReceipt.stderr).toContain('Selection contains no audio files.');
+      expect(withReceipt.stderr).toBe(planned.stderr);
       await expect(readFile(receipt, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
       // The projection declares confirm: false, so --yes is not an option here.
@@ -427,6 +427,7 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       const argv = ['audible-select', '--candidate', '1', '--candidates', candidates, '--json'];
 
       const without = await invokeCli(argv);
+      expect(await readdir(directory)).toEqual(['candidates.json', 'library']);
       const withReceipt = await invokeCli([...argv, '--receipt', receiptPath]);
       const tool = await invokeMcpTool('select_audible_edition', { input: { candidate: 1, candidates } });
 

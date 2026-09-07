@@ -169,7 +169,7 @@ Suspense fallback, and byte for byte the `structuredContent` of the tool call.
 on the tool; a command that gets one still writes the receipt file. This is a
 behavior change from the retired `src/cli/` tree, where `inventory --report`
 and `convert --receipt` were required: both commands now run without a receipt
-path and write no file, and their exit codes, `--apply` gating, and error
+path and write no report or receipt file, and their exit codes, `--apply` gating, and error
 output are unchanged either way.
 
 Each tool module declares its `inputSchema` as an inline zod literal, because
