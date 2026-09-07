@@ -304,7 +304,7 @@ it('derives the Audiobook Curator release identity from package.json as the one 
 });
 
 
-it('serves the routed Audiobook Curator artifact through a real MCP client', { retry: 2, timeout: 60_000 }, async () => {
+it('serves the routed Audiobook Curator artifact through a real MCP client and its projected bin', { retry: 2, timeout: 60_000 }, async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'audiobook-routed-artifact-'));
   const root = join(fixtureRoot, 'project');
   await cp(join(examplesRoot, 'audiobook-curator'), root, {
@@ -332,6 +332,18 @@ it('serves the routed Audiobook Curator artifact through a real MCP client', { r
       content: expect.arrayContaining([expect.objectContaining({ type: 'text' })]),
       structuredContent: { operation: 'inspect', root },
     });
+
+    // The same tool from the source-free artifact bin, through its `.cli.ts`
+    // projection (#725): `inspect <root>` is `tool:curator/inspect_sources`,
+    // and the receipt is the MCP structuredContent.
+    const bin = join(output, 'bin', 'audiobook-curator.mjs');
+    const projected = await execFile(process.execPath, [bin, 'inspect', root, '--json'], { cwd: fixtureRoot });
+    expect(JSON.parse(projected.stdout)).toEqual(inspectResult.structuredContent);
+    const usage = await execFile(process.execPath, [bin, 'inspect', '--help'], { cwd: fixtureRoot });
+    expect(usage.stdout).toContain('MCP tool: curator:inspect_sources');
+    expect(usage.stdout).toContain('--max-files <number>');
+    await expect(execFile(process.execPath, [bin, 'curator', 'inspect_sources'], { cwd: fixtureRoot }))
+      .rejects.toMatchObject({ code: 2, stderr: expect.stringContaining('Unknown command: curator.') });
     await expect(client.listResources()).resolves.toMatchObject({
       resources: expect.arrayContaining([
         expect.objectContaining({ uri: 'audiobook-curator://catalog' }),

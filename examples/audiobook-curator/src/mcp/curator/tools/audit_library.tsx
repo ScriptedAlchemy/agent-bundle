@@ -1,6 +1,7 @@
 import { Agent } from '@agent-bundle/runtime';
 import React, { Suspense } from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
 
 import { libraryAuditHeadline } from '../../../components/headlines.js';
 import { LibraryAnalysis } from '../../../components/library-analysis.js';
@@ -15,7 +16,14 @@ export const config = {
   description: 'Audit audiobook library metadata, duplicates, and multipart evidence without deletion advice.',
   exitCode: 'result',
 };
-export const inputSchema = operation.inputSchema;
+// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
+// is inline literal zod mirroring the operation's own input schema.
+export const inputSchema = z.object({
+  concurrency: z.number().int().min(1).max(8).optional(),
+  report: z.string().min(1).max(4096).optional(),
+  sources: z.array(z.string().min(1).max(4096)).min(1).max(64),
+  strict: z.boolean().optional(),
+}).strict();
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {

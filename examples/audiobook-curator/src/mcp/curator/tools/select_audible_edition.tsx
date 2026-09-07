@@ -1,6 +1,7 @@
 import { Agent, agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
 
 import type { AudibleSelectionReceipt } from '../../../audible.js';
 import { SelectionRanking } from '../../../components/candidate-ranking.js';
@@ -14,7 +15,14 @@ export const config = {
   annotations: { readOnlyHint: false },
   description: 'Record an explicit human-reviewed Audible edition choice from a candidate report.',
 };
-export const inputSchema = operation.inputSchema;
+// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
+// is inline literal zod mirroring the operation's own input schema.
+export const inputSchema = z.object({
+  candidate: z.number().int().min(1).max(500),
+  candidates: z.string().min(1).max(4096),
+  note: z.string().max(4096).optional(),
+  receipt: z.string().min(1).max(4096).optional(),
+}).strict();
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {

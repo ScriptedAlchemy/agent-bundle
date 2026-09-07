@@ -10,23 +10,31 @@ export const config = {
   flags: {
     cwd: { description: 'Working directory of the command (default: the current directory).', required: false },
     laneKey: { name: 'lane' },
+    regions: { description: 'Region the work may run in (repeatable, or comma-separated).', name: 'region' },
     tags: { description: 'Tag attached to the request (repeatable; duplicates are dropped).', name: 'tag' },
   },
   positionals: ['argv'],
 } satisfies CliProjectionConfig<typeof inputSchema>;
 
-type CliInput = Omit<z.input<typeof inputSchema>, 'cwd'> & { readonly cwd?: string };
+type CliInput = Omit<z.input<typeof inputSchema>, 'cwd' | 'regions'> & {
+  readonly cwd?: string;
+  readonly regions?: readonly string[];
+};
 
-// Leading "!" tags exercise projection mapping failures.
+// Leading "!" tags exercise projection mapping failures; `--region eu,us`
+// exercises a comma-separated enum list the canonical schema judges after
+// mapInput has split it.
 export const mapInput = (input: CliInput): z.input<typeof inputSchema> => {
   const tags = input.tags === undefined ? undefined : dedupe(input.tags);
   const rejected = tags?.find((tag) => tag.startsWith('!'));
   if (rejected !== undefined) {
     throw new Error(`Tag ${JSON.stringify(rejected)} must not start with "!".`);
   }
+  const { regions, ...rest } = input;
   return {
-    ...input,
+    ...rest,
     cwd: input.cwd ?? process.cwd(),
+    ...(regions === undefined ? {} : { regions: regions.flatMap((value) => value.split(',')) as z.input<typeof inputSchema>['regions'] }),
     ...(tags === undefined ? {} : { tags: [...tags] }),
   };
 };

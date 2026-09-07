@@ -5,29 +5,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 import { expectDocument, renderRoute } from 'agent-bundle/test';
 
-it('renders the inventory CLI document with its canonical receipt', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'curator-cli-rendered-inventory-'));
-  try {
-    const source = join(directory, 'library');
-    const report = join(directory, 'inventory.json');
-    await mkdir(source);
-
-    const rendered = await renderRoute('cli:inventory', {
-      input: { report, source },
-    });
-    const canonicalReceipt = JSON.parse(await readFile(report, 'utf8')) as unknown;
-
-    expectDocument(rendered)
-      .toHaveStatus('success')
-      .toContainText('Inventoried 0 media files with 0 retained errors.')
-      .toContainMarkdown('**Files:** 0')
-      .toHaveValue(canonicalReceipt);
-  } finally {
-    await rm(directory, { force: true, recursive: true });
-  }
-});
-
-it('renders the audit CLI integrity report and chapter outline with its canonical receipt', async () => {
+it('renders the audit tool integrity report and chapter outline with its canonical receipt', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'curator-cli-rendered-audit-'));
   const previousPath = process.env['PATH'];
   try {
@@ -52,7 +30,7 @@ process.stdout.write('SHA256=${'b'.repeat(64)}\\n');
     ]);
     process.env['PATH'] = `${bin}:${previousPath ?? ''}`;
 
-    const rendered = await renderRoute('cli:audit', {
+    const rendered = await renderRoute('tool:curator/audit_audiobook', {
       input: { file, receipt },
     });
     const canonicalReceipt = JSON.parse(await readFile(receipt, 'utf8')) as unknown;

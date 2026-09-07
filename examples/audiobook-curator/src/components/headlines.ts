@@ -9,9 +9,6 @@ export const inventoryHeadline = (receipt: InventoryReceipt): string =>
 export const libraryAuditHeadline = (receipt: LibraryAuditReceipt): string =>
   `Audited ${receipt.summary.files} library media files and found ${receipt.duplicateCandidates.length} duplicate candidate groups.`;
 
-export const libraryAuditCliHeadline = (receipt: LibraryAuditReceipt, sourceCount: number): string =>
-  `Audited ${String(receipt.summary.files)} files (${String(receipt.summary.bytes)} bytes) across ${String(sourceCount)} sources.`;
-
 export const selectionHeadline = (receipt: SelectionReceipt): string => {
   const reviewCount = receipt.selections.filter((selection) => selection.reviewRequired).length;
   return `Selected ${receipt.selections.length} source groups; ${reviewCount} require review.`;

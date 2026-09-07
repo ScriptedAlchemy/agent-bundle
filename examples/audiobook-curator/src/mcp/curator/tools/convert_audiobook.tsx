@@ -1,6 +1,7 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
 
 import { ChapterOutline, chaptersFromConvertReceipt } from '../../../components/chapter-outline.js';
 import { convertHeadline } from '../../../components/headlines.js';
@@ -15,7 +16,27 @@ export const config = {
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
 };
-export const inputSchema = operation.inputSchema;
+// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
+// is inline literal zod mirroring the operation's own input schema.
+export const inputSchema = z.object({
+  apply: z.boolean().optional(),
+  artwork: z.string().min(1).max(4096).optional(),
+  audioBitrate: z.string().min(2).max(32).optional(),
+  audioCodec: z.enum(['aac', 'alac']).optional(),
+  author: z.string().min(1).max(512),
+  engine: z.enum(['audiobook-forge', 'ffmpeg']).optional(),
+  forgeAacEncoder: z.string().min(1).max(128).optional(),
+  forgeCli: z.string().min(1).max(4096).optional(),
+  jobs: z.number().int().min(0).max(256).optional(),
+  language: z.string().min(1).max(64).optional(),
+  narrator: z.string().min(1).max(512).optional(),
+  output: z.string().min(1).max(4096),
+  overwrite: z.boolean().optional(),
+  receipt: z.string().min(1).max(4096).optional(),
+  selection: z.string().min(1).max(4096),
+  title: z.string().min(1).max(1024),
+  year: z.string().min(1).max(64).optional(),
+}).strict();
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {

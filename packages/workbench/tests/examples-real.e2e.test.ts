@@ -379,26 +379,13 @@ e2e('renders the flagship compiled Application tree by server and kind in real C
     await selectApplicationLeaf(page, server.url, searchLeaf);
     await expectApplicationTree(page, surface.application);
     expect(workbenchLeafPath(searchLeaf)).toBe('/routes/mcp/curator/tool/search_audible');
+    // Every CLI leaf is a `<tool>.cli.ts` projection of a curator tool (#725):
+    // the CLI group carries tool identities and no `cli:*` route remains.
     const cliLeaves = applicationLeaves(surface.application).filter((leaf) => leaf.ref.kind === 'cli');
-    expect(cliLeaves.map((leaf) => leaf.routeId).filter((id): id is string => id !== undefined).filter((id) => id.startsWith('cli:')).toSorted())
-      .toEqual([
-        'cli:acoustic-identify',
-        'cli:acoustic-verify',
-        'cli:apply-chapters',
-        'cli:apply-metadata',
-        'cli:audible-cache',
-        'cli:audible-search',
-        'cli:audible-select',
-        'cli:audit',
-        'cli:convert',
-        'cli:inspect',
-        'cli:inventory',
-        'cli:library-audit',
-        'cli:prepare',
-        'cli:select',
-        'cli:shelf',
-        'cli:whisper-verify',
-      ]);
+    const cliRouteIds = cliLeaves.map((leaf) => leaf.routeId).filter((id): id is string => id !== undefined).toSorted();
+    expect(cliRouteIds).toHaveLength(16);
+    expect(cliRouteIds.filter((id) => id.startsWith('cli:'))).toEqual([]);
+    expect(cliRouteIds).toContain('tool:curator/search_audible');
     await captureExampleState(page, 'audiobook-curator', 'routes-catalog-by-server');
 
     await editWatchedSource(server, project.root, conversionSource, `${healthyConversion}\nconst = ;\n`, 'failed');

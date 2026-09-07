@@ -322,7 +322,12 @@ is recorded statically and loaded only by the CLI bin; the MCP worker never sees
 `mapInput` is a surface adapter, not domain logic: it only reshapes or defaults argv into the
 canonical input (renames, splitting lists, deriving a working directory). Domain validation and
 behaviour stay in the operation — its `inputSchema` refinements and its component. A mapper that
-recreates command logic is the duplication the projection exists to remove.
+recreates command logic is the duplication the projection exists to remove. Because the mapper
+may still split or rename a value, a command whose projection exports `mapInput` has its
+`z.enum` choices judged by the canonical schema after `mapInput` runs — so `--regions us,uk`
+reaches the mapper — and a value outside the enum is still exit 2, reported as
+`Invalid value for --<option>[<index>]: expected one of: …` under the CLI spelling. A projection
+without `mapInput` rejects an unknown enum value while parsing argv, as a `src/cli` route does.
 
 | Key | Meaning |
 | --- | --- |

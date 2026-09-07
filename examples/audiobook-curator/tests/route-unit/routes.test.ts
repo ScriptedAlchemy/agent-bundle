@@ -158,36 +158,3 @@ it('caps rendered inventory probe errors while retaining the complete receipt', 
     await rm(directory, { force: true, recursive: true });
   }
 });
-
-it('renders the library-audit CLI route with in-flight progress and the canonical receipt (#102 stage 3)', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'curator-route-unit-audit-'));
-  try {
-    const sources = join(directory, 'library');
-    const report = join(directory, 'report.json');
-    await mkdir(sources, { recursive: true });
-    const rendered = await renderRoute('cli:library-audit', {
-      input: { concurrency: 1, report, sources: [sources] },
-    });
-
-    expectDocument(rendered).toHaveStatus('success').toContainMarkdown('Library audit');
-    const receipt = rendered.document.value as {
-      readonly exitCode: number;
-      readonly operation: string;
-      readonly summary: { readonly files: number };
-    };
-    expect(receipt.operation).toBe('library-audit');
-    expect(receipt.exitCode).toBe(0);
-    expect(receipt.summary.files).toBe(0);
-    // The same shell wraps rendered CLI commands; a CLI route has no owning server.
-    expect(rendered.document.root.kind === 'result' ? rendered.document.root.metadata : undefined).toEqual({
-      curator: { route: 'cli:library-audit', server: null, surface: 'cli' },
-    });
-    // The component reported request-scoped progress around the audit.
-    expect(rendered.progress.map((update) => update.completed)).toEqual([0, 1]);
-    // The receipt landed in the requested report file, exactly like the
-    // pre-migration plain command.
-    expect(JSON.parse(await readFile(report, 'utf8'))).toMatchObject({ operation: 'library-audit' });
-  } finally {
-    await rm(directory, { force: true, recursive: true });
-  }
-});

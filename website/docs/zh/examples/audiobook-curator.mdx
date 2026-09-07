@@ -22,15 +22,19 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
 
 ## 它证明什么
 
-- **路由树就是应用。** `agent-bundle.config.ts` 声明标识、Node 运行时、两个 target 与 MCP 到 CLI 的
-  投影。其余由文件约定发现：`src/mcp/curator/` 下的 16 个工具路由、1 个目录资源与 1 个策展提示词。
-  这里没有操作注册表，没有手写的 `src/mcp/curator.ts`，也没有逐操作的服务器选择器。
-- **一份编写好的表面，两种协议。** `routes.mcpCommands` 把全部 16 个 MCP 工具投影为
-  `audiobook-curator curator <tool>`，因此编译后的图共有 32 条 CLI 命令：`src/cli/` 下 16 条编写好的，
-  加上 16 条投影出来的。被投影的工具接受一个可选的 `--input '<JSON object>'`；只读工具直接运行，
-  而可能产生变更的工具需要 `--yes`。
-- **表现层是共享的，不是复制的。** `src/components/` 是一份报告组件库，MCP 路由与渲染式 CLI 路由都
-  组合它，因此一个 MCP 工具和它的 CLI 对应命令不可能漂移成两套表现层。
+- **路由树就是应用。** `agent-bundle.config.ts` 声明标识、Node 运行时与两个 target。其余由文件约定
+  发现：`src/mcp/curator/` 下的 16 个工具路由、1 个目录资源与 1 个策展提示词。这里没有操作注册表，
+  没有手写的 `src/mcp/curator.ts`，没有逐操作的服务器选择器，也没有 `routes` 设置。
+- **一个操作，一条命令。** 每个工具都有一个同目录的
+  [`<tool>.cli.ts` 投影模块](../guide/authoring/package-entries.mdx#将一个工具投影为惯用命令)——
+  `search_audible.cli.ts` 把工具拼写为 `audible-search`、`--duration`，以及可逗号分隔或重复的
+  `--regions`；`prepare_audiobook.cli.ts` 把 `outputRoot` 拼写为 `--output`——因此编译后的图恰好有
+  16 条 CLI 命令，每条都带着工具自己的身份（`tool:curator/<tool>`）。没有 `src/cli/` 目录，也没有
+  `audiobook-curator curator <tool> --input` 这样的孪生命令：投影就是命令。每个投影都声明
+  `confirm: false`，因为这些先计划再执行的命令用 `--apply` 而不是 `--yes` 把关变更。
+- **表现层是共享的，不是复制的。** `src/components/` 是一份报告组件库，每个工具模块只渲染一次并服务
+  两种表面：MCP 文本内容与管道输出的 CLI Markdown 是同一份文档，因此一个工具和它的命令不可能漂移成
+  两套表现层。
 - **Markdown 块就是 JSX。** 组件库中的 `DataList`、`FileList` 原语以及重复分析中的已测量文件表格，都通过
   运行时的 [`MarkdownContent`](../guide/authoring/mcp.mdx#用-jsx-编写富-markdown-块) 组件编写
   Markdown——`<ul>`/`<li>`、`<strong>` 和一个 GFM `<table>`——而不是手工拼接字符串，因此转义归渲染器
@@ -39,27 +43,25 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
   `ffmpeg -version` 与 `ffprobe -version`，并连同探测时间一起发布工具可用性。目录资源通过
   `await agent()` 读取它，并渲染实时上下文或一个显式的不可用状态。
 - **持久状态有被挂载的身份。** `src/state.ts` 挂载工作区级持久状态 `audiobook-curator/shelf` 与三个
-  事件。如果状态未挂载，那个只读 MCP 工具与渲染式 `shelf` CLI 命令都会返回一个空的结构化书架和一条
-  显式的不可用提示，而不是失败。
+  事件。如果状态未挂载，只读的 `review_curation_shelf` 工具——命令行上是 `shelf`——会返回一个空的
+  结构化书架和一条显式的不可用提示，而不是失败。
 - **Suspense 变成 MCP 进度。** `audit_library` 把它的异步分析放到 React `Suspense` 之后，回退内容是一个
   `Agent.Progress` 节点，而这个回退本身就是全部的进度表面：生成的投影器会把它作为 `notifications/progress`
   发送给传入了 progress token 的客户端，再用完成后的分析替换它，而最终的结构化收据不变。没有任何
   `progress.report()` 调用重复这条消息。
-- **包构建归框架所有。** 配置没有声明 `bin`，也没有声明 `scripts`。`src/cli/` 下的路由命令编译为
+- **包构建归框架所有。** 配置没有声明 `bin`，也没有声明 `scripts`。投影出的命令编译为
   `dist/bin/audiobook-curator.mjs` 以服务 `package.json` 的 `bin`，而 `dist/index.js` 加声明文件服务
   `exports`。见 [CLI 与库包入口](../guide/authoring/package-entries.mdx)。
 - **`package.json` 是唯一的版本来源。** 配置没有声明 `plugin.version`；解析出的版本会流入项目上下文、
   产物清单、`inspect` 输出、dev 状态，以及这个插件导入的 `agent-bundle/meta` 常量。
 
-## 渲染式与普通 CLI 路由
+## 每条命令都渲染其工具的文档
 
-七条编写好的 `.tsx` 命令渲染 Agent Document——`inventory`、`select`、`audible-search`、`convert`、
-`audit`、`library-audit` 与 `shelf`。交互式终端会就地更新它们报告的进度；管道输出则是一份最终的
-Markdown 文档。另外九条兼容性命令仍是普通的 `.ts` 路由。
-
-两类命令都支持用 `--json` 选择机器输出，并输出一个经结果 schema 校验的 JSON 值加一个换行。对于渲染式
-命令，这个值是最终的规范 `Agent.Result` 值——绝不是 Markdown 表现，也绝不是中间的 Suspense 回退——
-因此某条命令改为渲染式时，收据的消费方不需要改动。
+每条命令运行的就是其工具的组件。交互式终端会就地绘制流式的 `Agent.Progress` 回退；管道输出则是一份
+最终的 Markdown 文档——与 MCP 客户端作为文本内容收到的是同一份标题与报告。`--json` 选择机器输出，
+并输出一个经结果 schema 校验的 JSON 值加一个换行：这是最终的规范 `Agent.Result` 值，绝不是 Markdown
+表现，也绝不是中间的 Suspense 回退，并且与工具调用的 `structuredContent` 逐字节一致。`--report` 与
+`--receipt` 在命令行上和在工具上一样是可选的；传入了的命令仍会写出收据文件。
 
 ## 在工作区中开发
 

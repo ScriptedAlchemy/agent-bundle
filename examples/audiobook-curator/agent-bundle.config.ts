@@ -14,11 +14,10 @@ export default defineConfig({
     // status, and the `agent-bundle/meta` constant this plugin imports.
   },
   runtime: { node: '22.19.0' },
-  // #102 stage 4 adopts the in-house G7 projection for every curator tool.
-  routes: { mcpCommands: true },
-  // No `scripts` or `bin` fields needed: the routed `src/cli/` commands
-  // compile into the shared artifact/package executable (bin/audiobook-curator.mjs) by
-  // convention (#102 stages 2-3).
+  // No `routes`, `scripts`, or `bin` fields needed: every curator tool's
+  // colocated `<tool>.cli.ts` projection compiles into the shared
+  // artifact/package executable (bin/audiobook-curator.mjs) by convention,
+  // so one operation is one command (#725).
   // No `skills` field needed: `src/skills/curate-audiobooks/SKILL.md` is
   // discovered by convention.
   targets: ['claude', 'codex'],

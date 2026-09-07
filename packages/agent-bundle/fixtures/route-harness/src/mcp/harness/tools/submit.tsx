@@ -11,6 +11,7 @@ export const inputSchema = z.object({
   argv: z.array(z.string()).min(1).describe('The command line to run.'),
   cwd: z.string().min(1).describe('Working directory of the command.'),
   laneKey: z.string().min(1).optional().describe('Lane the work is queued under.'),
+  regions: z.array(z.enum(['eu', 'us'])).optional().describe('Regions the work may run in.'),
   tags: z.array(z.string()).optional().describe('Tags attached to the request.'),
 });
 
@@ -19,6 +20,7 @@ export const resultSchema = z.object({
   cwd: z.string().min(1),
   laneKey: z.string().optional(),
   operation: z.literal('submit'),
+  regions: z.array(z.string()).optional(),
   tags: z.array(z.string()).optional(),
 });
 
@@ -29,6 +31,7 @@ export default async function Submit({ input }: { readonly input: z.infer<typeof
     cwd: input.cwd,
     ...(input.laneKey === undefined ? {} : { laneKey: input.laneKey }),
     operation: 'submit' as const,
+    ...(input.regions === undefined ? {} : { regions: input.regions }),
     ...(input.tags === undefined ? {} : { tags: input.tags }),
   };
   const { invocation, providers } = context;

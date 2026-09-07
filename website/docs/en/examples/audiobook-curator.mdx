@@ -25,18 +25,21 @@ those features, not the build. This example has no hooks.
 ## What it proves
 
 - **The route tree is the application.** `agent-bundle.config.ts` declares identity, the Node
-  runtime, the two targets, and the MCP-to-CLI projection. File conventions discover the rest:
-  16 tool routes, one catalog resource, and one curation prompt under `src/mcp/curator/`. There
-  is no operation registry, no handwritten `src/mcp/curator.ts`, and no per-operation server
-  selector.
-- **One authored surface, two protocols.** `routes.mcpCommands` projects all 16 MCP tools as
-  `audiobook-curator curator <tool>`, so the compiled graph carries 32 CLI commands: the 16
-  authored ones under `src/cli/` plus the 16 projections. Projected tools take one optional
-  `--input '<JSON object>'`; read-only tools run directly while mutation-capable tools require
-  `--yes`.
-- **Presentation is shared, not duplicated.** `src/components/` is one report library composed by
-  both the MCP routes and the rendered CLI routes, so an MCP tool and its CLI counterpart cannot
-  drift into two presenters.
+  runtime, and the two targets. File conventions discover the rest: 16 tool routes, one catalog
+  resource, and one curation prompt under `src/mcp/curator/`. There is no operation registry, no
+  handwritten `src/mcp/curator.ts`, no per-operation server selector, and no `routes` setting.
+- **One operation, one command.** Every tool has a colocated
+  [`<tool>.cli.ts` projection](../guide/authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command)
+  — `search_audible.cli.ts` spells the tool as `audible-search`, `--duration`, and a
+  comma-separated or repeatable `--regions`; `prepare_audiobook.cli.ts` spells `outputRoot` as
+  `--output` — so the compiled graph carries exactly 16 CLI commands, each with the tool's own
+  identity (`tool:curator/<tool>`). There is no `src/cli/` directory and no
+  `audiobook-curator curator <tool> --input` twin: the projection is the command. Every
+  projection declares `confirm: false` because the plan-first commands gate their mutation on
+  `--apply`, never on `--yes`.
+- **Presentation is shared, not duplicated.** `src/components/` is one report library, and each
+  tool module renders once for both surfaces: the MCP text content and the piped CLI Markdown are
+  the same document, so a tool and its command cannot drift into two presenters.
 - **Markdown blocks are JSX.** The library's `DataList` and `FileList` primitives and the
   duplicate analysis's measured-files table author their Markdown through the runtime's
   [`MarkdownContent`](../guide/authoring/mcp.mdx#rich-markdown-blocks-as-jsx) component —
@@ -48,33 +51,32 @@ those features, not the build. This example has no hooks.
   with the probe time. The catalog resource reads it through `await agent()` and renders either
   the live context or an explicit unavailable state.
 - **Durable state has a mounted identity.** `src/state.ts` mounts the workspace-durable
-  `audiobook-curator/shelf` state with three events. If state is not mounted, the read-only MCP
-  tool and the rendered `shelf` CLI command both return an empty structured shelf and an explicit
-  unavailable notice instead of failing.
+  `audiobook-curator/shelf` state with three events. If state is not mounted, the read-only
+  `review_curation_shelf` tool — `shelf` on the command line — returns an empty structured shelf
+  and an explicit unavailable notice instead of failing.
 - **Suspense becomes MCP progress.** `audit_library` places its asynchronous analysis behind
   React `Suspense` with an `Agent.Progress` fallback, and that fallback alone is the progress
   surface: the generated projector sends it as `notifications/progress` to a client that passed a
   progress token, then replaces it with the completed analysis without changing the final
   structured receipt. No `progress.report()` call repeats the message.
-- **The framework owns the package build.** The config declares no `bin` or `scripts` field. The routed
-  `src/cli/` commands compile into `dist/bin/audiobook-curator.mjs` for `package.json` `bin`, and
+- **The framework owns the package build.** The config declares no `bin` or `scripts` field. The
+  projected commands compile into `dist/bin/audiobook-curator.mjs` for `package.json` `bin`, and
   `dist/index.js` plus declarations serve `exports`. See
   [CLI and library package entries](../guide/authoring/package-entries.mdx).
 - **`package.json` is the single version source.** The config declares no `plugin.version`; the
   resolved version flows into project context, artifact manifests, `inspect` output, dev status,
   and the `agent-bundle/meta` constant this plugin imports.
 
-## Rendered and plain CLI routes
+## Every command renders its tool's document
 
-Seven authored `.tsx` commands render Agent Documents — `inventory`, `select`, `audible-search`,
-`convert`, `audit`, `library-audit`, and `shelf`. An interactive terminal updates their reported
-progress in place; piped output is one final Markdown document. Nine compatibility commands
-remain plain `.ts` routes.
-
-Across both kinds, `--json` selects machine output and emits one result-schema-validated JSON
-value followed by a newline. For a rendered command that value is the canonical final
-`Agent.Result` value — never the Markdown presentation and never an intermediate Suspense
-fallback — so a receipt consumer does not change when a command becomes rendered.
+Each command runs its tool's component. An interactive terminal draws the streamed
+`Agent.Progress` fallback in place; piped output is one final Markdown document — the same
+headline and report the MCP client receives as text content. `--json` selects machine output and
+emits one result-schema-validated JSON value followed by a newline: the canonical final
+`Agent.Result` value, never the Markdown presentation and never an intermediate Suspense fallback,
+and byte for byte the `structuredContent` of the tool call. `--report` and `--receipt` are
+optional on the command line exactly as they are on the tool; a command that gets one still
+writes the receipt file.
 
 ## Working in the workspace
 
