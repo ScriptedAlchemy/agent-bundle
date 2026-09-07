@@ -10,6 +10,7 @@ import { readInstallReceipt } from '../src/install/receipt.ts';
 import { uninstallBundle } from '../src/install/uninstall.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 
+const isolatedEnvironment: Readonly<NodeJS.ProcessEnv> = {};
 const pluginName = 'amp-install-fixture';
 
 const writeBundle = async (
@@ -48,6 +49,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
   try {
     const installed = await installBundle({
       commandRunner: forbiddenRunner(),
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
@@ -80,6 +82,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
 
     const unchanged = await installBundle({
       commandRunner: forbiddenRunner(),
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
@@ -91,6 +94,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
     await writeBundle(bundle, '1.0.0', 'second');
     const replaced = await installBundle({
       commandRunner: forbiddenRunner(),
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
@@ -104,6 +108,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
 
     const planned = await uninstallBundle({
       commandRunner: forbiddenRunner(),
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
@@ -116,6 +121,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
 
     const uninstalled = await uninstallBundle({
       commandRunner: forbiddenRunner(),
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
@@ -194,6 +200,7 @@ it('installs a mixed-case portable plugin name accepted by the Amp planner', asy
   try {
     const installed = await installBundle({
       commandRunner: forbiddenRunner(),
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
@@ -221,6 +228,7 @@ it('rejects an Amp manifest name that could escape the plugin root', async () =>
   try {
     await expect(installBundle({
       commandRunner: forbiddenRunner(),
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
@@ -244,6 +252,7 @@ it('refuses to replace a foreign Amp directory even with --replace', async () =>
 
   try {
     await expect(installBundle({
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
@@ -270,6 +279,7 @@ it('refuses a symlinked Amp plugin ancestor before writing outside the host root
 
   try {
     await expect(installBundle({
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
@@ -292,6 +302,7 @@ it('refuses modified or unlisted files inside the generated Amp directory', asyn
 
   try {
     await expect(installBundle({
+      environment: isolatedEnvironment,
       from: bundle,
       home,
       host: 'amp',
