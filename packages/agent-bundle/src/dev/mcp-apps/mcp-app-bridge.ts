@@ -173,6 +173,8 @@ export interface McpAppBridgeCloseOptions {
 export interface CreateMcpAppBridgeOptions {
   readonly binding: McpAppBinding;
   readonly consentAuthority?: McpAppConsentAuthority;
+  /** Leave the opening call for an explicit result or cancellation publisher to settle. */
+  readonly deferInitialToolResult?: boolean;
   readonly host: McpAppBridgeHost;
   readonly maxQueuedHostMessageBytes?: number;
   readonly operations: McpAppBridgeBindingOperations;
@@ -304,8 +306,11 @@ const snapshotBinding = (value: McpAppBinding): BridgeBindingSnapshot => {
 const snapshotHost = (host: McpAppBridgeHost): McpAppBridgeHost => {
   if (!nonempty(host.info?.name) || !nonempty(host.info?.version)) throw new TypeError('MCP App host info must contain nonempty name and version values.');
   const capabilities = host.capabilities === undefined ? Object.freeze({}) : validHostCapabilities(host.capabilities);
-  const context = host.context === undefined ? Object.freeze({}) : validHostContext(host.context);
-  if (capabilities === undefined || context === undefined) throw new TypeError('MCP App host context must use stable MCP Apps field values.');
+  if (capabilities === undefined) throw new TypeError('MCP App host capabilities must use stable MCP Apps field values.');
+  const [context, contextError] = host.context === undefined
+    ? [Object.freeze({}), undefined] as const
+    : validHostContext(host.context);
+  if (context === undefined) throw new TypeError(contextError);
   return Object.freeze({
     ...host,
     capabilities,
@@ -491,60 +496,85 @@ const validObjectJsonSchema = (value: unknown): boolean => {
   return schema.required === undefined || (Array.isArray(schema.required) && schema.required.every((required) => typeof required === 'string'));
 };
 
-const validToolDefinition = (value: unknown): boolean => {
+const invalidToolDefinitionField = (value: unknown): string | undefined => {
   const tool = jsonRecord(value);
-  if (tool === undefined || !nonempty(tool.name) || !validObjectJsonSchema(tool.inputSchema)) return false;
-  if (tool.outputSchema !== undefined && !validObjectJsonSchema(tool.outputSchema)) return false;
-  if (tool.icons !== undefined && !validIcons(tool.icons)) return false;
-  if (tool.title !== undefined && typeof tool.title !== 'string') return false;
-  if (tool.description !== undefined && typeof tool.description !== 'string') return false;
+  if (tool === undefined) return 'tool';
+  if (!nonempty(tool.name)) return 'tool.name';
+  if (!validObjectJsonSchema(tool.inputSchema)) return 'tool.inputSchema';
+  if (tool.outputSchema !== undefined && !validObjectJsonSchema(tool.outputSchema)) return 'tool.outputSchema';
+  if (tool.icons !== undefined && !validIcons(tool.icons)) return 'tool.icons';
+  if (tool.title !== undefined && typeof tool.title !== 'string') return 'tool.title';
+  if (tool.description !== undefined && typeof tool.description !== 'string') return 'tool.description';
   if (tool.annotations !== undefined) {
     const annotations = jsonRecord(tool.annotations);
     if (annotations === undefined
       || (annotations.title !== undefined && !nonempty(annotations.title))
-      || ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'].some((key) => annotations[key] !== undefined && typeof annotations[key] !== 'boolean')) return false;
+      || ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'].some((key) => annotations[key] !== undefined && typeof annotations[key] !== 'boolean')) return 'tool.annotations';
   }
   if (tool.execution !== undefined) {
     const execution = jsonRecord(tool.execution);
-    if (execution === undefined || (execution.taskSupport !== undefined && execution.taskSupport !== 'required' && execution.taskSupport !== 'optional' && execution.taskSupport !== 'forbidden')) return false;
+    if (execution === undefined || (execution.taskSupport !== undefined && execution.taskSupport !== 'required' && execution.taskSupport !== 'optional' && execution.taskSupport !== 'forbidden')) return 'tool.execution';
   }
-  return true;
+  return undefined;
 };
 
-const validHostContext = (value: unknown): McpAppBridgeJsonRecord | undefined => {
+type HostContextValidation = readonly [
+  context: McpAppBridgeJsonRecord | undefined,
+  error: string | undefined,
+];
+
+const invalidHostContext = (field: string): HostContextValidation => [
+  undefined,
+  `MCP App host context.${field} must use a valid MCP Apps field value.`,
+];
+
+const validHostContext = (value: unknown): HostContextValidation => {
   const context = jsonRecord(value);
-  if (context === undefined) return undefined;
-  if (context.theme !== undefined && context.theme !== 'light' && context.theme !== 'dark') return undefined;
-  if (context.displayMode !== undefined && (typeof context.displayMode !== 'string' || !displayModes.has(context.displayMode as McpAppBridgeDisplayMode))) return undefined;
-  if (context.availableDisplayModes !== undefined && validDisplayModeList(context.availableDisplayModes) === undefined) return undefined;
-  if (context.locale !== undefined && !nonempty(context.locale)) return undefined;
-  if (context.timeZone !== undefined && !nonempty(context.timeZone)) return undefined;
-  if (context.userAgent !== undefined && !nonempty(context.userAgent)) return undefined;
-  if (context.platform !== undefined && context.platform !== 'web' && context.platform !== 'desktop' && context.platform !== 'mobile') return undefined;
+  if (context === undefined) return [undefined, 'MCP App host context must use stable MCP Apps field values.'];
+  if (context.theme !== undefined && context.theme !== 'light' && context.theme !== 'dark') {
+    return [undefined, 'MCP App host context.theme must be "light" or "dark".'];
+  }
+  if (context.displayMode !== undefined && (typeof context.displayMode !== 'string' || !displayModes.has(context.displayMode as McpAppBridgeDisplayMode))) return invalidHostContext('displayMode');
+  if (context.availableDisplayModes !== undefined && validDisplayModeList(context.availableDisplayModes) === undefined) return invalidHostContext('availableDisplayModes');
+  if (context.locale !== undefined && !nonempty(context.locale)) return invalidHostContext('locale');
+  if (context.timeZone !== undefined && !nonempty(context.timeZone)) return invalidHostContext('timeZone');
+  if (context.userAgent !== undefined && !nonempty(context.userAgent)) return invalidHostContext('userAgent');
+  if (context.platform !== undefined && context.platform !== 'web' && context.platform !== 'desktop' && context.platform !== 'mobile') return invalidHostContext('platform');
   if (context.toolInfo !== undefined) {
     const toolInfo = jsonRecord(context.toolInfo);
-    if (toolInfo === undefined || !validToolDefinition(toolInfo.tool) || (toolInfo.id !== undefined && !isRequestId(toolInfo.id))) return undefined;
+    if (toolInfo === undefined) return invalidHostContext('toolInfo');
+    const invalidToolField = invalidToolDefinitionField(toolInfo.tool);
+    if (invalidToolField === 'tool.inputSchema' || invalidToolField === 'tool.outputSchema') {
+      return [
+        undefined,
+        `MCP App host context.toolInfo.${invalidToolField} must be an object-rooted JSON Schema.`,
+      ];
+    }
+    if (invalidToolField !== undefined) return invalidHostContext(`toolInfo.${invalidToolField}`);
+    if (toolInfo.id !== undefined && !isRequestId(toolInfo.id)) {
+      return [undefined, 'MCP App host context.toolInfo.id must be a JSON-RPC request id.'];
+    }
   }
   if (context.deviceCapabilities !== undefined) {
     const device = jsonRecord(context.deviceCapabilities);
-    if (device === undefined || (device.touch !== undefined && typeof device.touch !== 'boolean') || (device.hover !== undefined && typeof device.hover !== 'boolean')) return undefined;
+    if (device === undefined || (device.touch !== undefined && typeof device.touch !== 'boolean') || (device.hover !== undefined && typeof device.hover !== 'boolean')) return invalidHostContext('deviceCapabilities');
   }
   if (context.styles !== undefined) {
     const styles = jsonRecord(context.styles);
     const variables = styles === undefined || styles.variables === undefined ? undefined : jsonRecord(styles.variables);
     const css = styles === undefined || styles.css === undefined ? undefined : jsonRecord(styles.css);
     if (styles === undefined || (styles.variables !== undefined && (variables === undefined || !Object.entries(variables).every(([key, variable]) => hostStyleVariables.has(key) && typeof variable === 'string')))
-      || (styles.css !== undefined && (css === undefined || (css.fonts !== undefined && typeof css.fonts !== 'string')))) return undefined;
+      || (styles.css !== undefined && (css === undefined || (css.fonts !== undefined && typeof css.fonts !== 'string')))) return invalidHostContext('styles');
   }
   if (context.containerDimensions !== undefined) {
     const dimensions = jsonRecord(context.containerDimensions);
-    if (dimensions === undefined || !['height', 'maxHeight', 'width', 'maxWidth'].every((key) => dimensions[key] === undefined || (typeof dimensions[key] === 'number' && Number.isFinite(dimensions[key]) && dimensions[key] >= 0))) return undefined;
+    if (dimensions === undefined || !['height', 'maxHeight', 'width', 'maxWidth'].every((key) => dimensions[key] === undefined || (typeof dimensions[key] === 'number' && Number.isFinite(dimensions[key]) && dimensions[key] >= 0))) return invalidHostContext('containerDimensions');
   }
   if (context.safeAreaInsets !== undefined) {
     const insets = jsonRecord(context.safeAreaInsets);
-    if (insets === undefined || !['top', 'right', 'bottom', 'left'].every((key) => typeof insets[key] === 'number' && Number.isFinite(insets[key]) && insets[key] >= 0)) return undefined;
+    if (insets === undefined || !['top', 'right', 'bottom', 'left'].every((key) => typeof insets[key] === 'number' && Number.isFinite(insets[key]) && insets[key] >= 0)) return invalidHostContext('safeAreaInsets');
   }
-  return context;
+  return [context, undefined];
 };
 
 const validResourceMetadata = (value: unknown): McpAppBridgeJsonRecord | undefined => {
@@ -1373,7 +1403,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       }
     },
     publishHostContextChanged(context: McpAppBridgeJsonRecord): boolean {
-      const snapshot = validHostContext(context);
+      const [snapshot] = validHostContext(context);
       if (snapshot === undefined) return false;
       const availableDisplayModes = snapshot.availableDisplayModes === undefined ? undefined : validDisplayModeList(snapshot.availableDisplayModes);
       const published = emitHost(Object.freeze({ jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: snapshot }));
@@ -1452,7 +1482,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
           }
           inputQueued = true;
         }
-        if (!terminalQueued) {
+        if (!terminalQueued && options.deferInitialToolResult !== true) {
           const resultMessage = Object.freeze({
             jsonrpc: '2.0',
             method: 'ui/notifications/tool-result',

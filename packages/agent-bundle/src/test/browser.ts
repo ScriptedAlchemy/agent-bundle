@@ -16,6 +16,7 @@ import type {
   McpAppJsonValue,
   McpAppToolDefinition,
 } from '../dev/mcp-apps/mcp-app-binding-service.ts';
+import { snapshotMcpAppJsonRecord } from '../dev/mcp-apps/mcp-app-json.ts';
 import type { McpAppProfileId } from '../dev/mcp-app-profile-descriptors.ts';
 import type {
   McpAppConsentAuthority,
@@ -74,7 +75,8 @@ export interface MountBrowserAppOptions {
   readonly toolDefinition?: McpAppToolDefinition;
   readonly toolInput?: McpAppBridgeJsonRecord;
   readonly toolName?: string;
-  readonly toolResult: McpAppJsonValue;
+  /** Initial terminal result; omit it while the opening call is in flight. */
+  readonly toolResult?: McpAppJsonValue;
 }
 
 export interface MountedBrowserApp {
@@ -112,6 +114,7 @@ export class BrowserAppTestError extends Error {
 const registrySymbol = Symbol.for(AGENT_BROWSER_TEST_REGISTRY_SYMBOL_KEY);
 const realm = globalThis as typeof globalThis & { [registrySymbol]?: AgentBrowserTestRegistry };
 let nextBindingId = 1;
+const pendingToolResult = Object.freeze({ content: Object.freeze([]) });
 
 const unavailableProvenance = (name: string): BrowserAppProvenance => ({
   name,
@@ -236,7 +239,12 @@ const bindingFor = (
   app: CompiledBrowserTestApp,
   options: MountBrowserAppOptions,
 ): McpAppBinding => {
-  const toolName = options.toolName ?? `show-${app.name}`;
+  const toolName = options.toolName ?? options.toolDefinition?.name ?? `show-${app.name}`;
+  if (options.toolDefinition !== undefined && options.toolDefinition.name !== toolName) {
+    throw new TypeError(
+      `Browser App toolDefinition.name ${JSON.stringify(options.toolDefinition.name)} must match toolName ${JSON.stringify(toolName)}.`,
+    );
+  }
   const serverNames = app.serverIds.map((id) => id.startsWith('mcp:') ? id.slice('mcp:'.length) : id);
   const serverName = options.serverName ?? (serverNames.length === 1 ? serverNames[0] : undefined);
   if (serverName === undefined || !serverNames.includes(serverName)) {
@@ -244,21 +252,23 @@ const bindingFor = (
       `Browser App ${JSON.stringify(app.name)} requires one serverName from ${JSON.stringify(serverNames)}.`,
     );
   }
+  const toolDefinition: McpAppToolDefinition = options.toolDefinition ?? {
+    _meta: { ui: { resourceUri: app.resourceUri } },
+    name: toolName,
+  };
   return Object.freeze({
     epochId: `browser-app:${app.name}`,
     id: `browser-app-binding-${String(nextBindingId++)}`,
     input: options.toolInput ?? {},
     previewProfile: selectedProfile(app, options.profile),
     resourceUri: app.resourceUri,
-    result: options.toolResult,
+    result: options.toolResult ?? pendingToolResult,
     serverName,
     sessionId: `browser-app-session:${app.name}`,
     target: app.target,
-    toolDefinition: options.toolDefinition ?? Object.freeze({
-      _meta: { ui: { resourceUri: app.resourceUri } },
-      inputSchema: { type: 'object' },
-      name: toolName,
-    }),
+    toolDefinition: toolDefinition.inputSchema === undefined
+      ? Object.freeze({ ...toolDefinition, inputSchema: { type: 'object' } })
+      : toolDefinition,
     toolName,
   });
 };
@@ -278,6 +288,38 @@ export const mountBrowserApp = async (
   const openLinks: string[] = [];
   const sizes: McpAppBridgeSize[] = [];
   const userHost = options.host;
+  const binding = (() => {
+    try {
+      return bindingFor(app, options);
+    } catch (error) {
+      throw new BrowserAppTestError('MCP App bridge could not be created.', provenance, [
+        `cause: ${error instanceof Error ? error.message : String(error)}`,
+      ]);
+    }
+  })();
+  const toolDefinition = snapshotMcpAppJsonRecord(binding.toolDefinition);
+  if (toolDefinition === undefined) {
+    throw new BrowserAppTestError('MCP App toolDefinition must use stable JSON field values.', provenance);
+  }
+  const userContextValue = userHost?.context;
+  const userContext = snapshotMcpAppJsonRecord(userContextValue);
+  if (userContextValue !== undefined && userContext === undefined) {
+    throw new BrowserAppTestError('MCP App host.context must use stable JSON field values.', provenance);
+  }
+  const suppliedToolInfoValue = userContext?.toolInfo;
+  const suppliedToolInfo = snapshotMcpAppJsonRecord(suppliedToolInfoValue);
+  if (suppliedToolInfoValue !== undefined) {
+    const suppliedTool = snapshotMcpAppJsonRecord(
+      suppliedToolInfo?.tool,
+    );
+    const suppliedName = suppliedTool?.name;
+    if (suppliedName !== binding.toolName) {
+      throw new BrowserAppTestError(
+        `MCP App host.context.toolInfo.tool.name ${JSON.stringify(suppliedName)} conflicts with opening tool ${JSON.stringify(binding.toolName)}.`,
+        provenance,
+      );
+    }
+  }
   const host: McpAppBridgeHost = {
     capabilities: userHost?.capabilities ?? {
       downloadFile: {},
@@ -286,10 +328,12 @@ export const mountBrowserApp = async (
       serverResources: {},
       serverTools: {},
     },
-    context: userHost?.context ?? {
+    context: {
       availableDisplayModes: ['inline'],
       displayMode: 'inline',
       platform: 'desktop',
+      ...userContext,
+      toolInfo: { ...suppliedToolInfo, tool: toolDefinition },
     },
     info: userHost?.info ?? { name: 'agent-bundle-browser-test', version: '1.0.0' },
     ...(userHost?.onDisplayMode === undefined ? {} : { onDisplayMode: userHost.onDisplayMode }),
@@ -351,8 +395,9 @@ export const mountBrowserApp = async (
   const bridge = (() => {
     try {
       return createMcpAppBridge({
-        binding: bindingFor(app, options),
+        binding,
         consentAuthority: authority,
+        deferInitialToolResult: options.toolResult === undefined,
         host,
         operations: options.operations,
         profile: selectedProfile(app, options.profile),
@@ -371,7 +416,7 @@ export const mountBrowserApp = async (
     }
   })();
   window.addEventListener('message', onMessage);
-  if (!bridge.publishToolResult(options.toolResult)) {
+  if (options.toolResult !== undefined && !bridge.publishToolResult(options.toolResult)) {
     window.removeEventListener('message', onMessage);
     await bridge.forceClose().catch(() => undefined);
     iframe.remove();

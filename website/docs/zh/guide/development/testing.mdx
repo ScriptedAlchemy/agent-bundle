@@ -206,6 +206,13 @@ try {
 —— 一份输出的捆绑包被直接投放到隔离的宿主形状根目录并在没有宿主自有安装的情况下启动，它比
 `host-install` 更弱。
 
+`mountBrowserApp` 会根据 `toolName` 与 `toolDefinition` 派生开场调用的
+`hostContext.toolInfo`，发布 `toolInput`，并合并其他 `host.context` 字段。不要在
+`host.context` 中重复提供 `toolInfo`；冲突的开场工具名会被拒绝。传入 `toolResult`
+会在挂载期间发布已经结算的结果。若开场调用仍在进行中，则省略它，之后再用
+`publishToolResult(...)`（包括 `isError: true` 的结果）或 `publishToolCancelled(reason?)`
+结算且只能结算一次。每个发布方法都会返回桥接层是否接受了该终态通知。
+
 ```ts twoslash
 import { cliJson, cliNdjson, invokeCli, invokeMcpTool } from 'agent-bundle/test';
 
