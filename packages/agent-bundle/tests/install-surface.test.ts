@@ -307,9 +307,11 @@ it('reads a shadow this build actually wrote as fact, not as a hypothetical', ()
     + ' This build also writes `.mcp.json`, which it uses for mcp instead.'
     + ' A root that also carries `.plugin/plugin.json` uses it for manifest and still reads the rest.',
   );
-  // The stdio narrowing is a limit on the emitted document, and that document
-  // is not the one Copilot reads here.
+  // Both narrowings are limits on the emitted document, and that document is
+  // not the one Copilot reads here.
   expect(install).not.toContain('  - Partial `mcp`: 2026-09-06: the probe listed one stdio server');
+  expect(install).not.toContain('  - Partial `placeholders`: 2026-09-06: the probe proved the configuration'
+    + ' Copilot records');
 });
 
 /** The one rendered line for a client, so a claim is checked where it is made. */
