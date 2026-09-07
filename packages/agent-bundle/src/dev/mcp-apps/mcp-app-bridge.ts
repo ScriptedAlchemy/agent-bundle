@@ -918,6 +918,13 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   let hostTrafficBlocked = false;
   let inputQueued = false;
   let terminalQueued = false;
+  let openingTerminal: McpAppBridgeMessage | undefined = options.deferInitialToolResult === true
+    ? undefined
+    : Object.freeze({
+      jsonrpc: '2.0',
+      method: 'ui/notifications/tool-result',
+      params: cloneJson(binding.result),
+    });
   let closePromise: Promise<void> | undefined;
   let releasePromise: Promise<void> | undefined;
   let teardownId: McpAppBridgeRequestId | undefined;
@@ -1058,8 +1065,16 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       const originalInput = jsonRecord(binding.input);
       if (originalInput === undefined || !queueInput(originalInput)) return false;
     }
-    const queued = emitHost(Object.freeze({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: cloneJson(result) }));
-    if (queued) terminalQueued = true;
+    const message = Object.freeze({
+      jsonrpc: '2.0' as const,
+      method: 'ui/notifications/tool-result',
+      params: cloneJson(result),
+    });
+    const queued = emitHost(message);
+    if (queued) {
+      openingTerminal = message;
+      terminalQueued = true;
+    }
     return queued;
   };
 
@@ -1417,12 +1432,16 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         if (originalInput === undefined || !queueInput(originalInput)) return false;
       }
       const params: McpAppBridgeJsonRecord = reason === undefined ? {} : { reason };
-      const queued = emitHost(Object.freeze({
+      const message = Object.freeze({
         jsonrpc: '2.0',
         method: 'ui/notifications/tool-cancelled',
         params: Object.freeze(params),
-      }));
-      if (queued) terminalQueued = true;
+      });
+      const queued = emitHost(message);
+      if (queued) {
+        openingTerminal = message;
+        terminalQueued = true;
+      }
       return queued;
     },
     publishToolInput(argumentsValue?: McpAppBridgeJsonRecord): boolean {
@@ -1482,13 +1501,8 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
           }
           inputQueued = true;
         }
-        if (!terminalQueued && options.deferInitialToolResult !== true) {
-          const resultMessage = Object.freeze({
-            jsonrpc: '2.0',
-            method: 'ui/notifications/tool-result',
-            params: cloneJson(binding.result),
-          });
-          if (!enqueueHostMessage(resultMessage)) {
+        if (!terminalQueued && openingTerminal !== undefined) {
+          if (!enqueueHostMessage(openingTerminal)) {
             lifecycle = 'closing';
             void releaseBinding().catch(() => undefined);
             return false;

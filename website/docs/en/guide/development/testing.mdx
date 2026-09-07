@@ -237,12 +237,14 @@ an isolated host-shaped root and spawned without a host-owned install, which is 
 `host-install`.
 
 `mountBrowserApp` derives the opening call's `hostContext.toolInfo` from `toolName` and
-`toolDefinition`, publishes `toolInput`, and merges any other `host.context` fields. Do not repeat
-`toolInfo` in `host.context`; a conflicting opening tool name is rejected. Pass `toolResult` to
+`toolDefinition`, publishes `toolInput`, and injects that tool information into either the caller's
+`host.context` or the default inline desktop context. Do not repeat `toolInfo` in `host.context`;
+a conflicting opening tool name is rejected. Pass `toolResult` to
 publish an already-settled result during mount. Omit it when the opening call is still in flight,
 then settle exactly once with `publishToolResult(...)` — including an `isError: true` result — or
 `publishToolCancelled(reason?)`. Each publisher returns whether the bridge accepted that terminal
-notification.
+notification. If the App initializes again, the harness replays the opening input and the accepted
+terminal notification.
 
 ```ts twoslash
 import { cliJson, cliNdjson, invokeCli, invokeMcpTool } from 'agent-bundle/test';

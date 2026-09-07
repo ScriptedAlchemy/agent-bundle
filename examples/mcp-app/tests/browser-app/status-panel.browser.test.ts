@@ -162,15 +162,23 @@ it('mounts the compiled panel, initializes the bridge, and renders the published
 });
 
 it('merges caller host context with the derived opening tool information', async () => {
-  const app = await mountStatus({ host: { context: { locale: 'fr-FR', theme: 'dark' } } });
+  const app = await mountStatus({
+    host: { context: { displayMode: 'fullscreen', locale: 'fr-FR', theme: 'dark' } },
+  });
 
   expect(initializeResult(app)).toMatchObject({
     hostContext: {
+      displayMode: 'fullscreen',
       locale: 'fr-FR',
-      platform: 'desktop',
       theme: 'dark',
       toolInfo: { tool: { name: 'show-status' } },
     },
+  });
+  expect(initializeResult(app)).not.toMatchObject({
+    hostContext: { availableDisplayModes: ['inline'] },
+  });
+  expect(initializeResult(app)).not.toMatchObject({
+    hostContext: { platform: 'desktop' },
   });
 });
 

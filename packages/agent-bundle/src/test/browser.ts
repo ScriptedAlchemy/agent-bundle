@@ -329,10 +329,11 @@ export const mountBrowserApp = async (
       serverTools: {},
     },
     context: {
-      availableDisplayModes: ['inline'],
-      displayMode: 'inline',
-      platform: 'desktop',
-      ...userContext,
+      ...(userContext ?? {
+        availableDisplayModes: ['inline'],
+        displayMode: 'inline',
+        platform: 'desktop',
+      }),
       toolInfo: { ...suppliedToolInfo, tool: toolDefinition },
     },
     info: userHost?.info ?? { name: 'agent-bundle-browser-test', version: '1.0.0' },
