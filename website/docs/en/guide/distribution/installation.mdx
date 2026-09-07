@@ -96,6 +96,40 @@ npm-only metadata and authored package entries from host ownership comparisons. 
 proof reconstructs the manifest-owned artifact from the installed package and exercises
 `agent-bundle install --from` after deleting the source checkout.
 
+### A package-bound installer bin
+
+A published plugin that wants `<name> install <host>` without asking its users to install the
+`agent-bundle` CLI declares one [`bin`](../authoring/package-entries.mdx#bin-and-lib) entry and
+delegates to `agent-bundle/install`:
+
+```ts
+// src/install-bin.ts — the whole installer a package ships
+import { fileURLToPath } from 'node:url';
+
+import { runInstallCli } from 'agent-bundle/install';
+
+export const main = (argv: readonly string[]): Promise<number> =>
+  runInstallCli(argv, {
+    // The npm root is the artifact, so a bin under bin/ binds its parent directory.
+    from: fileURLToPath(new URL('..', import.meta.url)),
+    name: 'my-plugin-install',
+  });
+```
+
+`runInstallCli` is the `agent-bundle` CLI's own `install <host>`, `uninstall <host>`, and
+`doctor` commands — the same flags, receipts, replacement rules, `--plan`, data policy, `--json`
+output, and exit codes — with the bundle root pinned to `from`, so the bin exposes no `--from` and never searches for another artifact
+root. The package build inlines the lifecycle into the executable; the installed package needs no
+`agent-bundle` at run time. The entry also exports `installBundle`, `uninstallBundle`, `runDoctor`,
+and the `format*` helpers for a bin that composes its own command surface. The read-only status
+check is `doctor --host <host>`: it reports the installed copy as current, stale,
+version-mismatched, foreign, or absent.
+
+Exit codes follow the `agent-bundle` CLI. 0 is success. `doctor` always writes its report (human
+or `--json`) to stdout and exits 1 when that report carries an error diagnostic — read the report,
+not stderr. An `install` or `uninstall` that fails, or any command that throws, writes its
+diagnostics as one JSON line to stderr and exits 1. A usage error exits 2.
+
 ## Development installs are a different thing
 
 `agent-bundle dev --install-host <host>` maintains a *marked development* install that follows

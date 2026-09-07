@@ -73,6 +73,10 @@
       "types": "./dist/meta.d.ts",
       "import": "./dist/meta.js"
     },
+    "./install": {
+      "types": "./dist/install/index.d.ts",
+      "import": "./dist/install.js"
+    },
     "./launch-env": {
       "types": "./dist/launch-env.d.ts",
       "import": "./dist/launch-env.js"

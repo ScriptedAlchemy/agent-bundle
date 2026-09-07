@@ -1,3 +1,10 @@
+import { formatByteSize } from '../core/strings.ts';
+import type {
+  DoctorDurableStateReport,
+  DoctorInstallComparison,
+  DoctorLifecycle,
+  DoctorReport,
+} from './doctor.ts';
 import type { InstallResult } from './install.ts';
 import type { UninstallResult } from './uninstall.ts';
 
@@ -102,4 +109,137 @@ export const formatUninstallResult = (result: UninstallResult): string => {
     lines.push(...result.nextSteps.map((step, index) => `  ${index + 1}. ${step}`));
   }
   return `${lines.join('\n')}\n`;
+};
+
+const describeLifecycle = (lifecycle: DoctorLifecycle): string => {
+  const observations = (['placed', 'registered', 'enabled', 'active'] as const).map((stage) => {
+    const observation = lifecycle[stage];
+    return observation.status === 'observed'
+      ? `${stage}=${observation.value ? 'yes' : 'no'}`
+      : `${stage}=unavailable`;
+  });
+  return `${lifecycle.stage} (${observations.join(', ')})`;
+};
+
+const describeInstallComparison = (comparison: DoctorInstallComparison): string => {
+  const installed = (comparison.installedContentHash === undefined
+    ? ''
+    : `; installed ${comparison.installedVersion ?? 'unknown version'} ` +
+      `content ${shortContentHash(comparison.installedContentHash)}, ` +
+      `artifact content ${shortContentHash(comparison.artifactContentHash)}`) +
+    (comparison.enabled === false ? '; disabled by the host' : '');
+  switch (comparison.status) {
+    case 'current':
+      return `current${installed}`;
+    case 'stale':
+      return `stale (same version, different content)${installed}`;
+    case 'version-mismatch':
+      return `version mismatch${installed}`;
+    case 'foreign':
+      return `foreign install${installed}`;
+    case 'load-failed':
+      return `load failed (installed ${comparison.installedVersion ?? 'unknown version'}, refused by the host: ` +
+        `${(comparison.errors ?? []).join(' | ')})`;
+    case 'not-installed':
+      return 'not installed';
+    case 'unknown':
+      return 'unknown (host inventory unavailable)';
+    default: {
+      const exhaustive: never = comparison.status;
+      throw new TypeError(`Unknown install comparison ${String(exhaustive)}.`);
+    }
+  }
+};
+
+/** Human-readable doctor report shared by the `agent-bundle` CLI and package-bound installer bins. */
+export const formatDoctorReport = (result: DoctorReport): string => {
+  const out: string[] = [];
+  for (const host of result.hosts) {
+    const detail = host.probe.version ?? host.probe.evidence;
+    out.push(`${host.host}: ${host.probe.status}${detail === undefined ? '' : ` (${detail})`}\n`);
+    out.push(
+      `  inventory: ${host.inventory.status}` +
+      `${host.inventory.status === 'known' ? ` (${host.inventory.findings.length} finding(s))` : ''}\n`,
+    );
+    if (host.bundle !== undefined) {
+      const identity = host.bundle.name === undefined
+        ? ''
+        : ` ${host.bundle.name}${host.bundle.version === undefined ? '' : `@${host.bundle.version}`}`;
+      out.push(`  bundle:${identity} ${host.bundle.state}\n`);
+      if (host.bundle.comparison !== undefined) {
+        out.push(`  installed copy: ${describeInstallComparison(host.bundle.comparison)}\n`);
+      }
+      for (const validation of host.bundle.hostValidation ?? []) {
+        out.push(
+          `  host validation (${validation.copy} ${validation.pluginDirectory}` +
+          `${validation.scope === undefined ? '' : `, scope ${validation.scope}`}): ${validation.status}\n`,
+        );
+      }
+      if (host.bundle.lifecycle !== undefined) {
+        out.push(`  lifecycle: ${describeLifecycle(host.bundle.lifecycle)}\n`);
+      }
+    }
+    if (host.receipts.length > 0) {
+      out.push(`  receipts: ${host.receipts.length} store receipt(s)\n`);
+      for (const receipt of host.receipts) {
+        out.push(`    ${receipt.plugin}@${receipt.version} (${receipt.mode}, ${receipt.scope}): ${receipt.state}\n`);
+      }
+    }
+    const reports = [
+      ...host.inventory.findings.flatMap((finding) => finding.durableStates ?? (
+        finding.durableState === undefined ? [] : [finding.durableState]
+      )),
+      host.bundle?.durableState,
+    ].filter((report): report is DoctorDurableStateReport => report !== undefined);
+    const uniqueReports = [...new Map(reports.map((report) => [report.directory, report])).values()];
+    for (const report of uniqueReports) {
+      out.push(
+        `  state root: ${report.directory} (${report.exists ? 'exists' : 'missing'}, ` +
+        `${report.writable ? 'writable' : 'not writable'}, ${report.stateSource}); ` +
+        `ownership: ${report.ownership}${report.ownershipReason === undefined ? '' : ` (${report.ownershipReason})`}, ` +
+        `${report.purgeable ? 'purgeable' : 'retained'}${
+          report.servers.length === 0 ? '' : `, servers: ${report.servers.join(', ')}`
+        }\n`,
+      );
+    }
+    const legacyReports = host.inventory.findings
+      .map((finding) => finding.legacyDurableState)
+      .filter((report): report is DoctorDurableStateReport => report !== undefined);
+    for (const report of [...new Map(legacyReports.map((entry) => [entry.directory, entry])).values()]) {
+      out.push(`  legacy state: ${report.directory} (exists, ${report.writable ? 'writable' : 'not writable'})\n`);
+    }
+    if (uniqueReports.length > 0) {
+      const stores = uniqueReports.reduce((total, report) => total + report.summary.stores, 0);
+      const bytes = uniqueReports.reduce((total, report) => total + report.summary.bytes, 0);
+      out.push(
+        `  durable state: ${stores} ${stores === 1 ? 'store' : 'stores'}, ${formatByteSize(bytes)}\n`,
+      );
+    }
+    // The operator `.env` layer (#469): present files and their variable counts, never a value.
+    const operatorEnvFiles = [
+      ...host.inventory.findings.map((finding) => finding.operatorEnv),
+      host.bundle?.operatorEnv,
+    ].flatMap((report) => report?.files ?? []).filter((file) => file.state !== 'absent');
+    const uniqueEnvFiles = [...new Map(operatorEnvFiles.map((file) => [file.path, file])).values()];
+    if (uniqueEnvFiles.length > 0) {
+      out.push(`  operator env: ${uniqueEnvFiles.map((file) =>
+        `${file.path} (${file.state === 'present' ? `${String(file.variables ?? 0)} variable${file.variables === 1 ? '' : 's'}` : file.state})`).join(', ')}\n`);
+    }
+  }
+  if (result.web !== undefined) {
+    out.push(`${result.web.line}\n`);
+  }
+  out.push(
+    `runtime endpoints: ${result.endpoints.status}; ${result.endpoints.summary.live} live, ` +
+    `${result.endpoints.summary.staleSockets} stale socket(s), ` +
+    `${result.endpoints.summary.staleLocks} stale lock(s)\n`,
+  );
+  for (const entry of result.diagnostics) {
+    out.push(`${entry.code}: ${entry.message}\nRecovery: ${entry.recovery}\n`);
+  }
+  out.push(
+    `Doctor summary: ${result.summary.errors} error(s), ${result.summary.warnings} warning(s), ` +
+    `${result.summary.infos} info(s)\n`,
+  );
+  return out.join('');
 };

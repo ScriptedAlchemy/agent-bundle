@@ -31,26 +31,12 @@ import type {
   McpAppProfileId,
   ProjectOptions,
 } from './api.ts';
-import type {
-  installBundle,
-  InstallHost,
-  InstallMode,
-  InstallResult,
-  InstallScope,
-} from './install/install.ts';
-import type {
-  DoctorDurableStateReport,
-  DoctorHost,
-  DoctorInstallComparison,
-  DoctorLifecycle,
-  DoctorReport,
-  runDoctor,
-} from './install/doctor.ts';
-import type { uninstallBundle, UninstallResult } from './install/uninstall.ts';
+import type { installBundle, InstallHost } from './install/install.ts';
+import type { runDoctor } from './install/doctor.ts';
+import type { uninstallBundle } from './install/uninstall.ts';
 import type { runHostMcpProxy } from './dev/host-mcp-proxy.ts';
-import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
-import { errorMessage } from './core/errors.ts';
-import { formatInstallResult, formatUninstallResult } from './install/format.ts';
+import { DiagnosticError, diagnosticsFor, type Diagnostic } from './core/diagnostics.ts';
+import { collectInstallHost, registerLifecycleCommands } from './install/commands.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
 import { formatByteSize } from './core/strings.ts';
@@ -121,33 +107,6 @@ interface SourceCommandOptions {
 
 interface BuildCommandOptions extends SourceCommandOptions {
   readonly output?: string;
-}
-
-interface InstallCommandOptions {
-  readonly force?: boolean;
-  readonly from: string;
-  readonly json?: boolean;
-  readonly replace?: boolean;
-  readonly mode?: InstallMode;
-  readonly scope: string;
-}
-
-interface UninstallCommandOptions {
-  readonly confirmPurge?: boolean;
-  readonly force?: boolean;
-  readonly from: string;
-  readonly json?: boolean;
-  readonly keepData?: boolean;
-  readonly mode?: InstallMode;
-  readonly plan?: boolean;
-  readonly purgeData?: boolean;
-  readonly scope: string;
-}
-
-interface DoctorCommandOptions {
-  readonly from?: string;
-  readonly host: readonly DoctorHost[];
-  readonly json?: boolean;
 }
 
 interface EvalCommandOptions extends SourceCommandOptions {
@@ -233,24 +192,6 @@ const trialCount = (value: string): number => {
   return number;
 };
 
-const installHost = (value: string): InstallHost => {
-  if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
-  throw new InvalidArgumentError('Install host must be claude, codex, or cursor.');
-};
-
-const collectInstallHost = (value: string, previous: readonly InstallHost[]): readonly InstallHost[] =>
-  [...previous, installHost(value)];
-
-const installMode = (value: string): InstallMode => {
-  if (value === 'local' || value === 'marketplace') return value;
-  throw new InvalidArgumentError('Install mode must be local or marketplace.');
-};
-
-const installScope = (value: string): InstallScope => {
-  if (value === 'user' || value === 'project' || value === 'local') return value;
-  throw new InvalidArgumentError('Install scope must be user, project, or local.');
-};
-
 const mcpAppProfile = (value: string): McpAppProfileId => {
   if (value === 'portable' || value === 'claude' || value === 'chatgpt') return value;
   throw new InvalidArgumentError('MCP App profile must be portable, claude, or chatgpt.');
@@ -263,14 +204,6 @@ const consentCapability = (value: string): ServeAppAllowCapability => {
 
 const collectConsentCapability = (value: string, previous: readonly ServeAppAllowCapability[]): readonly ServeAppAllowCapability[] =>
   [...previous, consentCapability(value)];
-
-const doctorHost = (value: string): DoctorHost => {
-  if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
-  throw new InvalidArgumentError('Doctor host must be claude, codex, or cursor.');
-};
-
-const collectDoctorHost = (value: string, previous: readonly DoctorHost[]): readonly DoctorHost[] =>
-  [...previous, doctorHost(value)];
 
 const configureSourceOptions = (command: Command): Command => command
   .option('--root <root>', 'Project root', process.cwd())
@@ -346,15 +279,6 @@ const parseJsonObject = async (options: JsonInputOptions): Promise<Record<string
   return value as Record<string, unknown>;
 };
 
-const diagnosticsFor = (error: unknown): readonly Diagnostic[] => {
-  if (error instanceof DiagnosticError) return error.diagnostics;
-  return [{
-    code: 'AB5000',
-    message: errorMessage(error),
-    severity: 'error',
-  }];
-};
-
 /** One canonical JSON line: the `--json` document on stdout, or the diagnostics document on stderr. */
 const machineLine = (result: unknown): string => `${stableJson(result === undefined ? null : result)}\n`;
 
@@ -394,144 +318,6 @@ const humanPrepack = (result: Awaited<ReturnType<typeof prepack>>): string => [
   ...result.diagnostics.map((diagnostic) => `${diagnostic.code} (${diagnostic.severity}): ${diagnostic.message}\n`),
   `Prepack validated ${result.pack.files.length} file(s) for ${result.build.model.metadata.name}\n`,
 ].join('');
-
-const shortContentHash = (hash: string): string => hash.slice(0, 12);
-
-const humanInstall = (result: InstallResult): string => formatInstallResult(result);
-
-const humanUninstall = (result: UninstallResult): string => formatUninstallResult(result);
-
-const describeLifecycle = (lifecycle: DoctorLifecycle): string => {
-  const observations = (['placed', 'registered', 'enabled', 'active'] as const).map((stage) => {
-    const observation = lifecycle[stage];
-    return observation.status === 'observed'
-      ? `${stage}=${observation.value ? 'yes' : 'no'}`
-      : `${stage}=unavailable`;
-  });
-  return `${lifecycle.stage} (${observations.join(', ')})`;
-};
-
-const describeInstallComparison = (comparison: DoctorInstallComparison): string => {
-  const installed = (comparison.installedContentHash === undefined
-    ? ''
-    : `; installed ${comparison.installedVersion ?? 'unknown version'} ` +
-      `content ${shortContentHash(comparison.installedContentHash)}, ` +
-      `artifact content ${shortContentHash(comparison.artifactContentHash)}`) +
-    (comparison.enabled === false ? '; disabled by the host' : '');
-  switch (comparison.status) {
-    case 'current':
-      return `current${installed}`;
-    case 'stale':
-      return `stale (same version, different content)${installed}`;
-    case 'version-mismatch':
-      return `version mismatch${installed}`;
-    case 'foreign':
-      return `foreign install${installed}`;
-    case 'load-failed':
-      return `load failed (installed ${comparison.installedVersion ?? 'unknown version'}, refused by the host: ` +
-        `${(comparison.errors ?? []).join(' | ')})`;
-    case 'not-installed':
-      return 'not installed';
-    case 'unknown':
-      return 'unknown (host inventory unavailable)';
-    default: {
-      const exhaustive: never = comparison.status;
-      throw new TypeError(`Unknown install comparison ${String(exhaustive)}.`);
-    }
-  }
-};
-
-const humanDoctor = (result: DoctorReport): string => {
-  const out: string[] = [];
-  for (const host of result.hosts) {
-    const detail = host.probe.version ?? host.probe.evidence;
-    out.push(`${host.host}: ${host.probe.status}${detail === undefined ? '' : ` (${detail})`}\n`);
-    out.push(
-      `  inventory: ${host.inventory.status}` +
-      `${host.inventory.status === 'known' ? ` (${host.inventory.findings.length} finding(s))` : ''}\n`,
-    );
-    if (host.bundle !== undefined) {
-      const identity = host.bundle.name === undefined
-        ? ''
-        : ` ${host.bundle.name}${host.bundle.version === undefined ? '' : `@${host.bundle.version}`}`;
-      out.push(`  bundle:${identity} ${host.bundle.state}\n`);
-      if (host.bundle.comparison !== undefined) {
-        out.push(`  installed copy: ${describeInstallComparison(host.bundle.comparison)}\n`);
-      }
-      for (const validation of host.bundle.hostValidation ?? []) {
-        out.push(
-          `  host validation (${validation.copy} ${validation.pluginDirectory}` +
-          `${validation.scope === undefined ? '' : `, scope ${validation.scope}`}): ${validation.status}\n`,
-        );
-      }
-      if (host.bundle.lifecycle !== undefined) {
-        out.push(`  lifecycle: ${describeLifecycle(host.bundle.lifecycle)}\n`);
-      }
-    }
-    if (host.receipts.length > 0) {
-      out.push(`  receipts: ${host.receipts.length} store receipt(s)\n`);
-      for (const receipt of host.receipts) {
-        out.push(`    ${receipt.plugin}@${receipt.version} (${receipt.mode}, ${receipt.scope}): ${receipt.state}\n`);
-      }
-    }
-    const reports = [
-      ...host.inventory.findings.flatMap((finding) => finding.durableStates ?? (
-        finding.durableState === undefined ? [] : [finding.durableState]
-      )),
-      host.bundle?.durableState,
-    ].filter((report): report is DoctorDurableStateReport => report !== undefined);
-    const uniqueReports = [...new Map(reports.map((report) => [report.directory, report])).values()];
-    for (const report of uniqueReports) {
-      out.push(
-        `  state root: ${report.directory} (${report.exists ? 'exists' : 'missing'}, ` +
-        `${report.writable ? 'writable' : 'not writable'}, ${report.stateSource}); ` +
-        `ownership: ${report.ownership}${report.ownershipReason === undefined ? '' : ` (${report.ownershipReason})`}, ` +
-        `${report.purgeable ? 'purgeable' : 'retained'}${
-          report.servers.length === 0 ? '' : `, servers: ${report.servers.join(', ')}`
-        }\n`,
-      );
-    }
-    const legacyReports = host.inventory.findings
-      .map((finding) => finding.legacyDurableState)
-      .filter((report): report is DoctorDurableStateReport => report !== undefined);
-    for (const report of [...new Map(legacyReports.map((entry) => [entry.directory, entry])).values()]) {
-      out.push(`  legacy state: ${report.directory} (exists, ${report.writable ? 'writable' : 'not writable'})\n`);
-    }
-    if (uniqueReports.length > 0) {
-      const stores = uniqueReports.reduce((total, report) => total + report.summary.stores, 0);
-      const bytes = uniqueReports.reduce((total, report) => total + report.summary.bytes, 0);
-      out.push(
-        `  durable state: ${stores} ${stores === 1 ? 'store' : 'stores'}, ${formatByteSize(bytes)}\n`,
-      );
-    }
-    // The operator `.env` layer (#469): present files and their variable counts, never a value.
-    const operatorEnvFiles = [
-      ...host.inventory.findings.map((finding) => finding.operatorEnv),
-      host.bundle?.operatorEnv,
-    ].flatMap((report) => report?.files ?? []).filter((file) => file.state !== 'absent');
-    const uniqueEnvFiles = [...new Map(operatorEnvFiles.map((file) => [file.path, file])).values()];
-    if (uniqueEnvFiles.length > 0) {
-      out.push(`  operator env: ${uniqueEnvFiles.map((file) =>
-        `${file.path} (${file.state === 'present' ? `${String(file.variables ?? 0)} variable${file.variables === 1 ? '' : 's'}` : file.state})`).join(', ')}\n`);
-    }
-  }
-  if (result.web !== undefined) {
-    out.push(`${result.web.line}\n`);
-  }
-  out.push(
-    `runtime endpoints: ${result.endpoints.status}; ${result.endpoints.summary.live} live, ` +
-    `${result.endpoints.summary.staleSockets} stale socket(s), ` +
-    `${result.endpoints.summary.staleLocks} stale lock(s)\n`,
-  );
-  for (const entry of result.diagnostics) {
-    out.push(`${entry.code}: ${entry.message}\nRecovery: ${entry.recovery}\n`);
-  }
-  out.push(
-    `Doctor summary: ${result.summary.errors} error(s), ${result.summary.warnings} warning(s), ` +
-    `${result.summary.infos} info(s)\n`,
-  );
-  return out.join('');
-};
 
 const humanInspect = (result: Awaited<ReturnType<typeof inspect>>): string => {
   const out: string[] = [];
@@ -963,82 +749,19 @@ export const runCli = async (
     await (options.json === true ? machine(result) : show(humanPrepack(result)));
   });
 
-  const installCommand = program.command('install')
-    .description('Install a built bundle into a supported host')
-    .argument('<host>', 'Destination host: claude, codex, or cursor', installHost)
-    .option('--from <bundle-dir>', 'Target bundle directory or artifact root', process.cwd())
-    .option('--scope <scope>', 'Host install scope', installScope, 'user')
-    .option(
-      '--replace',
-      'Replace an existing agent-bundle install of this plugin even when its version differs; ' +
-        'same-version content drift is replaced automatically and foreign installs are always refused',
-    )
-    .option('--force', 'Alias for --replace')
-    .option('--mode <mode>', 'Cursor delivery mode: local (default) or marketplace', installMode)
-    .option('--json', 'Write one machine-readable JSON document');
-  installCommand.action(async (
-    host: InstallHost,
-    options: InstallCommandOptions,
-  ) => {
-    const install = dependencies.installBundle ?? (await import('./install/install.ts')).installBundle;
-    const result = await install({
-      from: options.from,
-      host,
-      replace: options.replace === true || options.force === true,
-      ...(options.mode === undefined ? {} : { mode: options.mode }),
-      scope: installScope(options.scope),
-    });
-    await (options.json === true ? machine(result) : show(humanInstall(result)));
-  });
-
-  const uninstallCommand = program.command('uninstall')
-    .description('Remove a receipt-owned host install of a built bundle, and nothing else')
-    .argument('<host>', 'Host to uninstall from: claude, codex, or cursor', installHost)
-    .option('--from <bundle-dir>', 'Target bundle directory or artifact root that identifies the plugin', process.cwd())
-    .option('--scope <scope>', 'Host install scope', installScope, 'user')
-    .option('--mode <mode>', 'Cursor delivery mode to uninstall: local (default) or marketplace', installMode)
-    .option('--keep-data', 'Keep the plugin\'s durable runtime state (state/) in place; this is the default')
-    .option('--purge-data', 'Also remove the plugin\'s durable runtime state; requires --confirm-purge')
-    .option('--confirm-purge', 'Confirm that --purge-data may delete durable state')
-    .option(
-      '--force',
-      'Proceed without an install receipt (legacy or host-only install) or when owned content no longer matches the receipt; ' +
-        'foreign directories are still refused',
-    )
-    .option('--plan', 'Print the exact paths and host registrations that would be removed without changing anything')
-    .option('--json', 'Write one machine-readable JSON document');
-  uninstallCommand.action(async (
-    host: InstallHost,
-    options: UninstallCommandOptions,
-  ) => {
-    const uninstall = dependencies.uninstallBundle ?? (await import('./install/uninstall.ts')).uninstallBundle;
-    const result = await uninstall({
-      ...(options.confirmPurge === undefined ? {} : { confirmPurge: options.confirmPurge }),
-      ...(options.force === undefined ? {} : { force: options.force }),
-      from: options.from,
-      host,
-      ...(options.keepData === undefined ? {} : { keepData: options.keepData }),
-      ...(options.mode === undefined ? {} : { mode: options.mode }),
-      ...(options.plan === undefined ? {} : { plan: options.plan }),
-      ...(options.purgeData === undefined ? {} : { purgeData: options.purgeData }),
-      scope: installScope(options.scope),
-    });
-    await (options.json === true ? machine(result) : show(humanUninstall(result)));
-  });
-
-  const doctorCommand = program.command('doctor')
-    .description('Inspect host installs and runtime endpoints without changing them')
-    .option('--host <host>', 'Host to inspect (repeatable)', collectDoctorHost, [])
-    .option('--from <bundle-dir>', 'Target bundle directory or artifact root')
-    .option('--json', 'Write one machine-readable JSON document');
-  doctorCommand.action(async (options: DoctorCommandOptions) => {
-    const doctor = dependencies.runDoctor ?? (await import('./install/doctor.ts')).runDoctor;
-    const result = await doctor({
-      ...(options.from === undefined ? {} : { from: options.from }),
-      ...(options.host.length === 0 ? {} : { hosts: options.host }),
-    });
-    await (options.json === true ? machine(result) : show(humanDoctor(result)));
-    if (result.diagnostics.some((entry) => entry.severity === 'error')) exitCode = 1;
+  registerLifecycleCommands(program, {
+    // Each implementation loads on first use, so `install` never pays for `doctor`.
+    lifecycle: async () => ({
+      installBundle: dependencies.installBundle
+        ?? (async (options) => (await import('./install/install.ts')).installBundle(options)),
+      runDoctor: dependencies.runDoctor
+        ?? (async (options) => (await import('./install/doctor.ts')).runDoctor(options)),
+      uninstallBundle: dependencies.uninstallBundle
+        ?? (async (options) => (await import('./install/uninstall.ts')).uninstallBundle(options)),
+    }),
+    machine,
+    setExitCode: (code) => { exitCode = code; },
+    show,
   });
 
   const validateCommand = configureSourceOptions(

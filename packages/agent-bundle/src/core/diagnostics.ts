@@ -1,3 +1,4 @@
+import { errorMessage } from './errors.ts';
 import { deepFreeze } from './freeze.ts';
 
 export type DiagnosticSeverity = 'error' | 'warning' | 'info';
@@ -103,6 +104,12 @@ export class DiagnosticError extends Error {
     this.diagnostics = diagnostics;
   }
 }
+
+/** The diagnostics a failed command reports: a `DiagnosticError`'s own, or one `AB5000` for any other throw. */
+export const diagnosticsFor = (error: unknown): readonly Diagnostic[] =>
+  error instanceof DiagnosticError
+    ? error.diagnostics
+    : [{ code: 'AB5000', message: errorMessage(error), severity: 'error' }];
 
 export class DiagnosticBag {
   readonly diagnostics: Diagnostic[];

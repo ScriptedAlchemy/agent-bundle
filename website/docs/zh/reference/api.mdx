@@ -24,6 +24,7 @@ description: '生成的 agent-bundle 类型 API：每个公开入口点一页、
 | `agent-bundle/mcp-apps` | [mcp-apps](/zh/api/mcp-apps) | MCP App 资源注册表契约，编译器会在本地 MCP 服务器中替换它。 |
 | `agent-bundle/cli-entry` | [cli-entry](/zh/api/cli-entry) | 每个生成的 CLI 可执行文件所基于的路由式 CLI 外壳。 |
 | `agent-bundle/mcp-entry` | [mcp-entry](/zh/api/mcp-entry) | 每个生成的 MCP 服务器所包裹的 stdio MCP 入口外壳。 |
+| `agent-bundle/install` | [install](/zh/api/install) | 与包绑定的生命周期 CLI `runInstallCli`（即 `agent-bundle` CLI 的 `install`、`uninstall` 与 `doctor` 命令，bundle 根目录固定为携带该 bin 的包），以及 `installBundle`、`uninstallBundle`、`runDoctor`、`formatInstallResult` / `formatUninstallResult` / `formatDoctorReport` 渲染器及其选项与结果类型。参见[与包绑定的安装器 bin](../guide/distribution/installation.mdx#与包绑定的安装器-bin)。 |
 | `agent-bundle/launch-env` | [launch-env](/zh/api/launch-env) | 每个输出外壳在启动时应用的操作者 `.env` 层——`applyOperatorEnv`、`parseOperatorEnv`，以及 `AGENT_BUNDLE_ENV_FILE` 变量背后的 `OPERATOR_ENV_FILE_*` 常量——供希望获得同样行为的手写入口使用。 |
 | `agent-bundle/web-host` | [web-host](/zh/api/web-host) | 产物内浏览器宿主：`runWebCommand`、`WEB_HOST_TOKEN_HEADER`、`readWebManifest` 及其类型。配置了 [`web`](./configuration.mdx#web) 时，生成的 `bin/<plugin>.mjs` 会导入该入口；作者运行 `<plugin> web`，而不是自己导入它。 |
 | `agent-bundle/routes` | [routes/public](/zh/api/routes/public) | 路由模块的编写类型（`AgentEventRouteProps`、`ToolRouteProps`、`CliRouteProps` 与各类 `config` 形状），以及 `appResourceUri`——对同级 MCP App 的静态引用，编译器会把它解析为该 App 的 `resourceUri`。 |
