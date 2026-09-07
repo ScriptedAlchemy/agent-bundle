@@ -13,8 +13,7 @@ export const config = {
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan an M4B output, or apply the plan only when apply is explicitly true.',
 };
-// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
-// is inline literal zod mirroring the operation's own input schema.
+// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   apply: z.boolean().optional(),
   outputName: z.string().min(5).max(204).optional(),

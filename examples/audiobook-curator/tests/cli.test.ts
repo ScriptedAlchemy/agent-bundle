@@ -64,7 +64,9 @@ describe('audiobook-curator projected CLI', () => {
       { key: 'root', kind: 'string', option: 'root', positional: 0, repeated: false, required: true },
     ]);
 
-    // inventory <source> [--report FILE] [--strict]
+    // inventory <source> [--report FILE] [--strict]. The retired route demanded
+    // --report; a projection can only relax a canonical key (`required?: false`),
+    // so the command now takes the tool's optional report.
     const inventory = byName.get('inventory')!;
     expect(inventory).toMatchObject({ exitCode: 'result', routeId: 'tool:curator/inventory_sources' });
     expect(inventory.options.map((option) => [option.option, option.required, option.positional ?? null])).toEqual([
@@ -91,6 +93,7 @@ describe('audiobook-curator projected CLI', () => {
       'forge-aac-encoder', 'forge-cli', 'jobs', 'language', 'narrator',
       'output', 'overwrite', 'receipt', 'selection', 'title', 'year',
     ]);
+    // --receipt is optional like the tool's; the retired route required it.
     expect(convert.options.filter((option) => option.required).map((option) => option.option)).toEqual([
       'author', 'output', 'selection', 'title',
     ]);

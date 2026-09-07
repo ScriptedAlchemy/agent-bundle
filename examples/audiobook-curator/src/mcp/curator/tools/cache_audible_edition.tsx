@@ -13,8 +13,7 @@ export const config = {
   annotations: { openWorldHint: true, readOnlyHint: false },
   description: 'Cache a reviewed Audible edition and retained source evidence.',
 };
-// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
-// is inline literal zod mirroring the operation's own input schema.
+// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   asin: z.string().min(1).max(64),
   attempts: z.number().int().min(1).max(10).optional(),

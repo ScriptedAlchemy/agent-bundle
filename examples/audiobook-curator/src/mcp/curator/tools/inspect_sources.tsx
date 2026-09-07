@@ -13,8 +13,7 @@ export const config = {
   annotations: { readOnlyHint: true },
   description: 'Inspect a bounded directory tree and report supported audiobook media without changing it.',
 };
-// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
-// is inline literal zod mirroring the operation's own input schema.
+// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   maxFiles: z.number().int().min(1).max(256).optional(),
   root: z.string().min(1).max(4096),

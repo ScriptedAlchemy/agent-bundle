@@ -17,8 +17,7 @@ export const config = {
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan or explicitly apply verified chapter rows while preserving all non-chapter media state.',
 };
-// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
-// is inline literal zod mirroring the operation's own input schema.
+// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   apply: z.boolean().optional(),
   chapters: z.string().min(1).max(4096),

@@ -16,8 +16,7 @@ export const config = {
   description: 'Audit audiobook library metadata, duplicates, and multipart evidence without deletion advice.',
   exitCode: 'result',
 };
-// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
-// is inline literal zod mirroring the operation's own input schema.
+// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   concurrency: z.number().int().min(1).max(8).optional(),
   report: z.string().min(1).max(4096).optional(),

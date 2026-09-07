@@ -15,8 +15,7 @@ export const config = {
   description: 'Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default.',
   exitCode: 'result',
 };
-// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
-// is inline literal zod mirroring the operation's own input schema.
+// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   all: z.boolean().optional(),
   attempts: z.number().int().min(1).max(10).optional(),

@@ -14,8 +14,7 @@ export const config = {
   description: 'Compare a bounded Audible sample with local audio through an optional Audiolocate Python capability.',
   exitCode: 'result',
 };
-// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
-// is inline literal zod mirroring the operation's own input schema.
+// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   asin: z.string().min(1).max(64),
   attempts: z.number().int().min(1).max(10).optional(),

@@ -14,8 +14,7 @@ export const config = {
   description: 'Extract and transcribe distributed PCM windows for human language, story, and narrator review.',
   exitCode: 'result',
 };
-// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
-// is inline literal zod mirroring the operation's own input schema.
+// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   author: z.string().max(512).optional(),
   file: z.string().min(1).max(4096),

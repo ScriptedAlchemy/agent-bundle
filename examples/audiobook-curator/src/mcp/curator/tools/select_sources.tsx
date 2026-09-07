@@ -14,8 +14,7 @@ export const config = {
   annotations: { readOnlyHint: false },
   description: 'Select strongest source encodings while retaining alternates and duration review evidence.',
 };
-// The argv projection (`<tool>.cli.ts`) is compiled statically, so the schema
-// is inline literal zod mirroring the operation's own input schema.
+// Inline, not `operation.inputSchema`: the `.cli.ts` projection compiles this grammar statically.
 export const inputSchema = z.object({
   inventory: z.string().min(1).max(4096),
   report: z.string().min(1).max(4096).optional(),
