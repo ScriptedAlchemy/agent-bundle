@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { resolveArtifactLayoutDirectory } from '../adapters/types.ts';
+import { ampMcpDocumentIssues } from '../adapters/amp-mcp.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
@@ -81,11 +82,12 @@ const ampFrontmatterValidator = (frontmatter: unknown): readonly AgentSkillsFron
   ) {
     issues.push({ instancePath: '/builtin-tools', keyword: 'type', message: 'must be an array of nonempty strings' });
   }
-  if (
-    record.mcpServers !== undefined
-    && (typeof record.mcpServers !== 'object' || record.mcpServers === null || Array.isArray(record.mcpServers))
-  ) {
-    issues.push({ instancePath: '/mcpServers', keyword: 'type', message: 'must be an object' });
+  if (record.mcpServers !== undefined) {
+    issues.push(...ampMcpDocumentIssues(record.mcpServers).map((issue) => ({
+      instancePath: `/${issue.path.replaceAll('.', '/')}`,
+      keyword: 'amp-mcp',
+      message: issue.message,
+    })));
   }
   return Object.freeze(issues);
 };
@@ -205,6 +207,35 @@ export const validateEmittedSkills = async (options: {
           target,
           skillRecovery,
         ));
+      }
+    }
+    if (skill.targets.includes('amp') && parsed.frontmatter.mcpServers === undefined) {
+      const mcpPath = `${skill.root}/mcp.json`;
+      if (options.files.some((file) => file.path === mcpPath)) {
+        let document: unknown;
+        try {
+          document = JSON.parse(await runWithPlatform(readFileString(resolve(options.artifactRoot, mcpPath)))) as unknown;
+        } catch {
+          diagnostics.push(diagnostic(
+            'AB6015',
+            'Emitted Amp Skill mcp.json must contain one JSON value.',
+            mcpPath,
+            'amp',
+            skillRecovery,
+          ));
+          document = undefined;
+        }
+        if (document !== undefined) {
+          for (const issue of ampMcpDocumentIssues(document)) {
+            diagnostics.push(diagnostic(
+              'AB6015',
+              `Emitted Amp Skill MCP ${issue.path || 'root'} ${issue.message}.`,
+              mcpPath,
+              'amp',
+              skillRecovery,
+            ));
+          }
+        }
       }
     }
     if (typeof parsed.frontmatter.name === 'string' && parsed.frontmatter.name !== skill.name) {

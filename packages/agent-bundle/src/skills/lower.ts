@@ -1,5 +1,6 @@
 import { stringify as stringifyYaml } from 'yaml';
 
+import { ampMcpDocumentIssues } from '../adapters/amp-mcp.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import {
@@ -133,7 +134,17 @@ const validateFrontmatter = (
     case 'amp': {
       const portable = Object.fromEntries(Object.entries(frontmatter).filter(([key]) =>
         ['allowed-tools', 'compatibility', 'description', 'license', 'metadata', 'name'].includes(key)));
-      return schemaIssues(host, validateAgentSkillsFrontmatter(portable), source);
+      return [
+        ...schemaIssues(host, validateAgentSkillsFrontmatter(portable), source),
+        ...schemaIssues(host, frontmatter.mcpServers === undefined
+          ? []
+          : ampMcpDocumentIssues(frontmatter.mcpServers).map((issue) => ({
+            field: issue.path,
+            instancePath: `/${issue.path.replaceAll('.', '/')}`,
+            keyword: 'amp-mcp',
+            message: issue.message,
+          })), source),
+      ];
     }
     case 'claude':
       return schemaIssues(host, validateClaudeSkillFrontmatter(frontmatter), source);

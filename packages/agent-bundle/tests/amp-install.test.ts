@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -181,6 +181,52 @@ it('refuses to replace a foreign Amp directory even with --replace', async () =>
       scope: 'user',
     })).rejects.toThrow('foreign install');
     await expect(readFile(join(destination, 'index.js'), 'utf8')).resolves.toContain('foreign');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('refuses a symlinked Amp plugin ancestor before writing outside the host root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-amp-symlink-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const ampRoot = join(home, '.config', 'amp');
+  const outside = join(root, 'outside');
+  await mkdir(bundle, { recursive: true });
+  await mkdir(ampRoot, { recursive: true });
+  await mkdir(outside, { recursive: true });
+  await symlink(outside, join(ampRoot, 'plugins'), 'dir');
+  await writeBundle(bundle, '1.0.0', 'owned');
+
+  try {
+    await expect(installBundle({
+      from: bundle,
+      home,
+      host: 'amp',
+      scope: 'user',
+    })).rejects.toThrow('unsupported filesystem entry');
+    expect(await readdir(outside)).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('refuses modified or unlisted files inside the generated Amp directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-amp-inventory-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const plugin = join(bundle, '.amp', 'plugins', pluginName);
+  await mkdir(bundle, { recursive: true });
+  await writeBundle(bundle, '1.0.0', 'owned');
+  await writeFile(join(plugin, 'unlisted.js'), 'export default "unlisted";\n');
+
+  try {
+    await expect(installBundle({
+      from: bundle,
+      home,
+      host: 'amp',
+      scope: 'user',
+    })).rejects.toThrow('does not match its manifest-owned directory');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

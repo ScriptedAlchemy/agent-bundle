@@ -177,13 +177,13 @@ const snapshotOutputLayout = (value: unknown, field: string): TargetArtifactOutp
   });
 };
 
-const snapshotRootDocuments = (value: unknown): readonly string[] => {
-  const documents = dataArrayValues(value);
-  if (documents === undefined) throw new Error('Target adapter artifact layout root documents must be a data array.');
-  return Object.freeze(documents.map((document) => {
-    const name = requireNonempty(document, 'artifact layout root document');
+const snapshotRootPaths = (value: unknown, field: string): readonly string[] => {
+  const paths = dataArrayValues(value);
+  if (paths === undefined) throw new Error(`Target adapter artifact layout ${field} must be a data array.`);
+  return Object.freeze(paths.map((path) => {
+    const name = requireNonempty(path, `artifact layout ${field}`);
     if (!isSafeArtifactDirectory(name)) {
-      throw new Error('Target adapter artifact layout root documents must be safe single-segment names.');
+      throw new Error(`Target adapter artifact layout ${field} must contain safe single-segment names.`);
     }
     return name;
   }));
@@ -251,7 +251,12 @@ const snapshotArtifactLayout = (
   const workflows = layout.workflows === undefined
     ? undefined
     : requireNonempty(layout.workflows, 'artifact layout workflows namespace');
-  const rootDocuments = layout.rootDocuments === undefined ? undefined : snapshotRootDocuments(layout.rootDocuments);
+  const rootDirectories = layout.rootDirectories === undefined
+    ? undefined
+    : snapshotRootPaths(layout.rootDirectories, 'root directories');
+  const rootDocuments = layout.rootDocuments === undefined
+    ? undefined
+    : snapshotRootPaths(layout.rootDocuments, 'root documents');
 
   if (assets !== undefined && !isSafeArtifactDirectory(assets)) {
     throw new Error('Target adapter artifact layout assets namespace must be a safe single namespace.');
@@ -283,6 +288,7 @@ const snapshotArtifactLayout = (
     ...(mcpApps === undefined ? {} : { mcpApps }),
     ...(mcpEntries === undefined ? {} : { mcpEntries }),
     ...(outputStyles === undefined ? {} : { outputStyles }),
+    ...(rootDirectories === undefined ? {} : { rootDirectories }),
     ...(rootDocuments === undefined ? {} : { rootDocuments }),
     ...(rules === undefined ? {} : { rules }),
     ...(scripts === undefined ? {} : { scripts }),

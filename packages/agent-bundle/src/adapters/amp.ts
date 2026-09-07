@@ -14,6 +14,7 @@ import {
   type TargetHookWrapper,
 } from './hook-contract.ts';
 import {
+  hasPathToken,
   sortedEntries,
   sourceInputs,
   type TargetAdapter,
@@ -21,11 +22,12 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 import { operatorEnvLayerImport } from '../build/launch-env-shell.ts';
+import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isPortablePathSegment } from '../core/paths.ts';
 import { stableJson } from '../core/digest.ts';
+import { isPlainDataRecord } from '../core/strict-json.ts';
 import {
-  pathTokens,
   type NormalizedHook,
   type NormalizedMcpServer,
   type NormalizedPlugin,
@@ -40,23 +42,20 @@ const metadata = Object.freeze({
 const evidence = capabilityEvidence(ampName, metadata);
 const { errorDiagnostic } = createTargetDiagnostics(ampName, 'Amp');
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const ampPluginRoot = (plugin: string): string => `.amp/plugins/${plugin}`;
 
 const factoryName = (name: string): string => {
-  const identifier = name.replace(/-([a-z\d])/gu, (_, character: string) => character.toUpperCase());
+  const identifier = name.replace(
+    /[^A-Za-z\d_$]+([A-Za-z\d_$])?/gu,
+    (_, character: string | undefined) => character?.toUpperCase() ?? '',
+  );
   return /^[A-Za-z_$]/u.test(identifier) ? identifier : `plugin${identifier}`;
 };
 
-const containsPathToken = (value: string): boolean =>
-  Object.values(pathTokens).some((token) => value.includes(token));
-
 const mcpServerPlan = (
   server: NormalizedMcpServer,
-): { readonly diagnostics: readonly ReturnType<typeof errorDiagnostic>[]; readonly value?: Record<string, unknown> } => {
-  const diagnostics: ReturnType<typeof errorDiagnostic>[] = [];
+): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
+  const diagnostics: Diagnostic[] = [];
   if (server.source !== undefined) {
     diagnostics.push(errorDiagnostic(
       'amp.mcp.generated-local',
@@ -86,7 +85,7 @@ const mcpServerPlan = (
     ...Object.entries(server.env ?? {}).map(([name, value]) => [`env.${name}`, value] as const),
   ] as const;
   for (const [location, value] of values) {
-    if (value !== undefined && containsPathToken(value)) {
+    if (value !== undefined && hasPathToken(value)) {
       diagnostics.push(errorDiagnostic(
         `amp.mcp.path-token.${location.replaceAll(/[^a-z\d]+/giu, '-').toLowerCase()}`,
         `Amp skill MCP server ${JSON.stringify(server.name)} ${location} uses an Agent Bundle path token, ` +
@@ -135,7 +134,7 @@ const encodeAmpPlaygroundOutput = (
       message: result.reason,
     };
   }
-  return isRecord(result.updatedInput)
+  return isPlainDataRecord(result.updatedInput)
     ? { action: 'modify', input: result.updatedInput }
     : undefined;
 };
@@ -456,7 +455,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
         sourceInputs: sourceInputs(skill.source, sidecar.source),
       });
     }
-    const nativeMcp = isRecord(hostDocument?.frontmatter.mcpServers);
+    const nativeMcp = isPlainDataRecord(hostDocument?.frontmatter.mcpServers);
     const mcpResource = skill.resources.find((resource) => resource.relativePath === 'mcp.json');
     if (hasMcp && (nativeMcp || mcpResource !== undefined)) {
       diagnostics.push(errorDiagnostic(
@@ -507,7 +506,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
 export const ampAdapter: TargetAdapter = Object.freeze({
   artifactLayout: Object.freeze({
-    assets: '.amp',
+    rootDirectories: Object.freeze(['.amp']),
     rootDocuments: Object.freeze(['INSTALL.md']),
     skills: '.amp/plugins/{plugin}/skills',
   }),

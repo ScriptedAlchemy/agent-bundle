@@ -91,6 +91,11 @@ it('registers Amp as a built-in directory-plugin target with pinned evidence', (
   expect(registry.supports('amp', 'skills')).toBe(true);
   expect(registry.supports('amp', 'install')).toBe(true);
   expect(registry.mcpRuntime('amp')).toBeUndefined();
+  expect(registry.artifactLayout('amp')).toMatchObject({
+    rootDirectories: ['.amp'],
+    skills: '.amp/plugins/{plugin}/skills',
+  });
+  expect(registry.artifactLayout('amp').assets).toBeUndefined();
   expect(capabilityTable.pluginApi.package).toBe('@ampcode/plugin');
   expect(capabilityTable.pluginApi.version).toBe('0.0.0-20260907001852-gf348fed');
   expect(capabilityTable.runtimeProof.state).toBe('unverified');
@@ -143,6 +148,14 @@ it('keeps content-only skills free of compiled runtimes', () => {
     '.amp/plugins/amp-review/skills/review/SKILL.md',
     '.amp/plugins/amp-review/skills/review/references/checklist.md',
   ]);
+});
+
+it('emits a valid private factory name for every portable plugin path segment', () => {
+  const model = plugin();
+  const dotted = { ...model, metadata: { ...model.metadata, name: 'amp.review-tools' } };
+  expect(writes(dotted)['.amp/plugins/amp.review-tools/index.js']).toContain(
+    'export default async function ampReviewTools(amp)',
+  );
 });
 
 it('preserves native frontmatter and sibling MCP precedence over generated skill MCP', () => {

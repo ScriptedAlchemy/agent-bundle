@@ -319,6 +319,33 @@ describe('canonical Skill IR', () => {
     })]);
   });
 
+  it('rejects malformed Amp skill MCP instead of preserving an invented wrapper', async () => {
+    const markdown = [
+      '---',
+      'name: review',
+      'description: Review a change.',
+      'targets:',
+      '  amp:',
+      '    mcpServers:',
+      '      wrapped:',
+      '        mcpServers: {}',
+      '---',
+      '',
+      '# Review',
+      '',
+    ].join('\n');
+    const root = await projectRoot({ 'src/skills/review/SKILL.md': markdown });
+    const ir = parseSkillIr(await parseSkill(join(root, 'src', 'skills', 'review'), root));
+    const amp = lowerSkillIr(ir, 'amp');
+
+    expect(amp.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'AB3010',
+      message: expect.stringContaining('mcpServers.wrapped.mcpServers'),
+      severity: 'error',
+      target: 'amp',
+    }));
+  });
+
   it('rejects unknown nested fields for every typed host target without dropping valid fields', async () => {
     const markdown = [
       '---',

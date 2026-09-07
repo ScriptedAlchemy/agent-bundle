@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve } from 'node:path';
 
 import { Effect, Predicate } from 'effect';
 
@@ -21,6 +21,7 @@ import {
   type PluginIdentity,
 } from './identity.ts';
 import {
+  assertRealAncestors,
   compareInstalledTree,
   createInstallReceipt,
   describeContentComparison,
@@ -1116,6 +1117,7 @@ export const ampInstallLocation = (
   readonly hostDirectories: readonly string[];
   readonly hostRoot: string;
   readonly installRoot: string;
+  readonly relativeDestination: string;
   readonly registration: 'amp-project-plugin' | 'amp-system-plugin';
 } => {
   if (scope === 'local') {
@@ -1130,13 +1132,15 @@ export const ampInstallLocation = (
   const installRoot = scope === 'project'
     ? join(hostRoot, '.amp', 'plugins')
     : join(hostRoot, 'plugins');
+  const relativeDestination = `${scope === 'project' ? '.amp/plugins' : 'plugins'}/${identity.plugin}`;
   return {
-    destination: join(installRoot, identity.plugin),
+    destination: join(hostRoot, relativeDestination),
     hostDirectories: scope === 'project'
       ? Object.freeze(['.amp', '.amp/plugins'])
       : Object.freeze(['plugins']),
     hostRoot,
     installRoot,
+    relativeDestination,
     registration: scope === 'project' ? 'amp-project-plugin' : 'amp-system-plugin',
   };
 };
@@ -1148,8 +1152,24 @@ const installAmp = async (
 ): Promise<InstallResult> => {
   const entry = identity.documents.entry;
   if (entry === undefined) throw failure('AB7001', 'The Amp projection has no plugin entry.', 'amp');
-  const source = join(identity.bundleRoot, dirname(entry));
+  const entryRoot = posix.dirname(entry);
+  const source = join(identity.bundleRoot, entryRoot);
+  const verified = await bundleInventory(identity, { restoreModes: true });
+  const prefix = `${entryRoot}/`;
+  const expectedFiles = verified.files
+    .filter((file) => file.startsWith(prefix))
+    .map((file) => file.slice(prefix.length));
   const artifact = await treeInventory(source);
+  if (
+    artifact.files.length !== expectedFiles.length
+    || artifact.files.some((file, index) => file !== expectedFiles[index])
+  ) {
+    throw failure(
+      'AB7001',
+      `Amp plugin directory ${source} does not match its manifest-owned directory.`,
+      'amp',
+    );
+  }
   const location = ampInstallLocation(options, identity, scope);
   const base = {
     bundleRoot: identity.bundleRoot,
@@ -1163,8 +1183,16 @@ const installAmp = async (
     version: identity.version,
   } as const;
   if (resolve(source) === resolve(location.destination)) {
-    return { ...base, state: 'already-installed' };
+    throw failure(
+      'AB7005',
+      'The Amp source directory is already the project destination; use a separate artifact output so installation can write an ownership receipt without modifying built bytes.',
+      'amp',
+    );
   }
+  await assertRealAncestors(
+    location.hostRoot,
+    [`${location.relativeDestination}/index.js`],
+  );
   const created = [];
   for (const relativePath of location.hostDirectories) {
     if (!await exists(join(location.hostRoot, relativePath))) created.push(relativePath);

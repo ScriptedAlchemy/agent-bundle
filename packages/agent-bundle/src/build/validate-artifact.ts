@@ -512,6 +512,7 @@ const isProjectionArtifactPath = (
     isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||
     isDirectOutputLayoutPath(relativePath, layout.rules) ||
     isDirectOutputLayoutPath(relativePath, layout.scripts) ||
+    layout.rootDirectories?.some((directory) => isRecursiveArtifactPath(relativePath, directory)) === true ||
     isSkillArtifactPath(relativePath, layout.skills, plugin) ||
     isAdapterRootDocument(relativePath, layout.rootDocuments) ||
     relativePath === hookContract?.manifestPath ||

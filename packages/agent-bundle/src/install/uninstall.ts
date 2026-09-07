@@ -1555,6 +1555,10 @@ const uninstallAmp = async (
 ): Promise<UninstallResult> => {
   const force = options.force === true;
   const location = ampInstallLocation(options, identity, scope);
+  await assertRealAncestors(
+    location.hostRoot,
+    [`${location.relativeDestination}/index.js`],
+  );
   const receiptPath = join(location.destination, installReceiptFile);
   const receipt = await readInstallReceipt(location.destination);
   const registration = scope === 'project' ? 'amp-project-plugin' as const : 'amp-system-plugin' as const;
@@ -1617,16 +1621,14 @@ const uninstallAmp = async (
     );
   }
   await assertRealAncestors(location.destination, receipt.files);
-  const inventory = await treeInventory(location.destination);
-  const owned = new Set([...receipt.files, installReceiptFile]);
-  const retained = inventory.files.filter((file) => !owned.has(file));
+  const retained = await listRetained(
+    location.destination,
+    new Set(receipt.files),
+    new Set(receipt.directories),
+  );
   const files = [...receipt.files.map((file) => join(location.destination, file)), receiptPath];
-  const internalDirectories = [...receipt.directories]
-    .sort((left, right) => right.split('/').length - left.split('/').length)
-    .map((directory) => join(location.destination, directory));
-  const hostDirectories = [...receipt.hostDirectories]
-    .sort((left, right) => right.split('/').length - left.split('/').length)
-    .map((directory) => join(location.hostRoot, directory));
+  const internalDirectories = receipt.directories.map((directory) => join(location.destination, directory));
+  const hostDirectories = receipt.hostDirectories.map((directory) => join(location.hostRoot, directory));
   const registrationReport = Object.freeze({
     action: options.plan === true ? 'planned' as const : 'removed' as const,
     detail: 'The receipt-owned directory plugin is removed; run `plugins: reload` interactively in a running Amp session.',
@@ -1638,11 +1640,13 @@ const uninstallAmp = async (
     registrations: Object.freeze([registrationReport]),
     retained: Object.freeze(retained),
   };
+  const directoryCandidates = [...internalDirectories, location.destination, ...hostDirectories];
   if (options.plan === true) {
+    const directories = await simulatePrune(directoryCandidates, new Set(files));
     return Object.freeze({
       ...result,
       removed: Object.freeze({
-        directories: Object.freeze([...internalDirectories, location.destination, ...hostDirectories]),
+        directories: Object.freeze(directories),
         files: Object.freeze(files),
       }),
       state: 'planned',
@@ -1650,10 +1654,7 @@ const uninstallAmp = async (
   }
   for (const file of receipt.files) await rm(join(location.destination, file), { force: true });
   await rm(receiptPath, { force: true });
-  const removedDirectories: string[] = [];
-  for (const directory of [...internalDirectories, location.destination, ...hostDirectories]) {
-    if (await pruneEmptyDirectory(directory)) removedDirectories.push(directory);
-  }
+  const removedDirectories = await pruneDirectories(directoryCandidates);
   return Object.freeze({
     ...result,
     removed: Object.freeze({

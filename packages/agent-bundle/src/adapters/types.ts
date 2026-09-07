@@ -61,7 +61,7 @@ export const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetAr
 );
 
 /**
- * The host documents one projection derives from the model, as the artifact
+ * The host entry/documents one projection derives from the model, as the artifact
  * manifest records them: root-relative pointers, never data copied back out of
  * the documents (#592 step 3). The MCP and hooks documents are named by the
  * adapter's runtime and hook contracts (`mcpRuntime().manifestPath`,
@@ -78,7 +78,7 @@ export interface TargetPlanDocuments {
 
 export interface TargetArtifactPlan {
   readonly diagnostics: readonly Diagnostic[];
-  /** Absent only for adapters that emit no host plugin manifest (test doubles); every shipped adapter declares it. */
+  /** Host entry/manifest pointers; absent only for adapters that emit neither (normally test doubles). */
   readonly documents?: TargetPlanDocuments;
   readonly entries: readonly TargetArtifactEntry[];
   readonly hookEntries?: readonly TargetHookEntry[];
@@ -459,6 +459,8 @@ export interface TargetArtifactLayout {
   readonly mcpApps?: TargetArtifactOutputLayout;
   readonly mcpEntries?: TargetArtifactOutputLayout;
   readonly outputStyles?: TargetArtifactOutputLayout;
+  /** Adapter-owned recursive namespaces at the artifact root. */
+  readonly rootDirectories?: readonly string[];
   /** Adapter-owned plain documents at the artifact root (for example a host manifest under its dotfolder). */
   readonly rootDocuments?: readonly string[];
   readonly rules?: TargetArtifactOutputLayout;

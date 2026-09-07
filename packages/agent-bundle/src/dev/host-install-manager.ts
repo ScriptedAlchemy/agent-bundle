@@ -27,7 +27,6 @@ import {
   type InstallBundleOptions,
   type InstallCommandRunner,
   type DevInstallHost,
-  type InstallHost,
   type InstallResult,
 } from '../install/install.ts';
 import {

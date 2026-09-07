@@ -136,9 +136,9 @@ export interface ArtifactManifestProjectionSchema {
 }
 
 /**
- * Root-relative paths of the host documents one projection derived from the
- * manifest: the host's plugin manifest, and its marketplace, MCP, and hooks
- * documents when the projection emitted them. Every path is a `files[]` entry.
+ * Root-relative paths of the host entry/documents one projection derived:
+ * an executable plugin entry or the host's plugin, marketplace, MCP, and hooks
+ * documents when emitted. Every path is a `files[]` entry.
  */
 export interface ArtifactManifestProjectionDocuments {
   /** The host's executable plugin entry when it has no JSON plugin manifest. */
