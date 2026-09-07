@@ -463,7 +463,20 @@ it('publishes failed event invocations with native provenance', async () => {
   });
 });
 
-it('keeps hostless shared events on their declared standalone fallback', async () => {
+it.each([
+  {
+    host: 'claude',
+    label: 'the shared root',
+    worker: 'hooks/hooks-flight.mjs',
+    wrapper: 'hooks/event-route-tool-after.claude.mjs',
+  },
+  {
+    host: 'amp',
+    label: 'a nested Amp plugin',
+    worker: '.amp/plugins/fixture/hooks/hooks-flight.mjs',
+    wrapper: '.amp/plugins/fixture/hooks/event-route-tool-after.mjs',
+  },
+] as const)('keeps hostless shared events on the standalone fallback in $label', async ({ host, worker, wrapper }) => {
   const route = {
     config: [],
     event: 'tool/after',
@@ -492,14 +505,14 @@ it('keeps hostless shared events on their declared standalone fallback', async (
           manifest: {
             executables: {
               hooks: [{
-                host: 'claude',
+                host,
                 kind: 'event-route',
-                path: 'hooks/event-route-tool-after.claude.mjs',
+                path: wrapper,
                 routeId: route.id,
               }],
               mcpServers: [],
             },
-            files: [{ path: 'hooks/hooks-flight.mjs' }],
+            files: [{ path: worker }],
             routes: {
               digest: 'digest',
               events: [{
@@ -531,7 +544,10 @@ it('keeps hostless shared events on their declared standalone fallback', async (
     diagnostics: [{ code: 'AB8236' }],
     status: 'failed',
   });
-  expect(production).toEqual({ executable: 'hooks/hooks-flight.mjs', kind: 'direct' });
+  expect(production).toEqual({
+    executable: worker,
+    kind: 'direct',
+  });
 });
 
 const echoRoute = {

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { dirname, extname, join, relative, resolve } from 'node:path';
+import { dirname, extname, join, posix, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { hooksFlightWorkerPath } from '../adapters/composite-layout.ts';
@@ -570,15 +570,24 @@ const hookEntrySourceInputs = (entry: TargetHookEntry): readonly string[] => {
   ]);
 };
 
+const requiresStandaloneHookWorker = (entry: TargetHookEntry): boolean =>
+  entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone';
+
+const hookWorkerPath = (entry: TargetHookEntry): string =>
+  posix.join(posix.dirname(entry.relativePath), posix.basename(hooksFlightWorkerPath));
+
 export const planCompiledHooks = (
   entries: readonly TargetHookEntry[],
   options: { readonly outDir: string },
 ): readonly CompiledHookEntry[] => {
-  const workerOwner = entries.findIndex((entry) =>
-    entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone');
+  const workerOwners = new Map<string, number>();
+  entries.forEach((entry, index) => {
+    if (requiresStandaloneHookWorker(entry) && !workerOwners.has(hookWorkerPath(entry))) {
+      workerOwners.set(hookWorkerPath(entry), index);
+    }
+  });
   const workerSourceInputs = Object.freeze([...new Set(entries
-    .filter((entry) =>
-      entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone')
+    .filter(requiresStandaloneHookWorker)
     .flatMap((entry) => [entry.hook.provenance.sourcePath, entry.hook.source]))]);
   return deepFreeze(entries.map((entry, index) => ({
     event: entry.event,
@@ -600,9 +609,9 @@ export const planCompiledHooks = (
         executorSourceInputs: Object.freeze([entry.hook.provenance.sourcePath, entry.hook.source]),
       }),
     ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
-    ...(index === workerOwner
+    ...(workerOwners.get(hookWorkerPath(entry)) === index
       ? {
-        workerOutput: resolveArtifactDestination(options.outDir, hooksFlightWorkerPath),
+        workerOutput: resolveArtifactDestination(options.outDir, hookWorkerPath(entry)),
         workerSourceInputs,
       }
       : {}),
@@ -629,39 +638,41 @@ export const planHooksSurface = (
   const compiled = planCompiledHooks(entries, options);
   const routeEntries = entries.filter((entry) => entry.hook.eventRoute !== undefined);
   const standaloneEventRoutes = [...new Map(routeEntries
-    .filter((entry) =>
-      entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone')
+    .filter(requiresStandaloneHookWorker)
     .map((entry) => [entry.hook.id, entry.hook])).values()];
+  const workerPlans = [...new Map(entries
+    .filter(requiresStandaloneHookWorker)
+    .map((entry) => [hookWorkerPath(entry), entry.hook])).entries()];
   const workerArtifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const eventIpcRuntime = routeEntries.length === 0 ? undefined : eventRuntimeModulePath('ipc');
   const eventProjectRuntime = routeEntries.length === 0 ? undefined : eventRuntimeModulePath('project');
   const launchEnvRuntime = launchEnvRuntimePath();
-  const workerEntry = standaloneEventRoutes.length === 0
-    ? undefined
-    : {
-      name: 'hooks-flight',
-      outputRelativePath: hooksFlightWorkerPath,
-      reactServer: true as const,
-      rscManifest: true as const,
-      source: standaloneEventRoutes[0]!.source,
-      sourceInputs: Object.freeze([
-        ...new Set([
-          ...standaloneEventRoutes.flatMap((hook) => [hook.provenance.sourcePath, hook.source]),
-          ...(options.providers ?? []).map((provider) => provider.source),
-          ...(options.state === undefined ? [] : [options.state.provenance.sourcePath, options.state.source]),
-        ]),
+  const workerEntries = workerPlans.map(([outputRelativePath, hook]) => ({
+    name: outputRelativePath === hooksFlightWorkerPath
+      ? 'hooks-flight'
+      : outputRelativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
+    outputRelativePath,
+    reactServer: true as const,
+    rscManifest: true as const,
+    source: hook.source,
+    sourceInputs: Object.freeze([
+      ...new Set([
+        ...standaloneEventRoutes.flatMap((hook) => [hook.provenance.sourcePath, hook.source]),
+        ...(options.providers ?? []).map((provider) => provider.source),
+        ...(options.state === undefined ? [] : [options.state.provenance.sourcePath, options.state.source]),
       ]),
-      virtualSource: generatedRouteFlightWorkerSource({
-        artifactEpoch: workerArtifactEpoch,
-        eventRoutes: standaloneEventRoutes,
-        ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
-        providers: options.providers ?? [],
-        routes: [],
-        serverName: 'hooks',
-        ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
-        ...(options.state === undefined ? {} : { state: options.state }),
-      }),
-    };
+    ]),
+    virtualSource: generatedRouteFlightWorkerSource({
+      artifactEpoch: workerArtifactEpoch,
+      eventRoutes: standaloneEventRoutes,
+      ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
+      providers: options.providers ?? [],
+      routes: [],
+      serverName: 'hooks',
+      ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
+      ...(options.state === undefined ? {} : { state: options.state }),
+    }),
+  }));
   return {
     entries: [
       ...compiled.flatMap((entry, index) => {
@@ -716,7 +727,7 @@ export const planHooksSurface = (
           },
         ];
       }),
-      ...(workerEntry === undefined ? [] : [workerEntry]),
+      ...workerEntries,
     ],
     ignoredSourcePaths: [
       runtimeIgnoredRoot(launchEnvRuntime),
@@ -732,7 +743,7 @@ export const planHooksSurface = (
             ?? (() => { throw new Error(`Missing bundled deferred hook executor evidence for ${JSON.stringify(entry.name)}.`); })(),
         }),
         ...(entry.workerOutput === undefined ? {} : {
-          workerSourceInputs: evidenceByPath.get(hooksFlightWorkerPath) ?? (() => { throw new Error('Missing bundled hook Flight worker evidence.'); })(),
+          workerSourceInputs: evidenceByPath.get(hookWorkerPath(entries[index]!)) ?? (() => { throw new Error('Missing bundled hook Flight worker evidence.'); })(),
         }),
       })));
     },

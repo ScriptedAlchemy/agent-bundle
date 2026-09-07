@@ -171,4 +171,45 @@ describe('event-route preflight source graph (#595)', () => {
     expect(executor.virtualSource).toContain('requestEventRuntime');
     expect(executor.virtualSource).toContain('preflight-entries@1.0.0');
   });
+
+  it('emits the standalone worker beside a nested host wrapper', () => {
+    const standalone = {
+      ...hook,
+      eventRoute: { event: 'tool/before' as const, fallback: 'none' as const, runtime: 'standalone' as const },
+      targets: ['amp'],
+    };
+    const nested = planHooks({ ...model, hooks: [standalone] }, 'amp', {
+      commandRoot: '',
+      encodePlaygroundInput: (input) => input,
+      encodePlaygroundOutput: (result) => result,
+      eventNames: {},
+      eventRouteNames: { 'tool/before': 'tool.call' },
+      hostContractRevision: 'test',
+      manifestPath: '.amp/hooks.json',
+      matchers: {},
+      registration: 'api',
+      wrapperPath: (candidate) => `.amp/plugins/preflight-entries/hooks/${candidate.name}.mjs`,
+      wrapperSource: () => 'config-hook-only\n',
+    }).hookEntries;
+    const rootWrapper = {
+      ...nested[0]!,
+      relativePath: 'hooks/event-route-tool-before.claude.mjs',
+      target: 'claude',
+    };
+    const combined = [rootWrapper, ...nested];
+    const workers = [
+      'hooks/hooks-flight.mjs',
+      '.amp/plugins/preflight-entries/hooks/hooks-flight.mjs',
+    ];
+
+    expect(planCompiledHooks(combined, { outDir: '/tmp/artifact' })
+      .flatMap((entry) => entry.workerOutput === undefined ? [] : [entry.workerOutput]))
+      .toEqual(workers.map((worker) => `/tmp/artifact/${worker}`));
+    const outputs = planHooksSurface(combined, {
+      artifactEpoch: 'preflight-entries@1.0.0',
+      outDir: '/tmp/artifact',
+      plugin: { name: 'preflight-entries', version: '1.0.0' },
+    }).entries.map((entry) => entry.outputRelativePath);
+    expect(outputs).toEqual(expect.arrayContaining(workers));
+  });
 });

@@ -13,7 +13,7 @@ import { validateArtifact } from '../src/build/validate-artifact.ts';
 import type { JsonObject } from '../src/core/strict-json.ts';
 import type { NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
 import { projectEventDocument } from '../src/events/projection.ts';
-import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
+import { compileRouteGraph, emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 
@@ -732,6 +732,91 @@ it('compiles a nested Amp hook wrapper that returns the documented tool.call dec
         hook_event_name: 'tool.call',
         session_id: 'thread-1',
         tool_input: { command: 'rm -rf /' },
+        tool_name: 'shell',
+        tool_use_id: 'tool-1',
+      }),
+    });
+    expect(result).toEqual({
+      code: 0,
+      stderr: '',
+      stdout: '{"action":"reject-and-continue","message":"blocked"}',
+    });
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+});
+
+it('runs a relocated standalone event route with its worker inside the Amp plugin', async () => {
+  const projectRoot = await mkdtemp(join(process.cwd(), 'packages', 'agent-bundle', '.amp-event-route-'));
+  const config = join(projectRoot, 'agent-bundle.config.ts');
+  const handler = join(projectRoot, 'src', 'events', 'tool', 'before.tsx');
+  const outputRoot = join(projectRoot, 'artifact');
+  const relocated = join(projectRoot, 'relocated');
+  await mkdir(join(projectRoot, 'src', 'events', 'tool'), { recursive: true });
+  await writeFile(config, 'export default {};\n');
+  await writeFile(handler, [
+    "import { Agent } from '@agent-bundle/runtime';",
+    "import { createElement } from 'react';",
+    "export const config = { runtime: 'standalone' };",
+    "export default async function BeforeTool() {",
+    "  return createElement(Agent.Result, { value: { outcome: 'deny', reason: 'blocked' } });",
+    '}',
+    '',
+  ].join('\n'));
+  const base = plugin();
+  const hook = eventHook('tool-before', 'beforeTool', 'tool/before');
+  const model: NormalizedPlugin = {
+    ...base,
+    hooks: [{
+      ...hook,
+      id: 'hook:event-route:tool-before',
+      name: 'event-route-tool-before',
+      provenance: { kind: 'conventional', sourcePath: handler },
+      source: handler,
+    }],
+    mcpServers: [],
+    metadata: { ...base.metadata, provenance: { kind: 'config', sourcePath: config } },
+    skills: [],
+    targets: [{
+      id: 'target:amp',
+      name: 'amp',
+      provenance: { kind: 'config', sourcePath: config },
+    }],
+  };
+
+  try {
+    const registry = createDefaultRegistry();
+    const routeGraph = await compileRouteGraph(projectRoot, {
+      plugin: { name: 'amp-review', version: '1.0.0' },
+    });
+    const built = await build({
+      model,
+      outputRoot,
+      projectRoot: join(process.cwd(), 'packages', 'agent-bundle'),
+      registry,
+      routeGraph,
+    });
+    const wrapper = '.amp/plugins/amp-review/hooks/event-route-tool-before.mjs';
+    const worker = '.amp/plugins/amp-review/hooks/hooks-flight.mjs';
+    expect(built.manifest.projections).toEqual([{
+      builtInHost: 'amp',
+      documents: { entry: '.amp/plugins/amp-review/index.js' },
+      host: 'amp',
+    }]);
+    expect(built.manifest.files.map((file) => file.path)).toContain(worker);
+    expect(built.manifest.files.map((file) => file.path).filter((path) => path.endsWith('/index.js')))
+      .toEqual(['.amp/plugins/amp-review/index.js']);
+    expect(built.manifest.compiler.provenance).toContainEqual(expect.objectContaining({ path: worker }));
+    expect(built.compileEvidence.assets).toContainEqual(expect.objectContaining({ path: worker }));
+    expect(await validateArtifact({ artifactRoot: outputRoot, registry })).toEqual([]);
+
+    await rename(outputRoot, relocated);
+    const result = await runNodeScript({
+      args: [join(relocated, wrapper)],
+      input: JSON.stringify({
+        hook_event_name: 'tool.call',
+        session_id: 'thread-1',
+        tool_input: { command: 'pwd' },
         tool_name: 'shell',
         tool_use_id: 'tool-1',
       }),

@@ -20,7 +20,9 @@ const writeBundle = async (
 ): Promise<void> => {
   const plugin = join(root, '.amp', 'plugins', name);
   await mkdir(join(plugin, 'skills', 'review'), { recursive: true });
+  await mkdir(join(plugin, 'hooks'), { recursive: true });
   await writeFile(join(plugin, 'index.js'), `export default async function () { /* ${marker} */ }\n`);
+  await writeFile(join(plugin, 'hooks', 'hooks-flight.mjs'), `export const marker = ${JSON.stringify(marker)};\n`);
   await writeFile(join(plugin, 'skills', 'review', 'SKILL.md'), '---\nname: review\ndescription: Review code.\n---\n');
   await writeFile(join(root, 'outside.txt'), 'must not be installed\n');
   await writeInstallFixtureManifest(root, { name, version }, [{ host: 'amp' }]);
@@ -65,8 +67,10 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
       'Run `amp plugins list` in a shell to inspect the installed plugin.',
     ]);
     await expect(readFile(join(destination, 'index.js'), 'utf8')).resolves.toContain('first');
+    await expect(readFile(join(destination, 'hooks', 'hooks-flight.mjs'), 'utf8')).resolves.toContain('first');
     await expect(readFile(join(destination, 'outside.txt'), 'utf8')).rejects.toThrow();
     expect(await readInstallReceipt(destination)).toMatchObject({
+      files: expect.arrayContaining(['hooks/hooks-flight.mjs']),
       host: 'amp',
       mode: 'local',
       plugin: pluginName,
@@ -94,6 +98,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
     });
     expect(replaced.state).toBe('replaced');
     await expect(readFile(join(destination, 'index.js'), 'utf8')).resolves.toContain('second');
+    await expect(readFile(join(destination, 'hooks', 'hooks-flight.mjs'), 'utf8')).resolves.toContain('second');
     await expect(readFile(join(destination, 'disabled-state.json'), 'utf8')).resolves.toBe('{"disabled":true}\n');
     await expect(readFile(settings, 'utf8')).resolves.toBe('{"amp.plugins.disabled":["amp-install-fixture"]}\n');
 
@@ -122,6 +127,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
       state: 'uninstalled',
     });
     await expect(readFile(join(destination, 'index.js'), 'utf8')).rejects.toThrow();
+    await expect(readFile(join(destination, 'hooks', 'hooks-flight.mjs'), 'utf8')).rejects.toThrow();
     await expect(readFile(join(destination, 'skills', 'review', 'SKILL.md'), 'utf8')).rejects.toThrow();
     await expect(readFile(join(destination, 'disabled-state.json'), 'utf8')).resolves.toBe('{"disabled":true}\n');
     await expect(readFile(settings, 'utf8')).resolves.toBe('{"amp.plugins.disabled":["amp-install-fixture"]}\n');

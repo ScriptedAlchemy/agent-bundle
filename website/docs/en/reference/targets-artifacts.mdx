@@ -32,6 +32,8 @@ directories appear only when the project authors them):
 artifact/
 ├── .amp/plugins/<name>/index.js          # Amp PluginAPI factory
 ├── .amp/plugins/<name>/skills/           # explicitly registered Amp skills
+├── .amp/plugins/<name>/hooks/<hook>.mjs  # Amp event callback wrappers
+├── .amp/plugins/<name>/hooks/hooks-flight.mjs  # sibling standalone event worker
 ├── .agents/plugins/marketplace.json      # Codex marketplace
 ├── .claude-plugin/plugin.json            # Claude Code manifest
 ├── .claude-plugin/marketplace.json
@@ -62,11 +64,13 @@ artifact/
 (`bundle`) file; `validate --artifact` re-checks a listed record against the
 file table (`AB6039`).
 
-Host manifests live in their dotfolders at the root. `skills/`, `hooks/`, `mcp/`, `scripts/`,
-`bin/`, and `assets/` are shared and emitted **once** — no per-host copies. Nothing else appears
-at the root: no generated `AGENTS.md`, no `hooks/hooks-cursor.json`, no `web/` directory. The
-browser host for configured MCP Apps ships inside `bin/<plugin>.mjs` as the framework-owned
-`web` command. That bin is emitted when `src/cli/**` compiled at least one command, when
+Host manifests live in their dotfolders at the root. Root-level `skills/`, `hooks/`, `mcp/`,
+`scripts/`, `bin/`, and `assets/` are shared and emitted **once**. Amp's registered skills,
+event wrappers, and the standalone worker beside those wrappers in each directory stay inside
+`.amp/plugins/<name>/` so the installed plugin remains self-contained. Nothing else appears at
+the root: no generated `AGENTS.md`, no `hooks/hooks-cursor.json`, no `web/` directory. The browser
+host for configured MCP Apps ships inside `bin/<plugin>.mjs` as the framework-owned `web` command.
+That bin is emitted when `src/cli/**` compiled at least one command, when
 [`web`](./configuration.mdx#web) is configured (even with no authored CLI commands), or both.
 
 ### Where each host reads its documents
