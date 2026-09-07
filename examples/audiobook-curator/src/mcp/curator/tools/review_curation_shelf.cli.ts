@@ -4,5 +4,6 @@ import type { inputSchema } from './review_curation_shelf.js';
 
 export const config = {
   command: ['shelf'],
+  confirm: false,
   description: 'Show the persisted curation shelf.',
 } satisfies CliProjectionConfig<typeof inputSchema>;

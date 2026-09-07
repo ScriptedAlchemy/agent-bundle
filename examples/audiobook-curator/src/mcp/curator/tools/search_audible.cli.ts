@@ -1,7 +1,6 @@
 import type { CliProjectionConfig } from 'agent-bundle/routes';
 import type { z } from 'zod';
 
-import { audibleRegionList } from '../../../operations/audible.js';
 import type { inputSchema } from './search_audible.js';
 
 export const config = {
@@ -16,8 +15,13 @@ export const config = {
 
 type CliInput = Omit<z.input<typeof inputSchema>, 'regions'> & { readonly regions?: readonly string[] };
 
-/** `--regions us,uk` and `--regions us --regions uk` both reach the canonical region array. */
+/**
+ * `--regions us,uk` and `--regions us --regions uk` both reach the canonical
+ * region array; the tool's `z.enum` judges each entry after the split.
+ */
 export const mapInput = (input: CliInput): z.input<typeof inputSchema> => {
   const { regions, ...rest } = input;
-  return regions === undefined ? rest : { ...rest, regions: regions.flatMap(audibleRegionList) };
+  if (regions === undefined) return rest;
+  const split = regions.flatMap((value) => value.split(',').map((region) => region.trim().toLowerCase()));
+  return { ...rest, regions: split as z.input<typeof inputSchema>['regions'] };
 };

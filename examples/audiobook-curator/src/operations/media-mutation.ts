@@ -8,7 +8,7 @@ import {
   type ChapterReceipt,
   type MetadataReceipt,
 } from '../media-mutation.ts';
-import { parityReceiptSchema, pathSchema } from './schemas.ts';
+import { parityReceiptSchema } from './schemas.ts';
 
 const metadataResultSchema = parityReceiptSchema<MetadataReceipt>('apply-metadata');
 const chaptersResultSchema = parityReceiptSchema<ChapterReceipt>('apply-chapters');

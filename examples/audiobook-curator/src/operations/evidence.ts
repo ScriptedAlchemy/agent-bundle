@@ -16,7 +16,7 @@ import {
   type WhisperReceipt,
 } from '../evidence.ts';
 import { readJson } from '../foundation.ts';
-import { audibleRegionSchema, parityReceiptSchema, pathSchema } from './schemas.ts';
+import { parityReceiptSchema } from './schemas.ts';
 
 const acousticResultSchema = parityReceiptSchema<AcousticReceipt>('audiolocate');
 const acousticIdentifyResultSchema = parityReceiptSchema<AcousticIdentifyReceipt>('acoustic-identify');

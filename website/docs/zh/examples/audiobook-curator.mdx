@@ -23,7 +23,7 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
 ## 它证明什么
 
 - **路由树就是应用。** `agent-bundle.config.ts` 声明标识、Node 运行时与两个 target。其余由文件约定
-  发现：`src/mcp/curator/` 下的 16 个工具路由、1 个目录资源与 1 个策展提示词。这里没有操作注册表，
+  发现：`src/mcp/curator/` 下的 16 个工具路由、1 个目录资源与 1 个策展提示词。这里没有路由注册表，
   没有手写的 `src/mcp/curator.ts`，没有逐操作的服务器选择器，也没有 `routes` 设置。
 - **一个操作，一条命令。** 每个工具都有一个同目录的
   [`<tool>.cli.ts` 投影模块](../guide/authoring/package-entries.mdx#将一个工具投影为惯用命令)——

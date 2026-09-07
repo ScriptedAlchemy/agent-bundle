@@ -168,11 +168,10 @@ Suspense fallback, and byte for byte the `structuredContent` of the tool call.
 `--report` and `--receipt` are optional on the command line exactly as they are
 on the tool; a command that gets one still writes the receipt file.
 
-Each tool module declares its `inputSchema` as inline literal zod mirroring the
-operation's own schema, because the argv projection is compiled statically from
-that literal; `src/operations/` keeps the schema the handler validates against.
-
-`src/operations/` owns shared operation handlers and schemas;
+Each tool module declares its `inputSchema` as an inline zod literal, because
+the argv projection is compiled statically from that literal; it is the only
+input schema. `src/operations/` keeps each operation's handler and result
+schema;
 `src/cli-command.ts` names the `{ signal }` context every handler receives. Domain logic
 remains in `src/` over `foundation.ts` and `media-process.ts`, while
 `src/index.ts` remains the package library entry.

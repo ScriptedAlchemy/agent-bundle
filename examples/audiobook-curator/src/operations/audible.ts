@@ -10,13 +10,12 @@ import {
   searchAudible,
   selectAudibleEdition,
   type AudibleCacheReceipt,
-  type AudibleRegion,
   type AudibleSearchReceipt,
   type AudibleSelectionReceipt,
 } from '../audible.ts';
 import type { CliCommandContext } from '../cli-command.js';
 import { readJson, writeReceipt } from '../foundation.ts';
-import { audibleRegions, audibleRegionSchema, parityReceiptSchema, pathSchema } from './schemas.ts';
+import { audibleRegionSchema, parityReceiptSchema } from './schemas.ts';
 
 const audibleEvidenceSchema = z.object({
   authorMatch: z.boolean(), durationDifferencePercent: z.number().nonnegative().optional(), language: z.string().optional(),
@@ -36,12 +35,6 @@ const audibleSelectResultSchema = parityReceiptSchema<AudibleSelectionReceipt>('
 const audibleCacheResultSchema = parityReceiptSchema<AudibleCacheReceipt>('audible-cache');
 
 /** Parses the CLI's comma-separated `--regions` list; shared with the routed `audible-search` command. */
-export const audibleRegionList = (value: string): readonly AudibleRegion[] => value.split(',').map((region) => {
-  const candidate = region.trim().toLowerCase();
-  if (!audibleRegions.includes(candidate as AudibleRegion)) throw new Error(`Unsupported Audible region: ${candidate}.`);
-  return candidate as AudibleRegion;
-});
-
 export const audibleOperations = Object.freeze({
   audibleSearch: {
     handler: searchAudible,

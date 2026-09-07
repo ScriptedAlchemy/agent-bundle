@@ -26,7 +26,7 @@ those features, not the build. This example has no hooks.
 
 - **The route tree is the application.** `agent-bundle.config.ts` declares identity, the Node
   runtime, and the two targets. File conventions discover the rest: 16 tool routes, one catalog
-  resource, and one curation prompt under `src/mcp/curator/`. There is no operation registry, no
+  resource, and one curation prompt under `src/mcp/curator/`. There is no route registry, no
   handwritten `src/mcp/curator.ts`, no per-operation server selector, and no `routes` setting.
 - **One operation, one command.** Every tool has a colocated
   [`<tool>.cli.ts` projection](../guide/authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command)

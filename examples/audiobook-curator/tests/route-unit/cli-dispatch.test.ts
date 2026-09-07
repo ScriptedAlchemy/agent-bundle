@@ -306,12 +306,13 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       expect(repeated.hosts).toEqual(['api.audible.de', 'api.audible.fr']);
 
       // The region list is split before the canonical schema validates, so a
-      // typo is a mapping failure, never a request.
+      // typo is a usage failure the tool's enum reports, never a request.
       const rejected = await withAudible(() => invokeCli(['audible-search', '--title', query.title, '--regions', 'us,mars']));
       expect(rejected.hosts).toEqual([]);
       expect(rejected.value.exitCode).toBe(2);
       expect(rejected.value.stdout).toBe('');
-      expect(rejected.value.stderr).toContain('Unsupported Audible region: mars.');
+      expect(rejected.value.stderr).toContain('Invalid value for --regions[1]');
+      expect(rejected.value.stderr).toContain('"mars"');
       expect(rejected.value.value).toBeUndefined();
     });
 
