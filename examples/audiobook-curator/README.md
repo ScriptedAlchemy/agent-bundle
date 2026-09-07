@@ -166,7 +166,8 @@ result-schema-validated JSON value followed by a newline: the canonical final
 `Agent.Result` value, never the Markdown presentation or an intermediate
 Suspense fallback, and byte for byte the `structuredContent` of the tool call.
 `--report` and `--receipt` are optional on the command line exactly as they are
-on the tool; a command that gets one still writes the receipt file. This is a
+on the tool; a command that gets one still writes the receipt file
+when it succeeds. This is a
 behavior change from the retired `src/cli/` tree, where `inventory --report`
 and `convert --receipt` were required: both commands now run without a receipt
 path and write no report or receipt file, and their exit codes, `--apply` gating, and error

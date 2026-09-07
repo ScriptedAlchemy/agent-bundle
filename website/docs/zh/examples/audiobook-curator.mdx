@@ -61,7 +61,7 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
 最终的 Markdown 文档——与 MCP 客户端作为文本内容收到的是同一份标题与报告。`--json` 选择机器输出，
 并输出一个经结果 schema 校验的 JSON 值加一个换行：这是最终的规范 `Agent.Result` 值，绝不是 Markdown
 表现，也绝不是中间的 Suspense 回退，并且与工具调用的 `structuredContent` 逐字节一致。`--report` 与
-`--receipt` 在命令行上和在工具上一样是可选的；传入了的命令仍会写出收据文件。这相对于已移除的
+`--receipt` 在命令行上和在工具上一样是可选的；传入了的命令在成功时仍会写出收据文件。这相对于已移除的
 `src/cli/` 树是一处行为变化：那里的 `inventory --report` 与 `convert --receipt` 是必填的；现在这两条命令
 不带收据路径也能运行且不写报告或收据文件，而退出码、`--apply` 把关与错误输出在两种情况下都不变。
 
