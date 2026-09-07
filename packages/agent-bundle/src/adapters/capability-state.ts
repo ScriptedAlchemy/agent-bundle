@@ -496,8 +496,17 @@ const clientInstall = (
     }
     return Object.freeze({ command: action.command, role: action.role! });
   });
-  if (validated.filter((action) => CLIENT_INSTALL_ANCHORS.includes(action.role)).length !== 1) {
+  const anchors = validated.filter((action) => CLIENT_INSTALL_ANCHORS.includes(action.role));
+  if (anchors.length !== 1) {
     throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block without exactly one ${CLIENT_INSTALL_ANCHORS.join(' or ')} action.`);
+  }
+  // Registration names the emitted tree where it lies, so it is a local
+  // directory by definition: a registered marketplace or repository entry
+  // would render as an install of something this artifact is not.
+  if (anchors[0]!.role === 'register' && install.source !== 'local-directory') {
+    throw new CapabilityStateError(
+      `The pinned ${target} table gives client ${id} a register action against a ${install.source} source (expected local-directory).`,
+    );
   }
   return Object.freeze({
     actions: Object.freeze(validated),

@@ -298,13 +298,18 @@ it('reads a shadow this build actually wrote as fact, not as a hypothetical', ()
   );
   expect(install).not.toContain('grok plugin install ./');
   // Copilot CLI checks the root manifest before .claude-plugin/plugin.json, so
-  // the composite root it shares with Claude is still read from the root (#728).
+  // the composite root it shares with Claude is still read from the root — but
+  // .mcp.json is its own published MCP location, so that surface moves (#728).
   expect(clientLineFor(install!, 'GitHub Copilot CLI')).toBe(
     '- **GitHub Copilot CLI** (@github/copilot 1.0.83, installed and exercised 2026-09-06) installs this'
-    + ' bundle as one plugin. Reads: `mcp.json`, `plugin.json`, `skills`.'
+    + ' bundle as one plugin. Reads: `plugin.json`, `skills`.'
     + ' Install: `copilot plugin install <plugin directory>`. Not loaded: hooks.'
+    + ' This build also writes `.mcp.json`, which it uses for mcp instead.'
     + ' A root that also carries `.plugin/plugin.json` uses it for manifest and still reads the rest.',
   );
+  // The stdio narrowing is a limit on the emitted document, and that document
+  // is not the one Copilot reads here.
+  expect(install).not.toContain('  - Partial `mcp`: 2026-09-06: the probe listed one stdio server');
 });
 
 /** The one rendered line for a client, so a claim is checked where it is made. */
@@ -356,13 +361,15 @@ it.each([
     skills: expected.skills,
   }).get('INSTALL.md')!;
 
-  // Copilot CLI: a local-directory install, and the one manifest location its
-  // published order puts ahead of the emitted root.
+  // Copilot CLI: a local-directory install, the one manifest location its
+  // published order puts ahead of the emitted root, and the MCP location it
+  // publishes for a plugin, neither of which a portable-only build writes.
   expect(clientLineFor(install, 'GitHub Copilot CLI')).toBe(
     '- **GitHub Copilot CLI** (@github/copilot 1.0.83, installed and exercised 2026-09-06) installs this'
     + ` bundle as one plugin. ${expected.reads}`
     + ' Install: `copilot plugin install <plugin directory>`. Not loaded: hooks.'
-    + ' A root that also carries `.plugin/plugin.json` uses it for manifest and still reads the rest.',
+    + ' A root that also carries `.plugin/plugin.json` uses it for manifest and still reads the rest.'
+    + ' A root that also carries `.mcp.json` uses it for mcp and still reads the rest.',
   );
   // VS Code registers the emitted directory where it lies; nothing is copied.
   expect(clientLineFor(install, 'VS Code (Copilot agent plugins)')).toBe(
@@ -398,7 +405,7 @@ it.each([
   const codewhaleRemote = '  - Partial `mcp`: 2026-09-06: CodeWhale narrows the standard at the plugin boundary.';
   const codewhaleHosts = 'declare exactly the normalized endpoint host set in capabilities.network_hosts.'
     + ' That declaration rides in extensions["net.codewhale"], which this projection writes only when the'
-    + ' author authors portable.extensions';
+    + ' author authors portable.extensions; a remote server emitted without it is a validation error';
   for (const claim of [copilotStdio, codewhaleRemote, codewhaleHosts]) {
     if (expected.withMcpDocument) expect(install).toContain(claim);
     else expect(install).not.toContain(claim);

@@ -709,8 +709,14 @@ it('holds the corrected client records to the source each one is pinned to', () 
   // Copilot CLI checks .plugin/plugin.json before the emitted root manifest and
   // the emitted root before .claude-plugin/plugin.json, and its published order
   // is for the manifest file alone.
-  expect(client('copilot-cli').discovery.shadowedBy).toEqual([{ path: '.plugin/plugin.json', surfaces: ['manifest'] }]);
+  // Its published locations are per component: the manifest order above, and
+  // .mcp.json as a plugin's MCP configuration, which the probe ran without.
+  expect(client('copilot-cli').discovery.shadowedBy).toEqual([
+    { path: '.plugin/plugin.json', surfaces: ['manifest'] },
+    { path: '.mcp.json', surfaces: ['mcp'] },
+  ]);
   expect(client('copilot-cli').discovery.evidence.join('\n')).toContain('checked in this order');
+  expect(client('copilot-cli').discovery.evidence.join('\n')).toContain('MCP configuration | .mcp.json, .github/mcp.json');
   // A listed stdio server is not a launched remote one.
   expect(client('copilot-cli').surfaces.mcp).toMatchObject({ state: 'degraded' });
   expect(client('copilot-cli').surfaces.mcp!.reason).toContain('no streamable-http server from an emitted mcp.json'
@@ -826,6 +832,10 @@ it('refuses a client record that claims a tier its own rows do not support', () 
   expect(() => clientCompatibilityFrom('portable', record({
     install: { actions: [{ command: 'demo plugins install <git url>', role: 'install' }], source: 'git' },
   }))).toThrow(/install block with source "git" \(expected local-directory or marketplace or repository\)/u);
+  // Registering the emitted tree where it lies is a local-directory action.
+  expect(() => clientCompatibilityFrom('portable', record({
+    install: { actions: [{ command: 'demo plugins register <owner>/<repository>', role: 'register' }], source: 'repository' },
+  }))).toThrow(/register action against a repository source \(expected local-directory\)/u);
   // A client that reads nothing this artifact emits cannot install it locally.
   expect(() => clientCompatibilityFrom('portable', record({
     discovery: { evidence: ['2026-09-06: read from the vendor docs.'] },
