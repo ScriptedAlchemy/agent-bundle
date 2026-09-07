@@ -1,104 +1,194 @@
 ---
-description: 'How an agent-bundle project becomes something a host can install: build, validate, and ship the one composite plugin root every selected host reads.'
+description: 'Build and validate a composite plugin, pack the generated npm root when needed, and give consumers an explicit installation path without a second compiler.'
 ---
 
 # Shipping a bundle
 
-`agent-bundle build` emits **one composite plugin root** — `artifact/` by default — and that root
-is the unit of distribution. There is no packaging step after the build and no per-host
-repackaging script: the root is the directory you copy, publish, or hand to a host CLI, and every
-host `targets` selected reads the same directory as its plugin root.
+There are two delivery forms, with the same compiled plugin inside them:
 
-```sh
-npx agent-bundle build --root . --output artifact
-```
+| Deliverable | Use it for |
+| --- | --- |
+| Composite artifact, `artifact/` by default | Copying a built plugin or following its generated native installation instructions. |
+| Generated npm root, `dist/` when package output is enabled | Packing an npm tarball with the artifact, package metadata, and any package-only entries. |
+
+Neither form needs a handwritten host repackager. npm still needs its normal **packaging step**;
+that step must use the generated package root, not the source project or a second implementation
+of the application.
+
+The following `npx --no-install` commands run the compiler already installed in the developer
+project. They deliberately do not fetch a package by the unqualified `agent-bundle` name. See
+[framework installation](../start/installation.mdx) for the supported preview/release selector.
 
 ## The pipeline
 
-| Step | Command | What it produces |
-| --- | --- | --- |
-| Build | `agent-bundle build` | One composite plugin root carrying every selected host projection, plus the `dist/` package build when the project declares `bin`/`lib`. |
-| Validate | `agent-bundle validate --artifact <root> --strict` | Content-addressed proof that the emitted bytes match the manifest, plus host-tool findings where a selected host publishes a validator. |
-| Install | `agent-bundle install <host> --from <root>` | The bundle registered in Claude, Codex, or Cursor — all three from the same root. |
+```sh
+npx --no-install agent-bundle build --output artifact
+npx --no-install agent-bundle validate --artifact artifact --strict
+```
 
-The build already validates the project before it writes anything, so a separate `validate` run
-against source is a fast pre-flight rather than a required stage. Validating the **artifact** is
-the interesting one, because it needs no project sources at all.
+| Step | What it establishes |
+| --- | --- |
+| Source validation / build | The authored declarations can be compiled into the selected projections. A successful build is not native-host execution evidence. |
+| Artifact validation | The bare composite artifact's files and digests agree with its manifest and the applicable validation rules. Host-tool checks depend on the selected validation options and available tools. |
+| Application and integration tests | The operations behave as expected; stronger packed-process/native-host claims need their own tests. |
+| Explicit installation | The chosen host receives the intended projection under its supported scope and ownership rules. |
+
+A source `validate` run is useful before a typecheck or while editing, but it is not a substitute
+for validating the deliverable. `validate --artifact` does not require the source project.
+Installation is a separate operator action; building a plugin must not register it globally.
 
 ### How the root compiles
 
-The build plans every selected host projection first and merges them by path into one tree —
-two projections may share a path only when their bytes agree (`AB4103`), and a component scoped
-to some hosts may not sit where another selected host would discover it (`AB4105`). It then
-lowers the compiled surfaces in at most two stages into one staged root, published atomically
-once the artifact validates:
+The compiler discovers the application, resolves selected host projections, compiles the
+required browser/server entries, and assembles one validated tree. Shared paths must have
+compatible bytes, and a host must not accidentally discover another host's components.
 
-1. **MCP Apps** — the browser environment, compiled through `@rsbuild/core`. Present only when
-   the project declares App routes, and always first: the MCP entries embed its HTML.
-2. **Agent-host surfaces** — the routed CLI bin, bundled scripts, hook wrappers, MCP stdio
-   entries, and each surface's react-server Flight worker, lowered together through **one Rslib
-   instance** (one Rsbuild environment per output, one Rspack multi-compiler). A surface reaches
-   its worker by file name at run time, so nothing orders the two within the stage, and each
-   surface keeps its own source evidence for the manifest.
-
-Compiled surfaces are built once and attributed to the **composite identity** — the selected
-hosts sorted and joined by `+`, such as `claude+codex` — never once per host. Both stages and the
-package-only library and authored-bin entries compose their bundler config the same way —
-profile, `tools.rsbuild`, `tools.rspack`, then the framework invariants — as described under
-[`tools`](../../reference/configuration.mdx#tools). `agent-bundle inspect --bundler` prints the
-lowered Rspack configuration of every compiled output; its `output.path` is the artifact output itself.
+The generated manifest, not a consumer's filename probe, identifies the executable, its launch
+arguments, and its owning server or App. Do not reconstruct a server command from the first
+argument in a native `mcp.json`, guess an `artifact/<host>/` directory, or rename generated
+executables after compilation. Advanced compiler details belong in
+[architecture](../concepts/architecture.mdx) and
+[artifact validation](./validation.mdx).
 
 ## What ships inside the root
 
-Amp's directory plugin lives at `.amp/plugins/<name>/`; other host manifests live in their
-dotfolders at the root (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, and the portable
-`plugin.json`), each pointing at its own hook and MCP
-documents, while `skills/`, `hooks/`, `mcp/`, `scripts/`, `bin/`, and `assets/` are shared and
-emitted once. The full tree and the per-host document locations are in
-[Targets and artifacts](../../reference/targets-artifacts.mdx).
+The composite includes the selected native manifests, shared component files, compiled entries,
+`agent-bundle.manifest.json`, persisted compile evidence, and generated `INSTALL.md` where
+applicable. It contains the plugin's actual names, not a template name consumers must replace.
+The [project-structure guide](../start/project-structure.mdx) shows the output layout.
 
-Whenever a built-in host is selected the root carries one generated `INSTALL.md`, a section per
-selected host, written with the bundle's **real** plugin and marketplace names — not placeholders
-— so the file can be followed verbatim.
+**The composite root and a host's native install root are not always identical.** Amp's directory
+plugin is nested at `.amp/plugins/<name>/`; the other built-in native projections read their
+manifests from the composite root. The framework's manifest-aware `install --from` command
+accepts the composite root and resolves the selected host's layout. Use its generated
+instructions rather than requiring end users to learn the nesting.
 
-The Claude and Codex projections always include local marketplace manifests, which is what lets
-their public CLIs install the root directly. Selecting `cursor` or `portable` adds a standalone
-`install.mjs`, because Cursor exposes marketplace management but no non-interactive plugin
-install verb.
+Selecting `cursor` or `portable` includes the standalone `install.mjs` path described in
+[host installation](./installation.mdx). That is a documented installation mechanism, not a
+universal claim that every portable client supports every native hook or App capability.
 
-`agent-bundle.manifest.json` records every emitted file with its SHA-256, so validation compares
-real bytes rather than checking that a path exists.
-
-Builds are reproducible: two builds of one unchanged source tree emit byte-identical artifacts —
-the same manifest and the same digests — whatever `--output` names, however `targets` is ordered,
-and however the per-build staging directory is named. The module identifiers the bundler writes
-into compiled entries derive from the project root only, never from the staging or output
-directory or from any absolute path of the building machine, so installed copies, preview
-packages, and [`doctor`](./installation.mdx) comparisons see the same bytes from the same source.
-The generated modules those identifiers name are served from memory under the reserved
-`.agent-bundle-virtual/` directory of the project root; the build refuses to compile while anything
-occupies that directory.
+Treat delivered code as immutable. Writable framework state is resolved independently of the
+installed code directory. Domain data, including refreshed sessions and application databases,
+needs a deliberate application-owned location and migration policy. Do not package live
+credentials, mutable caches, or operator data as assets.
 
 ## The npm-facing half
 
-A project that also ships as an npm package has a second output, `dist/`, but it is not a second
-plugin build. `dist/` is the npm package root: it contains the complete composite artifact,
-`package.json`, the standard package documentation files, and any package-only library or
-authored-bin entries described in [Package entries](../authoring/package-entries.mdx).
-`validate --artifact` and other artifact-only commands still take the bare composite artifact;
-the manifest-aware `install --from` path accepts the npm root.
+For a project with package output enabled, such as the MCP starter, `dist/` contains the complete
+npm root: the validated artifact copied unchanged, generated `package.json`, standard package
+documentation, and declared package-only bins/library output. There is no nested `artifact/`
+inside the tarball.
 
-For a generated routed CLI, the installed package's `bin` points directly at
-`bin/<name>.mjs`, copied unchanged from the validated artifact. The npm CLI therefore has the
-same commands — including `web` — and the same bytes as the artifact CLI. The tarball has no
-nested `artifact/` directory, and the framework does not compile a parallel `dist/bin/<name>.js`
-application or generate a package-relative installer bin.
+For a generated routed CLI, `package.json.bin` points directly at `bin/<name>.mjs` from the
+artifact. It has the same operation surface as the artifact CLI, including `web` when declared.
+An **explicit authored package bin** instead compiles to `bin/<name>.js`; these are different
+entry kinds, not two versions of the same routed CLI.
 
-`agent-bundle prepack` is the gate for that half: it runs the release build, dry-runs `npm pack`
-without scripts, and verifies packaged outputs, artifact hashes, bins, and versions.
+Run the framework gate, then pack the generated directory:
+
+```sh
+npx --no-install agent-bundle prepack --json
+npm pack ./dist --ignore-scripts
+```
+
+`prepack` performs the release build and validates the dry-run package inventory, entry paths,
+artifact hashes, versions, and declared runtime dependencies. The second command creates the
+actual tarball. `--ignore-scripts` here prevents pack-time scripts from rebuilding a different
+product; it is not a promise that consumer install scripts are ignored during installation.
+
+Check the generated `dist/package.json`, its `bin`/`exports`, and the tarball file list. Do not
+patch the generated manifest by hand. Update authored package/configuration inputs and rebuild.
+The starters are private development packages; an intentional public release also needs suitable
+authored package metadata and removal of `private: true` before rebuilding. This guide does not
+publish anything automatically.
+
+A static plugin distributed as a built directory does not need to invent a library or executable
+just to use native installation. See [package entries](../authoring/package-entries.mdx) when
+choosing npm delivery and its optional entry points.
+
+### Consumer install scripts and dependencies
+
+Build tools are not automatically runtime dependencies. Self-contained generated JavaScript
+must not depend on the source checkout, workspace aliases, or the consumer installing the
+compiler. A prebuilt payload or an explicitly retained consumer install script may have real
+runtime dependencies; declare those accurately instead of externalizing ordinary generated
+entries to make the package smaller.
+
+Do not carry source-relative shell scripts into the installed package by accident. The package
+builder supports a bounded relocation of documented script forms and diagnoses unsupported
+ones. A package that passes only with `--ignore-scripts` during consumer installation has not
+proved its promised install lifecycle. Use isolated fixtures when testing scripts with side
+effects; never use real credentials or global host configuration for that test.
+
+### An optional package-bound installer
+
+For a consumer-friendly `my-plugin-install install <host>` command, declare a package-only bin
+and delegate its implementation to the public framework entry. Merge this entry into the
+existing config rather than replacing unrelated entries:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'my-plugin', description: 'Project tools for an agent.' },
+  targets: ['claude', 'codex', 'cursor'],
+  bin: { 'my-plugin-install': './src/install-bin.ts' },
+});
+```
+
+```ts
+// src/install-bin.ts
+import { fileURLToPath } from 'node:url';
+import { runInstallCli } from 'agent-bundle/install';
+
+export const main = (argv: readonly string[]): Promise<number> =>
+  runInstallCli(argv, {
+    from: fileURLToPath(new URL('..', import.meta.url)),
+    name: 'my-plugin-install',
+  });
+```
+
+The parent-directory binding refers to the **emitted** `bin/` entry in the npm root. Run its
+built/installed form, not the source file as a substitute for an installation proof. The package
+build bundles the lifecycle implementation, so the consumer does not install the compiler just
+to use this bin.
+
+This is an opt-in entry, not an installer automatically added to every plugin. It reuses
+`install`, `uninstall`, and `doctor` with the package root bound once. There is no consumer-owned
+argv parser, native config merger, root-search loop, or private framework import. Supported
+flags and scopes are in [host installation](./installation.mdx).
+
+### Prove the installed package
+
+Install the actual tarball in a fresh temporary consumer and test its declared bin or named MCP
+server. Move or remove the source fixture, use a different working directory, and give it a
+separate writable state root. Confirm the expected tools and representative results. A test
+that launches the source tree's `artifact/` is useful, but it is not an npm-install test.
+
+Artifact-only commands such as `validate --artifact` take the **bare composite artifact**.
+The manifest-aware `install --from` path accepts an npm root as well and excludes npm-only
+metadata from host ownership comparisons. Do not interchange those roots merely because both
+contain `agent-bundle.manifest.json`.
+
+Use public [packed test helpers](../development/testing.mdx) and the canonical manifest rather
+than copying a private installer or native-document parser into the plugin's test harness.
+Native account authorization and host execution remain separately qualified evidence.
+
+## Install explicitly
+
+Consumers follow the delivered `INSTALL.md`, or invoke the package-bound installer when the
+plugin provides one. Developers who already have the compiler can use:
+
+```sh
+npx --no-install agent-bundle install claude --from artifact --scope user
+```
+
+Use only the intended host and scope. npm package installation is not host registration;
+framework build/prepack does not imply consent to modify a host. Read-only `doctor` and planned
+uninstall behavior are documented in [host installation](./installation.mdx).
 
 ## In this section
 
-- [Artifact validation](./validation.mdx) — source and artifact validation, and what each host's own tooling contributes.
-- [Host installation](./installation.mdx) — installing into Claude, Codex, and Cursor, and the install scopes each one accepts.
-- [Preview packages](./preview-packages.mdx) — the pkg.pr.new release channel that stands in for npm today.
+- [Artifact validation](./validation.mdx): source checks, artifact checks, and host validators.
+- [Host installation](./installation.mdx): native roots, scopes, receipts, replacement, and removal.
+- [Preview packages](./preview-packages.mdx): the current development distribution channel.

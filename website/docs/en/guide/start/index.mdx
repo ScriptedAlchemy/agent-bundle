@@ -1,95 +1,96 @@
 ---
-description: 'agent-bundle compiles one typed config into one installable plugin root for Claude Code, Codex, Cursor, and the portable Agent Plugins format.'
+description: 'Build one agent-host plugin with conventional routes, typed results, and framework-owned host projections, development, and packaging.'
 ---
 
 # Introduction
 
-agent-bundle compiles an agent plugin — Skills, hooks, MCP servers, and scripts, described
-by one typed config — into installable output for Amp, Claude Code, Codex, and Cursor, plus
-the portable Agent Plugins format. You write the plugin once; the compiler emits each host's
-manifests and wrappers into that root.
+Agent Bundle is a meta-framework for **building plugins for agent hosts**. Write your tools,
+Skills, hooks, and views once. The framework discovers conventional source files, builds the
+executable entries, and emits the manifests required by your selected hosts.
 
-Node.js 22.19 or later is required.
+Start with the [quick start](./quick-start.mdx): create a project, add a tool, see its rendered
+result in Workbench, and test it. You do not need to write an MCP server or learn the compiler's
+internal architecture first. The compiler and Workbench require Node.js 22.19 or later.
 
 ## The problem it solves
 
-Every agent host wants the same plugin expressed in its own layout: its own manifest
-filenames, its own placeholder spellings for the plugin install root, its own hook document
-shape, its own MCP server declaration. Writing that by hand means maintaining the same plugin
-several times and discovering the disagreements after installation.
+A **host** is the application loading the plugin, such as Claude Code, Codex, Cursor, or Amp.
+An **MCP server** exposes tools, resources, and prompts through the Model Context Protocol.
+An **MCP App** is a browser view associated with an MCP resource/tool. These are different parts
+of the system, not three names for your application.
 
-agent-bundle inverts that. Host-specific layout is the compiler's job, so it stays out of your
-source tree:
+Without the framework, a composite plugin can accumulate separate tool registries, native hook
+wrappers, CLI handlers, browser message plumbing, and installation scripts. Agent Bundle owns
+those integration boundaries so application code can concentrate on what the plugin does.
 
-```sh
-npx agent-bundle build --root .
+The useful analogy to a convention-based app framework is **a file declares a route**:
+
+```text
+src/mcp/status/tools/hello.tsx
+                 ↓
+       hello tool on the status server
+                 ↓
+  generated MCP entry · Workbench · tests
 ```
 
-That single command emits one composite root at `artifact/`: Amp's `.amp/plugins/<name>/`
-directory and the manifests of every other selected host (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, the portable
-`plugin.json`) over shared `skills/`, `hooks/`, `mcp/`, `bin/`, and `scripts/` directories,
-plus one `INSTALL.md`. `targets` selects which host projections the root carries — `amp`,
-`claude`, `codex`, `cursor`, `portable`; omitted, it selects `portable` alone. Amp installs its
-nested generated directory; the other hosts install the composite root.
+Add a colocated CLI projection to expose that same operation as a command. Add an App when it
+needs an interactive browser view. Neither requires a second implementation of the operation.
 
 ## What the config owns
 
-One `agent-bundle.config.ts` at the project root describes the whole plugin:
+A conventional project needs a small `agent-bundle.config.ts`:
 
 ```ts twoslash
 import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
-  plugin: { name: 'my-plugin', description: 'What it does.' }, // [!code highlight]
+  plugin: { name: 'my-plugin', description: 'Project tools for an agent.' },
   targets: ['claude', 'codex', 'cursor'],
-  skills: ['src/skills/*'],
-  hooks: { sessionStart: { handler: './src/session-start.ts' } },
-  mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
 });
 ```
 
-The same config also owns the npm package build — no second bundler config, no bin shims, no
-hand-rolled stdio lifecycles. `bin` and `lib` entries (or the conventions `src/cli.ts`,
-`src/index.ts`, and `src/mcp/<server-id>.ts`) emit executable `dist/bin/<name>.js` bundles and a
-library output beside the plugin root. An MCP entry that default-exports a server factory
-runs under a framework-owned stdio lifecycle. `tools.rsbuild` / `tools.rspack` is the one
-bundler escape hatch.
+The plugin name is its host-facing slug; the npm package name may differ. The release version
+comes from `package.json`. Target selection does not require repeating the source tree in config.
+Custom MCP servers, remote endpoints, prebuilt payloads, and package entries remain supported
+when the conventions do not fit; they are not required setup for your first tool.
+
+`targets` selects projections: `amp`, `claude`, `codex`, `cursor`, or `portable`. Omitted, it
+selects `portable` alone. A selected host does not necessarily support every component or live
+development feature. Consult [host capabilities](../../reference/targets-artifacts.mdx) before
+adding a host-specific surface.
 
 ## The authoring model
 
-agent-bundle has one newcomer model, and it fits on four lines:
+| Concept | What you write |
+| --- | --- |
+| Routes | Files under conventional roots such as `src/mcp/<server>/tools/`. The path supplies identity. |
+| Configuration | Project identity, selected hosts, policy, and explicit exceptions. |
+| Rendering | Rendered routes return `Agent.*` elements describing agent-facing content and structured results. Browser Apps use browser UI code. |
+| Context, when needed | `await agent()` inside a request gives access to framework-provided context and providers. Unavailable host information is not fabricated. |
 
-1. **Authored source lives under `src/`.** Skills, commands, rules, scripts, MCP routes, state,
-   and providers all have conventional `src/` roots. A path is an identity: a module at
-   `src/mcp/curator/tools/status.tsx` *is* the `status` tool of the `curator` server.
-2. **One small flat config.** `agent-bundle.config.ts` holds project identity, targets, and the
-   policy that no route file can own.
-3. **JSX means rendering.** An executable route is one async default Server Component that does
-   the work and returns `Agent.*` nodes. There is no public `execute`/`render` split.
-4. **Opt in to context.** Call `await agent()` inside that component only when you need host,
-   session, actor, workspace, capability, or state context.
+A static Skills plugin does **not** need a React runtime or an MCP server. A plain hook can use
+the public hook contract without JSX. Providers, state, and browser Apps are optional features,
+not boilerplate to copy into every project.
 
-Everything above that line is power-tier reference: custom and remote MCP server modes,
-prebuilt payloads, request-context providers, and the bundler escape hatch.
+The framework owns discovery, host translation, execution plumbing, devtools, and packaging.
+Your plugin still owns its domain services, authorization rules, storage model, and workflows.
+It does not need to turn its scheduler, database, or login flow into a framework subsystem.
 
 ## Evidence, not vibes
 
-A plugin that builds is not a plugin that works. agent-bundle ships separate proof levels —
-route-unit, in-memory MCP, CLI dispatch, packed stdio, packed with source deleted, and
-host-install — and each helper stamps the level it carried into its provenance. A pass at one
-level is never reported as a receipt for another, and an assertion that needs stronger evidence
-than the harness produced is `inconclusive` rather than silently passing.
+Use the scaffold's `check` command for its complete deterministic suite. A route test proves
+application behavior; a packed-process test additionally checks the installed executable;
+a native-host test checks the host integration. These are separate claims. See
+[testing](../development/testing.mdx) when adding coverage beyond the starter.
 
 ## Where to go next
 
-- [Installation](./installation.mdx) — install the preview tarballs that CI publishes today.
-- [Quick start](./quick-start.mdx) — scaffold a project, or write the config by hand.
-- [Project structure](./project-structure.mdx) — the conventional `src/` roots and the output layout.
-- [Compiler architecture](../concepts/architecture.mdx) — how one route becomes MCP, CLI, and hooks.
-- [Authoring](../authoring/index.mdx) — the configuration model and every authorable surface.
+- [Quick start](./quick-start.mdx): one tool from source file to visible result and test.
+- [Project structure](./project-structure.mdx): a composite plugin's authored files and the
+  distinct source, generated, package, and writable-state roots.
+- [Shipping a bundle](../distribution/index.mdx): build, validate, pack the generated npm root,
+  and install explicitly.
 
-The repository documents the same contracts in more depth:
-[Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md)
-is the whole authoring model on one screen, and
-[Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md)
-is the full package-build contract.
+[Installation](./installation.mdx) explains the framework preview channel.
+[Authoring](../authoring/index.mdx) and [compiler architecture](../concepts/architecture.mdx)
+are the detailed references, not prerequisites for the first working plugin.
