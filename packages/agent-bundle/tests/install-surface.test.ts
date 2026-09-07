@@ -194,6 +194,9 @@ it.each([
   {
     agentPlugins: 'installs this bundle as one plugin. Reads: `plugin.json`.',
     inventory: 'no component',
+    swivalPartial: false,
+    swivalTier: 'loads the components it recognizes without reading the manifest. This bundle emits none of'
+      + ' the paths it reads, so there is nothing to install there.',
     mcpServers: [],
     skills: [],
     skillsTier: 'loads the components it recognizes without reading the manifest. This bundle emits none of'
@@ -202,6 +205,10 @@ it.each([
   {
     agentPlugins: 'installs this bundle as one plugin. Reads: `plugin.json`, `skills`.',
     inventory: 'skills only',
+    swivalPartial: true,
+    swivalTier: 'loads the components it recognizes without reading the manifest. Reads: `skills`.'
+      + ' Register: `swival --skills-dir <plugin directory>/skills "<task>"`.'
+      + ' Not loaded: manifest, mcp, placeholders, hooks.',
     mcpServers: [],
     skills: [portableSkill],
     skillsTier: 'loads the components it recognizes without reading the manifest. Reads: `skills`.'
@@ -210,6 +217,11 @@ it.each([
   {
     agentPlugins: 'installs this bundle as one plugin. Reads: `mcp.json`, `plugin.json`.',
     inventory: 'MCP only',
+    swivalPartial: false,
+    // Swival's registration hands over the skill tree alone, so an MCP-only
+    // bundle carries nothing it reads and gets no command.
+    swivalTier: 'loads the components it recognizes without reading the manifest. This bundle emits none of'
+      + ' the paths it reads, so there is nothing to install there.',
     mcpServers: [portableServer],
     skills: [],
     skillsTier: 'loads the components it recognizes without reading the manifest. Reads: `mcp.json`.'
@@ -218,6 +230,10 @@ it.each([
   {
     agentPlugins: 'installs this bundle as one plugin. Reads: `mcp.json`, `plugin.json`, `skills`.',
     inventory: 'skills and MCP',
+    swivalPartial: true,
+    swivalTier: 'loads the components it recognizes without reading the manifest. Reads: `skills`.'
+      + ' Register: `swival --skills-dir <plugin directory>/skills "<task>"`.'
+      + ' Not loaded: manifest, mcp, placeholders, hooks.',
     mcpServers: [portableServer],
     skills: [portableSkill],
     skillsTier: 'loads the components it recognizes without reading the manifest. Reads: `mcp.json`, `skills`.'
@@ -234,6 +250,14 @@ it.each([
     + ` plugins documented as closed beta) ${expected.agentPlugins}`);
   expect(install).toContain('- **Qoder CLI** (docs retrieved 2026-09-06; no CLI version is published on'
     + ` any page) ${expected.skillsTier}`);
+  // A narrowed surface is a limit on a document; a limit on a document this
+  // build did not write is not a limit here.
+  expect(install).toContain('- **Swival** (docs retrieved 2026-09-06; no product version is published on'
+    + ` the documentation pages) ${expected.swivalTier}`);
+  const partial = '  - Partial `skills`: 2026-09-06: the emitted skills/ root is not a default location,'
+    + ' so it loads only once registered with --skills-dir';
+  if (expected.swivalPartial) expect(install).toContain(partial);
+  else expect(install).not.toContain(partial);
   // A client that reads nothing says so whatever the bundle carries.
   expect(install).toContain('- **Antigravity** (docs retrieved 2026-09-06; no product or CLI version is'
     + ' published on any page) loads nothing from this bundle as published.');
@@ -302,6 +326,11 @@ it('documents recorded Agent Plugins clients for the portable profile', () => {
   expect(install).toContain('**Antigravity**');
   // A client that reads the emitted tree where it lies is registered, not installed.
   expect(install).toContain('**Pi**');
+  // An instruction-and-skill host is recorded at the tier it actually reaches,
+  // in the location its own documentation scans (#703, #704, #710).
+  expect(install).toContain('**Cascade (Devin Desktop)**');
+  expect(install).toContain('**JetBrains Junie**');
+  expect(install).toContain('**Swival**');
   // Reading a document and running what it configures are separate claims.
   expect(install).toContain('`mcp` records that the client reads the emitted `mcp.json` as MCP configuration');
   // This fixture carries no component, so a client that reads only components
