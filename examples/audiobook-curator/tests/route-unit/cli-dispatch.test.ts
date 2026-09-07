@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { inputSchema as convertAudiobookInputSchema } from '../../src/mcp/curato
 import { inputSchema as inspectInputSchema, resultSchema as inspectResultSchema } from '../../src/mcp/curator/tools/inspect_sources.tsx';
 import { resultSchema as inventoryResultSchema } from '../../src/mcp/curator/tools/inventory_sources.tsx';
 import { resultSchema as audibleSearchResultSchema } from '../../src/mcp/curator/tools/search_audible.tsx';
+import { resultSchema as audibleSelectResultSchema } from '../../src/mcp/curator/tools/select_audible_edition.tsx';
 import { discoveryOperations } from '../../src/operations/discovery.ts';
 
 const directories: string[] = [];
@@ -146,6 +147,22 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       expect(run.exitCode).toBe(receipt.exitCode);
       expect(run.value).toEqual(receipt);
       expect(inventoryResultSchema.parse(JSON.parse(await readFile(report, 'utf8')))).toEqual(receipt);
+    });
+
+    it('runs inventory without --report, as the tool allows, and writes no report file', async () => {
+      // Migration note (#734): the retired `src/cli/inventory.tsx` required
+      // `--report`; the projected command shares the tool's optional field.
+      const { library, report } = await temporaryLibrary();
+      const run = await invokeCli(['inventory', library, '--strict', '--json']);
+      const receipt = inventoryResultSchema.parse(cliJson(run));
+      const tool = await invokeMcpTool('inventory_sources', { input: { source: library, strict: true } });
+
+      expect(run.exitCode).toBe(0);
+      expect(receipt).toMatchObject({ exitCode: 0, operation: 'inventory', summary: { errors: 0, files: 0 } });
+      expect(run.value).toEqual(receipt);
+      expect(tool.isError).toBe(false);
+      expect(withoutGeneratedAt(tool.structuredContent)).toEqual(withoutGeneratedAt(receipt));
+      await expect(readFile(report, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
     it('uses a failing inventory receipt exit code as the process exit code without ffprobe', async () => {
@@ -358,6 +375,15 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       expect(planned.stderr).not.toContain('--yes');
       expect(planned.value).toBeUndefined();
 
+      // Migration note (#734): the retired `src/cli/convert.tsx` required
+      // `--receipt`; the projected command shares the tool's optional field.
+      // With or without it, the failure is the same and no receipt is written.
+      const receipt = join(directory, 'convert-receipt.json');
+      const withReceipt = await invokeCli([...argv, '--receipt', receipt, '--json']);
+      expect(withReceipt.exitCode).toBe(1);
+      expect(withReceipt.stderr).toContain('Selection contains no audio files.');
+      await expect(readFile(receipt, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
       // The projection declares confirm: false, so --yes is not an option here.
       const confirmed = await invokeCli([...argv, '--yes']);
       expect(confirmed.exitCode).toBe(2);
@@ -367,6 +393,59 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       expect(help.stdout).toContain('MCP tool: curator:convert_audiobook');
       expect(help.stdout).toContain('--apply');
       expect(help.stdout).not.toContain('requires --yes');
+    });
+  });
+
+  describe('receipt paths are optional on the projected commands', () => {
+    const candidateReport = async (): Promise<{ readonly candidates: string; readonly directory: string }> => {
+      const { directory } = await temporaryLibrary();
+      const candidates = join(directory, 'candidates.json');
+      await writeFile(candidates, JSON.stringify({
+        candidates: [{
+          asin: 'B0CURATOR01',
+          authors: [{ name: 'Ada Author' }],
+          evidence: { authorMatch: true, languageMatch: true, narratorMatch: true, score: 100, strictIdentityMatch: true, titleMatch: true, unabridged: true },
+          narrators: [{ name: 'Nora Narrator' }],
+          region: 'us',
+          title: 'The Selected Edition',
+        }],
+        errors: [],
+        exitCode: 0,
+        generatedAt: '2026-09-02T18:00:00.000Z',
+        humanReviewRequired: true,
+        mutation: false,
+        operation: 'audible-search',
+        query: { title: 'The Selected Edition' },
+        reviewNote: 'Choose the matching edition.',
+      }));
+      return { candidates, directory };
+    };
+
+    it('records an Audible selection with and without --receipt and writes the file only when asked', async () => {
+      const { candidates, directory } = await candidateReport();
+      const receiptPath = join(directory, 'selection.json');
+      const argv = ['audible-select', '--candidate', '1', '--candidates', candidates, '--json'];
+
+      const without = await invokeCli(argv);
+      const withReceipt = await invokeCli([...argv, '--receipt', receiptPath]);
+      const tool = await invokeMcpTool('select_audible_edition', { input: { candidate: 1, candidates } });
+
+      for (const run of [without, withReceipt]) {
+        expect(run.exitCode).toBe(0);
+        expect(run.stderr).toBe('');
+        expect(run.routeId).toBe('tool:curator/select_audible_edition');
+        expect(audibleSelectResultSchema.parse(cliJson(run))).toMatchObject({
+          candidateNumber: 1,
+          humanReviewed: true,
+          mutation: false,
+          operation: 'audible-select',
+          selected: { asin: 'B0CURATOR01' },
+        });
+      }
+      expect(withoutGeneratedAt(cliJson(withReceipt))).toEqual(withoutGeneratedAt(cliJson(without)));
+      expect(withoutGeneratedAt(tool.structuredContent)).toEqual(withoutGeneratedAt(cliJson(without)));
+      expect(audibleSelectResultSchema.parse(JSON.parse(await readFile(receiptPath, 'utf8')))).toEqual(withReceipt.value);
+      expect((await readdir(directory)).filter((name) => name.endsWith('.json')).sort()).toEqual(['candidates.json', 'selection.json']);
     });
   });
 
