@@ -166,6 +166,13 @@ class RecordingService implements McpSessionRouteService {
     return id === this.session.id ? this.session : undefined;
   }
 
+  readonly launchQueries: unknown[] = [];
+
+  async launches(options: { readonly epochId: string; readonly serverName: string }): Promise<readonly { readonly launchId: string; readonly targets: readonly string[] }[]> {
+    this.launchQueries.push(options);
+    return options.serverName === 'weather' ? [{ launchId: 'launch-a', targets: ['claude', 'codex'] }] : [];
+  }
+
   async open(options: { readonly epochId: string; readonly serverName: string; readonly target: string }): Promise<McpSessionRouteSession> {
     this.opens.push(options);
     return this.session;
@@ -189,6 +196,27 @@ const readLines = async (response: Response, count: number): Promise<readonly un
   await reader.cancel();
   return lines;
 };
+
+it('lists the launches of one epoch and server from the query string alone', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const response = await fetch(`${started.url}/api/mcp/launches?epochId=epoch-a&serverName=weather`, { headers: headers() });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ epochId: 'epoch-a', launches: [{ launchId: 'launch-a', targets: ['claude', 'codex'] }], serverName: 'weather' });
+    expect(service.launchQueries).toEqual([{ epochId: 'epoch-a', serverName: 'weather' }]);
+
+    const missing = await fetch(`${started.url}/api/mcp/launches?epochId=epoch-a`, { headers: headers() });
+    expect(missing.status).toBe(400);
+    const extra = await fetch(`${started.url}/api/mcp/launches?epochId=epoch-a&serverName=weather&target=portable`, { headers: headers() });
+    expect(extra.status).toBe(400);
+    const posted = await fetch(`${started.url}/api/mcp/launches?epochId=epoch-a&serverName=weather`, { headers: headers(), method: 'POST' });
+    expect(posted.status).toBe(405);
+  } finally {
+    await started.close();
+  }
+});
 
 it('admits one positive session timeout with the immutable session snapshot', async () => {
   const service = new RecordingService();

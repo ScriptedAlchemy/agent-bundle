@@ -10,6 +10,7 @@ import {
 } from './mcp-app-binding-service.ts';
 import {
   createMcpAppBridge,
+  pendingMcpAppToolResult,
   type McpAppBridge,
   type McpAppBridgeBindingOperations,
   type McpAppBridgeCloseOptions,
@@ -59,10 +60,19 @@ export interface CreateMcpAppPreviewOptions {
   readonly host: McpAppPreviewHostContext;
   readonly input: McpAppJsonValue;
   readonly previewProfile: McpAppPreviewProfile;
-  readonly result: McpAppJsonValue;
+  /**
+   * Omitted while the opening call is still in flight (#751): the App receives
+   * its input and waits for the one terminal outcome `settle` publishes.
+   */
+  readonly result?: McpAppJsonValue;
   readonly sessionId: string;
   readonly toolName: string;
 }
+
+/** The one terminal outcome of an opening call the preview was created without. */
+export type McpAppPreviewTerminal =
+  | Readonly<{ readonly result: McpAppJsonValue }>
+  | Readonly<{ readonly cancelled: string }>;
 
 export interface McpAppPreview {
   readonly binding: McpAppBinding;
@@ -100,6 +110,8 @@ interface PreviewEntry {
   resource?: McpAppBridgeResourceResolution;
   preview?: McpAppPreview;
   readonly outbound: McpAppBridgeMessage[];
+  /** Created without a result and not yet settled. */
+  pendingTerminal: boolean;
   pendingTeardown?: McpAppBridgeMessage;
   teardownAckAccepted: boolean;
   actionCount: number;
@@ -257,7 +269,7 @@ export class McpAppPreviewService {
           this.#onBindingTeardown(event.binding.id);
         },
         previewProfile: options.previewProfile,
-        result: options.result,
+        result: options.result ?? pendingMcpAppToolResult,
         sessionId: options.sessionId,
         tool,
       });
@@ -275,6 +287,7 @@ export class McpAppPreviewService {
       const bridge = createMcpAppBridge({
         binding,
         consentAuthority,
+        deferInitialToolResult: options.result === undefined,
         host: {
           ...this.#host,
           context: hostContextRecord(options.host, toolDefinition),
@@ -312,6 +325,7 @@ export class McpAppPreviewService {
         closed: false,
         outbound,
         outboundBytes: 0,
+        pendingTerminal: options.result === undefined,
         tail: Promise.resolve(),
         teardownAckAccepted: false,
       };
@@ -369,6 +383,22 @@ export class McpAppPreviewService {
       this.#creates.delete(control);
       control.finish(cleanupFailure);
     }
+  }
+
+  /**
+   * Publishes the opening call's one terminal outcome to a binding created
+   * without a result. `false` for an unknown or closed binding, one created
+   * with its result, one already settled, or an outcome the bridge refused; a
+   * later outcome cannot become the result once one has been published.
+   */
+  async settle(bindingId: string, terminal: McpAppPreviewTerminal): Promise<boolean> {
+    const entry = this.#entries.get(bindingId);
+    if (entry === undefined || entry.closed || !entry.pendingTerminal) return false;
+    const published = 'result' in terminal
+      ? entry.bridge.publishToolResult(terminal.result)
+      : entry.bridge.publishToolCancelled(terminal.cancelled);
+    if (published) entry.pendingTerminal = false;
+    return published;
   }
 
   async receive(bindingId: string, action: unknown): Promise<boolean> {

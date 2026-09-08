@@ -93,6 +93,18 @@ runs and `GET /api/runtime/runs/<id>` reads one run.
 
 ## MCP operations and correlation
 
+`GET /api/mcp/launches?epochId=<epoch>&serverName=<server>` lists the App launches eligible for
+one server on a published epoch: `{ launchId, targets }` groups that share a launch identity,
+resolved from the artifact's declared projections with installed hosts consulted. The Workbench
+App workspace selects from this list rather than from the build's global targets.
+
+`POST /api/mcp/sessions/<session-id>/apps` accepts `input` without `result` to mount a preview
+for a call still in flight; the App then receives `ui/notifications/tool-input` only. `POST
+/api/mcp/apps/<binding-id>/result` with `{ result }` or `{ cancelled }` publishes that binding's
+single terminal notification (`tool-result` or `tool-cancelled`). It answers `accepted: false`
+for a binding already settled or created with a result, and 404 (`AB8022`) once the binding is
+closed.
+
 `POST /api/mcp/sessions/<session-id>/operations` keeps the existing operation union. A
 `tools/call` operation additionally accepts an optional top-level `correlationId` of at most 256
 characters. The browser cannot supply `_meta` directly; the foreground copies this value to

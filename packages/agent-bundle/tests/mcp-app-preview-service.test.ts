@@ -367,6 +367,42 @@ it('preserves input-result FIFO order across one bounded outbound slot', async (
   expect(preview.bridge.lifecycle).toBe('initialized');
 });
 
+it('defers the terminal notification for a preview created without a result until settle publishes one (#751)', async () => {
+  const service = serviceFor(authorityFor());
+  const preview = await service.create({ host, input: originalInput, previewProfile: 'portable', sessionId: 'session-weather', toolName: 'show-weather' });
+
+  // The App sees its input and then waits: no result placeholder is sent.
+  expect(await service.receive(binding.id, initialize)).toBe(true);
+  expect(await service.receive(binding.id, initialized)).toBe(true);
+  expect((await service.takeOutbound(binding.id)).map((message) => message.method ?? message.id)).toEqual(['initialize-weather', 'ui/notifications/tool-input']);
+
+  expect(await service.settle(binding.id, { result: originalResult })).toBe(true);
+  expect(await service.takeOutbound(binding.id)).toEqual([
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: originalResult },
+  ]);
+  // One outcome per call: a later cancellation is refused and nothing is sent.
+  expect(await service.settle(binding.id, { cancelled: 'too late' })).toBe(false);
+  expect(await service.takeOutbound(binding.id)).toEqual([]);
+  expect(await service.settle('binding-unknown', { cancelled: 'gone' })).toBe(false);
+  expect(preview.bridge.lifecycle).toBe('initialized');
+
+  // A cancelled call reaches the App as ui/notifications/tool-cancelled, even
+  // when it settles before the frame initializes (the bridge queues it).
+  const cancelled = serviceFor(authorityFor());
+  await cancelled.create({ host, input: originalInput, previewProfile: 'portable', sessionId: 'session-weather', toolName: 'show-weather' });
+  expect(await cancelled.settle(binding.id, { cancelled: 'Cancelled from the Workbench.' })).toBe(true);
+  expect(await cancelled.receive(binding.id, initialize)).toBe(true);
+  expect(await cancelled.receive(binding.id, initialized)).toBe(true);
+  expect((await cancelled.takeOutbound(binding.id)).map((message) => message.method ?? message.id)).toEqual([
+    'initialize-weather', 'ui/notifications/tool-input', 'ui/notifications/tool-cancelled',
+  ]);
+
+  // A preview created with its result has nothing left to settle.
+  const complete = serviceFor(authorityFor());
+  await createPreview(complete);
+  expect(await complete.settle(binding.id, { result: originalResult })).toBe(false);
+});
+
 it('creates document permission challenges server-side and remounts only after an approved exact decision', async () => {
   const service = serviceFor(authorityFor());
   const preview = await createPreview(service);

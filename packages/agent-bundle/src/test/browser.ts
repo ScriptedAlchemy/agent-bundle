@@ -2,6 +2,7 @@ import {
   createMcpAppBridge,
   type McpAppBridge,
   type McpAppBridgeBindingOperations,
+  pendingMcpAppToolResult,
   type McpAppBridgeHost,
   type McpAppBridgeLogEvent,
   type McpAppBridgeMessage,
@@ -114,7 +115,6 @@ export class BrowserAppTestError extends Error {
 const registrySymbol = Symbol.for(AGENT_BROWSER_TEST_REGISTRY_SYMBOL_KEY);
 const realm = globalThis as typeof globalThis & { [registrySymbol]?: AgentBrowserTestRegistry };
 let nextBindingId = 1;
-const pendingToolResult = Object.freeze({ content: Object.freeze([]) });
 
 const unavailableProvenance = (name: string): BrowserAppProvenance => ({
   name,
@@ -262,7 +262,7 @@ const bindingFor = (
     input: options.toolInput ?? {},
     previewProfile: selectedProfile(app, options.profile),
     resourceUri: app.resourceUri,
-    result: options.toolResult ?? pendingToolResult,
+    result: options.toolResult ?? pendingMcpAppToolResult,
     serverName,
     sessionId: `browser-app-session:${app.name}`,
     target: app.target,

@@ -96,7 +96,20 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
 
   async create(options: Parameters<McpAppRoutePreviewService['create']>[0]) {
     this.calls.push({ kind: 'create', options });
+    this.pendingTerminal = options.result === undefined;
     return this.preview;
+  }
+
+  pendingTerminal = false;
+
+  async settle(bindingId: string, terminal: Parameters<NonNullable<McpAppRoutePreviewService['settle']>>[1]): Promise<boolean> {
+    this.calls.push({ bindingId, kind: 'settle', terminal });
+    if (bindingId !== this.preview.binding.id || !this.pendingTerminal) return false;
+    this.pendingTerminal = false;
+    this.outbound.push('result' in terminal
+      ? { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: terminal.result }
+      : { jsonrpc: '2.0', method: 'ui/notifications/tool-cancelled', params: { reason: terminal.cancelled } });
+    return true;
   }
 
   async receive(bindingId: string, action: unknown): Promise<boolean> {
@@ -607,6 +620,67 @@ it('creates an App preview from only session-scoped JSON data', async () => {
   }
 });
 
+it('creates a pending App preview from input alone and settles its one terminal outcome (#751)', async () => {
+  const started = await startRoutes();
+  try {
+    const { result: _omitted, ...pending } = createBody();
+    const created = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
+      body: JSON.stringify(pending),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(created.status).toBe(200);
+    expect(started.service.calls).toEqual([{
+      kind: 'create',
+      options: { host, input: { city: 'Paris' }, previewProfile: 'portable', sessionId: 'session-a', toolName: 'show-weather' },
+    }]);
+
+    // A result without its input is malformed, as before.
+    const { input: _input, ...resultOnly } = createBody();
+    const malformed = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
+      body: JSON.stringify(resultOnly),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(malformed.status).toBe(400);
+
+    const settle = (body: unknown) => fetch(`${started.url}/api/mcp/apps/binding-a/result`, {
+      body: JSON.stringify(body),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    const badShape = await settle({ result: { ok: true }, cancelled: 'both' });
+    expect(badShape.status).toBe(400);
+    const badReason = await settle({ cancelled: '' });
+    expect(badReason.status).toBe(400);
+
+    const settled = await settle({ result: { content: [{ text: 'Sunny', type: 'text' }] } });
+    expect(settled.status).toBe(200);
+    await expect(settled.json()).resolves.toEqual({
+      accepted: true,
+      actions: [],
+      lifecycle: 'created',
+      messages: [{ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { content: [{ text: 'Sunny', type: 'text' }] } }],
+    });
+
+    // The outcome is final: a later cancellation is refused, not published.
+    const again = await settle({ cancelled: 'too late' });
+    expect(again.status).toBe(200);
+    await expect(again.json()).resolves.toEqual({ accepted: false, actions: [], lifecycle: 'created', messages: [] });
+
+    const wrongMethod = await fetch(`${started.url}/api/mcp/apps/binding-a/result`, { headers: headers() });
+    expect(wrongMethod.status).toBe(405);
+    const unknown = await fetch(`${started.url}/api/mcp/apps/binding-z/result`, {
+      body: JSON.stringify({ cancelled: 'gone' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(unknown.status).toBe(404);
+  } finally {
+    await started.close();
+  }
+});
+
 it('binds the host\'s own opening call when a create request omits input and result (#562)', async () => {
   // A result far past the 64 KiB request-body bound: the host holds it, so the
   // page never sends it back.
@@ -642,11 +716,12 @@ it('binds the host\'s own opening call when a create request omits input and res
     expect(openings).toEqual([undefined, 'page-7']);
 
     // Another tool, a session the host did not open, an opening the host no
-    // longer holds, a blank opening, or an opening sent alongside the
-    // Workbench's own call: none has a call to bind.
+    // longer holds, a blank opening, a result without its input, or an opening
+    // sent alongside the Workbench's own call: none has a call to bind. (Input
+    // alone is the Workbench's pending call, #751.)
     for (const body of [
       { host, previewProfile: 'portable', toolName: 'other-tool' },
-      { host, input: { city: 'Oslo' }, previewProfile: 'portable', toolName: 'show-weather' },
+      { host, previewProfile: 'portable', result: { content: [] }, toolName: 'show-weather' },
       { host, opening: 'stale-page', previewProfile: 'portable', toolName: 'show-weather' },
       { host, opening: '', previewProfile: 'portable', toolName: 'show-weather' },
       { host, input: { city: 'Oslo' }, opening: 'page-7', previewProfile: 'portable', result: { content: [] }, toolName: 'show-weather' },

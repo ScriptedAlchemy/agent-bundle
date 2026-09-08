@@ -160,7 +160,8 @@ export interface McpAppBridgeFallback {
   readonly input: McpAppJsonValue;
   readonly kind: 'fallback';
   readonly reason: McpAppBridgeFallbackReason;
-  readonly result: McpAppJsonValue;
+  /** Absent while the opening call is still in flight (`deferInitialToolResult`). */
+  readonly result?: McpAppJsonValue;
 }
 
 export type McpAppBridgeResourceResolution = McpAppBridgeResource | McpAppBridgeFallback;
@@ -169,6 +170,13 @@ export interface McpAppBridgeCloseOptions {
   readonly id: McpAppBridgeRequestId;
   readonly reason?: string;
 }
+
+/**
+ * The binding result of an opening call still in flight: an empty tool result
+ * the App never receives, since `deferInitialToolResult` leaves the terminal
+ * notification to `publishToolResult` or `publishToolCancelled`.
+ */
+export const pendingMcpAppToolResult: McpAppJsonValue = Object.freeze({ content: Object.freeze([]) });
 
 export interface CreateMcpAppBridgeOptions {
   readonly binding: McpAppBinding;
@@ -1404,7 +1412,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         input: cloneJson(binding.input),
         kind: 'fallback',
         reason,
-        result: cloneJson(binding.result),
+        ...(options.deferInitialToolResult === true ? {} : { result: cloneJson(binding.result) }),
       });
       if (isClosed()) return fallback('bridge-closed');
       if (!resourceIsCanonical) return fallback('missing-canonical-resource-uri');

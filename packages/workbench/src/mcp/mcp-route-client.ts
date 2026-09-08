@@ -72,6 +72,12 @@ export interface McpInspectorRouteStatus {
   readonly url?: string;
 }
 
+/** One materially distinct launch of a server and the sorted projections that share it; the first is its representative. */
+export interface McpRouteLaunch {
+  readonly launchId: string;
+  readonly targets: readonly string[];
+}
+
 export interface McpRouteCatalog {
   readonly prompts: readonly unknown[];
   readonly resourceTemplates: readonly unknown[];
@@ -759,6 +765,20 @@ export class McpRouteClient {
 
   async session(id: string): Promise<McpRouteSession> {
     return routeSession(await this.#json(this.#sessionPath(id)));
+  }
+
+  /** The epoch's projections that launch the server, grouped by launch identity (#747). */
+  async launches(epochId: string, serverName: string): Promise<readonly McpRouteLaunch[]> {
+    const query = new URLSearchParams({ epochId, serverName });
+    const response = asRecord(await this.#json(`/api/mcp/launches?${query.toString()}`));
+    return Object.freeze(asArray(response.launches).map((entry) => {
+      const launch = asRecord(entry);
+      const targets = asArray(launch.targets);
+      if (typeof launch.launchId !== 'string' || targets.length === 0 || !targets.every((target) => typeof target === 'string' && target.length > 0)) {
+        throw new McpRouteClientError('AB8019', 'MCP launch route returned an invalid launch.');
+      }
+      return Object.freeze({ launchId: launch.launchId, targets: Object.freeze(targets as string[]) });
+    }));
   }
 
   async connection(id: string): Promise<McpRouteConnection> {

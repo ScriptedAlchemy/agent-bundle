@@ -9,7 +9,10 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { browserLaunchOptions, browserTrace, buildWorkbench, workbenchUrl } from './support/workbench-e2e.ts';
-import { expectHeading } from './support/workbench-acceptance.ts';
+import { expectHeading, selectApplicationLeaf } from './support/workbench-acceptance.ts';
+import { copyExample } from './support/example-acceptance.ts';
+import { inspectWorkbenchSurface } from '../../agent-bundle/src/test/index.ts';
+import { applicationLeaves } from '../src/application/application-tree-model.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
@@ -180,6 +183,62 @@ const writeBundledAppProject = async (root: string): Promise<void> => {
       "  skills: ['src/skills/review'],",
       "  targets: ['portable'],",
       '});',
+      '',
+    ].join('\n')),
+  ]);
+};
+
+/**
+ * A conventional App server added to a copy of the `mcp-app` example (#751):
+ * its bound tool takes as long as its input says, and the App reports what it
+ * hears, so the test can see the input arrive before the outcome and the
+ * outcome arrive as a result, an error, or a cancellation.
+ */
+const writeLifecycleServer = async (root: string): Promise<void> => {
+  const server = join(root, 'src', 'mcp', 'lifecycle');
+  await Promise.all([mkdir(join(server, 'apps'), { recursive: true }), mkdir(join(server, 'tools'), { recursive: true })]);
+  await Promise.all([
+    writeFile(join(server, 'apps', 'lifecycle.html'), '<!doctype html><html><body><main id="view">waiting</main></body></html>\n'),
+    writeFile(join(server, 'apps', 'lifecycle.ts'), [
+      "import type { AppRouteConfig } from 'agent-bundle';",
+      "import { createAppClient } from 'agent-bundle/app';",
+      '',
+      "export const config = { resourceUri: 'ui://lifecycle-fixture/lifecycle.html', template: './lifecycle.html' } satisfies AppRouteConfig;",
+      '',
+      "const view = document.querySelector('#view')!;",
+      "const client = createAppClient({ appInfo: { name: 'lifecycle-app-fixture', version: '1.0.0' } });",
+      "client.onToolInput('tool:lifecycle/show-lifecycle', (input) => { view.textContent = `input:${JSON.stringify(input)}`; });",
+      "client.onToolResult('tool:lifecycle/show-lifecycle', (result) => { view.textContent = `result:${JSON.stringify(result)}`; });",
+      "client.onToolError('tool:lifecycle/show-lifecycle', (error) => { view.textContent = `error:${error.message}`; });",
+      "client.onToolCancelled((event) => { view.textContent = `cancelled:${event.reason ?? ''}`; });",
+      "void client.connect().then(() => { if (view.textContent === 'waiting') view.textContent = 'connected'; });",
+      '',
+    ].join('\n')),
+    writeFile(join(server, 'tools', 'show-lifecycle.tsx'), [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import React from 'react';",
+      "import type { ToolConfig, ToolRouteProps } from 'agent-bundle';",
+      "import { appResourceUri } from 'agent-bundle/routes';",
+      "import { z } from 'zod';",
+      '',
+      'export const config = {',
+      "  _meta: { ui: { resourceUri: appResourceUri('lifecycle') } },",
+      "  description: 'Waits as long as it is told, then succeeds or fails on request.',",
+      '} satisfies ToolConfig;',
+      '',
+      'export const inputSchema = z.object({ delayMs: z.number().int().min(0), fail: z.boolean().optional() });',
+      'export const resultSchema = z.object({ waited: z.number() });',
+      '',
+      'export default async function ShowLifecycle({ input }: ToolRouteProps<typeof inputSchema>) {',
+      '  await new Promise((resolve) => setTimeout(resolve, input.delayMs));',
+      '  return (',
+      '    <Agent.Result value={{ waited: input.delayMs }}>',
+      '      {input.fail === true',
+      '        ? <Agent.Error code="AB9001">Lifecycle failed on request.</Agent.Error>',
+      '        : <Agent.Text>{`Lifecycle waited ${String(input.delayMs)}ms.`}</Agent.Text>}',
+      '    </Agent.Result>',
+      '  );',
+      '}',
       '',
     ].join('\n')),
   ]);
@@ -587,6 +646,133 @@ e2e('renders a compiler-bundled App that calls the host through createAppClient'
   } finally {
     const serverCleanup = await Promise.allSettled(server === undefined ? [] : [server.close()]);
     const projectCleanup = await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
+    const failedCleanup = [...serverCleanup, ...projectCleanup].find((result) => result.status === 'rejected');
+    if (failedCleanup?.status === 'rejected') cleanupFailure = failedCleanup.reason;
+  }
+  if (testFailure !== undefined) throw testFailure;
+  if (cleanupFailure !== undefined) throw cleanupFailure;
+});
+
+e2e('runs the App workspace call lifecycle from pending to result, error, and cancellation on an eligible launch (#747, #751)', { timeout: 120_000 * timeScale }, async ({ page }) => {
+  let project: Awaited<ReturnType<typeof copyExample>> | undefined;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let testFailure: unknown;
+  let cleanupFailure: unknown;
+  const consoleErrors: string[] = [];
+  const pageErrors: Error[] = [];
+  const appRequests: AppRouteRequest[] = [];
+  try {
+    await buildWorkbench();
+    project = await copyExample('mcp-app');
+    await writeLifecycleServer(project.root);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const foregroundOrigin = server.url;
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text());
+    });
+    page.on('pageerror', (error) => pageErrors.push(error));
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.origin !== foregroundOrigin || !url.pathname.startsWith('/api/mcp/')) return;
+      appRequests.push({ body: requestBody(request.postData()), method: request.method(), path: `${url.pathname}${url.search}` });
+    });
+    const failedOperations: string[] = [];
+    page.on('response', (response) => {
+      const url = new URL(response.url());
+      if (response.status() >= 400 && url.origin === foregroundOrigin) failedOperations.push(`${String(response.status())} ${url.pathname}`);
+    });
+
+    const surface = await inspectWorkbenchSurface({ root: project.root });
+    const appLeaf = applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'app' && leaf.ref.server === 'lifecycle');
+    if (appLeaf === undefined) throw new Error('Expected the fixture to publish the lifecycle App leaf.');
+    await selectApplicationLeaf(page, foregroundOrigin, appLeaf);
+
+    // #747: the launch list is the dev server's judgement for this server on
+    // this build (declared targets grouped by launch identity, installed hosts
+    // consulted), not the build's global target digests; the session opens
+    // with the chosen launch's representative target.
+    const launchSelect = page.getByLabel('Launch');
+    await expect(launchSelect).toBeEnabled({ timeout: browserTimeout });
+    const launchesRequest = appRequests.find((request) => request.path.startsWith('/api/mcp/launches?'));
+    expect(launchesRequest?.path).toContain('serverName=lifecycle');
+    await expect(page.locator('.app-session-phase')).toHaveText('ready', { timeout: 30_000 * timeScale });
+    const chosenLaunch = await launchSelect.locator('option:checked').textContent();
+    expect(chosenLaunch).toContain('portable');
+    const openedSession = appRequests.find((request) => request.method === 'POST' && request.path === '/api/mcp/sessions');
+    expect(openedSession?.body).toMatchObject({ serverName: 'lifecycle', target: chosenLaunch?.split(' · ')[0] });
+
+    // Each call mounts a fresh preview; the newest App frame is the last one
+    // attached, and a closing predecessor may linger for a moment.
+    const appText = async (): Promise<string | undefined> => {
+      let text: string | undefined;
+      for (const frame of page.frames()) {
+        if (frame.url() !== 'about:blank') continue;
+        try {
+          const locator = frame.locator('#view');
+          if (await locator.count() === 1) text = await locator.textContent() ?? undefined;
+        } catch {
+          // The sandbox proxy replaces its inner frame once while installing the App document.
+        }
+      }
+      return text;
+    };
+    const outcome = page.getByTestId('app-call-outcome');
+    const preview = page.locator('iframe[title^="MCP App preview"]');
+
+    // #751 result: the preview mounts while the call is in flight, the App
+    // hears its input first, then the one result once the tool finishes.
+    await page.getByLabel('delayMs').fill('4000');
+    await page.getByRole('button', { name: 'Call tool and preview' }).click();
+    await expect(outcome.locator('summary')).toHaveText('Tool call pending', { timeout: browserTimeout });
+    await expect(preview).toBeVisible({ timeout: browserTimeout });
+    await expect.poll(appText, { timeout: browserTimeout }).toBe('input:{"delayMs":4000}');
+    expect(await outcome.locator('summary').textContent()).toBe('Tool call pending');
+    await expect(outcome.locator('summary')).toHaveText('Tool result', { timeout: 20_000 * timeScale });
+    await expect.poll(appText, { timeout: browserTimeout }).toBe('result:{"waited":4000}');
+    const settles = () => appRequests.filter((request) => request.method === 'POST' && request.path.endsWith('/result'));
+    expect(settles()).toHaveLength(1);
+    expect(settles()[0]?.body).toMatchObject({ result: { structuredContent: { waited: 4000 } } });
+    expect(appRequests.filter((request) => request.method === 'POST' && /\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(request.path)).at(-1)?.body).not.toHaveProperty('result');
+
+    // #751 error: a tool error is still the call's one result; the App's
+    // error listener sees it.
+    await page.getByLabel('delayMs').fill('0');
+    await page.getByRole('checkbox', { name: 'fail' }).check();
+    await page.getByRole('button', { name: 'Call tool and preview' }).click();
+    await expect(outcome.locator('summary')).toHaveText('Tool result', { timeout: browserTimeout });
+    await expect.poll(appText, { timeout: browserTimeout }).toBe('error:The opening tool returned an error.');
+    expect(settles()).toHaveLength(2);
+    await page.getByRole('checkbox', { name: 'fail' }).uncheck();
+
+    // #751 cancel: cancelling the pending call tells the App once and never
+    // lets a late result overwrite it.
+    await page.getByLabel('delayMs').fill('60000');
+    await page.getByRole('button', { name: 'Call tool and preview' }).click();
+    await expect.poll(appText, { timeout: browserTimeout }).toBe('input:{"delayMs":60000,"fail":false}');
+    await page.getByRole('button', { name: 'Cancel call' }).click();
+    await expect(outcome.locator('summary')).toHaveText('Tool call cancelled', { timeout: browserTimeout });
+    await expect(outcome).toContainText('Cancelled from the Workbench.');
+    await expect.poll(appText, { timeout: browserTimeout }).toBe('cancelled:Cancelled from the Workbench.');
+    expect(settles()).toHaveLength(3);
+    expect(settles()[2]?.body).toEqual({ cancelled: 'Cancelled from the Workbench.' });
+    await expect(page.getByRole('button', { name: 'Call tool and preview' })).toBeEnabled();
+    await expect(page.getByRole('alert').filter({ hasText: 'failed' })).toHaveCount(0);
+    // The cancelled call is the only failed foreground response: the session
+    // route answers the aborted operation with its 502 diagnostic, which Chrome
+    // logs as a failed resource load. Nothing else may fail.
+    expect(failedOperations).toEqual([expect.stringMatching(/^502 \/api\/mcp\/sessions\/[^/]+\/operations$/u)]);
+    expect(consoleErrors).toEqual(['Failed to load resource: the server responded with a status of 502 (Bad Gateway)']);
+    expect(pageErrors).toEqual([]);
+  } catch (error) {
+    testFailure = error;
+  } finally {
+    const serverCleanup = await Promise.allSettled(server === undefined ? [] : [server.close()]);
+    const projectCleanup = await Promise.allSettled(project === undefined ? [] : [project.release()]);
     const failedCleanup = [...serverCleanup, ...projectCleanup].find((result) => result.status === 'rejected');
     if (failedCleanup?.status === 'rejected') cleanupFailure = failedCleanup.reason;
   }

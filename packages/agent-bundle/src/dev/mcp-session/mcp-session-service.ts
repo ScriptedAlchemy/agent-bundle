@@ -20,6 +20,7 @@ import { DiagnosticError } from '../../core/diagnostics.ts';
 import { joinArtifact } from '../../core/paths.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import { runPromise } from '../../effect/boundary.ts';
+import { webLaunchGroups, type WebLaunchGroup } from '../web-host-launch-selection.ts';
 import { liftPromise, liftTry } from '../../effect/lift.ts';
 import { readFileString, unwrapPlatformError, type PlatformRun } from '../../effect/platform.ts';
 import { platformRunOf } from '../platform-run.ts';
@@ -489,6 +490,31 @@ export class McpSessionService {
       void this.closeSession(id).catch(() => undefined);
     };
     return false;
+  }
+
+  /**
+   * The projections of one published epoch that launch the named server,
+   * grouped by normalized launch identity (#747): the App workspace offers
+   * these, not every projection the build ships, and opens a session with one
+   * group's representative target. Resolved from the artifact manifest and
+   * host MCP documents alone; no candidate is spawned to find out.
+   */
+  async launches(options: { readonly epochId: string; readonly serverName: string }): Promise<readonly WebLaunchGroup[]> {
+    if (this.#closed) throw McpSessionError.serviceClosed();
+    if (options.serverName.trim().length === 0) throw McpSessionError.invalidServerName();
+    const reference = await this.#epochStore.acquireEpochReference(options.epochId);
+    try {
+      const manifest = requireArtifactManifest(await readArtifactManifest(reference.root));
+      return await webLaunchGroups({
+        artifactRoot: reference.root,
+        declaredTargets: manifest.projections.map((projection) => projection.host),
+        registry: this.#registry,
+        serverName: options.serverName,
+        workspaceRoot: this.#projectRoot,
+      });
+    } finally {
+      await reference.close();
+    }
   }
 
   async closeSession(id: McpSessionId): Promise<boolean> {

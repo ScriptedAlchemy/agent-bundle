@@ -12,6 +12,7 @@ import {
   type McpAppPreview as McpAppPreviewResponse,
   type McpAppPreviewCreateRequest,
   type McpAppPreviewProfile,
+  type McpAppPreviewTerminal,
   type McpAppRelayFrame,
   type McpAppRouteClose,
   type McpAppRouteMessages,
@@ -49,6 +50,7 @@ export interface McpAppPreviewClient {
   decideConsent?(bindingId: string, challengeId: string, approved: boolean): Promise<McpAppConsentDecision>;
   forceClose(bindingId: string): Promise<boolean>;
   message(bindingId: string, message: McpAppJsonValue, signal?: AbortSignal): Promise<McpAppRouteMessages>;
+  settle?(bindingId: string, terminal: McpAppPreviewTerminal): Promise<McpAppRouteMessages>;
 }
 
 export interface McpAppFrameRelayLike {
@@ -68,7 +70,11 @@ export interface McpAppPreviewControllerOptions {
   readonly host: McpAppHostContext;
   readonly input: McpAppJsonValue;
   readonly previewProfile?: McpAppPreviewProfile;
-  readonly result: McpAppJsonValue;
+  /**
+   * Omitted while the opening call is in flight (#751): the App renders from
+   * its input and `settle` publishes the one terminal outcome later.
+   */
+  readonly result?: McpAppJsonValue;
   readonly sessionId: string;
   readonly toolName: string;
 }
@@ -76,7 +82,10 @@ export interface McpAppPreviewControllerOptions {
 export interface McpAppPreviewFallback {
   readonly input: McpAppJsonValue;
   readonly reason: string;
-  readonly result: McpAppJsonValue;
+  /** Absent while the opening call is still pending or once it was cancelled. */
+  readonly result?: McpAppJsonValue;
+  /** The reason the opening call was cancelled instead of producing a result. */
+  readonly cancelled?: string;
 }
 
 type McpAppArtifactPreviewState =
@@ -128,6 +137,8 @@ export type McpAppCanonicalResource = McpAppJsonObject & Readonly<{
 export interface McpAppPreviewProps extends Omit<McpAppPreviewControllerOptions, 'frameRelayFactory'> {
   readonly frameWindow?: McpAppFrameWindow;
   readonly frameRelayFactory?: McpAppFrameRelayFactory;
+  /** The opening call's outcome once it lands, for a preview mounted without `result`. */
+  readonly terminal?: McpAppPreviewTerminal;
   readonly title?: string;
 }
 
@@ -225,18 +236,35 @@ const canonicalResource = (value: McpAppJsonValue): McpAppCanonicalResource | un
 const fallbackFor = (
   resource: McpAppJsonValue | undefined,
   input: McpAppJsonValue,
-  result: McpAppJsonValue,
+  outcome: McpAppPreviewTerminal | undefined,
   reason = 'invalid-resource',
 ): McpAppPreviewFallback => {
+  const cancelled = outcome !== undefined && 'cancelled' in outcome ? { cancelled: outcome.cancelled } : {};
   if (resource !== undefined && isRecord(resource) && resource.kind === 'fallback' && typeof resource.reason === 'string') {
+    const fallbackResult = resource.result ?? resultOf(outcome);
     return Object.freeze({
       input: resource.input ?? input,
       reason: resource.reason,
-      result: resource.result ?? result,
+      ...(fallbackResult === undefined ? {} : { result: fallbackResult }),
+      ...cancelled,
     });
   }
-  return Object.freeze({ input, reason, result });
+  return Object.freeze({ input, reason, result: resultOf(outcome), ...cancelled });
 };
+
+/** The route settled the binding but this frame could not take the terminal message; nothing to retry. */
+export class McpAppOutcomeDeliveryError extends Error {
+  constructor() {
+    super('The App frame could not receive the outcome.');
+    this.name = 'McpAppOutcomeDeliveryError';
+  }
+}
+
+const resultOf = (outcome: McpAppPreviewTerminal | undefined): McpAppJsonValue | undefined =>
+  outcome !== undefined && 'result' in outcome ? outcome.result : undefined;
+
+const fallbackOutcome = (fallback: McpAppPreviewFallback): string =>
+  fallback.cancelled !== undefined ? `Cancelled: ${fallback.cancelled}` : fallback.result === undefined ? 'Pending…' : json(fallback.result);
 
 const canonicalUiResourceUri = (value: McpAppJsonValue): boolean => {
   if (typeof value !== 'string' || value.length === 0) return false;
@@ -405,7 +433,7 @@ const prepareRuntimePreviewSeed = (options: McpAppRuntimePreviewProps): RuntimeP
     client: options.client,
     createBridgeFactory: options.createBridgeFactory,
     evidence: runtimeEvidence(options),
-    fallback: fallbackFor(undefined, input, result),
+    fallback: fallbackFor(undefined, input, Object.freeze({ result })),
     input,
     registrar: options.registerLifecycle,
     result,
@@ -448,23 +476,23 @@ const runtimeErrorState = (fallback: McpAppPreviewFallback, error: unknown, phas
 const isRuntimeState = (state: McpAppPreviewControllerState): state is McpAppRuntimePreviewState =>
   'kind' in state && state.kind === 'runtime';
 
-const stateFor = (preview: McpAppPreviewResponse, input: McpAppJsonValue, result: McpAppJsonValue): McpAppPreviewState => {
+const stateFor = (preview: McpAppPreviewResponse, input: McpAppJsonValue, outcome: McpAppPreviewTerminal | undefined): McpAppPreviewState => {
   const resource = canonicalResource(preview.resource);
   if (preview.frame !== undefined && resource !== undefined && hasCanonicalAppsProfile(preview.profile)) {
     return Object.freeze({ phase: 'ready', preview, resource });
   }
-  return Object.freeze({ fallback: fallbackFor(preview.resource, input, result), phase: 'fallback', preview });
+  return Object.freeze({ fallback: fallbackFor(preview.resource, input, outcome), phase: 'fallback', preview });
 };
 
 const createRequest = (
   options: McpAppPreviewControllerOptions,
   input: McpAppJsonValue,
-  result: McpAppJsonValue,
+  result: McpAppJsonValue | undefined,
 ): McpAppPreviewCreateRequest => Object.freeze({
   host: options.host,
   input,
   previewProfile: options.previewProfile ?? 'portable',
-  result,
+  ...(result === undefined ? {} : { result }),
   toolName: options.toolName,
 });
 
@@ -479,7 +507,10 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   readonly #frameRelayFactory: McpAppFrameRelayFactory | undefined;
   readonly #input: McpAppJsonValue;
   readonly #request: McpAppPreviewCreateRequest | undefined;
-  readonly #result: McpAppJsonValue;
+  /** The opening call's outcome as this preview knows it; absent while the call is still in flight. */
+  #outcome: McpAppPreviewTerminal | undefined;
+  /** The one terminal publish in flight or accepted; cleared when it failed so the outcome can be offered again. */
+  #settling: Promise<boolean> | undefined;
   readonly #runtime: RuntimePreviewDependencies | undefined;
   readonly #runtimeEvidence: RuntimePreviewEvidence | undefined;
   readonly #runtimeFallback: McpAppPreviewFallback | undefined;
@@ -516,7 +547,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
       });
       this.#runtimeEvidence = seed.evidence;
       this.#input = seed.input;
-      this.#result = seed.result;
+      this.#outcome = Object.freeze({ result: seed.result });
       this.#runtimeFallback = seed.fallback;
       this.#runtimeLifecycle = Object.freeze({ close: () => this.close() });
       this.#runtimeRendererRef = (handle) => {
@@ -542,8 +573,9 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     this.#closeTimeoutMs = options.closeTimeoutMs;
     this.#frameRelayFactory = options.frameRelayFactory;
     this.#input = detachedJson(options.input);
-    this.#result = detachedJson(options.result);
-    this.#request = createRequest(options, this.#input, this.#result);
+    this.#outcome = options.result === undefined ? undefined : Object.freeze({ result: detachedJson(options.result) });
+    this.#settling = options.result === undefined ? undefined : Promise.resolve(false);
+    this.#request = createRequest(options, this.#input, resultOf(this.#outcome));
     this.#sessionId = options.sessionId;
   }
 
@@ -577,6 +609,46 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     return bindingId === undefined || this.#closed || list === undefined || client === undefined ? Object.freeze([]) : list.call(client, bindingId);
   }
 
+  /**
+   * Publishes the opening call's one terminal outcome to a preview created
+   * without `result` (#751). Waits for the binding to exist; `false` when there
+   * is nothing to settle (a second outcome, a closed preview, one created with
+   * its result). A publish the route refused or that threw rejects and leaves
+   * the preview unsettled — mounted as it was — so the caller can show the
+   * failure and offer the same outcome again. Once the route accepted it the
+   * binding is settled for good, so a frame that could not take the message
+   * rejects with `McpAppOutcomeDeliveryError` and nothing is offered again.
+   * ponytail: a response lost after the route accepted reads as a refusal on
+   * retry; replaying the accepted terminal would need the route to retain it.
+   */
+  async settle(terminal: McpAppPreviewTerminal): Promise<boolean> {
+    if (this.#settling !== undefined || this.#closed || this.#runtime !== undefined) return false;
+    this.#settling = this.#publishTerminal(terminal);
+    try {
+      return await this.#settling;
+    } catch (error) {
+      if (!(error instanceof McpAppOutcomeDeliveryError)) this.#settling = undefined;
+      throw error;
+    }
+  }
+
+  async #publishTerminal(terminal: McpAppPreviewTerminal): Promise<boolean> {
+    await this.#startPromise;
+    const preview = this.#preview;
+    const client = this.#client;
+    const settle = client?.settle;
+    if (preview === undefined || this.#closed || settle === undefined || client === undefined) return false;
+    const response = await settle.call(client, preview.bindingId, terminal);
+    if (this.#closed) return false;
+    if (!response.accepted) throw new Error('The App preview did not accept the outcome.');
+    this.#outcome = 'result' in terminal ? Object.freeze({ result: detachedJson(terminal.result) }) : terminal;
+    this.#setState(stateFor(preview, this.#input, this.#outcome));
+    if (response.messages.length > 0 && this.#relay?.deliverHostMessages?.(response.messages) !== true) {
+      throw new McpAppOutcomeDeliveryError();
+    }
+    return true;
+  }
+
   async decideConsent(challengeId: string, approved: boolean): Promise<boolean> {
     const previous = this.#preview;
     const client = this.#client;
@@ -595,7 +667,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
       return false;
     }
     this.#preview = decision.preview;
-    this.#setState(stateFor(decision.preview, this.#input, this.#result));
+    this.#setState(stateFor(decision.preview, this.#input, this.#outcome));
     return true;
   }
 
@@ -605,7 +677,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     if (preview === undefined || preview.frame?.documentPolicy?.revision !== revision || this.#closed) return false;
     this.#pendingDocumentPreview = undefined;
     this.#preview = preview;
-    this.#setState(stateFor(preview, this.#input, this.#result));
+    this.#setState(stateFor(preview, this.#input, this.#outcome));
     return true;
   }
 
@@ -637,11 +709,11 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
       const preview = await client.create(sessionId, request);
       this.#preview = preview;
       if (this.#closed) return;
-      this.#setState(stateFor(preview, this.#input, this.#result));
+      this.#setState(stateFor(preview, this.#input, this.#outcome));
     } catch (error) {
       if (!this.#closed) {
         this.#setState(Object.freeze({
-          fallback: fallbackFor(undefined, this.#input, this.#result, 'preview-error'),
+          fallback: fallbackFor(undefined, this.#input, this.#outcome, 'preview-error'),
           message: messageFor(error),
           phase: 'error',
         }));
@@ -674,14 +746,14 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   }
 
   #runtimeFailure(reason: string, error: unknown, phase: 'error' | 'cleanup-failed' = 'error'): void {
-    this.#setState(runtimeErrorState(fallbackFor(undefined, this.#input, this.#result, reason), error, phase));
+    this.#setState(runtimeErrorState(fallbackFor(undefined, this.#input, this.#outcome, reason), error, phase));
   }
 
   async #startRuntime(): Promise<void> {
     const runtime = this.#runtime;
     const request = this.#runtimeRequest();
     if (runtime === undefined || request === undefined) {
-      if (!this.#closed) this.#setState(runtimeFallbackState(this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#result)));
+      if (!this.#closed) this.#setState(runtimeFallbackState(this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#outcome)));
       return;
     }
     try {
@@ -692,7 +764,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
         return;
       }
       if (!this.#runtimeReady(preview)) {
-        if (!this.#closed) this.#setState(runtimeFallbackState(this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#result)));
+        if (!this.#closed) this.#setState(runtimeFallbackState(this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#outcome)));
         await this.#cleanupRuntime();
         return;
       }
@@ -719,7 +791,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
       this.#setState(Object.freeze({
         bridgeFactory,
         documentPolicy: policy,
-        fallback: this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#result),
+        fallback: this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#outcome),
         kind: 'runtime',
         phase: 'ready',
         preview,
@@ -814,7 +886,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   #relayError(error: unknown): void {
     if (this.#closed) return;
     this.#setState(Object.freeze({
-      fallback: fallbackFor(this.#preview?.resource, this.#input, this.#result, 'preview-error'),
+      fallback: fallbackFor(this.#preview?.resource, this.#input, this.#outcome, 'preview-error'),
       message: messageFor(error),
       phase: 'error',
     }));
@@ -1140,6 +1212,7 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
 export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewProps): React.ReactNode {
   const runtimeProps = isRuntimePreviewProps(props) ? props : undefined;
   const artifactProps = isRuntimePreviewProps(props) ? undefined : props;
+  const terminal = artifactProps?.terminal;
   const controller = useRef<McpAppPreviewController<McpAppPreviewControllerState> | undefined>(undefined);
   const [runtimeOwner, setRuntimeOwner] = useState<RuntimePreviewComponentOwner | undefined>(undefined);
   const latestRuntimeProps = useRef<McpAppRuntimePreviewProps | undefined>(undefined);
@@ -1244,6 +1317,19 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
     };
   }, [artifactProps?.client, artifactProps?.closeTimeoutMs, artifactProps?.host, artifactProps?.input, artifactProps?.previewProfile, artifactProps?.result, artifactProps?.sessionId, artifactProps?.toolName, frameRelayFactory, runtimeOwner]);
 
+  // The opening call's outcome lands once; the controller refuses any second
+  // one. A publish that failed is shown here and can be offered again.
+  const [settleError, setSettleError] = useState<{ readonly message: string; readonly retryable: boolean }>();
+  const offerTerminal = (outcome: McpAppPreviewTerminal): void => {
+    setSettleError(undefined);
+    controller.current?.settle(outcome).catch((error: unknown) => {
+      setSettleError({ message: messageFor(error), retryable: !(error instanceof McpAppOutcomeDeliveryError) });
+    });
+  };
+  useEffect(() => {
+    if (terminal !== undefined) offerTerminal(terminal);
+  }, [terminal]);
+
   useEffect(() => {
     if (runtimeController !== undefined || isRuntimeState(state) || state.phase !== 'ready' || browserWindow === undefined || iframe.current === null) return;
     controller.current?.attachFrame(iframe.current, browserWindow);
@@ -1274,7 +1360,7 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
           <section aria-label="MCP App fallback" className="mcp-app-preview__fallback">
             <p role="status">Interactive App rendering is unavailable ({fallback.reason}). Showing the ordinary tool result instead.</p>
             <details open><summary>Tool input</summary><pre>{json(fallback.input)}</pre></details>
-            <details open><summary>Tool result</summary><pre>{json(fallback.result)}</pre></details>
+            <details open><summary>Tool result</summary><pre>{fallbackOutcome(fallback)}</pre></details>
           </section>
         )}
         {runtimeState?.phase === 'ready' && runtimeController !== undefined && runtimeOwner !== undefined && runtimeController.runtimeRendererProps !== undefined ? <>
@@ -1296,7 +1382,7 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
           />
           <section aria-label="Runtime App result" className="mcp-app-preview__fallback">
             <details open><summary>Tool input</summary><pre>{json(runtimeState.fallback.input)}</pre></details>
-            <details open><summary>Tool result</summary><pre>{json(runtimeState.fallback.result)}</pre></details>
+            <details open><summary>Tool result</summary><pre>{fallbackOutcome(runtimeState.fallback)}</pre></details>
           </section>
         </> : null}
       </section>
@@ -1311,11 +1397,15 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
       <header className="mcp-app-preview__header"><h2>{title}</h2>{profile}</header>
       {artifactState.phase === 'loading' ? <p role="status">Creating MCP App preview…</p> : null}
       {artifactState.phase === 'error' ? <p role="alert">{artifactState.message}</p> : null}
+      {settleError === undefined || terminal === undefined ? null : <p role="alert">
+        The App did not receive the call's outcome: {settleError.message}{' '}
+        {settleError.retryable ? <button onClick={() => offerTerminal(terminal)} type="button">Retry</button> : null}
+      </p>}
       {fallback === undefined ? null : (
         <section aria-label="MCP App fallback" className="mcp-app-preview__fallback">
           <p role="status">Interactive App rendering is unavailable ({fallback.reason}). Showing the ordinary tool result instead.</p>
           <details open><summary>Tool input</summary><pre>{json(fallback.input)}</pre></details>
-          <details open><summary>Tool result</summary><pre>{json(fallback.result)}</pre></details>
+          <details open><summary>Tool result</summary><pre>{fallbackOutcome(fallback)}</pre></details>
         </section>
       )}
       {artifactState.phase === 'ready' && artifactState.preview.frame !== undefined

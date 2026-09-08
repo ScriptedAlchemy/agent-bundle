@@ -777,6 +777,11 @@ it('loads only the canonical HTML UI resource and returns a frozen structured fa
   });
   expect(Object.isFrozen(fallback)).toBe(true);
   expect(fallbackFixture.reads).toEqual([]);
+
+  // While the opening call is still in flight the binding's placeholder result
+  // is not the App's result, so the fallback carries none (#751).
+  const pendingFallback = await createMcpAppBridge({ binding: fallbackFixture.binding, deferInitialToolResult: true, host: fallbackFixture.host, operations: fallbackFixture.operations, send: () => true }).loadResource();
+  expect(pendingFallback).toEqual({ input: { city: 'Paris', units: 'metric' }, kind: 'fallback', reason: 'missing-canonical-resource-uri' });
 });
 
 it('queues host context and cancellation in protocol order without also sending the original result', async () => {
