@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -18,6 +18,9 @@ import {
 } from './support/scaffold-fixture.ts';
 
 const execFile = promisify(executeFile);
+
+/** npm's banner for one script of the scaffolded project, the label each pool runs under. */
+const poolBanner = (script: string): string => `status-plugin@0.1.0 ${script}\n`;
 
 afterAll(cleanupScaffoldFixture);
 
@@ -74,6 +77,30 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
       structuredContent: { service: 'docs', status: 'healthy' },
     },
   });
+
+  // The ordinary test command tests the plugin (#749): `npm test` runs every
+  // pool as its own labeled run, and a route that stops rendering what it
+  // claims fails it while the plain module tests stay green.
+  const tested = await npmRun(projectRoot, 'test');
+  for (const pool of ['test:unit', 'test:routes', 'test:projection']) expect(tested).toContain(poolBanner(pool));
+  const route = join(projectRoot, 'src', 'mcp', 'status', 'tools', 'report-status.tsx');
+  const source = await readFile(route, 'utf8');
+  expect(source).toContain('<Agent.Text>{report.summary}</Agent.Text>');
+  await writeFile(route, source.replace('<Agent.Text>{report.summary}</Agent.Text>', '<Agent.Text>unreachable</Agent.Text>'));
+  const broken = await npmRun(projectRoot, 'test').then(
+    () => { throw new Error('`npm test` passed with a route that renders the wrong text.'); },
+    (error: unknown) => error as { readonly code?: number; readonly stderr?: string; readonly stdout?: string },
+  );
+  // npm writes each script's banner to stderr, so the run is read as a whole:
+  // the unit pool passed, the route-unit pool failed on the changed render,
+  // and the projection pool never ran behind it.
+  const brokenOutput = `${broken.stdout ?? ''}${broken.stderr ?? ''}`;
+  expect(broken.code).toBe(1);
+  expect(brokenOutput).toContain(poolBanner('test:unit'));
+  expect(brokenOutput).toContain(poolBanner('test:routes'));
+  expect(brokenOutput).toContain('tests/route-unit/report-status.test.ts');
+  expect(brokenOutput).not.toContain(poolBanner('test:projection'));
+  await npmRun(projectRoot, 'test:unit');
 }, 600_000);
 
 it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artifact script', async () => {

@@ -15,12 +15,13 @@
   },
   "scripts": {
     "build": "agent-bundle build --json --output artifact",
-    "check": "npm run build && npm run typecheck && npm run test && npm run test:routes && npm run test:projection",
+    "check": "npm run build && npm run typecheck && npm test",
     "dev": "agent-bundle dev",
     "pack:check": "agent-bundle prepack --json --output artifact",
-    "test": "rstest tests --exclude \"tests/{route-unit,projection}/**\"",
+    "test": "npm run test:unit && npm run test:routes && npm run test:projection",
     "test:projection": "rstest --config rstest.projection.config.ts",
     "test:routes": "rstest --config rstest.route-unit.config.ts",
+    "test:unit": "rstest tests --exclude \"tests/{route-unit,projection}/**\"",
     "typecheck": "npm run validate && tsc -p tsconfig.json --noEmit",
     "validate": "agent-bundle validate --json"
   },

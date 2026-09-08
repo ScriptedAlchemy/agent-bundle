@@ -18,11 +18,11 @@ npm run check      # validate + build + typecheck + test
 - `src/skills/getting-started/` — a Skill: `SKILL.md` frontmatter plus optional
   `references/` and `assets/`. Every `src/skills/<name>/SKILL.md` directory is
   discovered automatically; add a folder and it ships.
-- `tests/` — run with `npm run test`.
+- `tests/` — run with `npm test`.
 
 ## Tests
 
-`npm run test` runs ordinary module tests — here, one test that keeps the
+`npm test` runs ordinary module tests — here, one test that keeps the
 Skill's frontmatter aligned with its directory — and `npm run check` runs them
 after validate, build, and typecheck.
 
@@ -43,9 +43,14 @@ export default defineConfig(await agentBundleRstest());
 ```
 
 ```json
-"test": "rstest tests --exclude \"tests/route-unit/**\"",
+"test": "npm run test:unit && npm run test:routes",
+"test:unit": "rstest tests --exclude \"tests/route-unit/**\"",
 "test:routes": "rstest --config rstest.route-unit.config.ts"
 ```
+
+`npm test` then runs both pools, each reported as its own run, so the route
+pool is part of the ordinary test command rather than a separate step to
+remember.
 
 Then `renderRoute` and `expectDocument` from `agent-bundle/test` assert the
 document the route renders, at the `route-unit` proof level. Rendering also

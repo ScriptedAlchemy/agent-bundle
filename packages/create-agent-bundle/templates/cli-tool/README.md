@@ -15,10 +15,11 @@ schemas. `src/index.ts` is the library export with declarations, and
 ```sh
 npm run dev              # local workbench with live rebuilds
 npm run build            # dist/ package build + host artifacts in artifact/
-npm run check            # build + typecheck + both test pools
+npm test                 # every test pool: unit, projection
+npm run check            # build + typecheck + npm test
 npm run typecheck        # validate (writes .agent-bundle/routes.d.ts) + tsc
-npm run test             # plain module tests
-npm run test:projection  # cli-dispatch + script-dispatch pool
+npm run test:unit        # plain module tests only
+npm run test:projection  # cli-dispatch + script-dispatch pool only
 
 # after a build
 node dist/bin/my-agent-plugin.mjs greet World
@@ -52,13 +53,16 @@ Validate and publish the generated npm root with
 
 ## Tests
 
-Two pools ship, and each one names the proof level it carries. A pass at one
-level is never a receipt for another, so they run — and are reported —
-separately. `npm run check` runs both.
+`npm test` tests the plugin: it runs both pools below in turn, so a command
+that stops dispatching fails the ordinary test command even while the plain
+module tests stay green. Each pool names the proof level it carries and is
+reported as its own run — a pass at one level is never a receipt for another.
+The focused scripts run one pool for a tight loop, and take Rstest's own flags
+after `--` (`npm run test:projection -- --watch`).
 
 | pool | command | files | what a pass proves |
 | --- | --- | --- | --- |
-| plain | `npm run test` | `tests/*.test.ts` | ordinary module tests over `src/index.ts`; no framework involved |
+| unit | `npm run test:unit` | `tests/*.test.ts` | ordinary module tests over `src/index.ts`; no framework involved |
 | projection (`cli-dispatch`) | `npm run test:projection` | `tests/projection/cli-dispatch.test.ts` | argv resolved and executed through the routed CLI's own shell over the compiled command graph — help, grammar, validation, exit codes — in-process; not the spawned executable |
 | projection (`script-dispatch`) | `npm run test:projection` | `tests/projection/script-dispatch.test.ts` | `src/scripts/hello.ts` run through its generated executable's `main` envelope contract with captured stdout/stderr and exit code — as a Node process of its own over the source, not the bundled `scripts/hello.mjs` |
 

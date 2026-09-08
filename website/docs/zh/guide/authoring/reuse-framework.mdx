@@ -165,6 +165,10 @@ notice 使用框架 ledger 及[notice 矩阵](../../reference/notices.md)中的�
 | 打包、路径或安装 | 真实打包后/删除源码运行，以及基于 receipt 所有权的安装测试。 |
 | 宿主行为 | 单独标注的、使用真实授权的原生宿主测试；mock 不是已认证的模型调用。 |
 
+在脚手架项目中，前三行就是 `npm test` 一起运行的确定性测试池，各自作为独立运行报告——`mcp-server`
+模板中是 `test:unit`、`test:routes` 与 `test:projection`，`cli-tool` 中是 `test:unit` 与
+`test:projection`，没有路由的 `minimal` 模板只有单元测试；其余各行是显式的、单独标注的门禁。
+
 测试应保留独立的预期身份和安全结果。所有预期都从被测输出本身推导，无法发现错误改名或缺失 annotation。
 反过来，也不应仅为测试插件领域行为，就把框架整个传输实现复制进测试 fixture。
 

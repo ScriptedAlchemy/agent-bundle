@@ -10,11 +10,12 @@ the `status` server; no handwritten server factory or server config is needed.
 ```sh
 npm run dev
 npm run build
-npm run check            # build + typecheck + all three test pools
+npm test                 # every test pool: unit, route-unit, projection
+npm run check            # build + typecheck + npm test
 npm run typecheck        # validate (writes .agent-bundle/routes.d.ts) + tsc
-npm run test             # plain module tests
-npm run test:routes      # route-unit pool
-npm run test:projection  # in-memory MCP projection pool
+npm run test:unit        # plain module tests only
+npm run test:routes      # route-unit pool only
+npm run test:projection  # in-memory MCP projection pool only
 npx --no-install agent-bundle mcp list --server status --target portable --artifact artifact
 
 # after publishing/removing "private" and installing the package
@@ -38,13 +39,16 @@ Validate and publish the generated npm root with
 
 ## Tests
 
-Three pools ship, and each one names the proof level it carries. A pass at one
-level is never a receipt for another, so they run — and are reported —
-separately. `npm run check` runs all three.
+`npm test` tests the plugin: it runs the three pools below in turn, so a route
+that stops rendering or a server that stops registering it fails the ordinary
+test command even while the plain module tests stay green. Each pool names the
+proof level it carries and is reported as its own run — a pass at one level is
+never a receipt for another. The focused scripts run one pool for a tight loop,
+and take Rstest's own flags after `--` (`npm run test:routes -- --watch`).
 
 | pool | command | files | what a pass proves |
 | --- | --- | --- | --- |
-| plain | `npm run test` | `tests/*.test.ts` | ordinary module tests over `src/status.ts`; no framework involved |
+| unit | `npm run test:unit` | `tests/*.test.ts` | ordinary module tests over `src/status.ts`; no framework involved |
 | route-unit | `npm run test:routes` | `tests/route-unit/**` | the route module renders to the Agent Document it claims, through the real renderer — no artifact, no transport |
 | projection | `npm run test:projection` | `tests/projection/**` | the real generated MCP server registers the route and projects its document to protocol content, over the SDK's in-memory transport — not a process, not the packed artifact |
 

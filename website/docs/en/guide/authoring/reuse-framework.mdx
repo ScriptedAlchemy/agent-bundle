@@ -194,6 +194,11 @@ second native-cache manager, receipt database, or lifecycle parser. See
 | Packaging, paths or installation | Actual packed/source-free execution and receipt-owned install tests. |
 | Host behavior | A separately labelled native host test with real authorization; mocks are not an authenticated model turn. |
 
+In a scaffolded project the first three rows are the deterministic pools `npm test` runs together,
+each reported as its own run — `test:unit`, `test:routes`, and `test:projection` in the
+`mcp-server` template, `test:unit` and `test:projection` in `cli-tool`, unit tests alone in the
+route-less `minimal` template; the remaining rows are explicit, separately labelled gates.
+
 Keep independent expected identities and safety outcomes in tests. Deriving every expectation
 from the same output under test cannot detect a wrong rename or missing annotation. Conversely,
 do not copy the framework's whole transport implementation into a test fixture merely to test
