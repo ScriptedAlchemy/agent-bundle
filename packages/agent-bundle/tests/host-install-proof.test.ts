@@ -486,7 +486,7 @@ it(
       hooks: 'not-emitted',
       host: 'cursor',
       install: { first: 'installed', sameVersionRebuild: 'replaced', second: 'already-installed', version: '1.0.0' },
-      manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config',
+      manifestMetadata: 'author/homepage/repository/license/keywords shared from package.json, extensions from portable config',
       pluginVariables: {
         allowedLocations: 'args/env values/cwd only',
         cursorExpansion: {
