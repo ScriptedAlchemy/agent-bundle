@@ -137,6 +137,25 @@ it('lets a host block override a shared field and null keep it out of that one h
   });
 });
 
+it('shares an author only with the hosts whose contract its fields satisfy', async () => {
+  // An email-only author is a valid package.json declaration, and a valid
+  // portable one; Cursor, Codex, and Claude all require author.name, so it
+  // shares nothing there rather than failing their own validation.
+  await withProject({
+    'package.json': { author: { email: 'ada@example.test' }, name: 'bare', version: '1.0.0' },
+  }, async (root) => {
+    const model = await modelFor(root, pluginConfig());
+    const plans = [portableAdapter, cursorAdapter, codexAdapter, claudeAdapter].map((adapter) => adapter.plan(model));
+    expect(plans.flatMap((plan) => plan.diagnostics)).toEqual([]);
+
+    const documents = projections(model) as Record<string, Record<string, unknown>>;
+    expect(documents.portable?.author).toEqual({ email: 'ada@example.test' });
+    expect(documents.cursor).not.toHaveProperty('author');
+    expect(documents.claude).not.toHaveProperty('author');
+    expect(documents.codex?.author).toEqual({ name: 'shared-fixture' });
+  });
+});
+
 it('reads a null host-block author as an opt-out, not as a malformed author', async () => {
   await withProject({ 'package.json': packageJson }, async (root) => {
     const config = pluginConfig({}, { codex: { author: null }, portable: { author: null } });

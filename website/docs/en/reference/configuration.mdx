@@ -102,8 +102,9 @@ homepage out of the Cursor manifest alone while the other hosts still carry it.
 
 Each host emits only what its pinned schema admits, and the value still passes that host's own
 validation. Cursor's author object is closed to `name` and `email`, so a shared `author.url` is
-dropped for Cursor and kept for the others; Claude Code's marketplace entry requires
-`author.name`, so a `package.json` author that is only an email address shares no author there.
+dropped for Cursor and kept for the others; Cursor, Codex, and Claude Code all require
+`author.name`, so a `package.json` author that is only an email address shares no author with
+them, while the portable manifest still carries it.
 
 Two `package.json` shapes are read: npm's person string (`"Ada <ada@example.com> (https://ada.example.com)"`)
 and its object form, and for `repository`, an absolute `http(s)` URL or the

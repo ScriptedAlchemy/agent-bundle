@@ -94,8 +94,8 @@ export default defineConfig({
 不进入任何产物，而 `cursor: { homepage: null }` 只让共享的 homepage 不进入 Cursor 清单，其他宿主仍然携带它。
 
 每个宿主只输出其固定 schema 允许的字段，并且该值仍然要通过该宿主自己的校验。Cursor 的 author 对象只允许
-`name` 与 `email`，因此共享的 `author.url` 对 Cursor 会被丢弃、对其他宿主保留；Claude Code 的 marketplace
-条目要求 `author.name`，因此只有邮箱地址的 `package.json` author 在那里不共享 author。
+`name` 与 `email`，因此共享的 `author.url` 对 Cursor 会被丢弃、对其他宿主保留；Cursor、Codex 与 Claude Code
+都要求 `author.name`，因此只有邮箱地址的 `package.json` author 不会共享给它们，而 portable 清单仍然携带它。
 
 会读取 `package.json` 的两种形状：npm 的 person 字符串（`"Ada <ada@example.com> (https://ada.example.com)"`）
 及其对象形式；对 `repository`，则是绝对 `http(s)` URL 或 npm 为其写入的

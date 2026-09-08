@@ -359,13 +359,15 @@ export interface CursorManifestMetadataPlanContext {
 }
 
 /**
- * The pinned Cursor plugin schema closes the author object to name and email,
- * so a shared `author.url` is dropped here rather than emitted and refused.
+ * The pinned Cursor plugin schema closes the author object to name and email
+ * and requires the name, so a shared `author.url` is dropped here and a shared
+ * author without a name shares nothing rather than being emitted and refused.
  * `category`, `publisher`, `tags`, and `minClientVersions` have no shared
  * counterpart and stay authored under `cursor`.
  */
 const cursorProjection: DescriptiveMetadataProjection = Object.freeze({
   authorFields: Object.freeze(['email', 'name'] as const),
+  authorRequiredFields: Object.freeze(['name'] as const),
   fields: Object.freeze(['author', 'homepage', 'keywords', 'license', 'repository'] as const),
 });
 
