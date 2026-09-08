@@ -1,8 +1,8 @@
 # my-agent-plugin
 
 A skills-only agent plugin built with [agent-bundle](https://github.com/ScriptedAlchemy/agent-bundle).
-One `agent-bundle.config.ts` describes the plugin; the compiler emits installable
-artifacts for Claude Code, Codex, and Cursor, plus a portable layout.
+One `agent-bundle.config.ts` describes the plugin; the compiler emits one artifact
+per target listed in that file.
 
 ## Commands
 

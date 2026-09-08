@@ -2,7 +2,7 @@ import { Effect, FileSystem, Path } from 'effect';
 import type { PlatformError } from 'effect/PlatformError';
 
 import { liftTry } from './effect/lift.ts';
-import { defaultTargets, UsageError, type TargetName } from './options.ts';
+import { defaultTargets, installableTargets, listAlternatives, UsageError, type TargetName } from './options.ts';
 import {
   assertLocalFrameworkTarball,
   type FrameworkRuntimePairing,
@@ -34,7 +34,6 @@ const renderTargets = (targets: readonly TargetName[]): string =>
 
 /** Derived from the shared default list so a change there cannot silently break the drift check. */
 const defaultTargetsLiteral = `targets: [${renderTargets(defaultTargets)}]`;
-const installableHostNames: readonly TargetName[] = ['claude', 'codex', 'cursor'];
 
 export interface ScaffoldRequest {
   readonly frameworkSpec: string;
@@ -98,27 +97,31 @@ const rewriteConfigTargets = (contents: string, targets: readonly TargetName[]):
   return contents.replace(defaultTargetsLiteral, `targets: [${renderTargets(targets)}]`);
 };
 
-/** Installable hosts in the package build's order. */
+/** The selected hosts `agent-bundle install` accepts, in catalog order. */
 const installableHosts = (targets: readonly TargetName[]): readonly TargetName[] =>
-  installableHostNames.filter((host) => targets.includes(host));
+  installableTargets.filter((host) => targets.includes(host));
 
 /**
  * Template READMEs are written against the default targets, so their install
  * example names `claude`. The checked-in shape is one shell comment followed
  * by the public install command for Claude, plus the prose sentence naming the
- * generic public install command; both markers are drift-checked.
+ * generic public install command; both markers are drift-checked. `--no-install`
+ * is optional in the marker and always present in the rewrite, so a README that
+ * loses the flag is rewritten rather than silently passed through.
  */
 const readmeInstallExample =
-  /^(# after publishing[^\n]*)\nnpx agent-bundle install claude --from node_modules\/\S+\n/mu;
+  /^(# after publishing[^\n]*)\nnpx (?:--no-install )?agent-bundle install claude --from node_modules\/\S+\n/mu;
 const readmeInstallProse =
-  /^Installing the npm package does not mutate any host; run\n`npx agent-bundle install <host> --from node_modules\/<package>` explicitly\.\n/mu;
+  /^Installing the npm package does not mutate any host; run\n`npx (?:--no-install )?agent-bundle install <host> --from node_modules\/<package>` explicitly\.\n/mu;
+
+/** The installable hosts as backticked README prose. */
+const installableAlternatives = listAlternatives(installableTargets.map((host) => `\`${host}\``));
 
 /**
  * Rewrite a template README's install instructions for the selected targets:
- * one example line per installable host, or — when no `claude`, `codex`, or
- * `cursor` target is selected — an explanation of how to enable one.
- * Templates without an install
- * section (the skills-only template) pass through unchanged.
+ * one example line per installable host, or — when the selection carries no
+ * installable target — an explanation of how to enable one. Templates without
+ * an install section (the skills-only template) pass through unchanged.
  */
 const rewriteReadmeInstall = (
   contents: string,
@@ -137,27 +140,26 @@ const rewriteReadmeInstall = (
   if (hosts.length === 0) {
     return contents
       .replace(readmeInstallExample, [
-        '# no installable host is selected; add claude, codex, or cursor',
+        `# no installable host is selected; add ${listAlternatives([...installableTargets])}`,
         '# to `targets` in agent-bundle.config.ts before installing',
         '',
       ].join('\n'))
       .replace(readmeInstallProse, [
         'Installing the npm package does not mutate any host. This project selects',
-        `no installable host target (${renderTargets(targets)}). Add \`claude\`, \`codex\`,`,
-        'or `cursor` to `targets` in `agent-bundle.config.ts` before using',
-        '`agent-bundle install`.',
+        `no installable host target (${renderTargets(targets)}). Add ${installableAlternatives}`,
+        'to `targets` in `agent-bundle.config.ts` before using `agent-bundle install`.',
         '',
       ].join('\n'));
   }
   return contents
     .replace(readmeInstallExample, [
       comment,
-      ...hosts.map((host) => `npx agent-bundle install ${host} --from node_modules/${packageName}`),
+      ...hosts.map((host) => `npx --no-install agent-bundle install ${host} --from node_modules/${packageName}`),
       '',
     ].join('\n'))
     .replace(readmeInstallProse, [
       'Installing the npm package does not mutate any host; run',
-      `\`npx agent-bundle install <host> --from node_modules/${packageName}\` explicitly.`,
+      `\`npx --no-install agent-bundle install <host> --from node_modules/${packageName}\` explicitly.`,
       `The package contains these selected host targets: ${hosts.map((host) => `\`${host}\``).join(', ')}.`,
       '',
     ].join('\n'));

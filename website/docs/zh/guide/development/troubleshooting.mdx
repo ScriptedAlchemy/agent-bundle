@@ -38,7 +38,7 @@ npx --no-install agent-bundle validate --artifact artifact
 | 症状 | 检查与修正 |
 | --- | --- |
 | 文件没有成为工具，或没有出现在 Workbench | 检查实际路由路径、受支持扩展名、私有 `_`/`.` 路径段、ignore 规则和显式服务器模式。检查路由图。custom/command/remote 服务器不是生成路由服务器；不要为补偿它再建一份注册清单。 |
-| 创建项目时拒绝一个受支持 target | 对照脚手架选项与编译器 target 目录。当前 Amp 选项缺口不意味着 Amp 适配器不存在。使用兼容源码项目/配置并查阅 Amp 的 MCP 限制，不要假定每个 starter 都适用。 |
+| 创建项目时拒绝一个受支持 target | 项目创建提供所有已注册 target，因此被拒绝时会指出哪个模板承载不了它、哪些模板可以。`amp` 与 MCP 模板是唯一被拒绝的组合：Amp 的 MCP 配置是 Skill 级的，会拒绝该模板中由编译器拥有的本地服务器。请改选被列出的模板，而不是照旧生成、在首次构建时撞上 `amp.mcp.generated-local`。 |
 | 组合因路径或发现冲突失败 | 阅读 `AB4103`、`AB4105` 或 `AB4106` 及受影响组件。让共享内容兼容，或有意分开构建不兼容投影。调整 target 顺序或覆盖生成文件不能解决问题。 |
 | hook 缺失，或原生决定与预期不同 | 检查生成的事件/hook 矩阵、选中宿主、matcher、能力需求及精确原生 payload。使用 `hooks list` 和文档中的宿主专属模拟。不要用虚构 allow/deny 代替缺失证据。 |
 | TypeScript 接受无效 App 路由 ID，或丢失 provider/结果类型 | 确认生成成功，并且 `.agent-bundle/routes.d.ts` 属于实际消费它的浏览器/服务器/测试程序。某个兄弟 tsconfig 包含它，不证明另一个也包含。 |

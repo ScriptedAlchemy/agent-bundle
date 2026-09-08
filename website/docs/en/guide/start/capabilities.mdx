@@ -45,10 +45,10 @@ path, or a component accidentally discovered by another host, are build errorsâ€
 to overwrite one projection with another. Reordering the target list does not resolve a conflict.
 See [composition rules](../../reference/targets-artifacts.mdx).
 
-The current scaffolder's target choices lag the compiler's Amp support. To build for Amp, use
-an appropriate existing/static project and set `targets` explicitly; the generated MCP starter's
-compiler-owned local server is refused under Amp's skill-scoped MCP contract
-(`amp.mcp.generated-local`). See the current
+Project creation offers the same targets the compiler registers, `amp` included. It refuses only
+the combination the compiler would: the MCP starter's compiler-owned local server is rejected
+under Amp's skill-scoped MCP contract (`amp.mcp.generated-local`), so an Amp project starts from
+another template. See the current
 [installation guide](../distribution/installation.mdx) for the nested install root and reload
 procedure.
 

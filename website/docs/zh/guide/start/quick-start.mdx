@@ -35,12 +35,12 @@ npm run check
 | `mcp-server` | 约定式 MCP 工具及路由、投影测试；当前 starter 还演示了可选的库导出与产物脚本。 |
 | `cli-tool` | 独立的路由式 CLI，附带脚本和库示例。 |
 
-当前脚手架接受 `portable`、`claude`、`codex` 和 `cursor`。编译器也支持 `amp`，现有项目可在
-`agent-bundle.config.ts` 中选择它——但这个 MCP starter 不行：Amp 的 Skill 级 MCP 契约会拒绝
-starter 中由编译器拥有的本地 `status` 服务器，因此在这里写 `targets: ['amp']` 会以
-`amp.mcp.generated-local` 构建失败。要做 Amp 插件，请脚手架 `minimal` 模板，或在恰好一个 Skill
-旁声明远程服务器或可全局解析的命令服务器。添加原生 target 也不代表实时开发代理支持该宿主。
-见[宿主安装](../distribution/installation.mdx)。
+脚手架提供编译器构建的每一个 target：`amp`、`portable`、`claude`、`codex` 和 `cursor`。
+只有一种组合被拒绝——`amp` 与这个 MCP starter，因为 Amp 的 Skill 级 MCP 契约会拒绝 starter 中
+由编译器拥有的本地 `status` 服务器（`amp.mcp.generated-local`）。创建项目时就会说明这一点，并
+列出 Amp 可用的模板，因此拒绝发生在项目生成之前，而不是首次构建时。要做 Amp 插件，请脚手架
+`minimal` 或 `cli-tool` 模板，或在恰好一个 Skill 旁声明远程服务器或可全局解析的命令服务器。
+添加原生 target 也不代表实时开发代理支持该宿主。见[宿主安装](../distribution/installation.mdx)。
 
 ## 添加第一个工具
 

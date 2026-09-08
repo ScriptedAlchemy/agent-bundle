@@ -28,7 +28,7 @@ scripted and asks nothing — the remaining values fall back to their defaults.
 | --- | --- |
 | `-d, --dir <dir>` | Project directory (also the first positional argument). `foo/bar` scaffolds into `foo/bar` and names the package `bar`; `@scope/name` keeps the scoped package name. |
 | `-t, --template <name>` | `minimal`, `mcp-server`, or `cli-tool`. |
-| `--targets <list>` | Comma-separated host targets: `portable`, `claude`, `codex`, `cursor`. Default: `portable,codex,claude`. |
+| `--targets <list>` | Comma-separated host targets: `amp`, `portable`, `claude`, `codex`, `cursor` — every target `agent-bundle` compiles. Default: `portable,codex,claude`. `amp` is refused with the `mcp-server` template, whose compiler-owned local server Amp's skill-scoped MCP contract rejects. |
 | `--package-manager <name>` | `npm`, `pnpm`, `yarn`, or `bun`. Default: detected from the invoking client. |
 | `--no-install` | Skip installing dependencies after scaffolding. |
 | `--framework-version <spec>` | Pin the project's `agent-bundle` dependency to this spec (a version, a tarball path, or a URL). Runtime templates require the compiler version recorded by this scaffolder release. |
