@@ -70,7 +70,8 @@ const isAppRoute = (url: URL): boolean =>
   url.pathname.startsWith('/api/mcp/apps/') || /^\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(url.pathname);
 
 e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 * timeScale }, async ({ page }) => {
-  const { tarball } = await sharedPackedTarball('agent-bundle');
+  const { packOutput, tarball } = await sharedPackedTarball('agent-bundle');
+  const packedAgentBundleIdentity = `${packOutput.name}@${packOutput.version}`;
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-release-'));
   const forbiddenStagedPackage = join(consumer, 'staged-package');
   const project = join(consumer, 'project');
@@ -692,7 +693,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expect(page.locator('.eval-host-models')).toContainText('portable');
       await expect(page.locator('.eval-host-models')).toContainText('deterministic');
       await expect(page.locator('.eval-host-models')).toContainText('Pass');
-      await expect(page.locator('.eval-trial-provenance').first()).toContainText('agent-bundle@0.1.0');
+      await expect(page.locator('.eval-trial-provenance').first()).toContainText(packedAgentBundleIdentity);
       await expect(page.locator('.eval-trial-provenance').first()).toContainText('automatic');
       await page.getByRole('button', { name: 'Preview safe text' }).first().click();
       await expect(page.locator('.eval-raw-result')).toContainText('The deterministic packed fixture passed.', { timeout: browserTimeout });
@@ -707,7 +708,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await page.getByRole('button', { name: 'Compare runs' }).click();
       await expect(page.locator('.comparison-matrix table')).toBeVisible({ timeout: browserTimeout });
       await expect(page.locator('.comparison-matrix')).toContainText(
-        'CLI agent-bundle@0.1.0 · Invocation automatic · Semantic grader none',
+        `CLI ${packedAgentBundleIdentity} · Invocation automatic · Semantic grader none`,
       );
 
       phase = 'foreground restart/reconnect';
