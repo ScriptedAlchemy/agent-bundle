@@ -149,9 +149,10 @@ export type McpServerConstraint<Server> = string extends Server ? string : Regis
 export type McpRouteServer<Server extends string> = Server extends RegisteredMcpServerName ? Server : string;
 
 /**
- * Options of one wire invocation. `Input` is the payload the generated server
- * hands the route: `invokeMcpTool` and `getMcpPrompt` bind it to the route's
- * registered input ({@link McpRouteInput}) when the name is a literal, and
+ * Options of one wire invocation. `Input` is the payload a caller sends over
+ * the wire — the route's `inputSchema` input, before the server parses it into
+ * what the route receives: `invokeMcpTool` and `getMcpPrompt` bind it to the
+ * route's registered input ({@link McpRouteInput}) when the name is a literal, and
  * it stays `unknown` — the previous shape — for a dynamic name or an
  * unregistered project. `Server` is the literal `server` option, when given;
  * it selects which server's route the name resolves to.

@@ -62,10 +62,12 @@ export type AppRouteId = unknown extends AppRoutes
   ? `tool:${string}/${string}`
   : Extract<keyof AppRoutes, `tool:${string}/${string}`> & string;
 
+/** What a caller sends for one route: the registered `inputSchema` input type (defaults optional, transforms as the wire carries them), before the server parses it. */
 export type AppRouteInput<Id extends string> = Id extends keyof AppRoutes
   ? AppRoutes[Id] extends AppRouteContract ? AppRoutes[Id]['input'] : unknown
   : unknown;
 
+/** The structured result one route resolves with: the registered `resultSchema` output. */
 export type AppRouteResult<Id extends string> = Id extends keyof AppRoutes
   ? AppRoutes[Id] extends AppRouteContract ? AppRoutes[Id]['result'] : unknown
   : unknown;

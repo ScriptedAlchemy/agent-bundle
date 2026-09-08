@@ -22,6 +22,7 @@ import type {
   AgentRequestInit,
   RegisteredRouteId,
   RegisteredRouteInput,
+  RegisteredRouteParsedInput,
   RegisteredRouteResult,
 } from '@agent-bundle/runtime';
 import type * as React from 'react';
@@ -113,6 +114,9 @@ export type RouteTargetConstraint<Target> = Target extends AgentRouteModule
 
 /** The registered input type of a route target; `unknown` for a module target, a dynamic string, or an unregistered project. */
 export type RouteTargetInput<Target> = Target extends RegisteredRouteId ? RegisteredRouteInput<Target> : unknown;
+
+/** The registered parsed input of a route target — what its component receives after defaults and transforms; `unknown` when unregistered. */
+export type RouteTargetParsedInput<Target> = Target extends RegisteredRouteId ? RegisteredRouteParsedInput<Target> : unknown;
 
 /** The registered result type of a route target; `unknown` for a module target, a dynamic string, or an unregistered project. */
 export type RouteTargetResult<Target> = Target extends RegisteredRouteId ? RegisteredRouteResult<Target> : unknown;
@@ -386,12 +390,13 @@ const componentProps = (
   kind: RenderableRouteKind,
   options: RenderRouteOptions,
   signal: AbortSignal,
+  parsedInput: unknown,
 ): Readonly<Record<string, unknown>> => {
   switch (kind) {
     case 'prompt':
     case 'resource':
     case 'tool':
-      return { input: (invocation.props as { readonly input?: unknown }).input, signal };
+      return { input: parsedInput, signal };
     case 'event-route': {
       // The public event-route contract is `{ canonical, native, signal }`,
       // and the generated Flight worker unwraps the payload into exactly that.
@@ -406,7 +411,7 @@ const componentProps = (
       };
     }
     case 'cli':
-      return { input: options.input ?? {}, signal };
+      return { input: parsedInput, signal };
     case 'script':
       return { argv: (invocation.props as { readonly input?: unknown }).input ?? [], signal };
     default: {
@@ -573,7 +578,8 @@ export interface LoadedRouteModule<Target extends string = string> {
   readonly [exportName: string]: unknown;
   readonly config?: unknown;
   readonly default?: (props: never) => unknown;
-  readonly inputSchema?: RouteModuleSchema<RouteTargetInput<Target>>;
+  /** `parse` returns the component's input — the caller's input after defaults and transforms. */
+  readonly inputSchema?: RouteModuleSchema<RouteTargetParsedInput<Target>>;
   readonly resultSchema?: RouteModuleSchema<RouteTargetResult<Target>>;
 }
 
@@ -623,6 +629,35 @@ export const loadRouteModule = async <Target extends string>(
   // contract with the route's provenance.
   const loaded = await loadManifestRouteModule(manifest, routeId as string);
   return loaded.module as LoadedRouteModule<Target>;
+};
+
+/**
+ * The component's `input` prop: the caller's input parsed by the route's own
+ * `inputSchema`, exactly where the generated Flight worker parses it (defaults
+ * filled, transforms applied) — so the registration types what the caller
+ * sends and the component still sees the schema's output. Rejected before the
+ * request scope opens, so no provider or component runs on invalid input.
+ * A module without an `inputSchema` (a script) receives the input as given.
+ */
+const parsedInput = (
+  schema: { readonly parse: (value: unknown) => unknown } | undefined,
+  input: unknown,
+  provenance: RenderedRouteProvenance,
+): unknown => {
+  if (schema === undefined) return input;
+  try {
+    return schema.parse(input);
+  } catch (error) {
+    throw new AgentTestError('invalid-input', "The route's own inputSchema rejected the input.", {
+      cause: error,
+      details: [
+        `cause:        ${error instanceof Error ? error.message : String(error)}`,
+        `received:     ${captured(input)}`,
+      ],
+      provenance,
+      recovery: 'Pass the input the route\'s inputSchema accepts; defaults and transforms are applied by the parse, not by the caller.',
+    });
+  }
 };
 
 /**
@@ -1434,6 +1469,9 @@ const prepareRender = async (
   const renderer = await loadRenderer();
   const surface = executableSurface(resolved.kind, resolved.provenance.routeId, resolved.manifest);
   const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, surface, options, resolved.provenance);
+  const input = resolved.kind === 'cli' || resolved.kind === 'prompt' || resolved.kind === 'resource' || resolved.kind === 'tool'
+    ? parsedInput(resolved.module.inputSchema, options.input ?? {}, resolved.provenance)
+    : undefined;
   const collected: AgentProgressUpdate[] = [];
   const context = options.context ?? {};
   const signal = options.signal ?? new AbortController().signal;
@@ -1445,7 +1483,7 @@ const prepareRender = async (
   const dispatcher = createFlightDispatcher({
     collected,
     component: resolved.component,
-    componentProps: (request) => componentProps(request.invocation, resolved.kind, options, request.signal),
+    componentProps: (request) => componentProps(request.invocation, resolved.kind, options, request.signal, input),
     contextProgress: context.progress,
     layoutRoute: {
       id: resolved.provenance.routeId,

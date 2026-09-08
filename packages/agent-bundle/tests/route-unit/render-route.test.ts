@@ -569,6 +569,32 @@ describe('layout composition at the route-unit level', () => {
     });
   });
 
+  it('parses the input through the route\'s own inputSchema before the component runs, as the generated worker does', async () => {
+    // The caller omits the defaulted field; the component receives the default (#752).
+    const defaulted = await renderRoute('tool:harness/layout-probe', { input: {} });
+    expect(defaulted.result).toEqual({ label: 'probe' });
+    expectDocument(defaulted).toContainText('probe: probe');
+
+    // Invalid input is rejected before any provider or component runs: no document, one harness diagnostic.
+    const error = await rejection(renderRoute('tool:harness/layout-probe', { input: { label: 1 } as never }));
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect(error.code).toBe('invalid-input');
+    expect(error.message).toContain("The route's own inputSchema rejected the input.");
+    expect(error.message).toContain('received:     {"label":1}');
+    expect(error.message).toContain('route:        tool:harness/layout-probe (tool)');
+  });
+
+  it('parses a rendered CLI route\'s input the same way, so CliRouteProps sees the schema output', async () => {
+    // The strict schema rejects an empty topic and an unknown mode before the component runs; without the
+    // parse both would render, since the component never reads what it does not use.
+    for (const input of [{ topic: '' }, { mode: 'bogus', topic: 'layouts' }]) {
+      const error = await rejection(renderRoute('cli:report', { input: input as never }));
+      expect(error).toBeInstanceOf(AgentTestError);
+      expect(error.code).toBe('invalid-input');
+      expect(error.message).toContain('route:        cli:report (cli)');
+    }
+  });
+
   it('applies only the root layout to a rendered CLI command', async () => {
     const rendered = await renderRoute('cli:report', { input: { topic: 'layouts' } });
 

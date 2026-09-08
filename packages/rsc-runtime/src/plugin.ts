@@ -43,6 +43,7 @@ export type {
   RegisteredRouteContract,
   RegisteredRouteId,
   RegisteredRouteInput,
+  RegisteredRouteParsedInput,
   RegisteredRouteResult,
   RegisteredRoutes,
   AgentRequestCapabilities,

@@ -304,7 +304,7 @@ export interface AgentProviderValues {
 /**
  * The project-registration seam, after TanStack Router's `Register`. It is
  * empty here; the compiler's generated `.agent-bundle/routes.d.ts` augments it
- * with `routes: AgentBundleRouteContracts` — a thin `{ input, result }` map
+ * with `routes: AgentBundleRouteContracts` — a thin `{ input, parsedInput, result }` map
  * keyed by route id: what the `agent-bundle/test` harness accepts and returns
  * for that route, inferred from each schema route's own `inputSchema` and
  * `resultSchema`, and for an event route its `{ canonical, native }` payload
@@ -329,9 +329,15 @@ export interface AgentProviderValues {
 // rslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration-merge extension point
 export interface Register {}
 
-/** One registered route's harness contract: the `input` a render accepts and the `result` it returns (`undefined` for routes without a `resultSchema`). */
+/**
+ * One registered route's harness contract: the `input` a caller sends (the
+ * schema's own input type), the `parsedInput` the component receives after
+ * defaults and transforms (the schema's output type), and the `result` a
+ * render returns (`undefined` for routes without a `resultSchema`).
+ */
 export interface RegisteredRouteContract {
   readonly input: unknown;
+  readonly parsedInput: unknown;
   readonly result: unknown;
 }
 
@@ -346,6 +352,11 @@ export type RegisteredRouteId = unknown extends RegisteredRoutes ? string : keyo
 /** The registered input type for one route id; `unknown` for an unregistered id. */
 export type RegisteredRouteInput<Id extends string> = Id extends keyof RegisteredRoutes
   ? RegisteredRoutes[Id] extends RegisteredRouteContract ? RegisteredRoutes[Id]['input'] : unknown
+  : unknown;
+
+/** The registered parsed-input type for one route id — what its component receives; `unknown` for an unregistered id. */
+export type RegisteredRouteParsedInput<Id extends string> = Id extends keyof RegisteredRoutes
+  ? RegisteredRoutes[Id] extends RegisteredRouteContract ? RegisteredRoutes[Id]['parsedInput'] : unknown
   : unknown;
 
 /** The registered result type for one route id; `unknown` for an unregistered id. */

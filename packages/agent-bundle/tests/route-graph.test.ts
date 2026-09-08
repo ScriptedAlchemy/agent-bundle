@@ -1465,7 +1465,7 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   // The registered map is the harness contract: an event route registers its `{ canonical, native }` payload and no result.
   expect(first).toContain("type HarnessInput<Contract> =\n  Contract extends { readonly input: infer Input } ? Input\n    : Contract extends { readonly component: infer Component } ? Omit<ComponentInput<Component>, 'signal'>\n      : never;");
   expect(first).toContain('type HarnessResult<Contract> =\n  Contract extends { readonly result: infer Result } ? Result\n    : Contract extends { readonly component: unknown } ? undefined\n      : never;');
-  expect(first).toContain('export type AgentBundleRouteContracts = {\n  readonly [Id in RouteId]: Readonly<{ input: HarnessInput<AgentBundleRoutes[Id]>; result: HarnessResult<AgentBundleRoutes[Id]> }>;\n};');
+  expect(first).toContain('export type AgentBundleRouteContracts = {\n  readonly [Id in RouteId]: Readonly<{\n    input: HarnessInput<AgentBundleRoutes[Id]>;\n    parsedInput: HarnessParsedInput<AgentBundleRoutes[Id]>;\n    result: HarnessResult<AgentBundleRoutes[Id]>;\n  }>;\n};');
   // A provider-free graph declares no provider surface; the runtime augmentation carries only the route registration.
   expect(first).not.toContain('AgentBundleProviders');
   expect(first).not.toContain('AgentProviderValues');
@@ -1648,9 +1648,11 @@ it('resolves generated helper types for schema and event route contracts and the
       '',
     ].join('\n'),
     'src/mcp/curator/tools/inspect.ts': [
-      'export interface InspectInput { readonly source: string; }',
+      '// What a caller sends (`_input`: the limit is optional) versus what the component receives (`_output`).',
+      'export interface InspectInput { readonly source: string; readonly limit?: number; }',
+      'export interface InspectParsedInput { readonly source: string; readonly limit: number; }',
       'export interface InspectResult { readonly accepted: boolean; }',
-      'export const inputSchema = {} as { readonly _output: InspectInput };',
+      'export const inputSchema = {} as { readonly _input: InspectInput; readonly _output: InspectParsedInput };',
       'export const resultSchema = {} as { readonly _output: InspectResult };',
       'export default async function Inspect() { return undefined; }',
       '',
@@ -1684,12 +1686,14 @@ it('resolves generated helper types for schema and event route contracts and the
       "import type { AgentBundleAppRouteContracts, AppToolRouteId, RouteId, RouteInput, RouteResult } from './.agent-bundle/routes.js';",
       "import type { WorkspaceOpenInput, WorkspaceOpenResult } from './src/events/workspace/open.js';",
       "import type { BriefInput, BriefResult } from './src/mcp/curator/prompts/brief.js';",
-      "import type { InspectInput, InspectResult } from './src/mcp/curator/tools/inspect.js';",
+      "import type { InspectInput, InspectParsedInput, InspectResult } from './src/mcp/curator/tools/inspect.js';",
       '',
       ...equalityHelpers,
       '',
       "export type Ids = Assert<Equal<RouteId, 'event:workspace/open' | 'prompt:curator/brief' | 'tool:curator/inspect'>>;",
+      '// A schema with `_input` registers the caller\'s input; one with only `_output` (the prompt) registers its output.',
       "export type SchemaInput = Assert<Equal<RouteInput<'tool:curator/inspect'>, InspectInput>>;",
+      "export type StructuralInput = Assert<Equal<RouteInput<'prompt:curator/brief'>, BriefInput>>;",
       "export type SchemaResult = Assert<Equal<RouteResult<'tool:curator/inspect'>, InspectResult>>;",
       "export type EventInput = Assert<Equal<RouteInput<'event:workspace/open'>, WorkspaceOpenInput>>;",
       "export type EventResult = Assert<Equal<RouteResult<'event:workspace/open'>, WorkspaceOpenResult>>;",
@@ -1697,9 +1701,10 @@ it('resolves generated helper types for schema and event route contracts and the
       'export type AllResults = Assert<Equal<RouteResult<RouteId>, BriefResult | InspectResult | WorkspaceOpenResult>>;',
       '// The augmentation registers the same contracts on the runtime, keyed by route id.',
       "export type RegisteredIds = Assert<Equal<keyof Register['routes'], RouteId>>;",
-      "export type RegisteredInspect = Assert<Equal<Register['routes']['tool:curator/inspect'], Readonly<{ input: InspectInput; result: InspectResult }>>>;",
-      '// An event route registers the harness payload (props without the signal the harness injects) and no result.',
-      "export type RegisteredEvent = Assert<Equal<Register['routes']['event:workspace/open'], Readonly<{ input: Omit<WorkspaceOpenInput, 'signal'>; result: undefined }>>>;",
+      '// Both sides of the schema boundary are registered: the caller\'s input and the component\'s parsed input.',
+      "export type RegisteredInspect = Assert<Equal<Register['routes']['tool:curator/inspect'], Readonly<{ input: InspectInput; parsedInput: InspectParsedInput; result: InspectResult }>>>;",
+      '// An event route registers the harness payload (props without the signal the harness injects) on both sides and no result.',
+      "export type RegisteredEvent = Assert<Equal<Register['routes']['event:workspace/open'], Readonly<{ input: Omit<WorkspaceOpenInput, 'signal'>; parsedInput: Omit<WorkspaceOpenInput, 'signal'>; result: undefined }>>>;",
       "export type RegisteredEventInput = Assert<Equal<keyof Register['routes']['event:workspace/open']['input'], 'canonical' | 'native'>>;",
       '// The App registration is the MCP tool subset of the same contracts: the prompt and event routes are not',
       '// `tools/call` targets, so an App client cannot name them; the tool keeps its own schema types.',

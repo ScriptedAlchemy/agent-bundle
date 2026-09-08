@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { access, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterAll, expect, it } from '@rstest/core';
@@ -52,6 +52,26 @@ it('scaffolds with independently versioned release tarballs and runs after sourc
     ?.endsWith(`agent-bundle-runtime-${pairing.runtime}.tgz`)).toBe(true);
 
   await installScaffoldedProject(projectRoot);
+
+  // `typecheck` on a clean checkout (#748): nothing has published the
+  // generated declaration yet, the script's `validate` step publishes it, and
+  // the program then consumes the registration — a wrong tool id is a compile
+  // error, not a `string` that type-checks.
+  const routeTypes = join(projectRoot, '.agent-bundle', 'routes.d.ts');
+  await expect(access(routeTypes)).rejects.toMatchObject({ code: 'ENOENT' });
+  await npmRun(projectRoot, 'typecheck');
+  await expect(readFile(routeTypes, 'utf8')).resolves.toContain('"tool:status/report-status"');
+  const wrongId = join(projectRoot, 'tests', 'route-unit', 'wrong-id.test.ts');
+  await writeFile(wrongId, [
+    "import { renderRoute } from 'agent-bundle/test';",
+    "void renderRoute('tool:status/does-not-exist', { input: {} });",
+    '',
+  ].join('\n'));
+  await expect(npmRun(projectRoot, 'typecheck')).rejects.toMatchObject({
+    stdout: expect.stringContaining("'\"tool:status/does-not-exist\"' is not assignable"),
+  });
+  await rm(wrongId);
+
   await npmRun(projectRoot, 'build');
 
   const artifact = join(projectRoot, 'artifact');

@@ -80,6 +80,7 @@ export type {
   RenderedRouteEvents,
   RouteTargetInput,
   RouteTargetConstraint,
+  RouteTargetParsedInput,
   RouteTargetResult,
 } from './render.ts';
 export { expectDocument } from './matchers.ts';

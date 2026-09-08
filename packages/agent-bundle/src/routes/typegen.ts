@@ -75,8 +75,9 @@ const hasToolRoutes = (routes: readonly CompiledAgentRoute[]): boolean =>
  * is the MCP tool subset of `AgentBundleRoutes` — the `tool:<server>/<name>`
  * ids filtered at the type level, so every route id is spelled once and the
  * contracts reuse the same type-only route module imports — one
- * `{ input, result }` per tool from the module's own `inputSchema` and
- * `resultSchema` output. The filter is inlined in the mapped type rather than
+ * `{ input, result }` per tool from the module's own `inputSchema` input
+ * (what a caller sends, before the server parses it) and `resultSchema`
+ * output. The filter is inlined in the mapped type rather than
  * named first so `keyof` the map (what an App client's route-id parameter
  * resolves to) prints as the tool ids in a rejection, not as an alias name.
  * Omitted for graphs without a tool route.
@@ -99,7 +100,7 @@ const appDeclarations = (routes: readonly CompiledAgentRoute[]): readonly string
  * the tool contract map (the same `Register` pattern as the runtime
  * augmentation below), so `createAppClient().call(id, input)` narrows its
  * route id to the project's tools, `input` to that tool's `inputSchema`
- * output, and its resolved value to the `resultSchema` output. Type-only:
+ * input, and its resolved value to the `resultSchema` output. Type-only:
  * the App bundle never loads a route module, Zod, or Node through it.
  * Omitted with the contract map for graphs without a tool route, so the
  * augmentation never references a module the project has no reason to
@@ -120,10 +121,10 @@ const appAugmentation = (routes: readonly CompiledAgentRoute[]): readonly string
 
 /**
  * The single `@agent-bundle/runtime` augmentation. Its `Register.routes`
- * member registers the thin `{ input, result }` contract map (TanStack
+ * member registers the thin `{ input, parsedInput, result }` contract map (TanStack
  * Router's `Register` pattern), so `agent-bundle/test`'s `renderRoute` narrows
  * its route-id parameter, `input`, and `result` from the project's own route
- * modules — a schema route's `inputSchema`/`resultSchema` output, an event
+ * modules — a schema route's `inputSchema` input and `resultSchema` output, an event
  * route's `{ canonical, native }` payload with no result; its
  * `AgentProviderValues` members make
  * `(await agent()).providers.<key>` observe each factory's resolved type.
@@ -166,8 +167,14 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     ...providers.map(providerImport),
     '',
     'type SchemaOutput<Schema> = Schema extends { readonly _output: infer Output } ? Output : never;',
+    '// A schema that declares `_input` (Zod) types a caller by it; a structural schema that declares only',
+    '// `_output` parses without defaults or transforms, so its output is also what a caller sends.',
+    'type SchemaInput<Schema> = Schema extends { readonly _input: infer Input } ? Input : SchemaOutput<Schema>;',
+    '// `input` is what a caller sends — the schema\'s own input type, so a defaulted or transformed field is',
+    '// spelled the way the wire carries it; the route component receives the parsed output instead.',
     'export type RouteContract<InputSchema, ResultSchema> = Readonly<{',
-    '  input: SchemaOutput<InputSchema>;',
+    '  input: SchemaInput<InputSchema>;',
+    '  parsedInput: SchemaOutput<InputSchema>;',
     '  result: SchemaOutput<ResultSchema>;',
     '}>;',
     'export type EventRouteContract<Component, Event extends string> = Readonly<{',
@@ -191,6 +198,10 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     '  Contract extends { readonly input: infer Input } ? Input',
     "    : Contract extends { readonly component: infer Component } ? Omit<ComponentInput<Component>, 'signal'>",
     '      : never;',
+    'type HarnessParsedInput<Contract> =',
+    '  Contract extends { readonly parsedInput: infer Parsed } ? Parsed',
+    "    : Contract extends { readonly component: infer Component } ? Omit<ComponentInput<Component>, 'signal'>",
+    '      : never;',
     'type HarnessResult<Contract> =',
     '  Contract extends { readonly result: infer Result } ? Result',
     '    : Contract extends { readonly component: unknown } ? undefined',
@@ -206,9 +217,13 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     'export type RouteId = keyof AgentBundleRoutes;',
     'export type RouteInput<Id extends RouteId> = ContractInput<AgentBundleRoutes[Id]>;',
     'export type RouteResult<Id extends RouteId> = ContractResult<AgentBundleRoutes[Id]>;',
-    '/** The registered harness contract map: one `{ input, result }` per route id, for `@agent-bundle/runtime`\'s `Register`. */',
+    '/** The registered harness contract map: one `{ input, parsedInput, result }` per route id, for `@agent-bundle/runtime`\'s `Register`. */',
     'export type AgentBundleRouteContracts = {',
-    '  readonly [Id in RouteId]: Readonly<{ input: HarnessInput<AgentBundleRoutes[Id]>; result: HarnessResult<AgentBundleRoutes[Id]> }>;',
+    '  readonly [Id in RouteId]: Readonly<{',
+    '    input: HarnessInput<AgentBundleRoutes[Id]>;',
+    '    parsedInput: HarnessParsedInput<AgentBundleRoutes[Id]>;',
+    '    result: HarnessResult<AgentBundleRoutes[Id]>;',
+    '  }>;',
     '};',
     '',
     ...appDeclarations(routes),

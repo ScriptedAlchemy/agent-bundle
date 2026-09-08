@@ -54,8 +54,9 @@ export const summarizes = async (): Promise<void> => {
 编译器生成的 `.agent-bundle/routes.d.ts` 会把项目的路由契约注册到 `@agent-bundle/runtime` 的
 `Register` 接口上——与它已经声明 provider 键的方式相同。一旦该文件成为项目 TypeScript 程序的一部分
 （`create-agent-bundle` 模板默认就把 `".agent-bundle/routes.d.ts"` 列在 `tsconfig.json` 的 `include`
-中，文件本身仍被 gitignore；当一个编译了路由或 provider 的项目漏掉它时，`agent-bundle validate` 会以
-`AB4834` 警告），用字符串字面量写出的
+中，文件本身仍被 gitignore；每一个导入了 `agent-bundle/test`、`agent-bundle/app`、`agent-bundle/eval`
+或 `@agent-bundle/runtime` 却漏掉该文件的 TypeScript 程序，`agent-bundle validate` 都会以 `AB4834`
+逐一警告），用字符串字面量写出的
 `renderRoute` 调用就会针对编译后的 route id 做检查——编辑器会补全它们，写错时会被拒绝并列出已注册的
 备选项——而 `input` 与 `result` 来自该路由自己的 `inputSchema` 与 `resultSchema`：
 
@@ -65,6 +66,14 @@ const { result } = await renderRoute('tool:library/summarize', {
 });
 const chapters: number | undefined = result?.chapters; // 无需强制类型转换
 ```
+
+`input` 是调用方发送的内容——schema 的**输入**类型：带 `.default()` 的字段是可选的，经
+`.transform()` 的字段按 wire 上的写法拼写——而路由组件收到的是 schema 的**输出**，与生成的服务器交给它的
+完全一致。`renderRoute` 在同一边界用路由自己的 `inputSchema` 解析输入：组件看到的是已填默认值、已应用
+transform 的值；schema 拒绝的输入会在任何 provider 或组件运行之前，以 `invalid-input` 测试错误失败。
+`result` 是 `resultSchema` 的输出。两侧都会被注册：`RegisteredRouteInput<Id>`（来自
+`@agent-bundle/runtime`）是调用方一侧，`RegisteredRouteParsedInput<Id>` 是组件一侧，也就是
+`loadRouteModule(id).inputSchema.parse(...)` 的返回类型。
 
 事件路由注册的是测试工具实际接受与返回的内容：`input` 是 `{ canonical, native, preflight? }` 载荷（`signal` 由测试
 工具自行提供），而 `result` 为 `undefined`，因为事件模块不导出 `resultSchema`。请用

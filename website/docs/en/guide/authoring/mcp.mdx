@@ -849,11 +849,15 @@ declare module 'agent-bundle/app' {
 ```
 
 whose members are the project's generated MCP **tool** routes (`AppToolRouteId` in the same
-file) — `input` inferred from each route's `inputSchema`, `result` from its `resultSchema`. Once
-that file is in the project's TypeScript program (the templates list `".agent-bundle/routes.d.ts"`
-in `tsconfig.json` `include`; `AB4834` when a routed project leaves it out), a literal route id is
-checked against the compiled tools, `input` is typed from that route, and the result is that
-route's structured object. The declaration imports the route modules type-only, so no route
+file) — `input` inferred from each route's `inputSchema` **input** type (what a caller sends: a
+`.default()`ed field is optional, a `.transform()`ed field is spelled as the wire carries it; the
+route component receives the parsed output), `result` from its `resultSchema` output. Once
+that file is in the App's TypeScript program (the templates list `".agent-bundle/routes.d.ts"`
+in `tsconfig.json` `include`; `AB4834` names each program that imports `agent-bundle/app` and
+leaves it out), a literal route id is checked against the compiled tools, `input` is typed from
+that route, and the result is that route's structured object. `onToolInput` delivers the host's
+opening payload with the same input type: it is the message before the server parses it, so a
+default the schema would fill is not promised to be present. The declaration imports the route modules type-only, so no route
 module, schema, or server code enters the App document. Without the augmentation — a handwritten
 server, or a program that omits the file — `call()` still works with `unknown` input and result,
 and a view may declare its own contract map through the same `AppRegister` seam. The
