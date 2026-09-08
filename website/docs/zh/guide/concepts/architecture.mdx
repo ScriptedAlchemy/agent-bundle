@@ -188,6 +188,7 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 
 | 宿主 | 规划器 | 能力表 |
 | --- | --- | --- |
+| `amp` | `adapters/amp.ts` 中的 `ampAdapter.plan` | `adapters/capabilities/amp-0.0.0-20260907001852-gf348fed.json` |
 | `claude` | `adapters/claude.ts` 中的 `planClaudeArtifacts` | `adapters/capabilities/claude-2.1.260.json` |
 | `codex` | `adapters/codex.ts` 中的 `planCodexArtifacts` | `adapters/capabilities/codex-0.147.0.json` |
 | `cursor` | `adapters/cursor.ts` 中的 `planCursorArtifacts` | `adapters/capabilities/cursor-2026-08-28.json` |
@@ -201,8 +202,16 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 声明的是同一组路由。
 
 `TargetRegistry`（`adapters/registry.ts`）是注册适配器的唯一位置。`createDefaultRegistry`
-先把 `portable` 注册为默认值，然后注册 `codex`、`claude` 与 `cursor`。不存在 `plugin`
-适配器。
+先把 `portable` 注册为默认值，然后注册 `codex`、`claude`、`cursor` 与 `amp`。注册顺序不是
+目标优先级：`planComposite` 在规划前先对所选集合排序（`sortedProjections`），复合身份就是
+排序后的名称连接。不存在 `plugin` 适配器。
+
+`amp` 是唯一一个插件形态为生成目录、而非一组声明式文档的内置宿主。它的规划在
+`.amp/plugins/{plugin}/` 下写出一个 `index.js` PluginAPI 工厂，由该 API 注册 Skill 与事件
+回调；其 MCP 配置是 Skill 作用域的：一个规范服务器需要恰好一个 Amp Skill，而由编译器拥有的
+本地服务器会被拒绝，因为固定的契约没有记录可用于启动它的插件根 token。逐表面的证据仍在生成的
+[宿主参考](../../reference/hosts.md)页面；面向作者的选择地图是
+[目标与能力地图](../start/capabilities.mdx)。
 
 ### compose 交给产物组装什么
 
@@ -417,7 +426,9 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 | `index.ts` | 重新导出这些类型、`parse` / `serialize` / `assemble` / `read` 以及 schema | 公开 API |
 
 不存在 portable 的 `install` / `doctor` 宿主
-（`BundleIdentityHost` 是 `claude` \| `codex` \| `cursor`）。
+（`BundleIdentityHost` 是 `amp` \| `claude` \| `codex` \| `cursor`）。
+`doctor` 覆盖 `claude`、`codex` 与 `cursor`；Amp 没有生命周期探测
+（`DoctorHost` 将其排除）。
 
 ### 第 3 步落地了什么
 
@@ -453,8 +464,9 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 原生钩子与手写的 MCP 入口是 `DiscoveredProject` / `NormalizedPlugin` 上彼此平行的集合。
 之后需要“每一个表面”的消费者仍要遍历多个字段。
 
-**四个规划器，一次合并。** `planClaudeArtifacts`、`planCodexArtifacts`、
-`planCursorArtifacts` 与 `portableAdapter.plan` 各自遍历整个模型并输出宿主文档。
+**五个规划器，一次合并。** `planClaudeArtifacts`、`planCodexArtifacts`、
+`planCursorArtifacts`、`portableAdapter.plan` 与 `ampAdapter.plan` 各自遍历整个模型并输出
+宿主文档。
 `compose.ts` 合并的是字节；它并没有用单个 `project(application, capabilities)` 函数取代
 这些规划器。
 
