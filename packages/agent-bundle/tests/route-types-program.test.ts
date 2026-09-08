@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from '@rstest/core';
+import ts from 'typescript-5';
 
 import { inspect, validate } from '../src/api.ts';
 import { routeTypesProgramDiagnostics } from '../src/routes/typegen-program.ts';
@@ -163,6 +164,63 @@ describe('AB4834 generated route declarations outside the TypeScript program', (
       'tsconfig.json': tsconfig(['src/scripts/*.ts']),
     });
     expect(codesOf((await validate({ root: buildOnly })).diagnostics)).not.toContain('AB4834');
+  });
+
+  it('reads imports with the scanner, not by text: comments and strings are not consumers, import type in a .d.ts is', async () => {
+    const commentOnly = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      // The program's own files mention the entries only in prose and a string literal.
+      'src/scripts/build.ts': [
+        "// Consumers import '@agent-bundle/runtime' or 'agent-bundle/test'; this script does neither.",
+        "export const hint = \"import { agent } from '@agent-bundle/runtime'\";",
+        '',
+      ].join('\n'),
+      'tsconfig.json': tsconfig(['src/scripts/*.ts']),
+    });
+    expect(codesOf((await validate({ root: commentOnly })).diagnostics)).not.toContain('AB4834');
+
+    const subpath = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      'src/scripts/build.ts': "import type { AgentRouteModule } from 'agent-bundle/routes';\nexport type Module = AgentRouteModule;\n",
+      'tsconfig.json': tsconfig(['src/scripts/*.ts']),
+    });
+    expect(codesOf((await validate({ root: subpath })).diagnostics)).not.toContain('AB4834');
+
+    const declaration = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      'src/scripts/types.d.ts': "import type { RegisteredRouteId } from '@agent-bundle/runtime';\nexport type Id = RegisteredRouteId;\n",
+      'tsconfig.json': tsconfig(['src/scripts/*.ts']),
+    });
+    expect(codesOf((await validate({ root: declaration })).diagnostics)).toContain('AB4834');
+  });
+
+  it('tailors the recovery to a config without its own include array, whose patterns an include would replace', async () => {
+    const defaults = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      // No `include`: the program is the `**/*` default, which never descends into dot-directories.
+      'tsconfig.json': `${JSON.stringify({ compilerOptions: { module: 'NodeNext', strict: true } }, null, 2)}\n`,
+    });
+    const [warning] = (await validate({ root: defaults })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4834');
+    expect(warning?.recovery).toContain('Add ".agent-bundle/routes.d.ts" to the "include" array of the config tsconfig.json extends, or declare an "include" array in tsconfig.json that lists ".agent-bundle/routes.d.ts" beside the patterns it compiles today (the default is "**/*")');
+
+    const inherited = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      'tsconfig.base.json': tsconfig(['agent-bundle.config.ts', 'src/**/*.ts']),
+      'tsconfig.json': '{ "extends": "./tsconfig.base.json" }\n',
+    });
+    const [inheritedWarning] = (await validate({ root: inherited })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4834');
+    expect(inheritedWarning?.recovery).toContain('the config tsconfig.json extends');
+  });
+
+  it('matches the declaration path the way the host file system does', async () => {
+    const root = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      // Case-mismatched: names the file on a case-insensitive host, nothing on a case-sensitive one.
+      'tsconfig.json': tsconfig(['.agent-bundle/Routes.d.ts', 'src/**/*.ts']),
+    });
+    const codes = codesOf((await validate({ root })).diagnostics);
+    if (ts.sys.useCaseSensitiveFileNames) expect(codes).toContain('AB4834');
+    else expect(codes).not.toContain('AB4834');
   });
 
   it('has nothing to report without a tsconfig, without routes, or with an unparsable tsconfig', async () => {

@@ -82,7 +82,9 @@ component receives the schema's **output**, exactly as the generated server hand
 `renderRoute` parses the input through the route's own `inputSchema` at that same boundary: the
 component sees defaults filled and transforms applied, and an input the schema rejects fails with
 an `invalid-input` harness error before any provider or component runs. `result` is the
-`resultSchema` output.
+`resultSchema` output. Both sides are registered: `RegisteredRouteInput<Id>` (from
+`@agent-bundle/runtime`) is the caller's side and `RegisteredRouteParsedInput<Id>` the component's,
+which is what `loadRouteModule(id).inputSchema.parse(...)` returns.
 
 An event route registers what the harness actually takes and gives back: `input` is the
 `{ canonical, native, preflight? }` payload (the harness supplies `signal` itself), and `result` is

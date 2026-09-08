@@ -14,14 +14,16 @@ import { routeTypesRelativePath } from './typegen.ts';
 const projectTsconfigFilename = 'tsconfig.json';
 
 /**
- * The modules whose declarations the generated file augments or narrows:
+ * The entries whose declarations the generated file augments or narrows:
  * a program that imports one of them observes the registration, and one that
  * omits the file type-checks those imports with `string` ids and `unknown`
  * input/result/provider values, silently. Route modules import
  * `@agent-bundle/runtime` (providers), App views `agent-bundle/app`, tests
- * `agent-bundle/test` and `agent-bundle/eval`.
+ * `agent-bundle/test` and `agent-bundle/eval`. Exact specifiers: no other
+ * entry (`agent-bundle/test/browser`, `agent-bundle/routes`) reads the
+ * registration.
  */
-const consumerImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"](?:agent-bundle\/(?:app|eval|test)|@agent-bundle\/runtime)(?:\/[^'"]*)?['"]/;
+const consumerEntries: ReadonlySet<string> = new Set(['agent-bundle/app', 'agent-bundle/eval', 'agent-bundle/test', '@agent-bundle/runtime']);
 
 const comparablePath = (path: string): string => {
   const resolved = resolve(path);
@@ -30,6 +32,8 @@ const comparablePath = (path: string): string => {
 
 interface Program {
   readonly fileNames: readonly string[];
+  /** Whether the config file itself declares `include` (not inherited through `extends`, not the `**` default). */
+  readonly ownInclude: boolean;
   readonly references: readonly string[];
   readonly tsconfigPath: string;
 }
@@ -45,6 +49,8 @@ interface Program {
 const program = (tsconfigPath: string): Program | undefined => {
   const read = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
   if (read.error !== undefined || read.config === undefined) return undefined;
+  // Read before parsing: the parser writes the inherited `include` back onto the raw config.
+  const ownInclude = Array.isArray((read.config as { readonly include?: unknown }).include);
   const parsed = ts.parseJsonConfigFileContent(
     read.config,
     ts.sys,
@@ -54,6 +60,7 @@ const program = (tsconfigPath: string): Program | undefined => {
   );
   return {
     fileNames: parsed.fileNames,
+    ownInclude,
     references: (parsed.projectReferences ?? []).map((reference) => ts.resolveProjectReferencePath(reference)),
     tsconfigPath,
   };
@@ -76,9 +83,17 @@ const programs = (rootTsconfigPath: string): readonly Program[] => {
   return found;
 };
 
-/** Whether one of the program's own source files imports a module the generated declaration augments. */
+/**
+ * Whether one of the program's root files imports an entry the generated
+ * declaration augments. The scanner's import pre-processing reads static and
+ * dynamic import specifiers only — a specifier in a comment or a string
+ * literal is not an import — and a user's own `.d.ts` counts like any other
+ * root file, since `import type` from a consumer entry reads the registration too.
+ */
 const consumesRegistration = (fileNames: readonly string[]): boolean =>
-  fileNames.some((fileName) => !fileName.endsWith('.d.ts') && consumerImport.test(ts.sys.readFile(fileName) ?? ''));
+  fileNames.some((fileName) =>
+    ts.preProcessFile(ts.sys.readFile(fileName) ?? '', true, false).importedFiles
+      .some((imported) => consumerEntries.has(imported.fileName)));
 
 /**
  * AB4834: the generated `.agent-bundle/routes.d.ts` registers the project's
@@ -103,11 +118,16 @@ export const routeTypesProgramDiagnostics = (projectRoot: string): readonly Diag
       && consumesRegistration(candidate.fileNames))
     .map((candidate) => {
       const tsconfig = relative(projectRoot, candidate.tsconfigPath).replaceAll('\\', '/');
-      const include = relative(dirname(candidate.tsconfigPath), routeTypesPath).replaceAll('\\', '/');
+      const include = JSON.stringify(relative(dirname(candidate.tsconfigPath), routeTypesPath).replaceAll('\\', '/'));
+      // An `include` array replaces the default (`**/*`) or the inherited
+      // patterns, so a config without its own must keep them when it adds one.
+      const where = candidate.ownInclude
+        ? `Add ${include} to the "include" array of ${tsconfig}`
+        : `Add ${include} to the "include" array of the config ${tsconfig} extends, or declare an "include" array in ${tsconfig} that lists ${include} beside the patterns it compiles today (the default is "**/*")`;
       return {
         code: 'AB4834',
         message: `${tsconfig} imports agent-bundle/app, agent-bundle/test, agent-bundle/eval, or @agent-bundle/runtime but does not include the generated ${routeTypesRelativePath}, so that program type-checks route ids as string and input/result/provider values as unknown.`,
-        recovery: `Add ${JSON.stringify(include)} to the "include" array of ${tsconfig}; agent-bundle validate, build, and dev keep the file current, and it stays gitignored.`,
+        recovery: `${where}; agent-bundle validate, build, and dev keep the file current, and it stays gitignored.`,
         severity: 'warning',
         sourcePath: candidate.tsconfigPath,
       };

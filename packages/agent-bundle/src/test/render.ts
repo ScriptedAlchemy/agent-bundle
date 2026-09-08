@@ -22,6 +22,7 @@ import type {
   AgentRequestInit,
   RegisteredRouteId,
   RegisteredRouteInput,
+  RegisteredRouteParsedInput,
   RegisteredRouteResult,
 } from '@agent-bundle/runtime';
 import type * as React from 'react';
@@ -113,6 +114,9 @@ export type RouteTargetConstraint<Target> = Target extends AgentRouteModule
 
 /** The registered input type of a route target; `unknown` for a module target, a dynamic string, or an unregistered project. */
 export type RouteTargetInput<Target> = Target extends RegisteredRouteId ? RegisteredRouteInput<Target> : unknown;
+
+/** The registered parsed input of a route target — what its component receives after defaults and transforms; `unknown` when unregistered. */
+export type RouteTargetParsedInput<Target> = Target extends RegisteredRouteId ? RegisteredRouteParsedInput<Target> : unknown;
 
 /** The registered result type of a route target; `unknown` for a module target, a dynamic string, or an unregistered project. */
 export type RouteTargetResult<Target> = Target extends RegisteredRouteId ? RegisteredRouteResult<Target> : unknown;
@@ -407,7 +411,7 @@ const componentProps = (
       };
     }
     case 'cli':
-      return { input: options.input ?? {}, signal };
+      return { input: parsedInput, signal };
     case 'script':
       return { argv: (invocation.props as { readonly input?: unknown }).input ?? [], signal };
     default: {
@@ -574,8 +578,8 @@ export interface LoadedRouteModule<Target extends string = string> {
   readonly [exportName: string]: unknown;
   readonly config?: unknown;
   readonly default?: (props: never) => unknown;
-  /** The registration types what a caller sends, not what `parse` returns (the component's props after defaults and transforms). */
-  readonly inputSchema?: RouteModuleSchema<unknown>;
+  /** `parse` returns the component's input — the caller's input after defaults and transforms. */
+  readonly inputSchema?: RouteModuleSchema<RouteTargetParsedInput<Target>>;
   readonly resultSchema?: RouteModuleSchema<RouteTargetResult<Target>>;
 }
 
@@ -1465,7 +1469,7 @@ const prepareRender = async (
   const renderer = await loadRenderer();
   const surface = executableSurface(resolved.kind, resolved.provenance.routeId, resolved.manifest);
   const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, surface, options, resolved.provenance);
-  const input = resolved.kind === 'prompt' || resolved.kind === 'resource' || resolved.kind === 'tool'
+  const input = resolved.kind === 'cli' || resolved.kind === 'prompt' || resolved.kind === 'resource' || resolved.kind === 'tool'
     ? parsedInput(resolved.module.inputSchema, options.input ?? {}, resolved.provenance)
     : undefined;
   const collected: AgentProgressUpdate[] = [];

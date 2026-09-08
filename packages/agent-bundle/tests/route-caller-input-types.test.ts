@@ -149,11 +149,16 @@ it('types callers by schema input and components by schema output in a clean gen
     // The server program: the component sees the parsed output.
     writeProjectFile(root, 'src/handler-types.ts', [
       "import type { ToolRouteProps } from 'agent-bundle';",
+      "import type { RegisteredRouteInput, RegisteredRouteParsedInput } from '@agent-bundle/runtime';",
       "import type { inputSchema as measureSchema } from './mcp/curator/tools/measure.js';",
       "import type { inputSchema as pageSchema } from './mcp/curator/tools/page.js';",
       ...equality,
       "export type PageProps = Assert<Equal<ToolRouteProps<typeof pageSchema>['input'], { limit: number }>>;",
       "export type MeasureProps = Assert<Equal<ToolRouteProps<typeof measureSchema>['input'], { text: number }>>;",
+      '// The registration carries both sides: what a caller sends and what the component receives.',
+      "export type PageCaller = Assert<Equal<RegisteredRouteInput<'tool:curator/page'>, { limit?: number | undefined }>>;",
+      "export type PageParsed = Assert<Equal<RegisteredRouteParsedInput<'tool:curator/page'>, { limit: number }>>;",
+      "export type MeasureParsed = Assert<Equal<RegisteredRouteParsedInput<'tool:curator/measure'>, { text: number }>>;",
       '',
     ].join('\n')),
     // Negative cases, each its own entry so one program reports exactly one rejection.

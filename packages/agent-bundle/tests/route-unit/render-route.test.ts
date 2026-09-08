@@ -584,6 +584,17 @@ describe('layout composition at the route-unit level', () => {
     expect(error.message).toContain('route:        tool:harness/layout-probe (tool)');
   });
 
+  it('parses a rendered CLI route\'s input the same way, so CliRouteProps sees the schema output', async () => {
+    // The strict schema rejects an empty topic and an unknown mode before the component runs; without the
+    // parse both would render, since the component never reads what it does not use.
+    for (const input of [{ topic: '' }, { mode: 'bogus', topic: 'layouts' }]) {
+      const error = await rejection(renderRoute('cli:report', { input: input as never }));
+      expect(error).toBeInstanceOf(AgentTestError);
+      expect(error.code).toBe('invalid-input');
+      expect(error.message).toContain('route:        cli:report (cli)');
+    }
+  });
+
   it('applies only the root layout to a rendered CLI command', async () => {
     const rendered = await renderRoute('cli:report', { input: { topic: 'layouts' } });
 

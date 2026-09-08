@@ -121,7 +121,7 @@ const appAugmentation = (routes: readonly CompiledAgentRoute[]): readonly string
 
 /**
  * The single `@agent-bundle/runtime` augmentation. Its `Register.routes`
- * member registers the thin `{ input, result }` contract map (TanStack
+ * member registers the thin `{ input, parsedInput, result }` contract map (TanStack
  * Router's `Register` pattern), so `agent-bundle/test`'s `renderRoute` narrows
  * its route-id parameter, `input`, and `result` from the project's own route
  * modules — a schema route's `inputSchema` input and `resultSchema` output, an event
@@ -174,6 +174,7 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     '// spelled the way the wire carries it; the route component receives the parsed output instead.',
     'export type RouteContract<InputSchema, ResultSchema> = Readonly<{',
     '  input: SchemaInput<InputSchema>;',
+    '  parsedInput: SchemaOutput<InputSchema>;',
     '  result: SchemaOutput<ResultSchema>;',
     '}>;',
     'export type EventRouteContract<Component, Event extends string> = Readonly<{',
@@ -197,6 +198,10 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     '  Contract extends { readonly input: infer Input } ? Input',
     "    : Contract extends { readonly component: infer Component } ? Omit<ComponentInput<Component>, 'signal'>",
     '      : never;',
+    'type HarnessParsedInput<Contract> =',
+    '  Contract extends { readonly parsedInput: infer Parsed } ? Parsed',
+    "    : Contract extends { readonly component: infer Component } ? Omit<ComponentInput<Component>, 'signal'>",
+    '      : never;',
     'type HarnessResult<Contract> =',
     '  Contract extends { readonly result: infer Result } ? Result',
     '    : Contract extends { readonly component: unknown } ? undefined',
@@ -212,9 +217,13 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     'export type RouteId = keyof AgentBundleRoutes;',
     'export type RouteInput<Id extends RouteId> = ContractInput<AgentBundleRoutes[Id]>;',
     'export type RouteResult<Id extends RouteId> = ContractResult<AgentBundleRoutes[Id]>;',
-    '/** The registered harness contract map: one `{ input, result }` per route id, for `@agent-bundle/runtime`\'s `Register`. */',
+    '/** The registered harness contract map: one `{ input, parsedInput, result }` per route id, for `@agent-bundle/runtime`\'s `Register`. */',
     'export type AgentBundleRouteContracts = {',
-    '  readonly [Id in RouteId]: Readonly<{ input: HarnessInput<AgentBundleRoutes[Id]>; result: HarnessResult<AgentBundleRoutes[Id]> }>;',
+    '  readonly [Id in RouteId]: Readonly<{',
+    '    input: HarnessInput<AgentBundleRoutes[Id]>;',
+    '    parsedInput: HarnessParsedInput<AgentBundleRoutes[Id]>;',
+    '    result: HarnessResult<AgentBundleRoutes[Id]>;',
+    '  }>;',
     '};',
     '',
     ...appDeclarations(routes),
