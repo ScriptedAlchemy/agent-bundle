@@ -346,6 +346,37 @@ describe('MCP App preview', () => {
     await complete.close();
   });
 
+  it('leaves a pending preview unsettled when publishing the outcome fails, so the outcome can be offered again (#751)', async () => {
+    const { client } = fakeClient(Promise.resolve(preview()));
+    let attempts = 0;
+    const flakyClient: McpAppPreviewClient = {
+      ...client,
+      async settle(_bindingId, terminal) {
+        attempts += 1;
+        if (attempts === 1) throw new Error('route unavailable');
+        if (attempts === 2) return Object.freeze({ accepted: false, lifecycle: 'initialized', messages: Object.freeze([]) });
+        return Object.freeze({ accepted: true, lifecycle: 'initialized', messages: Object.freeze([Object.freeze({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: terminal })]) });
+      },
+    };
+    const frameRelayFactory: McpAppFrameRelayFactory = () => ({ async close() {}, deliverHostMessages() { return true; }, start() { return true; } });
+    const controller = createMcpAppPreviewController({ client: flakyClient, frameRelayFactory, host, input: Object.freeze({ city: 'Paris' }), sessionId: 'session-weather', toolName: 'show-weather' });
+    const phases: string[] = [];
+    controller.subscribe((state) => { phases.push(state.phase); });
+    await controller.start();
+    controller.attachFrame(iframe(), browserWindow);
+
+    // A throw is shown, not swallowed, and does not consume the one outcome.
+    await expect(controller.settle({ result: { temperature: 22 } })).resolves.toBe(false);
+    expect(phases.at(-1)).toBe('error');
+    // A refusal is reported and likewise leaves the outcome offerable.
+    await expect(controller.settle({ result: { temperature: 22 } })).resolves.toBe(false);
+    await expect(controller.settle({ result: { temperature: 22 } })).resolves.toBe(true);
+    expect(attempts).toBe(3);
+    await expect(controller.settle({ cancelled: 'too late' })).resolves.toBe(false);
+    expect(attempts).toBe(3);
+    await controller.close();
+  });
+
   it('keeps the ordinary fallback visible and closes its unused binding when no canonical App frame is available', async () => {
     const fallback: McpAppJsonValue = Object.freeze({
       input: Object.freeze({ city: 'Paris' }),

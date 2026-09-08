@@ -490,7 +490,8 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   readonly #input: McpAppJsonValue;
   readonly #request: McpAppPreviewCreateRequest | undefined;
   #result: McpAppJsonValue | undefined;
-  #settled = false;
+  /** The one terminal outcome in flight or accepted; cleared when the publish failed so a retry can land. */
+  #settling: Promise<boolean> | undefined;
   readonly #runtime: RuntimePreviewDependencies | undefined;
   readonly #runtimeEvidence: RuntimePreviewEvidence | undefined;
   readonly #runtimeFallback: McpAppPreviewFallback | undefined;
@@ -554,7 +555,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     this.#frameRelayFactory = options.frameRelayFactory;
     this.#input = detachedJson(options.input);
     this.#result = options.result === undefined ? undefined : detachedJson(options.result);
-    this.#settled = options.result !== undefined;
+    this.#settling = options.result === undefined ? undefined : Promise.resolve(false);
     this.#request = createRequest(options, this.#input, this.#result);
     this.#sessionId = options.sessionId;
   }
@@ -593,10 +594,32 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
    * Publishes the opening call's one terminal outcome to a preview created
    * without `result` (#751). Waits for the binding to exist, then refuses a
    * second outcome, a closed preview, or a relay that cannot take the message.
+   * A publish the route rejected or that threw leaves the preview unsettled
+   * (and, for a throw, in the error state) so the outcome can be offered again.
    */
   async settle(terminal: McpAppPreviewTerminal): Promise<boolean> {
-    if (this.#settled || this.#closed || this.#runtime !== undefined) return false;
-    this.#settled = true;
+    if (this.#settling !== undefined || this.#closed || this.#runtime !== undefined) return false;
+    this.#settling = this.#publishTerminal(terminal).then(
+      (accepted) => {
+        if (!accepted && !this.#closed) this.#settling = undefined;
+        return accepted;
+      },
+      (error: unknown) => {
+        this.#settling = undefined;
+        if (!this.#closed) {
+          this.#setState(Object.freeze({
+            fallback: fallbackFor(undefined, this.#input, this.#result, 'preview-error'),
+            message: messageFor(error),
+            phase: 'error',
+          }));
+        }
+        return false;
+      },
+    );
+    return await this.#settling;
+  }
+
+  async #publishTerminal(terminal: McpAppPreviewTerminal): Promise<boolean> {
     await this.#startPromise;
     const preview = this.#preview;
     const client = this.#client;

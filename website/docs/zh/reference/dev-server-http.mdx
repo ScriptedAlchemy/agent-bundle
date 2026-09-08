@@ -90,10 +90,10 @@ data: { "session": HostSession }
 启动方式：共享同一启动身份的 `{ launchId, targets }` 分组，从产物声明的 projection 解析并参考已安装的宿主。
 Workbench 的 App 工作区从该列表中选择，而不是从构建的全局 target 中选择。
 
-`POST /api/mcp/apps` 接受只有 `input` 而没有 `result` 的请求，为仍在进行中的调用挂载预览；此时 App 只收到
-`ui/notifications/tool-input`。`POST /api/mcp/apps/<binding-id>/result` 携带 `{ result }` 或
-`{ cancelled }` 发布该绑定唯一的终态通知（`tool-result` 或 `tool-cancelled`）；对已关闭、已结算或创建时
-已带结果的绑定应答 `accepted: false`。
+`POST /api/mcp/sessions/<session-id>/apps` 接受只有 `input` 而没有 `result` 的请求，为仍在进行中的调用
+挂载预览；此时 App 只收到 `ui/notifications/tool-input`。`POST /api/mcp/apps/<binding-id>/result` 携带
+`{ result }` 或 `{ cancelled }` 发布该绑定唯一的终态通知（`tool-result` 或 `tool-cancelled`）；对已结算或
+创建时已带结果的绑定应答 `accepted: false`，绑定关闭后应答 404（`AB8022`）。
 
 `POST /api/mcp/sessions/<session-id>/operations` 保留现有操作联合类型。`tools/call` 操作额外接受一个
 最多 256 个字符的可选顶层 `correlationId`。浏览器不能直接提供 `_meta`；前台在发送请求前会把该值

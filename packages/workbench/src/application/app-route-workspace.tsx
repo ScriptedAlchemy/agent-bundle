@@ -110,7 +110,11 @@ export const AppRouteWorkspace = ({ clients, leaf, onNavigate, status }: AppRout
   const epochId = epoch?.id;
   const serverName = leaf.ref.kind === 'app' ? leaf.ref.server : undefined;
   const resourceUri = appResourceUriFor(leaf);
-  const [launches, setLaunches] = useState<readonly McpRouteLaunch[]>();
+  const launchKey = `${epochId ?? ''}\u0000${serverName ?? ''}`;
+  const [launchState, setLaunchState] = useState<{ readonly key: string; readonly groups: readonly McpRouteLaunch[] }>();
+  // Keyed by epoch and server, so a new epoch never opens a session with the
+  // previous list's target while its own launches are still loading.
+  const launches = launchState?.key === launchKey ? launchState.groups : undefined;
   const [launchError, setLaunchError] = useState<string>();
   const [launchId, setLaunchId] = useState<string>();
   const [profile, setProfile] = useState<McpAppPreviewProfile>('portable');
@@ -129,16 +133,15 @@ export const AppRouteWorkspace = ({ clients, leaf, onNavigate, status }: AppRout
   // The launches the dev server judged eligible for this server on this build
   // (#747): distinct launch identities, each with the targets that share it.
   useEffect(() => {
-    setLaunches(undefined);
     setLaunchError(undefined);
     if (epochId === undefined || serverName === undefined) return;
     let current = true;
     clients.mcpRoutes.launches(epochId, serverName).then(
-      (found) => { if (current) setLaunches(found); },
+      (found) => { if (current) setLaunchState({ groups: found, key: launchKey }); },
       (reason: unknown) => { if (current) setLaunchError(errorMessage(reason, 'The eligible launches could not be resolved.')); },
     );
     return () => { current = false; };
-  }, [clients.mcpRoutes, epochId, serverName]);
+  }, [clients.mcpRoutes, epochId, launchKey, serverName]);
 
   const launch = useMemo(
     () => launches?.find((candidate) => candidate.launchId === launchId) ?? preferredLaunch(launches ?? []),
