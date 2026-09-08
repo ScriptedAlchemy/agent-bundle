@@ -781,7 +781,7 @@ export const compileResultOf = (
     externals: Object.freeze(record.externals.map((external): ExternalIR => ({
       asset,
       externalType: external.externalType,
-      issuers: external.issuers.map((issuer) => posixRelativeWhenInside(options.cwd, issuer)),
+      issuers: external.issuers.map((issuer) => posixRelativeWhenInside(options.cwd, issuer)).sort(),
       kind: classifyExternal(external, { asset, emittedAssets: options.emittedAssets }),
       request: external.request,
       userRequest: external.userRequest,
