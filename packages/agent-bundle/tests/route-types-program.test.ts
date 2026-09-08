@@ -213,6 +213,20 @@ describe('AB4834 generated route declarations outside the TypeScript program', (
     expect(codesOf((await validate({ root: linked })).diagnostics)).not.toContain('AB4834');
   });
 
+  it('reads a referenced project through its emitted declaration, as tsc does, so its source-only imports do not make the parent a consumer', async () => {
+    const solution = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      // The child consumes the registration in source; its emitted declaration does not.
+      'child/src/status.ts': "import { invokeMcpTool } from 'agent-bundle/test';\nexport const status = (): Promise<unknown> => invokeMcpTool('report', { input: {} });\n",
+      'child/dist/status.d.ts': 'export declare const status: () => Promise<unknown>;\n',
+      'child/tsconfig.json': tsconfig(['src/**/*.ts'], { compilerOptions: { composite: true, declaration: true, module: 'NodeNext', outDir: 'dist', rootDir: 'src' } }),
+      'app/index.ts': "export { status } from '../child/src/status.js';\n",
+      'tsconfig.json': tsconfig([], { files: ['app/index.ts'], references: [{ path: './child' }] }),
+    });
+    const diagnostics = (await validate({ root: solution })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4834');
+    expect(diagnostics.map((diagnostic) => diagnostic.sourcePath)).toEqual([join(solution, 'child/tsconfig.json')]);
+  });
+
   it('follows imports from a narrow root, as tsc does: the consumer an entry point imports is in the program', async () => {
     const narrow = await createProject({
       'src/mcp/status/tools/report.ts': routeModule,

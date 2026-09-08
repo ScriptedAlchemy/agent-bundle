@@ -52,7 +52,9 @@ const projectSourceFiles = (parsed: ts.ParsedCommandLine): readonly ts.SourceFil
   const host = ts.createCompilerHost(options);
   const getSourceFile = host.getSourceFile.bind(host);
   host.getSourceFile = (fileName, ...rest) => (fileName.includes('/node_modules/') ? undefined : getSourceFile(fileName, ...rest));
-  return ts.createProgram({ host, options, rootNames: parsed.fileNames }).getSourceFiles();
+  // With the references, an import into a referenced project reads that
+  // project's emitted declaration, as `tsc -p` does, not its source.
+  return ts.createProgram({ host, options, projectReferences: parsed.projectReferences, rootNames: parsed.fileNames }).getSourceFiles();
 };
 
 /**
