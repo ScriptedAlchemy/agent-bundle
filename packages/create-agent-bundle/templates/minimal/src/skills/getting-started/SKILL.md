@@ -5,9 +5,10 @@ description: Explain this plugin’s current Skills or help add a new Skill to i
 # Getting started
 
 Inspect the plugin's current Skills before describing it: use `src/skills/` in
-the source project and the installed `skills/` directory in an artifact.
-Capabilities may have changed since scaffolding. The minimal template starts
-with this Skill, one config, and a delivery check.
+the source project, the installed `skills/` directory for Claude, Codex, Cursor,
+or portable, and `.amp/plugins/<plugin>/skills/` for Amp. Capabilities may have
+changed since scaffolding. The minimal template starts with this Skill, one
+config, and a delivery check.
 
 ## How to add a Skill
 
