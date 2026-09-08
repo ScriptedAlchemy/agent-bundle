@@ -10,7 +10,7 @@ import { cursorAdapter } from '../src/adapters/cursor.ts';
 import { portableAdapter } from '../src/adapters/portable.ts';
 import { normalizeProject, validateSource, type NormalizationTargetRegistry } from '../src/config/index.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
-import type { AgentBundleConfig, NormalizedPlugin } from '../src/core/types.ts';
+import type { AgentBundleConfig, AgentBundleSharedMetadata, NormalizedPlugin } from '../src/core/types.ts';
 
 const hosts = ['portable', 'claude', 'codex', 'cursor'] as const;
 
@@ -227,6 +227,15 @@ it('refuses a malformed plugin.metadata block as the config author\'s own error'
       .filter((diagnostic) => diagnostic.code === 'AB4014');
     expect(reported).toMatchObject([{ severity: 'error', sourcePath: join(root, 'agent-bundle.config.ts') }]);
     expect(reported[0]?.message).toMatch(/homepage must be an absolute HTTP or HTTPS URL/u);
+
+    // A field beyond the five is the same error, named against the block.
+    const unknown = pluginConfig({ metadata: { descriptoin: 'typo' } as AgentBundleSharedMetadata });
+    expect(validateSource(loaded(root, unknown), { skills: [] }, registry)
+      .filter((diagnostic) => diagnostic.code === 'AB4014'))
+      .toMatchObject([{
+        message: expect.stringContaining('shares only author, homepage, keywords, license, repository'),
+        recovery: expect.stringContaining('Correct plugin.metadata in the config'),
+      }]);
 
     // A package field the config replaced is not also reported.
     const replaced = pluginConfig({ metadata: { repository: 'https://example.test/repo' } });
