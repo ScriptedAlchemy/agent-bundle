@@ -26,11 +26,11 @@ node dist/bin/my-agent-plugin.mjs greet --help
 node artifact/scripts/hello.mjs World
 
 # after publishing/installing the package
-npx agent-bundle install claude --from node_modules/my-agent-plugin
+npx --no-install agent-bundle install claude --from node_modules/my-agent-plugin
 ```
 
 Installing the npm package does not mutate any host; run
-`npx agent-bundle install <host> --from node_modules/<package>` explicitly.
+`npx --no-install agent-bundle install <host> --from node_modules/<package>` explicitly.
 Validate and publish the generated npm root with
 `npm run pack:check && npm publish ./dist --ignore-scripts`.
 

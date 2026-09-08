@@ -37,11 +37,12 @@ selection and the separately versioned compiler/runtime pairing used by released
 | `mcp-server` | Conventional MCP tools with route/projection tests. The current starter also demonstrates an optional library export and an artifact script. |
 | `cli-tool` | A standalone routed CLI, with a script and library example. |
 
-The current scaffolder accepts `portable`, `claude`, `codex`, and `cursor`. The compiler also
-supports `amp`, and an existing project selects it in `agent-bundle.config.ts` — but not this MCP
-starter: Amp's skill-scoped MCP contract refuses the starter's compiler-owned local `status`
-server, so `targets: ['amp']` here fails the build with `amp.mcp.generated-local`. Scaffold
-`minimal` for an Amp project, or author a remote or globally resolvable command server beside
+The scaffolder offers every target the compiler builds: `amp`, `portable`, `claude`, `codex`, and
+`cursor`. One combination is refused — `amp` with this MCP starter, because Amp's skill-scoped MCP
+contract rejects the starter's compiler-owned local `status` server
+(`amp.mcp.generated-local`). Project creation says so and names the templates Amp can carry, so
+the refusal arrives before the project exists rather than at its first build. Scaffold `minimal`
+or `cli-tool` for an Amp project, or author a remote or globally resolvable command server beside
 exactly one Skill. Adding a native target also does not imply support for that host in the
 live-development proxy. See [host installation](../distribution/installation.mdx).
 

@@ -87,7 +87,9 @@ it('scaffolds with independently versioned release tarballs and runs after sourc
  */
 it('scaffolds the minimal template, auto-installs, and passes its own check', async () => {
   // No --no-install: this run covers the scaffolder-driven `npm install` path.
-  const projectRoot = await scaffoldProject('minimal', 'minimal-project', []);
+  // `amp` is here because project creation only started offering it in #745: a
+  // target the scaffolder accepts has to survive the packed build too.
+  const projectRoot = await scaffoldProject('minimal', 'minimal-project', ['--targets', 'portable,amp']);
 
   const manifest = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
     readonly devDependencies: Record<string, string>;
@@ -101,4 +103,8 @@ it('scaffolds the minimal template, auto-installs, and passes its own check', as
   await expectCleanValidate(projectRoot);
   await expect(readFile(join(projectRoot, 'artifact', 'skills', 'getting-started', 'SKILL.md'), 'utf8'))
     .resolves.toContain('# Getting started');
+  await expect(readFile(
+    join(projectRoot, 'artifact', '.amp', 'plugins', 'minimal-project', 'skills', 'getting-started', 'SKILL.md'),
+    'utf8',
+  )).resolves.toContain('# Getting started');
 }, 600_000);

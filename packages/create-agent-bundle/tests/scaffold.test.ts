@@ -167,9 +167,10 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
 
   it.effect('renders README install instructions for the selected targets', () => Effect.gen(function* () {
     const path = yield* Path.Path;
-    const [defaults, cursorOnly, everyHost, portableOnly, minimal] = yield* Effect.all([
+    const [defaults, cursorOnly, ampOnly, everyHost, portableOnly, minimal] = yield* Effect.all([
       scaffoldTemplate('cli-tool', { pluginName: 'greeter' }),
       scaffoldTemplate('mcp-server', { pluginName: 'status-plugin', targets: ['cursor'] }),
+      scaffoldTemplate('cli-tool', { pluginName: 'status-plugin', targets: ['amp'] }),
       scaffoldTemplate('mcp-server', { pluginName: 'status-plugin', targets: ['claude', 'codex', 'cursor'] }),
       scaffoldTemplate('cli-tool', { pluginName: 'greeter', targets: ['portable'] }),
       scaffoldTemplate('minimal', { pluginName: 'skills-only', targets: ['portable'] }),
@@ -180,8 +181,8 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     const defaultReadme = yield* readText(path.join(defaults.root, 'README.md'));
     expect(defaultReadme).toContain([
       '# after publishing/installing the package',
-      'npx agent-bundle install claude --from node_modules/status-plugin',
-      'npx agent-bundle install codex --from node_modules/status-plugin',
+      'npx --no-install agent-bundle install claude --from node_modules/status-plugin',
+      'npx --no-install agent-bundle install codex --from node_modules/status-plugin',
       '',
     ].join('\n'));
     expect(defaultReadme).not.toContain('install cursor');
@@ -189,23 +190,28 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
 
     // A cursor-only scaffold must not suggest unavailable host roots.
     const cursorReadme = yield* readText(path.join(cursorOnly.root, 'README.md'));
-    expect(cursorReadme).toContain('npx agent-bundle install cursor --from node_modules/status-plugin\n');
+    expect(cursorReadme).toContain('npx --no-install agent-bundle install cursor --from node_modules/status-plugin\n');
     expect(cursorReadme).not.toContain('install claude');
     expect(cursorReadme).not.toContain('install codex');
+
+    // Amp is installable, so it earns an install line like any other host.
+    const ampReadme = yield* readText(path.join(ampOnly.root, 'README.md'));
+    expect(ampReadme).toContain('npx --no-install agent-bundle install amp --from node_modules/status-plugin\n');
+    expect(ampReadme).toContain('The package contains these selected host targets: `amp`.');
 
     // Selecting every host installs into every host.
     const everyHostReadme = yield* readText(path.join(everyHost.root, 'README.md'));
     expect(everyHostReadme).toContain([
-      'npx agent-bundle install claude --from node_modules/status-plugin',
-      'npx agent-bundle install codex --from node_modules/status-plugin',
-      'npx agent-bundle install cursor --from node_modules/status-plugin',
+      'npx --no-install agent-bundle install claude --from node_modules/status-plugin',
+      'npx --no-install agent-bundle install codex --from node_modules/status-plugin',
+      'npx --no-install agent-bundle install cursor --from node_modules/status-plugin',
     ].join('\n'));
 
     // Portable-only scaffolds name no install command.
     const portableReadme = yield* readText(path.join(portableOnly.root, 'README.md'));
-    expect(portableReadme).not.toMatch(/^npx agent-bundle install /mu);
+    expect(portableReadme).not.toMatch(/^npx --no-install agent-bundle install /mu);
     expect(portableReadme).toContain("no installable host target ('portable')");
-    expect(portableReadme).toContain('Add `claude`, `codex`,');
+    expect(portableReadme).toContain('Add `amp`, `claude`, `codex`, or `cursor`');
 
     // The skills-only template has no install section and passes through.
     const minimalReadme = yield* readText(path.join(minimal.root, 'README.md'));
