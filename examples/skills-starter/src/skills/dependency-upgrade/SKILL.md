@@ -1,18 +1,17 @@
 ---
 name: dependency-upgrade
-description: Plans and verifies dependency upgrades with compatibility, rollout, and rollback evidence.
+description: Plan, implement, or review a dependency upgrade that may change APIs, runtime support, generated output, or operational behavior.
 ---
 # Dependency upgrade
 
-## When to use
+Match the user's scope: a plan or compatibility review does not authorize
+implementation, rollout, or publication. For implementation, complete the
+requested upgrade and relevant validation before reporting it done.
 
-Use this Skill for a library, runtime, toolchain, or platform upgrade that can
-change public APIs, generated output, operational behavior, or support policy.
-
-## Required resources
-
-- Apply [the compatibility checklist](references/compatibility-checklist.md).
-- Write the proposal with [the upgrade plan template](assets/upgrade-plan.md).
+Use [the compatibility checklist](references/compatibility-checklist.md) to
+select checks for affected surfaces. For a proposal or rollout handoff, use
+[the upgrade plan template](assets/upgrade-plan.md); mark unavailable evidence
+explicitly rather than inventing a result or owner.
 
 ## Workflow
 
@@ -22,12 +21,15 @@ change public APIs, generated output, operational behavior, or support policy.
    changes, peer requirements, and known regressions that intersect this repo.
 3. Map affected imports, configuration, generated artifacts, consumers, and
    CI/release surfaces before editing.
-4. Implement the smallest coherent increment and run focused contract tests,
-   type checks, production builds, and packed-consumer checks.
-5. Define rollout signals and a tested rollback path. Do not call the upgrade
-   complete until shipped output and a real consumer both pass.
+4. When implementation is requested, make the smallest coherent change and run
+   checks that exercise its affected behavior. Include builds or packed-consumer
+   checks when emitted or published output is affected.
+5. For release readiness, record rollout signals, rollback evidence, and real
+   consumer verification. A planning task can finish with a concrete plan and
+   clearly identified validation still needed before rollout.
 
 ## Final answer
 
 State the compatibility decision, changed surfaces, evidence run, remaining
-risk, rollout signal, and exact rollback trigger.
+risk, rollout signal, and exact rollback trigger. Mark any item not yet
+available for the requested scope.

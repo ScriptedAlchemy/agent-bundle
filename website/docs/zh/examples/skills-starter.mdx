@@ -32,7 +32,7 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 | 路径 | 是什么 |
 | --- | --- |
 | `src/skills/incident-triage/` | 一次生产事故，从最初信号到止损、证据收集，直到可直接交接的进展更新。 |
-| `src/skills/dependency-upgrade/` | 依赖升级规划，包含 API、运行时、灰度与回滚检查。 |
+| `src/skills/dependency-upgrade/` | 依赖升级计划、实施或审查，包含 API、运行时、灰度与回滚检查。 |
 | `src/skills/release-review/` | 一次显式发布评审所需的证据、严重级别、流程与最终报告要求。 |
 | `src/commands/review-release.md` | 启动发布评审的 Cursor 命令。 |
 | `src/rules/release-safety.mdc` | 让发布决策保持证据导向的 Cursor 规则。 |
@@ -41,6 +41,10 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 
 每个 Skill 都链接自己的 `references/` 清单或运行手册，以及一份可复用的 `assets/` 交接或规划模板，
 因此 Skill 正文保持简短，长篇材料只在需要时才被加载。
+
+dependency-upgrade Skill 区分计划、实施与发布就绪，按受影响的范围选择验证，而不是要求计划任务
+运行全部构建或消费者检查。发布就绪仍需当前候选版本的证据，以及规定的回滚和消费者检查；缺少证据
+必须明确报告，不能当作成功。
 
 ## 在 Workbench 中操作
 

@@ -1,13 +1,8 @@
 ---
 name: release-review
-description: Reviews release evidence and issues an auditable readiness verdict.
+description: Review a release candidate and issue an evidence-based go/no-go verdict.
 ---
 # Release review
-
-## When to use
-
-Use this Skill when a release candidate needs a go/no-go verdict supported by
-checked, reproducible evidence.
 
 ## Required resources
 

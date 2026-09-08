@@ -13,6 +13,11 @@ From the repository root, launch the Workbench with:
 pnpm example:host-test
 ```
 
+For a log-only question, the Skill reads existing captures. A requested live probe
+generates only the relevant shell, file-edit, or MCP events; subagents are used
+when testing parent/child lineage. Missing records are reported as missing
+evidence, not proof that the host lacks a capability.
+
 ## What the probe records
 
 Every canonical event family the framework admits has a semantic event route
