@@ -18,8 +18,8 @@ required. Both eval suites are deterministic and read only checked-in fixtures.
   [`docs/framework-mode.md`](../../docs/framework-mode.md).
 - `src/skills/incident-triage/SKILL.md` guides a production incident from first
   signal through containment, evidence collection, and a handoff-ready update.
-- `src/skills/dependency-upgrade/SKILL.md` plans dependency upgrades with API,
-  runtime, rollout, and rollback checks.
+- `src/skills/dependency-upgrade/SKILL.md` plans, implements, or reviews
+  dependency upgrades with API, runtime, rollout, and rollback checks.
 - `src/skills/release-review/SKILL.md` defines the evidence, severity, workflow,
   and final-report requirements for an explicit release review.
 - Each Skill links its own `references/` checklist or runbook and reusable

@@ -28,14 +28,9 @@ src/skills/release-review/
 ```md
 ---
 name: release-review
-description: Reviews release evidence and issues an auditable readiness verdict.
+description: Review a release candidate and issue an evidence-based go/no-go verdict.
 ---
 # Release review
-
-## When to use
-
-Use this Skill when a release candidate needs a go/no-go verdict supported by
-checked, reproducible evidence.
 
 ## Required resources
 
@@ -49,6 +44,23 @@ frontmatter 是必需的。缺少 frontmatter 的文档报告 `AB3001`；YAML �
 
 指向同级文件的链接是 Skill 引用自身资源的方式。它们在输出文档中保持相对形式，因此在宿主安装的任何
 产物中都能正确解析。
+
+## 让指令保持聚焦
+
+在 `description` 中简洁说明能力与明确的触发条件；正文只保留有用的共通指引和真实的安全或授权约束。
+如果描述已经说明适用边界，就无需重复一个 “When to use” 小节。
+
+把较长的特定模式操作流程放入 `references/`，通过链接说明何时阅读。不要在入口加载所有参考文件，
+也不要为简短且自包含的 Skill 创建无用的资源目录。`assets/` 保存用于输出的文件，而不是必须始终
+加载到上下文中的指令。
+
+正文应让代理保持用户请求的范围：计划或审查不能悄悄变成实施或发布。复用已有授权与当前有效的证据，
+在确需批准前完成相关准备，最后交付所请求的结果及其验证或限制。除非真实工作契约要求，否则不要强制
+进行广泛审计、重复检查或固定的报告仪式。发布就绪判定仍需当前候选版本的检查证据；计划任务可以明确
+列出待完成的检查。
+
+`create-agent-bundle` 的 minimal 模板遵循这一模式：它检查当前 Skill 目录，而不是假定脚手架最初的
+能力始终不变。渲染式 Skill 也应遵循相同原则：审查输出的 Markdown，而不仅是组件源码。
 
 ## 显式选择 Skill
 
@@ -128,7 +140,7 @@ import { Skill } from 'agent-bundle';
 
 export const frontmatter = {
   name: 'release-review',
-  description: 'Reviews release evidence and issues an auditable readiness verdict.',
+  description: 'Review a release candidate and issue an evidence-based go/no-go verdict.',
 };
 
 export default () => (
@@ -160,7 +172,7 @@ Markdown 链接（`[path](path)`），不是 token。宿主语法在降级阶段
 import { defineSkill } from 'agent-bundle';
 
 export const skill = defineSkill({
-  description: 'Reviews release evidence and issues an auditable readiness verdict.',
+  description: 'Review a release candidate and issue an evidence-based go/no-go verdict.',
   name: 'release-review',
 });
 ```

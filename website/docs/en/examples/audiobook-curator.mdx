@@ -143,3 +143,10 @@ audio suffixes and collisions with media or evidence inputs. Network bodies, pro
 traversal, and concurrency are bounded, and network work uses bounded attempts plus the caller's
 cancellation signal rather than hidden deadlines. Local media processes have no wall-clock
 deadline; caller cancellation and bounded stdout and stderr stay enforced.
+
+The curation Skill directs the agent to perform only the requested operations:
+inventory or audit alone does not require conversion or edition matching. For
+a mutation, it prepares the exact plan and evidence before seeking missing
+approval, and reuses approval only while those inputs remain unchanged. Every
+mutating tool call still requires `apply: true`; source immutability and
+human-reviewed edition selection remain intact.

@@ -57,7 +57,7 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     await expect(readFile(join(output, 'skills', 'release-review', 'SKILL.md'), 'utf8'))
       .resolves.toContain('# Release review');
     await expect(readFile(join(output, 'skills', 'release-review', 'SKILL.md'), 'utf8'))
-      .resolves.toContain('## When to use');
+      .resolves.not.toContain('## When to use');
     await expect(readFile(join(
       output,
       'skills',

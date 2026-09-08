@@ -1,13 +1,8 @@
 ---
 name: incident-triage
-description: Triages production incidents with evidence-first containment and a clear operational handoff.
+description: Triage a suspected active production incident and prepare evidence-based containment and handoff.
 ---
 # Incident triage
-
-## When to use
-
-Use this Skill when an alert, customer report, or operator observation suggests
-an active production incident and the team needs a fast, auditable first pass.
 
 ## Required resources
 

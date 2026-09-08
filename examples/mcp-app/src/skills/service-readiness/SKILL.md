@@ -1,13 +1,8 @@
 ---
 name: service-readiness
-description: Reviews service health evidence and records an auditable readiness decision.
+description: Assess service health evidence for a release, incident decision, or operational handoff.
 ---
 # Service readiness
-
-## When to use
-
-Use this Skill when a release, incident decision, or service handoff needs a
-clear health verdict backed by named checks and current evidence.
 
 ## Required resources
 

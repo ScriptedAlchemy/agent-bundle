@@ -35,7 +35,7 @@ content needs no MCP server, App route, state owner, or executable renderer.
 | Path | What it is |
 | --- | --- |
 | `src/skills/incident-triage/` | A production incident from first signal through containment, evidence collection, and a handoff-ready update. |
-| `src/skills/dependency-upgrade/` | Dependency upgrade planning with API, runtime, rollout, and rollback checks. |
+| `src/skills/dependency-upgrade/` | Dependency upgrade planning, implementation, or review with API, runtime, rollout, and rollback checks. |
 | `src/skills/release-review/` | The evidence, severity, workflow, and final-report requirements for an explicit release review. |
 | `src/commands/review-release.md` | A Cursor command that starts the release review. |
 | `src/rules/release-safety.mdc` | A Cursor rule that keeps release decisions evidence-based. |
@@ -45,6 +45,11 @@ content needs no MCP server, App route, state owner, or executable renderer.
 Each Skill links its own `references/` checklist or runbook and a reusable `assets/` handoff or
 planning template, so the Skill body stays short and the long-form material is loaded only when
 it is needed.
+
+The dependency-upgrade Skill distinguishes planning, implementation, and release readiness. It
+selects verification for the affected surfaces instead of requiring every build or consumer
+check for a plan. Release readiness still needs current candidate evidence and the documented
+rollback and consumer checks; missing evidence is reported, not treated as success.
 
 ## Working in the Workbench
 

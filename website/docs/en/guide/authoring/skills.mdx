@@ -30,14 +30,9 @@ Skill, copied into the artifact with its relative path preserved.
 ```md
 ---
 name: release-review
-description: Reviews release evidence and issues an auditable readiness verdict.
+description: Review a release candidate and issue an evidence-based go/no-go verdict.
 ---
 # Release review
-
-## When to use
-
-Use this Skill when a release candidate needs a go/no-go verdict supported by
-checked, reproducible evidence.
 
 ## Required resources
 
@@ -51,6 +46,32 @@ so write it as the condition under which the Skill should be used, not as a titl
 
 Links to sibling files are how a Skill points at its own resources. They stay relative in the
 emitted document, so they resolve inside whichever artifact the host installed.
+
+## Keep instructions focused
+
+Put a concise capability and a discriminating trigger in `description`; put
+only useful shared instructions and real safety or authorization constraints
+in the body. A repeated “When to use” section is unnecessary when the
+description already gives the boundary.
+
+Link substantial mode-specific procedures from `references/` and say when to
+read them. Do not load every reference at entry or create resource folders for
+a short, self-contained Skill. `assets/` holds files used in the output, not
+instructions that must always enter context.
+
+Write the body so the agent matches the user's scope. A plan or review should
+not silently become implementation or release. Reuse existing authorization
+and current evidence. Complete the relevant preparation before a necessary
+approval, and finish with the requested result and its validation or
+limitations. Avoid mandatory broad audits, repeated checks, and fixed report
+rituals unless the workflow's actual contract requires them. A release-readiness
+verdict still requires current candidate checks; a planning task can identify
+those checks as remaining work.
+
+The `create-agent-bundle` minimal template follows this pattern. It inspects
+the current Skill tree instead of assuming the scaffold's original
+capabilities are unchanged. Apply the same principles to rendered Skills:
+review the emitted Markdown, not just the component source.
 
 ## Selecting Skills explicitly
 
@@ -138,7 +159,7 @@ import { Skill } from 'agent-bundle';
 
 export const frontmatter = {
   name: 'release-review',
-  description: 'Reviews release evidence and issues an auditable readiness verdict.',
+  description: 'Review a release candidate and issue an evidence-based go/no-go verdict.',
 };
 
 export default () => (
@@ -174,7 +195,7 @@ function, or does not export a `frontmatter` record, reports `AB3004`.
 import { defineSkill } from 'agent-bundle';
 
 export const skill = defineSkill({
-  description: 'Reviews release evidence and issues an auditable readiness verdict.',
+  description: 'Review a release candidate and issue an evidence-based go/no-go verdict.',
   name: 'release-review',
 });
 ```
