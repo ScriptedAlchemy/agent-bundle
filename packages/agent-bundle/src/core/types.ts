@@ -27,7 +27,7 @@ export interface AgentBundleSharedMetadata {
   homepage?: string | null;
   keywords?: readonly string[] | null;
   license?: string | null;
-  repository?: string | { readonly url: string } | null;
+  repository?: string | { readonly type?: string; readonly url: string } | null;
 }
 
 export interface AgentBundlePluginConfig {

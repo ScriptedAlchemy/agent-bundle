@@ -49,8 +49,12 @@ export const pluginIdentity = (
 
 /** {@link pluginDescriptiveMetadata}, with the provenance a projection records. */
 export interface PluginDescriptiveMetadata extends DescriptiveMetadataResult {
-  /** True when any resolved field came from `package.json` rather than the config. */
-  readonly packageDerived: boolean;
+  /**
+   * The resolved `package.json`, present only when a resolved field came from
+   * it rather than the config, so a projection records it as a source input
+   * exactly when the artifact depends on its bytes.
+   */
+  readonly packageSource?: string;
 }
 
 /**
@@ -73,15 +77,22 @@ export const pluginDescriptiveMetadata = (
   const resolved = resolveDescriptiveMetadata(authored, fromPackage.value);
   // A package field the project already replaced (or opted out of) under
   // `plugin.metadata` is nobody's problem to fix: only report the ones that
-  // would otherwise have been shared. `author.email` belongs to `author`.
-  const overridden = isRecord(authored) ? new Set(Object.keys(authored)) : new Set<string>();
+  // would otherwise have been shared. `author.email` belongs to `author`, and
+  // an explicitly `undefined` key declares nothing, so the package value (and
+  // its provenance) still stands.
+  const overridden = new Set(isRecord(authored)
+    ? Object.keys(authored).filter((field) => authored[field] !== undefined)
+    : []);
+  const packageDerived = descriptiveMetadataFields
+    .some((field) => !overridden.has(field) && resolved.value[field] !== undefined);
   return Object.freeze({
     issues: Object.freeze([
       ...fromPackage.issues.filter((issue) => !overridden.has(issue.field.replace(/\..*$/u, ''))),
       ...resolved.issues,
     ]),
-    packageDerived: descriptiveMetadataFields.some((field) =>
-      !overridden.has(field) && resolved.value[field] !== undefined),
+    ...(packageDerived && fromPackage.packagePath !== undefined
+      ? { packageSource: fromPackage.packagePath }
+      : {}),
     value: resolved.value,
   });
 };

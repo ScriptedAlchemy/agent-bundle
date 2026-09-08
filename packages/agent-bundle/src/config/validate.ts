@@ -2248,7 +2248,7 @@ const validateSharedMetadata = (loaded: LoadedConfig): Diagnostic[] =>
   pluginDescriptiveMetadata(loaded.context.projectRoot, loaded.config).issues.map((issue) => issue.shared
     ? {
       code: 'AB4014',
-      message: `Shared plugin.metadata ${issue.message}`,
+      message: `Shared ${sharedMetadataField('plugin.metadata', issue.field)} ${issue.message}`,
       recovery: issue.field === 'metadata'
         ? 'Correct plugin.metadata in the config, or remove it to take the package.json values.'
         : `Correct plugin.metadata.${issue.field} in the config, or remove it to take the package.json value.`,
@@ -2257,11 +2257,15 @@ const validateSharedMetadata = (loaded: LoadedConfig): Diagnostic[] =>
     }
     : {
       code: 'AB4015',
-      message: `package.json ${issue.message} It is not shared with any host manifest.`,
+      message: `package.json ${issue.field} ${issue.message} It is not shared with any host manifest.`,
       recovery: `Correct the package.json field, or declare plugin.metadata.${issue.field.replace(/\..*$/u, '')} in the config instead.`,
       severity: 'warning' as const,
       sourcePath: join(loaded.context.projectRoot, 'package.json'),
     });
+
+/** `plugin.metadata.homepage` for a field issue, `plugin.metadata` for a block one. */
+const sharedMetadataField = (block: string, field: string): string =>
+  field === 'metadata' ? block : `${block}.${field}`;
 
 /**
  * The stage-1 script-route gate (#102): conventional `src/scripts/` routes

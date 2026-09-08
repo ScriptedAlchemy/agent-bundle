@@ -109,9 +109,18 @@ them, while the portable manifest still carries it.
 Two `package.json` shapes are read: npm's person string (`"Ada <ada@example.com> (https://ada.example.com)"`)
 and its object form, and for `repository`, an absolute `http(s)` URL or the
 `git+https://github.com/owner/repo.git` URL npm writes for one, whose `git+` prefix and trailing
-`.git` are removed. Shorthands like `owner/repo` and SSH URLs are **not** converted to a
-provider's web URL: the field is withheld with the `AB4015` warning, and
-`plugin.metadata.repository` declares it explicitly.
+`.git` are removed. Shorthands like `owner/repo`, SSH URLs, and `git+http://` URLs are **not**
+converted to a provider's web URL: the field is withheld with the `AB4015` warning, and
+`plugin.metadata.repository` declares it explicitly. A URL or email address the pinned host
+schemas would reject is withheld the same way rather than emitted for a host to refuse.
+
+An empty `package.json` field is an absent one: `"keywords": []` and `"license": ""` share
+nothing and report nothing. Under `plugin.metadata` the same value is the config author's, so
+`plugin.metadata.license: ''` reports `AB4014`; `null` is how a field is opted out.
+
+Claude Code's `.claude-plugin/plugin.json` carries no descriptive fields — its pinned schema
+admits none — and its `author.name` stays the generated plugin name. The shared values reach
+Claude Code through the marketplace entry.
 
 `package.json` is authoritative for release identity. Declare the release version only there:
 a `plugin.version` that disagrees with `package.json` reports the `AB4008` warning, and a release

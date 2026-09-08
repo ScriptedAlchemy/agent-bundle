@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -156,6 +156,18 @@ it('shares an author only with the hosts whose contract its fields satisfy', asy
   });
 });
 
+it('still judges a host block that declares no descriptive field of its own', async () => {
+  await withProject({ 'package.json': { name: 'bare', version: '1.0.0' } }, async (root) => {
+    // The shared layer must not turn an authored-but-unsupported block into a
+    // silent no-op: Cursor documents no `nativeHooks` surface.
+    const plan = cursorAdapter.plan(await modelFor(root, pluginConfig({}, {
+      cursor: { nativeHooks: { hooks: {} } } as Record<string, unknown>,
+    })));
+    expect(plan.diagnostics.map((diagnostic) => diagnostic.message).join('\n'))
+      .toContain('Cursor config declares unsupported field "nativeHooks"');
+  });
+});
+
 it('reads a null host-block author as an opt-out, not as a malformed author', async () => {
   await withProject({ 'package.json': packageJson }, async (root) => {
     const config = pluginConfig({}, { codex: { author: null }, portable: { author: null } });
@@ -234,8 +246,70 @@ it('withholds a repository form it cannot convert, and reports it against packag
       .filter((diagnostic) => diagnostic.code === 'AB4015');
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['warning', 'warning']);
     expect(reported.every((diagnostic) => diagnostic.sourcePath === join(root, 'package.json'))).toBe(true);
-    expect(reported.map((diagnostic) => diagnostic.message).join('\n'))
-      .toMatch(/repository must be an absolute HTTP or HTTPS URL/u);
+    expect(reported.map((diagnostic) => diagnostic.message).sort()).toEqual([
+      'package.json homepage must be an absolute HTTP or HTTPS URL. It is not shared with any host manifest.',
+      'package.json repository must be an absolute HTTP or HTTPS URL, or the git+https URL npm writes for one; ' +
+      'shorthand and SSH forms are not converted. It is not shared with any host manifest.',
+    ]);
+  });
+});
+
+it.each([
+  { label: 'an owner/repo shorthand', repository: 'example/shared-fixture' },
+  { label: 'a github: shorthand', repository: 'github:example/shared-fixture' },
+  { label: 'an SSH URL', repository: 'git@github.com:example/shared-fixture.git' },
+  { label: 'a git+ssh URL', repository: 'git+ssh://git@github.com/example/shared-fixture.git' },
+  { label: 'a git protocol URL', repository: 'git://github.com/example/shared-fixture.git' },
+  { label: 'a git+http URL', repository: 'git+http://github.com/example/shared-fixture.git' },
+])('withholds $label rather than rewriting it into a web URL', async ({ repository }) => {
+  await withProject({ 'package.json': { ...packageJson, repository } }, async (root) => {
+    const config = pluginConfig();
+    expect((await modelFor(root, config)).metadata.shared?.value).not.toHaveProperty('repository');
+    expect(validateSource(loaded(root, config), { skills: [] }, registry)
+      .filter((diagnostic) => diagnostic.code === 'AB4015')).toMatchObject([{
+      message: expect.stringContaining('package.json repository must be an absolute HTTP or HTTPS URL'),
+      severity: 'warning',
+    }]);
+  });
+});
+
+it('refuses a blank or empty plugin.metadata value instead of reading it as an opt-out', async () => {
+  await withProject({ 'package.json': packageJson }, async (root) => {
+    const config = pluginConfig({ metadata: { keywords: [], license: '  ' } });
+    const reported = validateSource(loaded(root, config), { skills: [] }, registry)
+      .filter((diagnostic) => diagnostic.code === 'AB4014');
+
+    expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
+      'Shared plugin.metadata.license must be a nonempty string.',
+      'Shared plugin.metadata.keywords must be a nonempty array of nonempty strings.',
+    ]);
+    // Withheld rather than read as an opt-out or guessed from the package:
+    // AB4014 is an error, so the build stops instead of shipping either.
+    const model = await modelFor(root, config);
+    expect(model.metadata.shared?.value).not.toHaveProperty('license');
+    expect(model.metadata.shared?.value).not.toHaveProperty('keywords');
+  });
+});
+
+it('withholds a shared URL or email the pinned host schemas would refuse', async () => {
+  await withProject({
+    'package.json': {
+      ...packageJson,
+      author: { email: 'ada@example', name: 'Ada' },
+      homepage: ' https://padded.example.test ',
+      name: 'bare',
+    },
+  }, async (root) => {
+    const config = pluginConfig();
+    const model = await modelFor(root, config);
+    // Surrounding whitespace is trimmed, not shipped; an address the schemas'
+    // email format rejects is withheld with the rest of the author.
+    expect(model.metadata.shared?.value.homepage).toBe('https://padded.example.test');
+    expect(model.metadata.shared?.value).not.toHaveProperty('author');
+    expect(validateSource(loaded(root, config), { skills: [] }, registry)
+      .filter((diagnostic) => diagnostic.code === 'AB4015')).toMatchObject([{
+      message: expect.stringContaining('package.json author.email must be an email address'),
+    }]);
   });
 });
 
@@ -245,7 +319,7 @@ it('refuses a malformed plugin.metadata block as the config author\'s own error'
     const reported = validateSource(loaded(root, config), { skills: [] }, registry)
       .filter((diagnostic) => diagnostic.code === 'AB4014');
     expect(reported).toMatchObject([{ severity: 'error', sourcePath: join(root, 'agent-bundle.config.ts') }]);
-    expect(reported[0]?.message).toMatch(/homepage must be an absolute HTTP or HTTPS URL/u);
+    expect(reported[0]?.message).toBe('Shared plugin.metadata.homepage must be an absolute HTTP or HTTPS URL.');
 
     // A field beyond the five is the same error, named against the block.
     const unknown = pluginConfig({ metadata: { descriptoin: 'typo' } as AgentBundleSharedMetadata });
@@ -283,13 +357,59 @@ it('records package.json among the source inputs of every projection that emits 
   });
 });
 
-it('leaves the shared layer out of the identity when a host block declares every field', async () => {
-  await withProject({ 'package.json': { name: 'bare-fixture', version: '1.0.0' } }, async (root) => {
-    const model = await modelFor(root, pluginConfig({}, { portable: { license: 'MIT' } }));
-    expect(model.metadata.shared).toBeUndefined();
-    const entry = portableAdapter.plan(model).entries
-      .find((candidate) => candidate.kind === 'write' && candidate.relativePath === 'plugin.json');
-    expect(entry?.kind === 'write' ? entry.sourceInputs : []).not.toContain(join(root, 'package.json'));
-    expect(JSON.parse(entry?.kind === 'write' ? entry.content : '{}')).toMatchObject({ license: 'MIT' });
+it('keeps package.json out of a projection whose host block overrides every shared field', async () => {
+  await withProject({
+    'package.json': { license: 'MIT', name: 'bare-fixture', version: '1.0.0' },
+  }, async (root) => {
+    const packagePath = join(root, 'package.json');
+    const model = await modelFor(root, pluginConfig({}, {
+      cursor: { license: 'Apache-2.0' },
+      portable: { license: 'Apache-2.0' },
+    }));
+    // The shared layer resolved a package value; these two artifacts just do
+    // not depend on it, so only they leave it out of their source inputs.
+    expect(model.metadata.shared?.packageSource).toBe(packagePath);
+
+    const inputsFor = (adapter: typeof portableAdapter, path: string): readonly string[] => {
+      const entry = adapter.plan(model).entries
+        .find((candidate) => candidate.kind === 'write' && candidate.relativePath === path);
+      return entry?.kind === 'write' ? entry.sourceInputs : [];
+    };
+    expect(inputsFor(portableAdapter, 'plugin.json')).not.toContain(packagePath);
+    expect(inputsFor(cursorAdapter, '.cursor-plugin/plugin.json')).not.toContain(packagePath);
+    expect(inputsFor(codexAdapter, '.codex-plugin/plugin.json')).toContain(packagePath);
+    expect(projections(model)).toMatchObject({
+      codex: { license: 'MIT' },
+      cursor: { license: 'Apache-2.0' },
+      portable: { license: 'Apache-2.0' },
+    });
+  });
+});
+
+it('resolves all three precedence levels at once, and records the file each value came from', async () => {
+  await withProject({ 'package.json': packageJson }, async (root) => {
+    const model = await modelFor(root, pluginConfig({
+      metadata: { homepage: 'https://shared.example.test', license: 'Apache-2.0' },
+    }, { cursor: { license: 'BSD-3-Clause' } }));
+    const documents = projections(model) as Record<string, Record<string, unknown>>;
+
+    // Host block, then plugin.metadata, then package.json — in one build.
+    expect(documents.cursor?.license).toBe('BSD-3-Clause');
+    expect(documents.portable?.license).toBe('Apache-2.0');
+    expect(documents.portable?.homepage).toBe('https://shared.example.test');
+    expect(documents.portable?.keywords).toEqual(['research', 'crm']);
+    expect(model.metadata.shared?.packageSource).toBe(join(root, 'package.json'));
+  });
+});
+
+it('reads a symlinked package.json through the path the source snapshot records', async () => {
+  await withProject({ 'package.json': packageJson }, async (root) => {
+    await rename(join(root, 'package.json'), join(root, 'package.real.json'));
+    await symlink(join(root, 'package.real.json'), join(root, 'package.json'));
+    const model = await modelFor(root, pluginConfig());
+
+    // One provenance path for one file: the resolved one, which is what
+    // `snapshotProjectSource` puts in the project revision.
+    expect(model.metadata.shared?.packageSource).toBe(await realpath(join(root, 'package.real.json')));
   });
 });

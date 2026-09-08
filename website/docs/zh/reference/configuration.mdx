@@ -100,8 +100,16 @@ export default defineConfig({
 会读取 `package.json` 的两种形状：npm 的 person 字符串（`"Ada <ada@example.com> (https://ada.example.com)"`）
 及其对象形式；对 `repository`，则是绝对 `http(s)` URL 或 npm 为其写入的
 `git+https://github.com/owner/repo.git` URL，其 `git+` 前缀与结尾的 `.git` 会被去掉。像 `owner/repo`
-这样的简写与 SSH URL **不会**被转换成某个托管商的网页 URL：该字段会被扣留并报告 `AB4015` 警告，
-改用 `plugin.metadata.repository` 显式声明。
+这样的简写、SSH URL 与 `git+http://` URL **不会**被转换成某个托管商的网页 URL：该字段会被扣留并报告
+`AB4015` 警告，改用 `plugin.metadata.repository` 显式声明。被固定宿主 schema 拒绝的 URL 或邮箱地址
+同样会被扣留，而不会输出给宿主去拒绝。
+
+`package.json` 中的空字段等于缺失字段：`"keywords": []` 与 `"license": ""` 既不共享也不报告。而
+`plugin.metadata` 下的同样取值出自配置作者之手，因此 `plugin.metadata.license: ''` 报告 `AB4014`；
+`null` 才是退出某个字段的方式。
+
+Claude Code 的 `.claude-plugin/plugin.json` 不携带描述字段——其固定 schema 不允许——且其
+`author.name` 仍是生成的插件名。共享值经由 marketplace 条目到达 Claude Code。
 
 `package.json` 对发布标识具有权威性。发布版本只在那里声明：与 `package.json` 不一致的 `plugin.version`
 会报告 `AB4008` 警告，而任何地方都没有版本的发布构建会被 `AB4013` 拒绝，而不是交付

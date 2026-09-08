@@ -4,6 +4,7 @@ import { createTargetDiagnostics } from './diagnostics.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
 import {
   isAbsoluteHttpUrl as isAbsoluteUrl,
+  isEmailAddress as isEmail,
   isNonemptyString,
   mergeDescriptiveMetadata,
   projectDescriptiveMetadata,
@@ -282,9 +283,6 @@ export const codexInterfaceFields = Object.freeze([
   'websiteURL',
 ]);
 
-
-const isEmail = (value: unknown): value is string =>
-  isNonemptyString(value) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
 
 const hookHandlersOf = (
   hooks: Readonly<Record<string, unknown>>,

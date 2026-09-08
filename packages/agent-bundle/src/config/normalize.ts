@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { readFile, readdir, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, extname, join, posix, relative, resolve, sep, win32 } from 'node:path';
+import { basename, dirname, extname, posix, relative, resolve, sep, win32 } from 'node:path';
 
 import { digest } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
@@ -1311,7 +1311,7 @@ export const normalizeProject = async (
   const shared: NormalizedSharedMetadata | undefined = Object.keys(descriptive.value).length === 0
     ? undefined
     : {
-      ...(descriptive.packageDerived ? { packageSource: join(loaded.context.projectRoot, 'package.json') } : {}),
+      ...(descriptive.packageSource === undefined ? {} : { packageSource: descriptive.packageSource }),
       value: descriptive.value,
     };
   const hostBins = await normalizeHostBins(loaded, targetNames, registry);

@@ -390,7 +390,11 @@ export const planCursorManifestMetadata = (
     projectDescriptiveMetadata(model.metadata.shared?.value, cursorProjection),
   );
   const value = merged.value;
-  if (cursorManifestMetadataFields.every((field) => value[field] === undefined)) return noManifestMetadataPlan;
+  // An authored block still reaches the unknown-field check below even when it
+  // declares no metadata field: `cursor: { nativeHooks: … }` is a diagnostic,
+  // not a no-op. Only a project with neither an authored block nor a shared
+  // value has nothing to judge.
+  if (authored === undefined && Object.keys(value).length === 0) return noManifestMetadataPlan;
   const diagnostics: Diagnostic[] = [];
   const sourceInputs = Object.freeze([
     ...(extension === undefined ? [] : [extension.provenance.sourcePath]),

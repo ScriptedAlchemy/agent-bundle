@@ -1,6 +1,7 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
 import {
   isAbsoluteHttpUrl,
+  isEmailAddress,
   isNonemptyString,
   mergeDescriptiveMetadata,
   projectDescriptiveMetadata,
@@ -962,7 +963,6 @@ const marketplaceContactFields: ReadonlySet<string> = new Set(['email', 'name', 
 const relevanceFields: ReadonlySet<string> = new Set(['signals', 'topic']);
 const relevanceSignalFields: ReadonlySet<string> = new Set(['cli', 'cwd', 'filesRead', 'hosts', 'manifestDeps']);
 const manifestDependencySignalFields: ReadonlySet<string> = new Set(['file', 'pattern']);
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 const hostnamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
 const githubRepositoryPattern =
   /^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$/u;
@@ -1049,7 +1049,7 @@ const planMarketplaceContact = (
     ));
   }
   const email = declared['email'];
-  if (email !== undefined && (typeof email !== 'string' || !emailPattern.test(email))) {
+  if (email !== undefined && !isEmailAddress(email)) {
     diagnostics.push(marketplaceDiagnostic(
       `${prefix}.email.invalid`,
       `Claude ${label} email must be a valid nonempty email address.`,
@@ -1717,10 +1717,13 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
   // are emitted through the pinned marketplace schema like any other, so a
   // shape it refuses is reported rather than shipped.
   const shared = projectDescriptiveMetadata(model.metadata.shared?.value, claudeMarketplaceProjection);
-  const marketplaceInputs = sourceInputs(
-    ...(declared === undefined || extension === undefined ? [] : [extension.provenance.sourcePath]),
-    ...(Object.keys(shared).length === 0 ? [] : [model.metadata.shared?.packageSource]),
-  );
+  const authoredInput = declared === undefined || extension === undefined
+    ? undefined
+    : extension.provenance.sourcePath;
+  const sharedInput = Object.keys(shared).length === 0 ? undefined : model.metadata.shared?.packageSource;
+  // The overlay can override or opt out of every shared field, so the entry's
+  // dependence on `package.json` is only known once the two are merged below.
+  let marketplaceInputs = sourceInputs(authoredInput, sharedInput);
   const basePlugin: Record<string, unknown> = {
     description: model.metadata.description ?? model.metadata.name,
     name: model.metadata.name,
@@ -1889,9 +1892,12 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
       ? marketplaceMetadata['pluginRoot']
       : undefined;
     const merged = isPlainDataRecord(pluginOverlay)
-      ? mergeDescriptiveMetadata(pluginOverlay, shared).value
-      : pluginOverlay;
-    const planned = planMarketplacePlugin(merged, pluginRoot);
+      ? mergeDescriptiveMetadata(pluginOverlay, shared)
+      : undefined;
+    if (merged !== undefined) {
+      marketplaceInputs = sourceInputs(authoredInput, merged.usedShared ? sharedInput : undefined);
+    }
+    const planned = planMarketplacePlugin(merged?.value ?? pluginOverlay, pluginRoot);
     diagnostics.push(...planned.diagnostics);
     if (planned.value !== undefined) document['plugins'] = [{ ...basePlugin, ...planned.value }];
   }

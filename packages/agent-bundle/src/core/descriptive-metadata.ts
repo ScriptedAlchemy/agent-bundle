@@ -40,6 +40,7 @@ export interface DescriptiveMetadata {
  */
 export interface DescriptiveMetadataIssue {
   readonly field: string;
+  /** The sentence after the field path, which the reporting caller composes. */
   readonly message: string;
   /** True when the value came from `plugin.metadata` rather than `package.json`. */
   readonly shared: boolean;
@@ -53,9 +54,15 @@ export interface DescriptiveMetadataResult {
 export const isNonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
-/** An absolute `http`/`https` URL, the form every host manifest field requires. */
+/**
+ * An absolute `http`/`https` URL in the form every host manifest field
+ * requires. Printable ASCII only: `new URL` accepts surrounding whitespace and
+ * non-ASCII authority characters that the pinned Cursor, Codex, and Claude
+ * schemas reject through their `uri` format, and a value one host refuses is
+ * not a value this compiler shares.
+ */
 export const isAbsoluteHttpUrl = (value: unknown): value is string => {
-  if (!isNonemptyString(value)) return false;
+  if (!isNonemptyString(value) || !/^[\u0021-\u007e]+$/u.test(value)) return false;
   try {
     const url = new URL(value);
     return url.protocol === 'http:' || url.protocol === 'https:';
@@ -64,8 +71,11 @@ export const isAbsoluteHttpUrl = (value: unknown): value is string => {
   }
 };
 
+/** The address grammar the pinned schemas' `email` format admits. */
 export const isEmailAddress = (value: unknown): value is string =>
-  isNonemptyString(value) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+  isNonemptyString(value) &&
+  /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/iu
+    .test(value);
 
 const isNonemptyStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.length > 0 && value.every(isNonemptyString);
@@ -73,20 +83,24 @@ const isNonemptyStringArray = (value: unknown): value is readonly string[] =>
 /** npm's `"Name <email> (url)"` person string; every part is optional but the name. */
 const personPattern = /^(?<name>[^<(]*?)\s*(?:<(?<email>[^>]*)>)?\s*(?:\((?<url>[^)]*)\))?$/u;
 
-/** `git+https://host/path(.git)`, the URL form npm writes for an HTTPS remote. */
-const gitHttpsPattern = /^git\+(?<url>https?:\/\/\S+?)(?:\.git)?$/u;
+/** `git+https://host/path(.git)`, the one URL form npm writes for an HTTPS remote. */
+const gitHttpsPattern = /^git\+(?<url>https:\/\/\S+?)(?:\.git)?$/u;
 
 /**
- * Nothing to share, reported as nothing: `null`, a blank string, and an empty
- * array all say "no value" rather than "a value this compiler rejects", and
- * `"keywords": []` is ordinary in a published `package.json`.
+ * The value a declaration actually declares. `null` is always a deliberate
+ * absence. A blank string or empty array is one only in `package.json`, where
+ * `"keywords": []` is ordinary; under `plugin.metadata` the config author
+ * wrote it, so it stays a value and AB4014 reports it.
  */
-const declaredValue = (value: unknown): unknown =>
+const declaredValue = (value: unknown, shared: boolean): unknown =>
   value === null ||
-    (typeof value === 'string' && value.trim().length === 0) ||
-    (Array.isArray(value) && value.length === 0)
+    (!shared && typeof value === 'string' && value.trim().length === 0) ||
+    (!shared && Array.isArray(value) && value.length === 0)
     ? undefined
     : value;
+
+/** URL fields carry no surrounding whitespace into a host manifest. */
+const trimmed = (value: unknown): unknown => typeof value === 'string' ? value.trim() : value;
 
 const authorFrom = (
   value: unknown,
@@ -101,33 +115,33 @@ const authorFrom = (
   if (record === undefined) {
     issues.push({
       field: 'author',
-      message: 'author must be a person string such as "Ada <ada@example.com>" or an object with name, email, and url.',
+      message: 'must be a person string such as "Ada <ada@example.com>" or an object with name, email, and url.',
       shared,
     });
     return undefined;
   }
   const author: Record<string, string> = {};
-  const name = declaredValue(record.name);
+  const name = declaredValue(record.name, shared);
   if (name !== undefined) {
     if (isNonemptyString(name)) author.name = name.trim();
     else {
-      issues.push({ field: 'author.name', message: 'author.name must be a nonempty string.', shared });
+      issues.push({ field: 'author.name', message: 'must be a nonempty string.', shared });
       return undefined;
     }
   }
-  const email = declaredValue(record.email);
+  const email = declaredValue(record.email, shared);
   if (email !== undefined) {
     if (isEmailAddress(email)) author.email = email.trim();
     else {
-      issues.push({ field: 'author.email', message: 'author.email must be an email address.', shared });
+      issues.push({ field: 'author.email', message: 'must be an email address.', shared });
       return undefined;
     }
   }
-  const url = declaredValue(record.url);
+  const url = trimmed(declaredValue(record.url, shared));
   if (url !== undefined) {
     if (isAbsoluteHttpUrl(url)) author.url = url;
     else {
-      issues.push({ field: 'author.url', message: 'author.url must be an absolute HTTP or HTTPS URL.', shared });
+      issues.push({ field: 'author.url', message: 'must be an absolute HTTP or HTTPS URL.', shared });
       return undefined;
     }
   }
@@ -137,13 +151,13 @@ const authorFrom = (
   if (unknown.length > 0) {
     issues.push({
       field: 'author',
-      message: `author declares ${unknown.map((field) => JSON.stringify(field)).join(', ')}; only name, email, and url are shared.`,
+      message: `declares ${unknown.map((field) => JSON.stringify(field)).join(', ')}; only name, email, and url are shared.`,
       shared,
     });
     return undefined;
   }
   if (Object.keys(author).length === 0) {
-    issues.push({ field: 'author', message: 'author must declare at least one of name, email, or url.', shared });
+    issues.push({ field: 'author', message: 'must declare at least one of name, email, or url.', shared });
     return undefined;
   }
   return Object.freeze(author);
@@ -174,14 +188,14 @@ const repositoryFrom = (
   issues: DescriptiveMetadataIssue[],
   shared: boolean,
 ): string | undefined => {
-  const declared = isPlainDataRecord(value) ? value.url : value;
+  const declared = trimmed(isPlainDataRecord(value) ? value.url : value);
   if (isAbsoluteHttpUrl(declared)) return declared;
-  const converted = isNonemptyString(declared) ? gitHttpsPattern.exec(declared.trim())?.groups?.url : undefined;
+  const converted = isNonemptyString(declared) ? gitHttpsPattern.exec(declared)?.groups?.url : undefined;
   if (converted !== undefined && isAbsoluteHttpUrl(converted)) return converted;
   issues.push({
     field: 'repository',
     message:
-      'repository must be an absolute HTTP or HTTPS URL, or the git+https URL npm writes for one; ' +
+      'must be an absolute HTTP or HTTPS URL, or the git+https URL npm writes for one; ' +
       'shorthand and SSH forms are not converted.',
     shared,
   });
@@ -194,30 +208,30 @@ const descriptiveMetadataFrom = (
 ): DescriptiveMetadataResult => {
   const issues: DescriptiveMetadataIssue[] = [];
   const value: Record<string, unknown> = {};
-  const author = declaredValue(declared.author);
+  const author = declaredValue(declared.author, shared);
   if (author !== undefined) {
     const planned = authorFrom(author, issues, shared);
     if (planned !== undefined) value.author = planned;
   }
-  const homepage = declaredValue(declared.homepage);
+  const homepage = trimmed(declaredValue(declared.homepage, shared));
   if (homepage !== undefined) {
     if (isAbsoluteHttpUrl(homepage)) value.homepage = homepage;
-    else issues.push({ field: 'homepage', message: 'homepage must be an absolute HTTP or HTTPS URL.', shared });
+    else issues.push({ field: 'homepage', message: 'must be an absolute HTTP or HTTPS URL.', shared });
   }
-  const repository = declaredValue(declared.repository);
+  const repository = declaredValue(declared.repository, shared);
   if (repository !== undefined) {
     const planned = repositoryFrom(repository, issues, shared);
     if (planned !== undefined) value.repository = planned;
   }
-  const license = declaredValue(declared.license);
+  const license = declaredValue(declared.license, shared);
   if (license !== undefined) {
     if (isNonemptyString(license)) value.license = license.trim();
-    else issues.push({ field: 'license', message: 'license must be a nonempty string.', shared });
+    else issues.push({ field: 'license', message: 'must be a nonempty string.', shared });
   }
-  const keywords = declaredValue(declared.keywords);
+  const keywords = declaredValue(declared.keywords, shared);
   if (keywords !== undefined) {
     if (isNonemptyStringArray(keywords)) value.keywords = Object.freeze(keywords.map((keyword) => keyword.trim()));
-    else issues.push({ field: 'keywords', message: 'keywords must be a nonempty array of nonempty strings.', shared });
+    else issues.push({ field: 'keywords', message: 'must be a nonempty array of nonempty strings.', shared });
   }
   return deepFreeze({ issues, value: value as DescriptiveMetadata });
 };
