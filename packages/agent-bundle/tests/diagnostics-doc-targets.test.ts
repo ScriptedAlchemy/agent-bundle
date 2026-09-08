@@ -7,13 +7,10 @@ import { expect, it } from '@rstest/core';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 
 /**
- * `docs/diagnostics.md` is the source the generated `reference/diagnostics.md`
- * page is rendered from, and AB4100 is the one row that enumerates the whole
- * built-in registry: its trigger names what the registry publishes and its
- * recovery tells the author which names to select. Nothing else compares that
- * prose to the registry, so #729's `amp` adapter shipped while both sentences
- * still listed four targets (#756). This holds the two enumerations to
- * `createDefaultRegistry`.
+ * AB4100's row in `docs/diagnostics.md` — the source the generated
+ * `reference/diagnostics.md` page is rendered from — enumerates the whole
+ * built-in registry twice, and nothing else compares that prose to the
+ * registry (#756).
  */
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
