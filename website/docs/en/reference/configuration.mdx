@@ -98,7 +98,9 @@ host block. Each field resolves in one order:
 
 `null` is a deliberate absence rather than a value: `plugin.metadata.homepage: null` keeps a
 `package.json` homepage out of every artifact, and `cursor: { homepage: null }` keeps a shared
-homepage out of the Cursor manifest alone while the other hosts still carry it.
+homepage out of the Cursor manifest alone while the other hosts still carry it. The one
+exception is `codex: { author: null }`: the Codex manifest always names an author, so it falls
+back to the generated plugin name rather than omitting the field.
 
 Each host emits only what its pinned schema admits, and the value still passes that host's own
 validation. Cursor's author object is closed to `name` and `email`, so a shared `author.url` is

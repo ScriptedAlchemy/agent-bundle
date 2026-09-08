@@ -51,11 +51,12 @@ const pluginConfig = (
 /** The descriptive half of each host's plugin document, keyed by host. */
 const projections = (model: NormalizedPlugin): Readonly<Record<string, unknown>> => {
   const documentAt = (adapter: typeof portableAdapter, path: string): Record<string, unknown> => {
-    const entry = adapter.plan(model).entries
+    const plan = adapter.plan(model);
+    expect(plan.diagnostics, path).toEqual([]);
+    const entry = plan.entries
       .find((candidate) => candidate.kind === 'write' && candidate.relativePath === path);
-    return entry !== undefined && entry.kind === 'write'
-      ? JSON.parse(entry.content) as Record<string, unknown>
-      : {};
+    if (entry === undefined || entry.kind !== 'write') throw new Error(`No ${path} in the ${adapter.name} plan.`);
+    return JSON.parse(entry.content) as Record<string, unknown>;
   };
   const marketplace = documentAt(claudeAdapter, '.claude-plugin/marketplace.json');
   const claudePlugin = Array.isArray(marketplace.plugins) ? marketplace.plugins[0] as Record<string, unknown> : {};
@@ -291,25 +292,52 @@ it('refuses a blank or empty plugin.metadata value instead of reading it as an o
   });
 });
 
-it('withholds a shared URL or email the pinned host schemas would refuse', async () => {
+it.each([
+  { field: 'homepage', label: 'a URL character the pinned uri format refuses', value: 'https://example.test/a|b' },
+  { field: 'homepage', label: 'a non-ASCII URL', value: 'https://example.test/p\u00e4th' },
+  { field: 'author', label: 'a doubled dot in an address', value: { email: 'a..b@example.test' } },
+  { field: 'author', label: 'an address without a domain', value: { email: 'ada@example' } },
+])('withholds $label rather than letting a host refuse it', async ({ field, value }) => {
   await withProject({
-    'package.json': {
-      ...packageJson,
-      author: { email: 'ada@example', name: 'Ada' },
-      homepage: ' https://padded.example.test ',
-      name: 'bare',
-    },
+    'package.json': { ...packageJson, author: 'Ada', [field]: value, name: 'bare' },
   }, async (root) => {
     const config = pluginConfig();
     const model = await modelFor(root, config);
-    // Surrounding whitespace is trimmed, not shipped; an address the schemas'
-    // email format rejects is withheld with the rest of the author.
-    expect(model.metadata.shared?.value.homepage).toBe('https://padded.example.test');
-    expect(model.metadata.shared?.value).not.toHaveProperty('author');
+    expect(model.metadata.shared?.value).not.toHaveProperty(field);
+    // Reported once against package.json, and every host still plans: the
+    // whole point is that a package field cannot become a host manifest error.
     expect(validateSource(loaded(root, config), { skills: [] }, registry)
-      .filter((diagnostic) => diagnostic.code === 'AB4015')).toMatchObject([{
-      message: expect.stringContaining('package.json author.email must be an email address'),
-    }]);
+      .filter((diagnostic) => diagnostic.code === 'AB4015')).toHaveLength(1);
+    for (const adapter of [portableAdapter, cursorAdapter, codexAdapter, claudeAdapter]) {
+      expect(adapter.plan(model).diagnostics, adapter.name).toEqual([]);
+    }
+  });
+});
+
+it('trims a shared URL rather than shipping the padding a host would refuse', async () => {
+  await withProject({
+    'package.json': { ...packageJson, homepage: ' https://padded.example.test ', name: 'bare' },
+  }, async (root) => {
+    const config = pluginConfig();
+    expect((await modelFor(root, config)).metadata.shared?.value.homepage).toBe('https://padded.example.test');
+    expect(validateSource(loaded(root, config), { skills: [] }, registry)
+      .filter((diagnostic) => diagnostic.code === 'AB4015')).toEqual([]);
+  });
+});
+
+it('keeps package.json out of the Claude entry its overlay overrides', async () => {
+  await withProject({
+    'package.json': { license: 'MIT', name: 'bare-fixture', version: '1.0.0' },
+  }, async (root) => {
+    const model = await modelFor(root, pluginConfig({}, {
+      claude: { marketplace: { plugin: { license: 'Apache-2.0' } } },
+    }));
+    expect(model.metadata.shared?.packageSource).toBe(join(root, 'package.json'));
+
+    const entry = claudeAdapter.plan(model).entries
+      .find((candidate) => candidate.kind === 'write' && candidate.relativePath === '.claude-plugin/marketplace.json');
+    expect(entry?.kind === 'write' ? entry.sourceInputs : []).not.toContain(join(root, 'package.json'));
+    expect(projections(model)).toMatchObject({ claude: { license: 'Apache-2.0' } });
   });
 });
 

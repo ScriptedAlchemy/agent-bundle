@@ -7,6 +7,7 @@ import {
 } from '../core/descriptive-metadata.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import { isSchemaEmail as isEmail, isSchemaHttpUrl as isAbsoluteUrl } from '../core/schema-formats.ts';
 import { isPlainDataRecord, ownDataValue } from '../core/strict-json.ts';
 import {
   pathTokens,
@@ -124,15 +125,6 @@ const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateHooks = validator.compile(hooksSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
-/**
- * The exact `format: "uri"` / `format: "email"` checks the pinned plugin
- * schema applies to `homepage`/`repository` and `author.email`, so metadata is
- * validated as the string that will be emitted rather than through a looser
- * local approximation (`new URL()` normalizes; a hand regex admits `a@b..c`).
- */
-const validateSchemaUri = validator.compile({ type: 'string', format: 'uri' });
-const validateSchemaEmail = validator.compile({ type: 'string', format: 'email' });
-
 /** The pinned Cursor document validators, shared with artifact validation. */
 export const cursorPluginValidator = validatePlugin;
 export const cursorMcpValidator = validateMcp;
@@ -308,19 +300,6 @@ export interface CursorManifestPointers {
   readonly skills?: string;
   readonly variables?: Record<string, unknown>;
 }
-
-const isAbsoluteUrl = (value: unknown): value is string => {
-  if (!isNonemptyString(value) || !validateSchemaUri(value)) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
-
-const isEmail = (value: unknown): value is string =>
-  isNonemptyString(value) && validateSchemaEmail(value) === true;
 
 const isNonemptyStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(isNonemptyString);

@@ -1,4 +1,5 @@
 import { deepFreeze } from './freeze.ts';
+import { isSchemaEmail, isSchemaHttpUrl } from './schema-formats.ts';
 import { isPlainDataRecord } from './strict-json.ts';
 
 /**
@@ -55,14 +56,13 @@ export const isNonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
 /**
- * An absolute `http`/`https` URL in the form every host manifest field
- * requires. Printable ASCII only: `new URL` accepts surrounding whitespace and
- * non-ASCII authority characters that the pinned Cursor, Codex, and Claude
- * schemas reject through their `uri` format, and a value one host refuses is
- * not a value this compiler shares.
+ * An absolute `http`/`https` URL: what Agent Plugins 1.0.0 §5.4 asks of a
+ * portable manifest, whose schema declares no `uri` format and whose clients
+ * MUST NOT reject a URL they can parse. Hosts that pin a stricter format read
+ * {@link isSchemaHttpUrl} instead.
  */
 export const isAbsoluteHttpUrl = (value: unknown): value is string => {
-  if (!isNonemptyString(value) || !/^[\u0021-\u007e]+$/u.test(value)) return false;
+  if (!isNonemptyString(value)) return false;
   try {
     const url = new URL(value);
     return url.protocol === 'http:' || url.protocol === 'https:';
@@ -71,11 +71,9 @@ export const isAbsoluteHttpUrl = (value: unknown): value is string => {
   }
 };
 
-/** The address grammar the pinned schemas' `email` format admits. */
+/** The same tolerance for an address; {@link isSchemaEmail} is the pinned one. */
 export const isEmailAddress = (value: unknown): value is string =>
-  isNonemptyString(value) &&
-  /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/iu
-    .test(value);
+  isNonemptyString(value) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
 
 const isNonemptyStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.length > 0 && value.every(isNonemptyString);
@@ -129,9 +127,9 @@ const authorFrom = (
       return undefined;
     }
   }
-  const email = declaredValue(record.email, shared);
+  const email = trimmed(declaredValue(record.email, shared));
   if (email !== undefined) {
-    if (isEmailAddress(email)) author.email = email.trim();
+    if (isSchemaEmail(email)) author.email = email;
     else {
       issues.push({ field: 'author.email', message: 'must be an email address.', shared });
       return undefined;
@@ -139,7 +137,7 @@ const authorFrom = (
   }
   const url = trimmed(declaredValue(record.url, shared));
   if (url !== undefined) {
-    if (isAbsoluteHttpUrl(url)) author.url = url;
+    if (isSchemaHttpUrl(url)) author.url = url;
     else {
       issues.push({ field: 'author.url', message: 'must be an absolute HTTP or HTTPS URL.', shared });
       return undefined;
@@ -189,9 +187,9 @@ const repositoryFrom = (
   shared: boolean,
 ): string | undefined => {
   const declared = trimmed(isPlainDataRecord(value) ? value.url : value);
-  if (isAbsoluteHttpUrl(declared)) return declared;
+  if (isSchemaHttpUrl(declared)) return declared;
   const converted = isNonemptyString(declared) ? gitHttpsPattern.exec(declared)?.groups?.url : undefined;
-  if (converted !== undefined && isAbsoluteHttpUrl(converted)) return converted;
+  if (converted !== undefined && isSchemaHttpUrl(converted)) return converted;
   issues.push({
     field: 'repository',
     message:
@@ -215,7 +213,7 @@ const descriptiveMetadataFrom = (
   }
   const homepage = trimmed(declaredValue(declared.homepage, shared));
   if (homepage !== undefined) {
-    if (isAbsoluteHttpUrl(homepage)) value.homepage = homepage;
+    if (isSchemaHttpUrl(homepage)) value.homepage = homepage;
     else issues.push({ field: 'homepage', message: 'must be an absolute HTTP or HTTPS URL.', shared });
   }
   const repository = declaredValue(declared.repository, shared);
