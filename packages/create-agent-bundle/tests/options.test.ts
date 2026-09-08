@@ -138,6 +138,21 @@ describe('resolveOptions', () => {
     expect(asked).toHaveLength(3);
   });
 
+  it('does not offer a target the chosen template cannot carry', async () => {
+    const offered: string[] = [];
+    const prompter: Prompter = {
+      multiselect: async (options) => {
+        offered.push(...options.options.map((option) => option.value));
+        return ['portable'];
+      },
+      select: async () => 'mcp-server',
+      text: async () => 'my-plugin',
+    };
+    await resolveOptions(parseFlags([]), { interactive: true, prompter, userAgent: undefined });
+    expect(offered).not.toContain('amp');
+    expect(offered).toContain('claude');
+  });
+
   it('rejects an empty interactive target selection', async () => {
     const prompter: Prompter = {
       ...unusedPrompter,

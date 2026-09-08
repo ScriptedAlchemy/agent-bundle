@@ -105,12 +105,14 @@ const installableHosts = (targets: readonly TargetName[]): readonly TargetName[]
  * Template READMEs are written against the default targets, so their install
  * example names `claude`. The checked-in shape is one shell comment followed
  * by the public install command for Claude, plus the prose sentence naming the
- * generic public install command; both markers are drift-checked.
+ * generic public install command; both markers are drift-checked. `--no-install`
+ * is optional in the marker and always present in the rewrite, so a README that
+ * loses the flag is rewritten rather than silently passed through.
  */
 const readmeInstallExample =
-  /^(# after publishing[^\n]*)\nnpx --no-install agent-bundle install claude --from node_modules\/\S+\n/mu;
+  /^(# after publishing[^\n]*)\nnpx (?:--no-install )?agent-bundle install claude --from node_modules\/\S+\n/mu;
 const readmeInstallProse =
-  /^Installing the npm package does not mutate any host; run\n`npx --no-install agent-bundle install <host> --from node_modules\/<package>` explicitly\.\n/mu;
+  /^Installing the npm package does not mutate any host; run\n`npx (?:--no-install )?agent-bundle install <host> --from node_modules\/<package>` explicitly\.\n/mu;
 
 /** The installable hosts as backticked README prose. */
 const installableAlternatives = listAlternatives(installableTargets.map((host) => `\`${host}\``));

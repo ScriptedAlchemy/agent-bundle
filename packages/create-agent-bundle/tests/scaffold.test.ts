@@ -176,8 +176,8 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
       scaffoldTemplate('minimal', { pluginName: 'skills-only', targets: ['portable'] }),
     ], { concurrency: 'unbounded' });
     // Default targets (portable, codex, claude): one line per installable host,
-    // in the package build's host order; the template's hard-coded `claude`
-    // example never survives as the only instruction (#317 review).
+    // in host-catalog order; the template's hard-coded `claude` example never
+    // survives as the only instruction (#317 review).
     const defaultReadme = yield* readText(path.join(defaults.root, 'README.md'));
     expect(defaultReadme).toContain([
       '# after publishing/installing the package',
@@ -213,8 +213,10 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     expect(portableReadme).toContain("no installable host target ('portable')");
     expect(portableReadme).toContain('Add `amp`, `claude`, `codex`, or `cursor`');
 
-    // The skills-only template has no install section and passes through.
+    // The skills-only template has no install section and passes through, so
+    // its prose must not name hosts the selection may not carry.
     const minimalReadme = yield* readText(path.join(minimal.root, 'README.md'));
+    expect(minimalReadme).not.toMatch(/Claude Code|Codex|Cursor/u);
     expect(minimalReadme).toBe(
       (yield* readText(path.join(templateRoot(path, 'minimal'), 'README.md'))).replaceAll(placeholderName, 'skills-only'),
     );
