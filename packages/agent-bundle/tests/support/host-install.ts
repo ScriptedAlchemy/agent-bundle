@@ -325,7 +325,7 @@ export interface PortableHostInstallReport {
     readonly second: 'already-installed';
     readonly version: '1.0.0';
   };
-  readonly manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config';
+  readonly manifestMetadata: 'author/homepage/repository/license/keywords shared from package.json, extensions from portable config';
   /**
    * The bundle's `mcp.json` is the spec-conformant document (`locations`,
    * `reservedEnvKeys` describe it); the Cursor copy is its install-time
@@ -1667,7 +1667,7 @@ export const runPortableHostInstallProof = async (
         pluginManifest.repository === 'https://github.com/ScriptedAlchemy/agent-bundle' &&
         JSON.stringify(pluginManifest.keywords) === JSON.stringify(['proof', 'agent-plugins']) &&
         record(record(pluginManifest.extensions)?.['com.example.proof'])?.fixture === true,
-      'Portable plugin manifest did not carry the authored Agent Plugins §5.4 metadata and §5.6 extensions.',
+      'Portable plugin manifest did not carry the shared Agent Plugins §5.4 metadata and authored §5.6 extensions.',
     );
 
     const mcpServers = record(mcpManifest.mcpServers);
@@ -1828,7 +1828,7 @@ export const runPortableHostInstallProof = async (
         second: 'already-installed',
         version,
       }),
-      manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config',
+      manifestMetadata: 'author/homepage/repository/license/keywords shared from package.json, extensions from portable config',
       pluginVariables: Object.freeze({
         allowedLocations: 'args/env values/cwd only',
         cursorExpansion: Object.freeze({

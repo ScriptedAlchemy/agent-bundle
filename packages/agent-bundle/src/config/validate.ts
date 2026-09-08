@@ -55,6 +55,7 @@ import {
 import { type DiscoveredProject, payloadDeclarationEntry, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import { normalizeNoticeRetention } from './notice-retention.ts';
+import { pluginDescriptiveMetadata } from './plugin-identity.ts';
 import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
 import type { SkillDocument } from './skill.ts';
 import { referencedResources } from './skill-references.ts';
@@ -2236,6 +2237,37 @@ const validatePackageIdentity = (loaded: LoadedConfig, release: boolean): Diagno
 };
 
 /**
+ * AB4014/AB4015: the shared descriptive layer (issue #753). A malformed
+ * `plugin.metadata` block is the author's own declaration, so it is an error;
+ * a `package.json` field this compiler will not share is a warning, because a
+ * package may legitimately carry a form no host manifest accepts (an
+ * `owner/repo` repository shorthand, say). Either way the field is withheld
+ * rather than guessed at, and the message names the file to fix.
+ */
+const validateSharedMetadata = (loaded: LoadedConfig): Diagnostic[] =>
+  pluginDescriptiveMetadata(loaded.context.projectRoot, loaded.config).issues.map((issue) => issue.shared
+    ? {
+      code: 'AB4014',
+      message: `Shared ${sharedMetadataField('plugin.metadata', issue.field)} ${issue.message}`,
+      recovery: issue.field === 'metadata'
+        ? 'Correct plugin.metadata in the config, or remove it to take the package.json values.'
+        : `Correct plugin.metadata.${issue.field} in the config, or remove it to take the package.json value.`,
+      severity: 'error' as const,
+      sourcePath: loaded.configPath,
+    }
+    : {
+      code: 'AB4015',
+      message: `package.json ${issue.field} ${issue.message} It is not shared with any host manifest.`,
+      recovery: `Correct the package.json field, or declare plugin.metadata.${issue.field.replace(/\..*$/u, '')} in the config instead.`,
+      severity: 'warning' as const,
+      sourcePath: join(loaded.context.projectRoot, 'package.json'),
+    });
+
+/** `plugin.metadata.homepage` for a field issue, `plugin.metadata` for a block one. */
+const sharedMetadataField = (block: string, field: string): string =>
+  field === 'metadata' ? block : `${block}.${field}`;
+
+/**
  * The stage-1 script-route gate (#102): conventional `src/scripts/` routes
  * ship through the explicit-`scripts` pipeline, so every discovered script
  * route that pipeline cannot ship yet is a hard error naming its explicit
@@ -2467,6 +2499,7 @@ export const validateSource = (
   const payloads = declaredPayloads(loaded, registry);
   diagnostics.push(...validateAssets(loaded));
   diagnostics.push(...validatePackageIdentity(loaded, options?.release === true));
+  diagnostics.push(...validateSharedMetadata(loaded));
   diagnostics.push(...validateBin(loaded));
   diagnostics.push(...validateHooks(loaded, registry, payloads));
   diagnostics.push(...validateLib(loaded));

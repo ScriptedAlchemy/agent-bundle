@@ -14,7 +14,7 @@ even when no error diagnostic was reported.
 | Family | Area |
 | --- | --- |
 | `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter), rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset), and the Skill IR (`AB3006`: unknown frontmatter field; `AB3008`–`AB3010`: per-host lowering of tokens and frontmatter); see below. |
-| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011` and `AB4013`: release identity; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project); see below. |
+| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011` and `AB4013`: release identity; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project; `AB4014`/`AB4015`: the shared descriptive metadata every host projection reads); see below. |
 | `AB41xx` | Normalized model invariants (`AB4100`–`AB4102`: unknown targets — the retired `plugin` name included — duplicate IDs and outputs; `AB4103`, `AB4105`, `AB4106`: the composite-root checks — same path with different bytes across selected projections, a host-scoped component leaking through conventional discovery, an advanced-registry adapter selected beside another target; see below). |
 | `AB42xx` | Hook configuration and native hook sources (`AB4200`–`AB4212`; see below). |
 | `AB43xx` | MCP server and MCP App configuration (`AB4300`–`AB4339`, see below; `AB4340`: a declaration for a route-generated server redeclares `entry`/`command`/`url`; `AB4341`: the `web` exposure/policy key; see below). |
@@ -621,6 +621,8 @@ development-only fallback can never produce a release artifact, so
 | `AB4010` | warning | `package.json` `version` is not a valid semantic version; the `packageVersion` axis is withheld. |
 | `AB4011` | warning | `package.json` is unusable — unparsable, not a JSON object, or symlinked outside the project root. |
 | `AB4013` | error (build) | `agent-bundle build` refuses a project with no release version: `plugin.version` is omitted and `package.json` declares no valid semantic version. |
+| `AB4014` | error | A `plugin.metadata` field is not the shape the shared descriptive layer accepts, or the block declares a field beyond `author`, `homepage`, `keywords`, `license`, and `repository`. The config declared it, so it is an error rather than a withheld value — a blank string or empty array included, where `null` is how a field is opted out. |
+| `AB4015` | warning | A `package.json` descriptive field cannot be shared with any host manifest — a `homepage`, `repository`, or `author.url` the pinned host schemas' `uri` format refuses, an `author.email` their `email` format refuses, or a `repository` in a form this compiler will not convert (`owner/repo` and `github:` shorthands, `git@`/`git://`/`git+ssh`/`git+http` URLs; only `http(s)` and the `git+https://…` URL npm writes, with or without a trailing `.git`, are read). An `author` with any malformed part is withheld whole. The field is withheld rather than guessed at; declare `plugin.metadata.<field>` to share an explicit value. A field the config already overrides is not reported. |
 
 ## Migration nudges and convention claims (`AB4730`–`AB4738`)
 

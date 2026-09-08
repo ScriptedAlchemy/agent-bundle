@@ -77,7 +77,40 @@ export default defineConfig({
 | `name` | 必填。宿主原生的插件 slug，绝不是 npm 包名。 |
 | `description` | 一句话，会写进生成的清单中。 |
 | `logo` | 项目相对的图片路径。缺失、不是文件或位于项目之外报告 `AB4012`；在已构建产物中缺失或逃逸出部署树报告 `AB6025`。 |
+| `metadata` | 共享描述层：`author`、`homepage`、`keywords`、`license`、`repository`。每个字段默认取 `package.json` 中的同名字段；此处的值会覆盖它，而 `null` 表示不共享。值格式错误报告 `AB4014`。 |
 | `version` | **已废弃。** |
+
+### 共享描述元数据
+
+`author`、`homepage`、`keywords`、`license` 与 `repository` 只声明一次，而不是在每个宿主块里重复。
+每个字段按同一顺序解析：
+
+1. 该产物对应的宿主块——`portable.license`、`cursor.license`、`codex.license` 或
+   `claude.marketplace.plugin.license`；
+2. `plugin.metadata.license`；
+3. 项目 `package.json` 的 `license` 字段。
+
+`null` 表示有意的缺失而不是一个值：`plugin.metadata.homepage: null` 让 `package.json` 的 homepage
+不进入任何产物，而 `cursor: { homepage: null }` 只让共享的 homepage 不进入 Cursor 清单，其他宿主仍然携带它。
+唯一的例外是 `codex: { author: null }`：Codex 清单始终要有作者，因此它会回退为生成的插件名，而不是省略该字段。
+
+每个宿主只输出其固定 schema 允许的字段，并且该值仍然要通过该宿主自己的校验。Cursor 的 author 对象只允许
+`name` 与 `email`，因此共享的 `author.url` 对 Cursor 会被丢弃、对其他宿主保留；Cursor、Codex 与 Claude Code
+都要求 `author.name`，因此只有邮箱地址的 `package.json` author 不会共享给它们，而 portable 清单仍然携带它。
+
+会读取 `package.json` 的两种形状：npm 的 person 字符串（`"Ada <ada@example.com> (https://ada.example.com)"`）
+及其对象形式；对 `repository`，则是绝对 `http(s)` URL 或 npm 为其写入的
+`git+https://github.com/owner/repo.git` URL，其 `git+` 前缀与结尾的 `.git` 会被去掉。像 `owner/repo`
+这样的简写、SSH URL 与 `git+http://` URL **不会**被转换成某个托管商的网页 URL：该字段会被扣留并报告
+`AB4015` 警告，改用 `plugin.metadata.repository` 显式声明。被固定宿主 schema 拒绝的 URL 或邮箱地址
+同样会被扣留，而不会输出给宿主去拒绝。
+
+`package.json` 中的空字段等于缺失字段：`"keywords": []` 与 `"license": ""` 既不共享也不报告。而
+`plugin.metadata` 下的同样取值出自配置作者之手，因此 `plugin.metadata.license: ''` 报告 `AB4014`；
+`null` 才是退出某个字段的方式。
+
+Claude Code 的 `.claude-plugin/plugin.json` 不携带描述字段——其固定 schema 不允许——且其
+`author.name` 仍是生成的插件名。共享值经由 marketplace 条目到达 Claude Code。
 
 `package.json` 对发布标识具有权威性。发布版本只在那里声明：与 `package.json` 不一致的 `plugin.version`
 会报告 `AB4008` 警告，而任何地方都没有版本的发布构建会被 `AB4013` 拒绝，而不是交付

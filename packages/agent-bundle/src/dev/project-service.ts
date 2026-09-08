@@ -338,8 +338,16 @@ export const snapshotProjectSource = async (
   // Declared prebuilt payload and host-bin files join the identity even when
   // their directories are ignored for source discovery: the artifact packages
   // their exact bytes, so the project revision must change with them.
+  // package.json joins the identity like the config file: it is where release
+  // identity and the shared descriptive metadata every host projection reads
+  // come from, so an artifact can depend on its bytes even if project ignore
+  // rules would keep it out of source discovery.
+  const packageJsonPath = await realpath(join(resolvedRoot, 'package.json')).catch(() => undefined);
   const sources = new Set<string>([
     resolvedConfigPath,
+    ...(packageJsonPath === undefined || containedPathComponents(resolvedRoot, packageJsonPath) === undefined
+      ? []
+      : [packageJsonPath]),
     ...(await sourcePaths(resolvedRoot, resolvedOutputRoots)),
     ...(await payloadSourcePaths(resolvedRoot, additionalSourceRoots)),
   ]);

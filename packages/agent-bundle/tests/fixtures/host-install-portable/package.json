@@ -2,5 +2,13 @@
   "name": "host-install-portable-proof-fixture",
   "private": true,
   "type": "module",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "author": "Agent Bundle proof harness (https://github.com/ScriptedAlchemy/agent-bundle)",
+  "homepage": "https://github.com/ScriptedAlchemy/agent-bundle",
+  "keywords": ["proof", "agent-plugins"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ScriptedAlchemy/agent-bundle.git"
+  }
 }

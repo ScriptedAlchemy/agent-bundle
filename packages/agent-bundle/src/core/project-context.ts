@@ -2,6 +2,8 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
+import type { DescriptiveMetadataResult } from './descriptive-metadata.ts';
+import { packageDescriptiveMetadata } from './descriptive-metadata.ts';
 import type { Diagnostic } from './diagnostics.ts';
 import { digest } from './digest.ts';
 import { deepFreeze } from './freeze.ts';
@@ -76,7 +78,12 @@ export const isValidPackageVersion = (value: string): boolean => packageVersionP
 export type PackageDocumentRead =
   /** No package.json, or one that cannot be read: a normal development state. */
   | { readonly kind: 'absent' }
-  | { readonly document: Readonly<Record<string, unknown>>; readonly kind: 'document' }
+  | {
+    readonly document: Readonly<Record<string, unknown>>;
+    readonly kind: 'document';
+    /** The resolved file, matching the path the source snapshot records. */
+    readonly path: string;
+  }
   | { readonly issue: PackageIdentityIssue; readonly kind: 'issue' };
 
 /**
@@ -115,7 +122,7 @@ export const readPackageDocument = (root: string): PackageDocumentRead => {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     return { issue: { kind: 'unparsable', message: 'package.json must contain a JSON object.' }, kind: 'issue' };
   }
-  return { document: parsed as Readonly<Record<string, unknown>>, kind: 'document' };
+  return { document: parsed as Readonly<Record<string, unknown>>, kind: 'document', path: packageJsonPath };
 };
 
 /**
@@ -166,6 +173,28 @@ export const snapshotPackageIdentity = (root: string): PackageIdentitySnapshot =
     ...(packageName === undefined ? {} : { packageName }),
     ...(packageVersion === undefined ? {} : { packageVersion }),
   });
+};
+
+/** {@link snapshotPackageDescriptiveMetadata}, with the file it was read from. */
+export interface PackageDescriptiveMetadataSnapshot extends DescriptiveMetadataResult {
+  /**
+   * The resolved `package.json`, absent when the project has none. It is the
+   * path the source snapshot records, so a symlinked package.json produces one
+   * provenance path rather than two.
+   */
+  readonly packagePath?: string;
+}
+
+/**
+ * The descriptive metadata a project's `package.json` already declares, read
+ * through the same containment-checked document as release identity so one
+ * file feeds every derived judgement. A missing package.json shares nothing.
+ */
+export const snapshotPackageDescriptiveMetadata = (root: string): PackageDescriptiveMetadataSnapshot => {
+  const read = readPackageDocument(root);
+  return read.kind === 'document'
+    ? deepFreeze({ ...packageDescriptiveMetadata(read.document), packagePath: read.path })
+    : deepFreeze({ issues: [], value: {} });
 };
 
 /**
@@ -493,6 +522,18 @@ export const canonicalizeNormalizedModel = (
     metadata: {
       ...detached.metadata,
       provenance: canonicalProvenance(root, detached.metadata.provenance),
+      ...(detached.metadata.shared?.packageSource === undefined
+        ? {}
+        : {
+          shared: {
+            ...detached.metadata.shared,
+            packageSource: canonicalCompilerPath(
+              root,
+              detached.metadata.shared.packageSource,
+              'Shared metadata package path',
+            ),
+          },
+        }),
     },
     ...(detached.nativeHooks === undefined
       ? {}
