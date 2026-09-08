@@ -346,7 +346,7 @@ describe('MCP App preview', () => {
     await complete.close();
   });
 
-  it('leaves a pending preview unsettled when publishing the outcome fails, so the outcome can be offered again (#751)', async () => {
+  it('leaves a pending preview mounted and unsettled when publishing the outcome fails, so the outcome can be offered again (#751)', async () => {
     const { client } = fakeClient(Promise.resolve(preview()));
     let attempts = 0;
     const flakyClient: McpAppPreviewClient = {
@@ -365,15 +365,39 @@ describe('MCP App preview', () => {
     await controller.start();
     controller.attachFrame(iframe(), browserWindow);
 
-    // A throw is shown, not swallowed, and does not consume the one outcome.
-    await expect(controller.settle({ result: { temperature: 22 } })).resolves.toBe(false);
-    expect(phases.at(-1)).toBe('error');
-    // A refusal is reported and likewise leaves the outcome offerable.
-    await expect(controller.settle({ result: { temperature: 22 } })).resolves.toBe(false);
+    // A throw and a refusal both reject for the caller to show; neither
+    // consumes the one outcome nor unmounts the ready frame.
+    await expect(controller.settle({ result: { temperature: 22 } })).rejects.toThrow('route unavailable');
+    await expect(controller.settle({ result: { temperature: 22 } })).rejects.toThrow('did not accept');
+    expect(phases.at(-1)).toBe('ready');
     await expect(controller.settle({ result: { temperature: 22 } })).resolves.toBe(true);
     expect(attempts).toBe(3);
     await expect(controller.settle({ cancelled: 'too late' })).resolves.toBe(false);
     expect(attempts).toBe(3);
+    await controller.close();
+  });
+
+  it('shows a pending fallback as pending, then as the cancellation once the call is cancelled (#751)', async () => {
+    const fallbackResource: McpAppJsonValue = Object.freeze({ input: Object.freeze({ city: 'Paris' }), kind: 'fallback', reason: 'invalid-resource' });
+    const { client } = fakeClient(Promise.resolve(preview({ frame: undefined, resource: fallbackResource })));
+    const settlingClient: McpAppPreviewClient = {
+      ...client,
+      async settle() { return Object.freeze({ accepted: true, lifecycle: 'initialized', messages: Object.freeze([]) }); },
+    };
+    const controller = createMcpAppPreviewController({
+      client: settlingClient,
+      frameRelayFactory: () => { throw new Error('fallback must not start a relay'); },
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+    await controller.start();
+    expect(controller.state).toMatchObject({ fallback: { input: { city: 'Paris' }, reason: 'invalid-resource' }, phase: 'fallback' });
+    expect(controller.state).not.toHaveProperty('fallback.result');
+    await expect(controller.settle({ cancelled: 'Cancelled from the Workbench.' })).resolves.toBe(true);
+    expect(controller.state).toMatchObject({ fallback: { cancelled: 'Cancelled from the Workbench.', reason: 'invalid-resource' }, phase: 'fallback' });
+    expect(controller.state).not.toHaveProperty('fallback.result');
     await controller.close();
   });
 
