@@ -359,7 +359,7 @@ prompt 路由则返回经校验的协议结果（来自 `document.value`）。CL
 `build/manifest-routes.ts` 的 `artifactRoutesFor`。`writeManifest` 再用
 `assembleArtifactManifest` 将其序列化：规范的 `stableJson` 加一个末尾换行。
 `parseArtifactManifest` 拒绝任何其他字节序列、重复键、未知键、缺失键、未排序
-的数组，以及指向清单自身的文件条目。`manifestVersion` 为 `4`。公开读取方是
+的数组，以及指向清单自身的文件条目。`manifestVersion` 为 `5`。公开读取方是
 `build/manifest-file.ts` 的 `readArtifactManifest`：`ok`、`missing`（仅
 ENOENT）或 `invalid`。
 
@@ -381,7 +381,7 @@ ENOENT）或 `invalid`。
 
 ### 写入器发出的分节
 
-文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 4`）
+文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 5`）
 是消费者读取的部分。**编译器记录**（`compiler`，`recordVersion: 1`）是
 这次运行的操作性账目——生产者、项目摘要、来源、适配器修订、固定的
 schema、验证结果——它的变化不会推动 `manifestVersion`；消费者读取方
@@ -389,7 +389,7 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 
 | 分节 | 记录什么 |
 | --- | --- |
-| `manifestVersion` | `4` |
+| `manifestVersion` | `5` |
 | `application` | 与宿主无关的身份：`id`、`name`、`version`，可选的 `description` |
 | `files[]` | 除清单自身外的每个发出文件（`path`、`bytes`、`sha256`、`kind`，可选的 `mode`） |
 | `runtime` | 来自 `NormalizedPlugin.runtime` 的 `{ node }` |
@@ -526,7 +526,7 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 | [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) | 基于同一桥接的生产 `web` 表面 |
 
 第 3 步以版本 2 落地了权威的 `agent-bundle.manifest.json`；分发安装指针将其推进到版本 3，
-Amp 可执行入口指针再把当前契约推进到 `manifestVersion` 4。
+Amp 可执行入口指针把它推进到 4，JSON 输入的 CLI 投影模式（`routes.cli.commands[].projection.input`）再把当前契约推进到 `manifestVersion` 5。
 字段契约见 [产物清单](../../reference/artifact-manifest.mdx)。#592
 会一直保持打开，直到该 issue 上剩余的验收标准落地。
 

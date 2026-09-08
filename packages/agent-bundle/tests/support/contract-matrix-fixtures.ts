@@ -97,6 +97,7 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
     input: { message: 'matrix notice', recipientSession: 'matrix-session' },
     resultCompat: 'closed',
   },
+  'tool:harness/select': { input: { selection: { by: 'id', id: 'matrix-1' } }, resultCompat: 'additive' },
   'tool:harness/strict-report': { input: { reportId: 'closed-1' }, resultCompat: 'closed' },
   'tool:harness/submit': {
     input: { argv: ['cargo', 'check'], cwd: '/tmp/contract-matrix', laneKey: 'matrix', tags: ['proof'] },

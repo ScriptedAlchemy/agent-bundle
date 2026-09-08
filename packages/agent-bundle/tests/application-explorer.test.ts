@@ -123,7 +123,7 @@ const manifest = (): ArtifactManifest => ({
     },
   },
   files: [],
-  manifestVersion: 4,
+  manifestVersion: 5,
   projections: [
     {
       documents: { mcp: 'codex/mcp.json', plugin: 'codex/plugin.json' },

@@ -87,6 +87,7 @@ const artifactCliProjectionFor = (projection: CompiledCliProjection): ArtifactMa
       defaults: Object.fromEntries(Object.entries(projection.defaults)
         .map(([key, value]) => [key, Array.isArray(value) ? [...value] : value])),
     }),
+  ...(projection.input === undefined ? {} : { input: projection.input }),
   mapInput: projection.mapInput,
   module: projection.module,
   ...(projection.relaxed === undefined ? {} : { relaxed: [...projection.relaxed] }),

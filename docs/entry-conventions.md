@@ -1045,6 +1045,19 @@ and, optionally, a synchronous `mapInput`:
 - `confirm` — default `!(tool config.annotations.readOnlyHint === true)`.
 - `exitCode` — `'result'` or `'zero'`; default: the tool's
   `config.exitCode ?? 'zero'`.
+- `input` — `'json'` (#746): the command takes the tool's canonical input
+  as one JSON object through `--input`, exactly as the bulk `mcpCommands`
+  projection does (`parseMcpCommandInput` in `cli-entry.ts` runs the same
+  JSON path for both), and never reads the tool's argv grammar — the mode
+  for a schema the grammar cannot express (a nested object, a union, a
+  transform), which a flag-bound projection over it reports as `AB4814`
+  with a recovery that names this mode. `compileProjectedCliCommands`
+  emits `options: [--input, --yes?]` and
+  `projection: { input: 'json', mapInput: false, module }`; the manifest
+  carries `input` too (`manifestVersion` 5). Combining it with `flags`,
+  `positionals`, or a `mapInput` export is `AB4844`: JSON mode hands the
+  object to the canonical `inputSchema` unchanged, so there is no merge
+  precedence to define.
 
 `mapInput` receives the parsed CLI input (canonical keys, after
 projection defaults) and must return `z.input<typeof inputSchema>`. It
@@ -1071,7 +1084,7 @@ executable, whichever projection mechanism produced the command — the
 bulk `--input` projection is a CLI surface too. The generated MCP
 server still passes `kind: 'tool'`.
 `inspect --routes` prints `cli.commands[].projection`
-(`module`, `mapInput`, `defaults?`, `relaxed?`) and `options[].{key,option,aliases}`.
+(`module`, `mapInput`, `input?`, `defaults?`, `relaxed?`) and `options[].{key,option,aliases}`.
 
 ### The stdio MCP lifecycle shell
 

@@ -342,6 +342,37 @@ without `mapInput` rejects an unknown enum value while parsing argv, as a `src/c
 | `aliases` | Command aliases (same rules as a `src/cli` route's `config.aliases`). |
 | `confirm` | Default: `!(tool config.annotations.readOnlyHint === true)`. |
 | `exitCode` | `'result'` or `'zero'`; default: the tool's `config.exitCode ?? 'zero'`. |
+| `input` | `'json'`: the command takes the tool's canonical input as one JSON object through `--input`, like the bulk `mcpCommands` projection, instead of per-field flags. For a schema the argv grammar cannot express. Cannot be combined with `flags`, `positionals`, or a `mapInput` export (`AB4844`). |
+
+### JSON input for a schema flags cannot spell
+
+The bounded argv grammar covers scalars, enums, and arrays of them. A tool whose `inputSchema`
+nests an object, a union, or a transform is a valid tool — the MCP surface takes it as is — but
+it has no faithful flag form, so a flag-bound projection over it fails `AB4814` (its recovery
+names this mode). Declare `input: 'json'` and the projected command takes the whole input at
+once:
+
+```ts title="src/mcp/curator/tools/select.cli.ts"
+import type { CliProjectionConfig } from 'agent-bundle/routes';
+
+import type { inputSchema } from './select.js';
+
+export const config = {
+  command: ['select'],
+  input: 'json',
+} satisfies CliProjectionConfig<typeof inputSchema>;
+```
+
+```sh
+my-plugin select --input '{"selection":{"by":"query","query":"dune"}}' --yes --json
+```
+
+The object reaches the tool's own `inputSchema` unchanged, so its defaults, refinements, and
+transforms apply exactly as they do for a `tools/call`; a schema issue is reported under
+`--input.<path>` and a non-object `--input` is refused with exit 2 before any tool runs. The
+command keeps everything else the projection controls — `command`, `aliases`, `description`,
+`confirm` (a mutation-capable tool still requires `--yes`), and `exitCode` — and help, `inspect`,
+and the artifact manifest record the mode (`projection.input: "json"`).
 
 `flags` is keyed by the canonical key of the tool's `RouteContract.input`. Discovery excludes
 `.cli.{ts,tsx}` before identity derivation and pairs the file with the sibling `.{ts,tsx}`. The
@@ -360,7 +391,7 @@ contract becomes load-bearing once it has a projection: `AB4814`/`AB4838`/`AB483
 tool module with the prefix `Tool route <path> (CLI projection <module>)`.
 
 `agent-bundle inspect --routes` dumps the compiled graph, so
-`cli.commands[].projection` (`module`, `mapInput`, `defaults?`, `relaxed?`) and
+`cli.commands[].projection` (`module`, `mapInput`, `input?`, `defaults?`, `relaxed?`) and
 `options[].{key,option,aliases}` appear with no extra renderer. The Workbench will surface those
 facts in the selected-operation inspector. The compiled command's `routeId` is the tool id; at
 run time `invocation.kind` is `'cli'` and `operationId` is that tool id. A route observes

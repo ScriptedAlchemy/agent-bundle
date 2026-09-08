@@ -709,6 +709,8 @@ describe('MCP tool CLI surface projections', () => {
       [`Tool route ${toolPath} (CLI projection ${projectionPath})`, 'z.object'],
       toolPath,
     );
+    // A projected tool has a way out a CLI route lacks: JSON mode (#746).
+    expect(nested.graph.diagnostics[0]?.recovery).toContain("Declare input: 'json' in the projection config");
 
     const external = await compileProjection(cliModule('{}'), {
       tool: [
@@ -732,6 +734,49 @@ describe('MCP tool CLI surface projections', () => {
       ],
       toolPath,
     );
+  });
+
+  it('compiles input: "json" into one --input command over a schema the flag grammar cannot spell (#746)', async () => {
+    const richSchema = "z.object({ selection: z.discriminatedUnion('by', [z.object({ by: z.literal('id'), id: z.string() }), z.object({ by: z.literal('query'), query: z.string() })]) })";
+    const { graph, root } = await compileProjection(cliModule("{ command: ['pick'], input: 'json' }"), {
+      tool: toolModule({ schema: richSchema }),
+    });
+
+    expect(graph.diagnostics).toEqual([]);
+    expect(graph.cli?.commands).toEqual([
+      expect.objectContaining({
+        mcp: { confirm: true, server: 'demo', tool: 'submit' },
+        options: [
+          expect.objectContaining({ key: 'input', kind: 'string', option: 'input', required: false }),
+          expect.objectContaining({ key: 'yes', kind: 'boolean', option: 'yes' }),
+        ],
+        path: ['pick'],
+        projection: { input: 'json', mapInput: false, module: projectionPath },
+        routeId: 'tool:demo/submit',
+      }),
+    ]);
+    expect(graph.cli?.projectionSources).toEqual({ 'tool:demo/submit': join(root, projectionPath) });
+
+    // A read-only tool in JSON mode takes no --yes, like the bulk projection.
+    const readOnly = await compileProjection(cliModule("{ input: 'json' }"), {
+      tool: toolModule({ config: "{ annotations: { readOnlyHint: true }, description: 'Pick.' }", schema: richSchema }),
+    });
+    expect(readOnly.graph.diagnostics).toEqual([]);
+    expect(readOnly.graph.cli?.commands?.[0]?.options.map((option) => option.key)).toEqual(['input']);
+  });
+
+  it('reports AB4844 when input: "json" is combined with flags, positionals, mapInput, or another mode', async () => {
+    const cases: readonly [string, string | undefined, string][] = [
+      ["{ input: 'json', flags: { laneKey: { name: 'lane' } } }", undefined, 'config.flags cannot be combined with config.input "json"'],
+      ["{ input: 'json', positionals: ['laneKey'] }", undefined, 'config.positionals cannot be combined with config.input "json"'],
+      ["{ input: 'json' }", 'export const mapInput = (input) => input;', 'exports mapInput beside config.input "json"'],
+      ["{ input: 'yaml' }", undefined, 'config.input must be "json" when declared'],
+    ];
+    for (const [config, mapInput, detail] of cases) {
+      const { graph, root } = await compileProjection(cliModule(config, mapInput));
+      expectOnlyDiagnostic(graph, 'AB4844', root, [detail]);
+      expect(graph.cli?.commands ?? []).toEqual([]);
+    }
   });
 
   it('reports AB4837 when a projection value-imports the compiler-bearing API entry', async () => {
