@@ -211,6 +211,19 @@ describe('AB4834 generated route declarations outside the TypeScript program', (
     await mkdir(join(linked, 'node_modules'), { recursive: true });
     await symlink(join(sibling, 'agent-bundle'), join(linked, 'node_modules/agent-bundle'), 'dir');
     expect(codesOf((await validate({ root: linked })).diagnostics)).not.toContain('AB4834');
+
+    // A monorepo root links its own package from inside the project root; the
+    // program still reached it through node_modules, so it is a dependency.
+    const monorepo = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      'src/scripts/build.ts': "import type { AgentRouteModule } from 'agent-bundle/routes';\nexport type Module = AgentRouteModule;\n",
+      'tsconfig.json': tsconfig(['src/scripts/*.ts']),
+      'packages/agent-bundle/package.json': '{"name":"agent-bundle","type":"module","exports":{"./routes":{"types":"./routes.d.ts"}}}\n',
+      'packages/agent-bundle/routes.d.ts': "import type { RegisteredRouteId } from '@agent-bundle/runtime';\nexport interface AgentRouteModule { readonly id: RegisteredRouteId }\n",
+    });
+    await mkdir(join(monorepo, 'node_modules'), { recursive: true });
+    await symlink(join(monorepo, 'packages/agent-bundle'), join(monorepo, 'node_modules/agent-bundle'), 'dir');
+    expect(codesOf((await validate({ root: monorepo })).diagnostics)).not.toContain('AB4834');
   });
 
   it('reads a referenced project through its emitted declaration, as tsc does, so its source-only imports do not make the parent a consumer', async () => {

@@ -31,8 +31,8 @@ const comparablePath = (path: string): string => {
 };
 
 interface Program {
-  /** Every file `tsc -p` would compile: the configured roots plus the modules they import, transitively. */
-  readonly sourceFiles: readonly ts.SourceFile[];
+  /** The program `tsc -p` would build: the configured roots plus the modules they import, transitively. */
+  readonly program: ts.Program;
   /** Whether the config file itself declares `include` (not inherited through `extends`, not the `**` default). */
   readonly ownInclude: boolean;
   readonly references: readonly string[];
@@ -47,14 +47,14 @@ interface Program {
  * files smaller than the real one, with the same import closure over the
  * project's sources.
  */
-const projectSourceFiles = (parsed: ts.ParsedCommandLine): readonly ts.SourceFile[] => {
+const projectProgram = (parsed: ts.ParsedCommandLine): ts.Program => {
   const options: ts.CompilerOptions = { ...parsed.options, noLib: true, types: [] };
   const host = ts.createCompilerHost(options);
   const getSourceFile = host.getSourceFile.bind(host);
   host.getSourceFile = (fileName, ...rest) => (fileName.includes('/node_modules/') ? undefined : getSourceFile(fileName, ...rest));
   // With the references, an import into a referenced project reads that
   // project's emitted declaration, as `tsc -p` does, not its source.
-  return ts.createProgram({ host, options, projectReferences: parsed.projectReferences, rootNames: parsed.fileNames }).getSourceFiles();
+  return ts.createProgram({ host, options, projectReferences: parsed.projectReferences, rootNames: parsed.fileNames });
 };
 
 /**
@@ -79,7 +79,7 @@ const program = (tsconfigPath: string): Program | undefined => {
     tsconfigPath,
   );
   return {
-    sourceFiles: projectSourceFiles(parsed),
+    program: projectProgram(parsed),
     ownInclude,
     references: (parsed.projectReferences ?? []).map((reference) => ts.resolveProjectReferencePath(reference)),
     tsconfigPath,
@@ -105,18 +105,18 @@ const programs = (rootTsconfigPath: string): readonly Program[] => {
 
 /**
  * Whether one of the project's own files in the program imports an entry the
- * generated declaration augments. A declaration the program reached outside
- * the project — a workspace-linked package's `dist`, which the host could not
- * decline by path — is not the project's consumer even when it imports the
- * runtime itself. The scanner's import pre-processing
+ * generated declaration augments. A file the program reached through a package
+ * import — a workspace-linked package's `dist`, which resolves to a real path
+ * the host could not decline — is a dependency, not the project's consumer,
+ * even when it imports the runtime itself. The scanner's import pre-processing
  * reads static and dynamic import specifiers only — a specifier in a comment
  * or a string literal is not an import — and a user's own `.d.ts` counts like
  * any other file, since `import type` from a consumer entry reads the
  * registration too.
  */
-const consumesRegistration = (projectRoot: string, sourceFiles: readonly ts.SourceFile[]): boolean =>
-  sourceFiles.some((sourceFile) =>
-    !relative(projectRoot, sourceFile.fileName).startsWith('..')
+const consumesRegistration = (program: ts.Program): boolean =>
+  program.getSourceFiles().some((sourceFile) =>
+    !program.isSourceFileFromExternalLibrary(sourceFile)
     && ts.preProcessFile(sourceFile.text, true, false).importedFiles
       .some((imported) => consumerEntries.has(imported.fileName)));
 
@@ -136,11 +136,10 @@ export const routeTypesProgramDiagnostics = (projectRoot: string): readonly Diag
   const routeTypesPath = join(projectRoot, routeTypesRelativePath);
   const rootTsconfigPath = join(projectRoot, projectTsconfigFilename);
   if (!existsSync(routeTypesPath) || !existsSync(rootTsconfigPath)) return [];
-  const expected = comparablePath(routeTypesPath);
   return programs(rootTsconfigPath)
     .filter((candidate) =>
-      !candidate.sourceFiles.some((sourceFile) => comparablePath(sourceFile.fileName) === expected)
-      && consumesRegistration(projectRoot, candidate.sourceFiles))
+      candidate.program.getSourceFile(routeTypesPath) === undefined
+      && consumesRegistration(candidate.program))
     .map((candidate) => {
       const tsconfig = relative(projectRoot, candidate.tsconfigPath).replaceAll('\\', '/');
       const include = JSON.stringify(relative(dirname(candidate.tsconfigPath), routeTypesPath).replaceAll('\\', '/'));
