@@ -180,6 +180,17 @@ it.each([
       // ... and NO_COLOR alone keeps it off.
       value: { stdout: pipe },
     });
+    // The JSON-mode projection (#746) in the source-free installed bin: the
+    // canonical object reaches the tool's own inputSchema, which applies its
+    // nested defaults; a non-object is refused before any tool runs.
+    await expect(probe(cliBin, ['select', '--input', '{"selection":{"by":"query","query":"dune"}}', '--yes', '--json'], {}))
+      .resolves.toEqual({
+        filters: { minRating: 0 },
+        invocation: 'cli',
+        selection: { by: 'query', limit: 10, query: 'dune' },
+      });
+    await expect(execFile(process.execPath, [cliBin, 'select', '--input', '[]', '--yes'], { cwd: project, env: plainEnv }))
+      .rejects.toMatchObject({ code: 2, stderr: expect.stringContaining('--input must be a JSON object') });
     await expect(probe(join(pluginRoot, 'scripts', 'checksum.mjs'), ['--terminal'], { FORCE_COLOR: '1', LINES: '50' }))
       .resolves.toEqual({
         hostSurface: 'script',
@@ -214,6 +225,7 @@ it.each([
         'mutation-probe',
         'plugin-root',
         'publish-notice',
+        'select',
         'strict-report',
         'submit',
         'ticket',

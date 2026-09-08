@@ -13,6 +13,7 @@ import {
   cliProjectionContractError,
   extractCliProjection,
   inputKeysRecovery,
+  jsonInputRecovery,
   relaxationRecovery,
   relaxationWithoutMapInputDetail,
   stringArray,
@@ -516,6 +517,36 @@ export const compileProjectedCliCommands = (
     }
     if (!aliasesValid) continue;
 
+    const description = config.description ?? tool.config['description'];
+    // The tool's own render budget was validated with its server (AB4835 is
+    // reported once, there); the projected command inherits the value.
+    const render = routeRenderLimits(tool.config);
+    const command = {
+      aliases,
+      ...(typeof description === 'string' ? { description } : {}),
+      exitCode: config.exitCode ?? (tool.config['exitCode'] === 'result' ? 'result' : 'zero'),
+      mcp: { confirm, server: module.server, tool: module.stem },
+      path: config.command ?? [module.stem],
+      ...(render === undefined ? {} : { render }),
+      rendered: true,
+      routeId: tool.id,
+    } as const;
+
+    // JSON mode never reads the tool's argv grammar: the schema the grammar
+    // cannot express is exactly what the mode is for, and the tool's own
+    // inputSchema validates the object at run time, as under `--input` of
+    // the bulk projection.
+    if (config.input === 'json') {
+      routes.push(tool);
+      projectionSources[tool.id] = source;
+      commands.push({
+        ...command,
+        options: confirm ? [toolOption, confirmationOption] : [toolOption],
+        projection: { input: 'json', mapInput: false, module: relativePath },
+      });
+      continue;
+    }
+
     // The tool text is absent only when the graph's read raced a deletion;
     // the next source snapshot settles it, as for a CLI route.
     if (tool.inputSchema === undefined && pair.toolText === undefined) continue;
@@ -530,7 +561,10 @@ export const compileProjectedCliCommands = (
     // A tool without an extractable inputSchema is judged by its server's
     // contract diagnostics; the projection has nothing to bind until then.
     if (!argv.found) continue;
-    diagnostics.push(...argv.diagnostics);
+    // A grammar the flag binding cannot express has a second way out here
+    // that a CLI route lacks: JSON mode.
+    diagnostics.push(...argv.diagnostics.map((diagnostic) =>
+      diagnostic.code === 'AB4814' ? { ...diagnostic, recovery: jsonInputRecovery } : diagnostic));
     if (argv.options === undefined) continue;
     let options = argv.options;
 
@@ -569,28 +603,17 @@ export const compileProjectedCliCommands = (
     // spelling was reserved above, so no key of the schema claims it.
     if (confirm) options = [...options, confirmationOption];
 
-    const description = config.description ?? tool.config['description'];
-    // The tool's own render budget was validated with its server (AB4835 is
-    // reported once, there); the projected command inherits the value.
-    const render = routeRenderLimits(tool.config);
     routes.push(tool);
     projectionSources[tool.id] = source;
     commands.push({
-      aliases,
-      ...(typeof description === 'string' ? { description } : {}),
-      exitCode: config.exitCode ?? (tool.config['exitCode'] === 'result' ? 'result' : 'zero'),
-      mcp: { confirm, server: module.server, tool: module.stem },
+      ...command,
       options,
-      path: config.command ?? [module.stem],
       projection: {
         ...(argv.defaults === undefined ? {} : { defaults: argv.defaults }),
         mapInput: extracted.mapInput,
         module: relativePath,
         ...(argv.relaxed === undefined ? {} : { relaxed: argv.relaxed }),
       },
-      ...(render === undefined ? {} : { render }),
-      rendered: true,
-      routeId: tool.id,
     });
   }
 

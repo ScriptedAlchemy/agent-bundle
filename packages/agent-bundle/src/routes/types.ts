@@ -271,6 +271,13 @@ export interface CompiledCliProjection {
    * `default`; keys sorted.
    */
   readonly defaults?: Readonly<Record<string, CliProjectionFlagDefault>>;
+  /**
+   * `'json'` when the command takes the tool's canonical input as one JSON
+   * object through `--input`, like the bulk `routes.mcpCommands` projection,
+   * instead of per-field flags: the mode for a schema the argv grammar cannot
+   * express. Absent for a flag-bound command.
+   */
+  readonly input?: 'json';
   /** True when the module exports a `mapInput` function the shell applies before `inputSchema`. */
   readonly mapInput: boolean;
   /** Project-relative POSIX path of the projection module. */

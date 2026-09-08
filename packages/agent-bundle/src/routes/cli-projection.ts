@@ -56,6 +56,7 @@ export interface CliProjectionConfigRecord {
   readonly description?: string;
   readonly exitCode?: 'result' | 'zero';
   readonly flags?: Readonly<Record<string, CliProjectionFlagConfig>>;
+  readonly input?: 'json';
   readonly positionals?: readonly string[];
 }
 
@@ -73,7 +74,7 @@ export interface CliProjectionExtractionOptions {
   readonly projectRoot?: string;
 }
 
-const projectionConfigKeys: readonly string[] = ['aliases', 'command', 'confirm', 'description', 'exitCode', 'flags', 'positionals'];
+const projectionConfigKeys: readonly string[] = ['aliases', 'command', 'confirm', 'description', 'exitCode', 'flags', 'input', 'positionals'];
 
 const flagConfigKeys: readonly string[] = ['aliases', 'default', 'description', 'name', 'required'];
 
@@ -81,7 +82,9 @@ const emptyProjectionConfig: CliProjectionConfigRecord = deepFreeze({});
 
 const projectionSubject = (module: string, toolId: string): string => `CLI projection ${module} for ${toolId}`;
 
-const contractRecovery = 'Declare only command, aliases, confirm, description, exitCode, flags, and positionals, each in the shape CliProjectionConfig documents; then inspect again.';
+const contractRecovery = 'Declare only command, aliases, confirm, description, exitCode, flags, input, and positionals, each in the shape CliProjectionConfig documents; then inspect again.';
+/** Recovery for a tool whose inputSchema the argv grammar cannot express: take the canonical input as JSON instead of per-field flags. */
+export const jsonInputRecovery = "Declare input: 'json' in the projection config so the command takes the tool's canonical input as one JSON object through --input, or restrict the tool's inputSchema initializer to the bounded argv grammar; then inspect again.";
 const grammarRecovery = `Export the projection config as a single top-level \`export const config = { ... }\` object literal inside the static route-config grammar (${routeConfigGrammar}), then inspect again.`;
 const mapInputRecovery = 'Export mapInput as one synchronous, non-generator function with a runtime binding — a function declaration (`export function mapInput(input) { ... }`), an arrow (`export const mapInput = (input) => ({ ... })`), or a function expression — or remove the export; then inspect again.';
 const spellingRecovery = 'Use kebab-case option spellings without leading dashes that are neither reserved (help, json, ndjson, version, and yes when the command confirms) nor claimed by another option or alias; then inspect again.';
@@ -232,6 +235,15 @@ const validateProjectionConfig = (raw: Readonly<Record<string, unknown>>): Confi
   if (exitCode !== undefined && exitCode !== 'result' && exitCode !== 'zero') {
     details.push('config.exitCode must be "result" or "zero" when declared');
   }
+  const input = raw['input'];
+  if (input !== undefined && input !== 'json') details.push('config.input must be "json" when declared');
+  // JSON mode takes the whole canonical input at once; a per-key binding beside it would need a
+  // merge precedence the shell does not define.
+  if (input === 'json') {
+    for (const site of ['flags', 'positionals'] as const) {
+      if (raw[site] !== undefined) details.push(`config.${site} cannot be combined with config.input "json", which takes the tool's whole input as one JSON object`);
+    }
+  }
   const flags: Record<string, CliProjectionFlagConfig> = {};
   const declaredFlags = raw['flags'];
   if (declaredFlags !== undefined && !isRecord(declaredFlags)) {
@@ -256,6 +268,7 @@ const validateProjectionConfig = (raw: Readonly<Record<string, unknown>>): Confi
       ...(typeof description === 'string' ? { description } : {}),
       ...(exitCode === 'result' || exitCode === 'zero' ? { exitCode } : {}),
       ...(declaredFlags === undefined ? {} : { flags }),
+      ...(input === 'json' ? { input } : {}),
       ...(positionals === undefined ? {} : { positionals }),
     },
     details: [],
@@ -439,6 +452,12 @@ export const extractCliProjection = (
   }
   const validated = validateProjectionConfig(extracted.config);
   for (const detail of validated.details) diagnostics.push(report.contract(detail));
+  if (validated.config?.input === 'json' && exports.named.has('mapInput')) {
+    diagnostics.push(report.contract(
+      'the module exports mapInput beside config.input "json", but JSON mode hands --input to the canonical inputSchema unchanged',
+      'Remove mapInput, or drop input: "json" and bind per-field flags for it to map; then inspect again.',
+    ));
+  }
   if (validated.config === undefined || diagnostics.length > 0) {
     return deepFreeze({ config: emptyProjectionConfig, diagnostics, mapInput });
   }

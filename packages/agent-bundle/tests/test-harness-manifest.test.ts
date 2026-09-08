@@ -93,6 +93,7 @@ describe('the compiled test manifest', () => {
       'tool:harness/mutation-probe',
       'tool:harness/plugin-root',
       'tool:harness/publish-notice',
+      'tool:harness/select',
       'tool:harness/strict-report',
       'tool:harness/submit',
       'tool:harness/ticket',
@@ -332,7 +333,7 @@ describe('the compiled test manifest', () => {
       rendered: true,
       routeId: `tool:harness/${tool}`,
     });
-    // `submit` carries an explicit `.cli.ts` projection, so it leaves the bulk set (#596).
+    // `select` and `submit` carry explicit `.cli.ts` projections, so they leave the bulk set (#596).
     expect(manifest.cliCommands.filter((command) => command.mcp !== undefined && command.projection === undefined)).toEqual([
       projected('catalog', 'Streams the harness catalog behind one Suspense boundary.', true),
       projected('context', 'Returns the request identity axes observed by this route.', true),
@@ -352,6 +353,17 @@ describe('the compiled test manifest', () => {
       projected('wait', 'Waits until aborted or holdMs elapses, for cancellation contract proof.', true, { maxElapsedMs: 120_000 }),
     ]);
     expect(manifest.cliCommands.filter((command) => command.projection !== undefined)).toMatchObject([
+      // JSON mode (#746): the schema the flag grammar cannot spell arrives whole through `--input`.
+      {
+        mcp: { confirm: true, server: 'harness', tool: 'select' },
+        options: [
+          { key: 'input', kind: 'string', option: 'input', repeated: false, required: false },
+          { key: 'yes', kind: 'boolean', option: 'yes', repeated: false, required: false },
+        ],
+        path: ['select'],
+        projection: { input: 'json', mapInput: false, module: 'src/mcp/harness/tools/select.cli.tsx' },
+        routeId: 'tool:harness/select',
+      },
       {
         mcp: { confirm: false, server: 'harness', tool: 'submit' },
         path: ['submit'],

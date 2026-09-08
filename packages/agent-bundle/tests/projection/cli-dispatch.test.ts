@@ -266,6 +266,7 @@ describe('the CLI dispatch level', () => {
         'harness wait',
         'inventory',
         'report',
+        'select',
         'submit',
         'tooling inspect',
         'tooling report',

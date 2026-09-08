@@ -172,7 +172,7 @@ const validManifest = (): ArtifactManifest => ({
     file('runtime/scripts/lint.mjs', 'bundle'),
     file('runtime/scripts/lint.worker.mjs', 'bundle'),
   ],
-  manifestVersion: 4,
+  manifestVersion: 5,
   projections: [
     {
       builtInHost: 'claude',
@@ -305,7 +305,7 @@ const minimalManifest = (): ArtifactManifest => ({
   distribution: { channels: ['local'], payloads: [] },
   executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
   files: [],
-  manifestVersion: 4,
+  manifestVersion: 5,
   projections: [],
   routes: { digest: hash('1'), events: [], layouts: [], providers: [], scripts: [], servers: [] },
   runtime: { node: '22.12.0' },
@@ -515,9 +515,10 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
  * sweep covers key deletion, unknown keys, and retyping). Both reject.
  */
 const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest) => void; readonly rule: string }[] = [
-  { apply: (manifest) => { (manifest as Record_).manifestVersion = 3; }, rule: 'manifestVersion is 4' },
+  { apply: (manifest) => { (manifest as Record_).manifestVersion = 3; }, rule: 'manifestVersion is 5' },
   { apply: (manifest) => { (manifest.compiler.producer as Record_).name = 'other'; }, rule: 'compiler.producer.name is agent-bundle' },
   { apply: (manifest) => { (manifest.compiler as Record_).recordVersion = 2; }, rule: 'compiler.recordVersion is 1' },
+  { apply: (manifest) => { (manifest.routes.cli!.commands![0]!.projection as Record_).input = 'yaml'; }, rule: 'cli projection input is json' },
   { apply: (manifest) => { manifest.runtime.node = '22.12'; }, rule: 'runtime.node is major.minor.patch' },
   { apply: (manifest) => { manifest.runtime.node = 'v22.12.0'; }, rule: 'runtime.node has no prefix' },
   { apply: (manifest) => { manifest.runtime.node = '22.012.0'; }, rule: 'runtime.node has no leading zeros' },
@@ -692,6 +693,13 @@ it('encodes the parser rules a schema can state, so both reject the same values'
   expect(outcomes).toEqual(schemaEncodedRules.map(({ rule }) => ({ parser: 'rejects', rule, schema: 'rejects' })));
 });
 
+it('accepts a JSON-mode CLI projection (manifestVersion 5) in both the parser and the schema', () => {
+  const manifest = clone();
+  (manifest.routes.cli!.commands![0]!.projection as Record_).input = 'json';
+  expect(parseArtifactManifest(canonicalBytes(manifest))).toEqual(manifest);
+  expect(schemaAccepts(manifest)).toBe(true);
+});
+
 it('accepts path segments that only resemble Windows device names in both the parser and the schema', () => {
   for (const path of ['claude/COM10.log', 'claude/console.txt', 'claude/nulled/index.json', 'claude/lpt.txt']) {
     const manifest: ArtifactManifest = {
@@ -731,7 +739,7 @@ it('leaves byte-level rules to the parser: a parsed value carries no formatting 
   expect(validateArtifactManifestSchema(JSON.parse(pretty))).toEqual([]);
 });
 
-it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 4 that matches the shipped file', async () => {
+it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 5 that matches the shipped file', async () => {
   expect(artifactManifestSchema.$schema).toBe('https://json-schema.org/draft/2020-12/schema');
   expect(artifactManifestSchema.$id).toBe('https://scriptedalchemy.github.io/agent-bundle/schemas/agent-bundle.manifest.schema.json');
   expect(artifactManifestSchema.type).toBe('object');
@@ -739,7 +747,7 @@ it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 4 tha
   expect(artifactManifestSchema.required).toEqual(Object.keys(minimalManifest()).sort());
   const properties = asObject(artifactManifestSchema.properties);
   expect(Object.keys(properties)).toEqual([...Object.keys(minimalManifest()), 'web'].sort());
-  expect(asObject(properties.manifestVersion).const).toBe(4);
+  expect(asObject(properties.manifestVersion).const).toBe(5);
 
   expect(Object.isFrozen(artifactManifestSchema)).toBe(true);
   expect(Object.isFrozen(properties)).toBe(true);

@@ -259,6 +259,8 @@ export interface ArtifactManifestCliCommandMcp {
 export interface ArtifactManifestCliProjection {
   /** Canonical key → the projection's `flags.<key>.default` literal. */
   readonly defaults?: Readonly<Record<string, CliProjectionFlagDefault>>;
+  /** `'json'` when the command takes the tool's canonical input as one JSON object through `--input` (manifestVersion 5). */
+  readonly input?: 'json';
   /** True when the module exports `mapInput`. */
   readonly mapInput: boolean;
   /** Project-relative POSIX path of the projection module. */
@@ -943,7 +945,7 @@ const parseCliOptions = (value: unknown, location: string): readonly ArtifactMan
 
 const parseCliProjection = (value: unknown, location: string): ArtifactManifestCliProjection => {
   const projection = requireRecord(value, location);
-  requireExactKeys(projection, location, ['mapInput', 'module'], ['defaults', 'relaxed']);
+  requireExactKeys(projection, location, ['mapInput', 'module'], ['defaults', 'input', 'relaxed']);
   let defaults: Record<string, CliProjectionFlagDefault> | undefined;
   if (projection.defaults !== undefined) {
     const record = requireRecord(projection.defaults, `${location}.defaults`);
@@ -955,6 +957,7 @@ const parseCliProjection = (value: unknown, location: string): ArtifactManifestC
   if (relaxed !== undefined && relaxed.length === 0) fail(`${location}.relaxed must name at least one key.`);
   return {
     ...(defaults === undefined ? {} : { defaults }),
+    ...(projection.input === undefined ? {} : { input: requireOneOf(projection.input, `${location}.input`, ['json'] as const) }),
     mapInput: requireBoolean(projection.mapInput, `${location}.mapInput`),
     module: requirePath(projection.module, `${location}.module`),
     ...(relaxed === undefined ? {} : { relaxed }),

@@ -242,15 +242,18 @@ const valueAt = (input: unknown, path: readonly PropertyKey[]): unknown => {
 const pathSuffix = (path: readonly PropertyKey[]): string =>
   path.map((segment) => (typeof segment === 'number' ? `[${String(segment)}]` : `.${String(segment)}`)).join('');
 
+const takesJsonInput = (command: CompiledCliCommand): boolean =>
+  command.mcp !== undefined && (command.projection === undefined || command.projection.input === 'json');
+
 /**
  * Spells a schema path the way the user typed it: the first segment is the
  * schema property the compiler projected onto argv (`--kebab-flag` or
- * `<positional>`); a projected MCP command's whole input arrived through
- * `--input`, so its path renders as `--input.<path>`.
+ * `<positional>`); an MCP command whose whole input arrived through
+ * `--input` renders its path as `--input.<path>`.
  */
 const targetOf = (command: CompiledCliCommand, path: readonly PropertyKey[]): string => {
   if (path.length === 0) return 'input';
-  if (command.mcp !== undefined && command.projection === undefined) return `--input${pathSuffix(path)}`;
+  if (takesJsonInput(command)) return `--input${pathSuffix(path)}`;
   const [head, ...rest] = path;
   const option = command.options.find((candidate) => candidate.key === head);
   if (option === undefined) return `input${pathSuffix(path)}`;
@@ -686,7 +689,7 @@ const parseMcpCommandInput = (
   if (command.mcp.confirm && parsed.input['yes'] !== true) {
     throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
   }
-  if (command.projection !== undefined) {
+  if (command.projection !== undefined && command.projection.input !== 'json') {
     if (!command.mcp.confirm) return parsed;
     const input = { ...parsed.input };
     delete input['yes'];

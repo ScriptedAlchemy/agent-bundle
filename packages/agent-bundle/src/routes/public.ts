@@ -607,6 +607,14 @@ export interface CliProjectionConfig<Schema = RouteSchema<Readonly<Record<string
   readonly exitCode?: 'result' | 'zero';
   /** Per canonical key: the CLI spelling, aliases, description, default, and relaxed requirement. */
   readonly flags?: Partial<Readonly<Record<RouteSchemaInputKey<Schema>, CliProjectionFlagConfig>>>;
+  /**
+   * `'json'`: the command takes the tool's canonical input as one JSON object
+   * through `--input '<json>'` instead of per-field flags — for a schema the
+   * bounded argv grammar cannot express (a nested object, a union, a
+   * transform). The tool's own `inputSchema` still validates it. Cannot be
+   * combined with `flags`, `positionals`, or a `mapInput` export.
+   */
+  readonly input?: 'json';
   /** Canonical keys consumed as bare arguments, in order (the `src/cli` positional rules apply). */
   readonly positionals?: readonly RouteSchemaInputKey<Schema>[];
 }

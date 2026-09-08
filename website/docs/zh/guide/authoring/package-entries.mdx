@@ -315,6 +315,34 @@ mapper——而枚举之外的值仍以 2 退出，并以 CLI 拼写报告为
 | `aliases` | 命令别名（规则与 `src/cli` 路由的 `config.aliases` 相同）。 |
 | `confirm` | 默认为 `!(tool config.annotations.readOnlyHint === true)`。 |
 | `exitCode` | `'result'` 或 `'zero'`；默认为工具的 `config.exitCode ?? 'zero'`。 |
+| `input` | `'json'`：命令像批量 `mcpCommands` 投影一样，通过 `--input` 以一个 JSON 对象接收工具的规范输入，而不是逐字段的 flag。用于 argv 语法无法表达的 schema。不能与 `flags`、`positionals` 或 `mapInput` 导出同时使用（`AB4844`）。 |
+
+### flag 无法拼写的 schema：JSON 输入
+
+有界 argv 语法覆盖标量、枚举以及它们的数组。`inputSchema` 中嵌套对象、联合或 transform 的工具仍是
+合法的工具——MCP 表面照原样接收它——但它没有忠实的 flag 形式，所以基于 flag 的投影会以 `AB4814`
+失败（其恢复提示会指向这一模式）。声明 `input: 'json'`，投影出的命令便一次接收完整输入：
+
+```ts title="src/mcp/curator/tools/select.cli.ts"
+import type { CliProjectionConfig } from 'agent-bundle/routes';
+
+import type { inputSchema } from './select.js';
+
+export const config = {
+  command: ['select'],
+  input: 'json',
+} satisfies CliProjectionConfig<typeof inputSchema>;
+```
+
+```sh
+my-plugin select --input '{"selection":{"by":"query","query":"dune"}}' --yes --json
+```
+
+该对象原样到达工具自己的 `inputSchema`，因此默认值、refinement 与 transform 的应用方式与
+`tools/call` 完全一致；schema 问题以 `--input.<path>` 报告，非对象的 `--input` 会在任何工具运行之前
+以退出码 2 被拒绝。命令保留投影控制的其余一切——`command`、`aliases`、`description`、`confirm`
+（可变更的工具仍需要 `--yes`）与 `exitCode`——帮助、`inspect` 与制品清单都会记录这一模式
+（`projection.input: "json"`）。
 
 `flags` 以工具的 `RouteContract.input` 的规范键为键。发现阶段会在派生身份之前排除 `.cli.{ts,tsx}`，
 并将该文件与同级的 `.{ts,tsx}` 配对。这个后缀在 `src/mcp/**` 下保留；加 `_` 前缀可以停用它。
@@ -331,7 +359,7 @@ mapper——而枚举之外的值仍以 2 退出，并以 CLI 拼写报告为
 `Tool route <path> (CLI projection <module>)`。
 
 `agent-bundle inspect --routes` 会转储编译后的路由图，因此无需额外的 renderer 即可看到
-`cli.commands[].projection`（`module`、`mapInput`、`defaults?`、`relaxed?`）与
+`cli.commands[].projection`（`module`、`mapInput`、`input?`、`defaults?`、`relaxed?`）与
 `options[].{key,option,aliases}`。Workbench 会在选中操作的 inspector 中展示这些事实。
 编译后命令的 `routeId` 是工具 id；运行时的 `invocation.kind` 为 `'cli'`，`operationId` 则为该工具
 id。只要路由从生成的 CLI 可执行文件运行，无论命令由哪种投影机制产生，它观察到的都是
