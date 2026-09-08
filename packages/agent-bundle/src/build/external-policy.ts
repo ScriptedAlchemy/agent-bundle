@@ -85,7 +85,7 @@ export const viewSelfContainmentDiagnostics = (
   evidence.externals.map((external) => artifactDiagnostic(
     'AB6005',
     `Compiled MCP App view ${JSON.stringify(asset)} `
-      + keptExternalClause(external, external.issuers.map((issuer) => posixRelativeWhenInside(projectRoot, issuer)))
+      + keptExternalClause(external, external.issuers.map((issuer) => posixRelativeWhenInside(projectRoot, issuer)).sort())
       + 'a view inlines every module it loads.',
     asset,
   ));

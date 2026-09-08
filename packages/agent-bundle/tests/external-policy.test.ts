@@ -1,10 +1,13 @@
 import { describe, expect, it } from '@rstest/core';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import type { CompileResult, ExternalIR } from '../src/build/compile-result.ts';
+import type { CompilationEvidence, CompileResult, ExternalIR } from '../src/build/compile-result.ts';
 import {
   classifyExternal,
   externalizedSpecifiers,
   selfContainmentDiagnostics,
+  viewSelfContainmentDiagnostics,
 } from '../src/build/external-policy.ts';
 
 const resultWith = (externals: readonly ExternalIR[]): CompileResult => ({
@@ -136,6 +139,28 @@ describe('selfContainmentDiagnostics', () => {
         userRequest: './sibling.mjs',
       },
     ]))).toEqual([]);
+  });
+});
+
+describe('viewSelfContainmentDiagnostics', () => {
+  it('sorts issuer identities after making project paths relative', () => {
+    const project = join(tmpdir(), 'a-agent-bundle-project');
+    const externalIssuer = join(tmpdir(), 'z-agent-bundle-source', 'view-runtime.ts');
+    const projectIssuer = join(project, 'views', 'status.tsx');
+    const evidence: CompilationEvidence = {
+      compiler: 'agent-bundle-mcp-app-status',
+      externals: [{
+        externalType: 'module',
+        issuers: [projectIssuer, externalIssuer].sort(),
+        request: 'react',
+        userRequest: 'react',
+      }],
+      modules: [],
+    };
+
+    expect(viewSelfContainmentDiagnostics(evidence, 'mcp-apps/status.html', project)[0]?.message).toBe(
+      `Compiled MCP App view "mcp-apps/status.html" keeps "react" external (module) from ${externalIssuer}, views/status.tsx; a view inlines every module it loads.`,
+    );
   });
 });
 

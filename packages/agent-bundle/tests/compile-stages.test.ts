@@ -4,9 +4,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { CompilationEvidence } from '../src/build/compile-result.ts';
 import { compileRslibSurfaces, settledRslibSurface } from '../src/build/compiler.ts';
 import { generatedMetaModulePath, metaModuleSpecifier } from '../src/build/meta.ts';
-import { buildRslibSurfaces, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
+import { buildRslibSurfaces, compileResultOf, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
 import { planCompileStages } from '../src/build/compile-stages.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 
@@ -105,6 +106,36 @@ const surfaceEntry = (name: string, outputRelativePath: string, source: string):
   outputRelativePath,
   source,
   sourceInputs: [source],
+});
+
+describe('compileResultOf', () => {
+  it('sorts issuer identities after making project paths relative', () => {
+    const project = join(tmpdir(), 'a-agent-bundle-project');
+    const externalIssuer = join(tmpdir(), 'z-agent-bundle-source', 'terminal-capability.ts');
+    const projectIssuer = join(project, 'src', 'scripts', 'pad.ts');
+    const record: CompilationEvidence = {
+      compiler: 'agent-bundle-scripts-pad',
+      externals: [{
+        externalType: 'global',
+        issuers: [projectIssuer, externalIssuer].sort(),
+        request: 'fs',
+        userRequest: 'node:fs',
+      }],
+      modules: [],
+    };
+
+    const result = compileResultOf(record, {
+      asset: { path: 'scripts/pad.mjs', sourceInputs: [projectIssuer] },
+      cwd: project,
+      dependencyRoots: new Map(),
+      emittedAssets: new Set(['scripts/pad.mjs']),
+    });
+
+    expect(result.externals[0]?.issuers).toEqual([
+      externalIssuer,
+      'src/scripts/pad.ts',
+    ].sort());
+  });
 });
 
 describe('buildRslibSurfaces', () => {
