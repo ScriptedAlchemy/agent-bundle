@@ -4,6 +4,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import {
   createMcpAppPreviewController,
+  McpAppOutcomeDeliveryError,
   McpAppPreview,
   McpAppPreviewFrame,
   type McpAppFrameRelayFactory,
@@ -375,6 +376,25 @@ describe('MCP App preview', () => {
     await expect(controller.settle({ cancelled: 'too late' })).resolves.toBe(false);
     expect(attempts).toBe(3);
     await controller.close();
+
+    // Once the route accepted the outcome the binding is settled even if this
+    // frame could not take the message: the failure is reported, not retried.
+    let deliveries = 0;
+    const deaf = createMcpAppPreviewController({
+      client: flakyClient,
+      frameRelayFactory: () => ({ async close() {}, deliverHostMessages() { deliveries += 1; return false; }, start() { return true; } }),
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+    await deaf.start();
+    deaf.attachFrame(iframe(), browserWindow);
+    await expect(deaf.settle({ result: { temperature: 22 } })).rejects.toBeInstanceOf(McpAppOutcomeDeliveryError);
+    expect(deliveries).toBe(1);
+    await expect(deaf.settle({ result: { temperature: 22 } })).resolves.toBe(false);
+    expect(attempts).toBe(4);
+    await deaf.close();
   });
 
   it('shows a pending fallback as pending, then as the cancellation once the call is cancelled (#751)', async () => {

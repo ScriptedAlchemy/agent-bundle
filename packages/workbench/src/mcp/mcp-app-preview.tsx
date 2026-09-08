@@ -252,6 +252,14 @@ const fallbackFor = (
   return Object.freeze({ input, reason, result: resultOf(outcome), ...cancelled });
 };
 
+/** The route settled the binding but this frame could not take the terminal message; nothing to retry. */
+export class McpAppOutcomeDeliveryError extends Error {
+  constructor() {
+    super('The App frame could not receive the outcome.');
+    this.name = 'McpAppOutcomeDeliveryError';
+  }
+}
+
 const resultOf = (outcome: McpAppPreviewTerminal | undefined): McpAppJsonValue | undefined =>
   outcome !== undefined && 'result' in outcome ? outcome.result : undefined;
 
@@ -605,9 +613,13 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
    * Publishes the opening call's one terminal outcome to a preview created
    * without `result` (#751). Waits for the binding to exist; `false` when there
    * is nothing to settle (a second outcome, a closed preview, one created with
-   * its result). A publish the route refused, the relay could not take, or that
-   * threw rejects and leaves the preview unsettled — mounted as it was — so the
-   * caller can show the failure and offer the same outcome again.
+   * its result). A publish the route refused or that threw rejects and leaves
+   * the preview unsettled — mounted as it was — so the caller can show the
+   * failure and offer the same outcome again. Once the route accepted it the
+   * binding is settled for good, so a frame that could not take the message
+   * rejects with `McpAppOutcomeDeliveryError` and nothing is offered again.
+   * ponytail: a response lost after the route accepted reads as a refusal on
+   * retry; replaying the accepted terminal would need the route to retain it.
    */
   async settle(terminal: McpAppPreviewTerminal): Promise<boolean> {
     if (this.#settling !== undefined || this.#closed || this.#runtime !== undefined) return false;
@@ -615,7 +627,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     try {
       return await this.#settling;
     } catch (error) {
-      this.#settling = undefined;
+      if (!(error instanceof McpAppOutcomeDeliveryError)) this.#settling = undefined;
       throw error;
     }
   }
@@ -629,11 +641,11 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     const response = await settle.call(client, preview.bindingId, terminal);
     if (this.#closed) return false;
     if (!response.accepted) throw new Error('The App preview did not accept the outcome.');
-    if (response.messages.length > 0 && this.#relay?.deliverHostMessages?.(response.messages) !== true) {
-      throw new Error('The App frame could not receive the outcome.');
-    }
     this.#outcome = 'result' in terminal ? Object.freeze({ result: detachedJson(terminal.result) }) : terminal;
     this.#setState(stateFor(preview, this.#input, this.#outcome));
+    if (response.messages.length > 0 && this.#relay?.deliverHostMessages?.(response.messages) !== true) {
+      throw new McpAppOutcomeDeliveryError();
+    }
     return true;
   }
 
@@ -1307,10 +1319,12 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
 
   // The opening call's outcome lands once; the controller refuses any second
   // one. A publish that failed is shown here and can be offered again.
-  const [settleError, setSettleError] = useState<string>();
+  const [settleError, setSettleError] = useState<{ readonly message: string; readonly retryable: boolean }>();
   const offerTerminal = (outcome: McpAppPreviewTerminal): void => {
     setSettleError(undefined);
-    controller.current?.settle(outcome).catch((error: unknown) => { setSettleError(messageFor(error)); });
+    controller.current?.settle(outcome).catch((error: unknown) => {
+      setSettleError({ message: messageFor(error), retryable: !(error instanceof McpAppOutcomeDeliveryError) });
+    });
   };
   useEffect(() => {
     if (terminal !== undefined) offerTerminal(terminal);
@@ -1384,8 +1398,8 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
       {artifactState.phase === 'loading' ? <p role="status">Creating MCP App preview…</p> : null}
       {artifactState.phase === 'error' ? <p role="alert">{artifactState.message}</p> : null}
       {settleError === undefined || terminal === undefined ? null : <p role="alert">
-        The App did not receive the call's outcome: {settleError}{' '}
-        <button onClick={() => offerTerminal(terminal)} type="button">Retry</button>
+        The App did not receive the call's outcome: {settleError.message}{' '}
+        {settleError.retryable ? <button onClick={() => offerTerminal(terminal)} type="button">Retry</button> : null}
       </p>}
       {fallback === undefined ? null : (
         <section aria-label="MCP App fallback" className="mcp-app-preview__fallback">
