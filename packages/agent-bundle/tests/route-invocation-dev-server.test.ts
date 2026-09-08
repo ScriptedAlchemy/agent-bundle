@@ -1997,7 +1997,8 @@ it('bounds the render history a compiled child produces by count and bytes acros
     expect(JSON.stringify(cancelled.document)).toContain(`${String(boundaries - 1)}:`);
     const reconnected = await readInvocationStream(reconnectedResponse);
     expect(reconnected[0]).toEqual({ type: 'truncated' });
-    expect(renderEvents(reconnected)).toEqual(cancelled.events);
+    // A live reconnect may include replay events evicted before the terminal envelope.
+    expect(renderEvents(reconnected).slice(-cancelled.events.length)).toEqual(cancelled.events);
     expect(reconnected.at(-1)).toEqual({ invocation: cancelled, type: 'final' });
     await live.next(isFinal);
     expect(live.seen.filter((message) => message.type === 'truncated')).toHaveLength(1);
