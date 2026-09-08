@@ -97,6 +97,14 @@ const declaredValue = (value: unknown, shared: boolean): unknown =>
     ? undefined
     : value;
 
+/**
+ * A URL every host takes: the pinned `uri` format, plus the lowercase scheme
+ * Claude Code's marketplace schema matches case-sensitively (`^https?://`)
+ * where ajv's format and `new URL` both accept `HTTPS://`.
+ */
+const isSharedHttpUrl = (value: unknown): value is string =>
+  isSchemaHttpUrl(value) && /^https?:\/\//u.test(value);
+
 /** URL fields carry no surrounding whitespace into a host manifest. */
 const trimmed = (value: unknown): unknown => typeof value === 'string' ? value.trim() : value;
 
@@ -137,7 +145,7 @@ const authorFrom = (
   }
   const url = trimmed(declaredValue(record.url, shared));
   if (url !== undefined) {
-    if (isSchemaHttpUrl(url)) author.url = url;
+    if (isSharedHttpUrl(url)) author.url = url;
     else {
       issues.push({ field: 'author.url', message: 'must be an absolute HTTP or HTTPS URL.', shared });
       return undefined;
@@ -187,9 +195,9 @@ const repositoryFrom = (
   shared: boolean,
 ): string | undefined => {
   const declared = trimmed(isPlainDataRecord(value) ? value.url : value);
-  if (isSchemaHttpUrl(declared)) return declared;
+  if (isSharedHttpUrl(declared)) return declared;
   const converted = isNonemptyString(declared) ? gitHttpsPattern.exec(declared)?.groups?.url : undefined;
-  if (converted !== undefined && isSchemaHttpUrl(converted)) return converted;
+  if (converted !== undefined && isSharedHttpUrl(converted)) return converted;
   issues.push({
     field: 'repository',
     message:
@@ -213,7 +221,7 @@ const descriptiveMetadataFrom = (
   }
   const homepage = trimmed(declaredValue(declared.homepage, shared));
   if (homepage !== undefined) {
-    if (isSchemaHttpUrl(homepage)) value.homepage = homepage;
+    if (isSharedHttpUrl(homepage)) value.homepage = homepage;
     else issues.push({ field: 'homepage', message: 'must be an absolute HTTP or HTTPS URL.', shared });
   }
   const repository = declaredValue(declared.repository, shared);

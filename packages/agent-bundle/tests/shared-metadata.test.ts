@@ -295,6 +295,7 @@ it('refuses a blank or empty plugin.metadata value instead of reading it as an o
 it.each([
   { field: 'homepage', label: 'a URL character the pinned uri format refuses', value: 'https://example.test/a|b' },
   { field: 'homepage', label: 'a non-ASCII URL', value: 'https://example.test/p\u00e4th' },
+  { field: 'homepage', label: 'an uppercase scheme', value: 'HTTPS://example.test' },
   { field: 'author', label: 'a doubled dot in an address', value: { email: 'a..b@example.test' } },
   { field: 'author', label: 'an address without a domain', value: { email: 'ada@example' } },
 ])('withholds $label rather than letting a host refuse it', async ({ field, value }) => {
