@@ -30,12 +30,16 @@ interface CreateRoute {
   readonly kind: 'create';
 }
 
+interface LaunchesRoute {
+  readonly kind: 'launches';
+}
+
 interface SessionRoute {
   readonly id: string;
   readonly kind: 'session' | 'connection' | 'catalog' | 'config' | 'operations' | 'trace' | 'stream' | 'restart' | 'cancel';
 }
 
-type Route = CreateRoute | SessionRoute;
+type Route = CreateRoute | LaunchesRoute | SessionRoute;
 
 type JsonObject = Record<string, unknown>;
 
@@ -80,6 +84,8 @@ export interface McpSessionRouteSession {
 export interface McpSessionRouteService {
   closeSession(id: string): Promise<boolean>;
   get(id: string): McpSessionRouteSession | undefined;
+  /** The epoch's projections that launch the server, grouped by launch identity; sorted targets, first is the representative. */
+  launches(options: { readonly epochId: string; readonly serverName: string }): Promise<readonly { readonly launchId: string; readonly targets: readonly string[] }[]>;
   open(options: { readonly epochId: string; readonly serverName: string; readonly target: string; readonly timeoutMs?: number }): Promise<McpSessionRouteSession>;
 }
 
@@ -102,6 +108,7 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   }
   const segments = parts.slice(3).map(decodedSegment);
   if (segments.length === 1 && segments[0] === 'sessions') return Object.freeze({ kind: 'create' });
+  if (segments.length === 1 && segments[0] === 'launches') return Object.freeze({ kind: 'launches' });
   if (segments[0] !== 'sessions' || segments[1] === undefined) {
     throw requestError(diagnostic('AB8013', 'MCP session route path is not valid.', 400));
   }
@@ -320,6 +327,9 @@ export class McpSessionRoutes {
       if (parsed.kind === 'create') {
         throw requestError(diagnostic('AB8019', 'MCP session could not be opened.', 400));
       }
+      if (parsed.kind === 'launches') {
+        throw requestError(diagnostic('AB8019', 'MCP server launches could not be resolved.', 400));
+      }
       throw requestError(diagnostic('AB8019', 'MCP session operation could not be completed.', 502));
     }
     return true;
@@ -332,6 +342,17 @@ export class McpSessionRoutes {
     service: McpSessionRouteService,
   ): Promise<void> {
     const method = request.method ?? 'GET';
+    if (parsed.kind === 'launches') {
+      if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      const query = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      const epochId = query.get('epochId');
+      const serverName = query.get('serverName');
+      if (!nonemptyString(epochId) || !nonemptyString(serverName) || [...query.keys()].some((key) => key !== 'epochId' && key !== 'serverName')) {
+        return invalidShape();
+      }
+      const launches = await service.launches({ epochId, serverName });
+      return responseJson(response, { epochId, launches, serverName });
+    }
     if (parsed.kind === 'create') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const session = await service.open(createRequest(await jsonBody(request)));

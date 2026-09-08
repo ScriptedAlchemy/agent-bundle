@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { McpAppJsonValue, McpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppBridgeCloseOptions, McpAppBridgeJsonRecord, McpAppBridgeLifecycle } from './mcp-app-bridge.ts';
-import type { McpAppPreviewCloseResult, McpAppPreviewHostContext } from './mcp-app-preview-service.ts';
+import type { McpAppPreviewCloseResult, McpAppPreviewHostContext, McpAppPreviewTerminal } from './mcp-app-preview-service.ts';
 import { McpAppRuntimePreviewError } from '../mcp-app-runtime-preview-service.ts';
 import type {
   CreateMcpAppPreviewRequest,
@@ -40,7 +40,7 @@ interface CreateRoute {
 
 interface BindingRoute {
   readonly bindingId: string;
-  readonly kind: 'messages' | 'host-context' | 'close' | 'force-close' | 'consent';
+  readonly kind: 'messages' | 'host-context' | 'close' | 'force-close' | 'consent' | 'result';
 }
 
 interface RuntimeCreateRoute { readonly kind: 'runtime-create'; }
@@ -78,10 +78,12 @@ export interface McpAppRoutePreviewService {
     readonly host: McpAppPreviewHostContext;
     readonly input: McpAppJsonValue;
     readonly previewProfile: McpAppPreviewProfile;
-    readonly result: McpAppJsonValue;
+    /** Omitted for an opening call still in flight; `settle` publishes its outcome. */
+    readonly result?: McpAppJsonValue;
     readonly sessionId: string;
     readonly toolName: string;
   }): Promise<McpAppRoutePreview>;
+  settle?(bindingId: string, terminal: McpAppPreviewTerminal): Promise<boolean>;
   consentChallenges?(bindingId: string): readonly McpAppConsentChallenge[] | undefined;
   decideConsent?(bindingId: string, challengeId: string, approved: boolean): boolean | Promise<boolean>;
   forceClose(bindingId: string): Promise<boolean>;
@@ -193,7 +195,7 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   if (parts.length !== 6) throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
   const bindingId = opaqueSegment(parts[4]!);
   const kind = parts[5];
-  if (kind === 'messages' || kind === 'host-context' || kind === 'close' || kind === 'consent') return Object.freeze({ bindingId, kind });
+  if (kind === 'messages' || kind === 'host-context' || kind === 'close' || kind === 'consent' || kind === 'result') return Object.freeze({ bindingId, kind });
   if (kind === undefined || kind.length === 0) throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
   throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
 };
@@ -322,11 +324,13 @@ const createRequest = (
   }
   // A request carrying neither field binds the call the host already made
   // (optionally naming which one with `opening`); one carrying both is the
-  // Workbench's own tool run. Anything in between is malformed.
+  // Workbench's own completed tool run, and one carrying only `input` is a
+  // run still in flight whose outcome the `result` route settles (#751). A
+  // result without its input is malformed.
   const carriesCall = Object.hasOwn(value, 'input') || Object.hasOwn(value, 'result');
   const call = carriesCall
-    ? isJsonValue(value.input) && isJsonValue(value.result) && !Object.hasOwn(value, 'opening')
-      ? { input: cloneJson(value.input), result: cloneJson(value.result) }
+    ? isJsonValue(value.input) && !Object.hasOwn(value, 'opening') && (!Object.hasOwn(value, 'result') || isJsonValue(value.result))
+      ? { input: cloneJson(value.input), ...(Object.hasOwn(value, 'result') ? { result: cloneJson(value.result as McpAppJsonValue) } : {}) }
       : undefined
     : openingCall?.(sessionId, value.toolName, typeof value.opening === 'string' ? value.opening : undefined);
   if (call === undefined) return invalidShape();
@@ -334,10 +338,16 @@ const createRequest = (
     host: hostContext(value.host),
     input: call.input,
     previewProfile: value.previewProfile,
-    result: call.result,
+    ...(call.result === undefined ? {} : { result: call.result }),
     sessionId,
     toolName: value.toolName,
   });
+};
+
+const terminalRequest = (value: JsonObject): McpAppPreviewTerminal => {
+  if (hasOnly(value, ['result']) && isJsonValue(value.result)) return Object.freeze({ result: cloneJson(value.result) });
+  if (hasOnly(value, ['cancelled']) && nonemptyString(value.cancelled)) return Object.freeze({ cancelled: value.cancelled });
+  return invalidShape();
 };
 
 const messageRequest = (value: JsonObject): McpAppJsonValue => {
@@ -518,6 +528,18 @@ export class McpAppRoutes {
         lifecycle: result.lifecycle,
         ...(result.started ? { message: result.message } : {}),
       });
+    }
+    if (parsed.kind === 'result') {
+      if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      const settle = service.settle;
+      if (settle === undefined) return this.#unavailable();
+      const result = await this.#serialize(parsed.bindingId, async () => {
+        const preview = this.#preview(service, parsed.bindingId);
+        const accepted = await settle.call(service, parsed.bindingId, terminalRequest(await jsonBody(request)));
+        const messages = await service.takeOutbound(parsed.bindingId);
+        return Object.freeze({ accepted, actions: Object.freeze([]), lifecycle: preview.bridge.lifecycle, messages });
+      });
+      return writeJsonResponse(response, result);
     }
     if (parsed.kind === 'messages') {
       const result = await this.#serialize(parsed.bindingId, async () => {

@@ -5,7 +5,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import { retainedRenderEvents, type RouteInvocation } from '../../agent-bundle/src/contracts/invocations.ts';
 import type { TraceEntry } from '../../agent-bundle/src/contracts/trace.ts';
-import { appResourceUriFor, appToolCallRequest, catalogToolsFor, orderedToolsForApp } from '../src/application/app-route-workspace.tsx';
+import { appResourceUriFor, appToolCallRequest, catalogToolsFor, launchLabel, orderedToolsForApp, preferredLaunch } from '../src/application/app-route-workspace.tsx';
 import type { ApplicationLeaf } from '../src/application/application-tree-model.ts';
 import { defaultEventHostSelection } from '../src/application/event-route-workspace.tsx';
 import { ExecutableRouteWorkspace, resultTabFor } from '../src/application/executable-route-workspace.tsx';
@@ -662,6 +662,17 @@ describe('App leaf tool binding', () => {
     expect(tools.map((tool) => tool.name)).toEqual(['inventory_sources', 'browse_library']);
     expect(orderedToolsForApp(tools, 'ui://curator/library.html').map((tool) => tool.name)).toEqual(['browse_library', 'inventory_sources']);
     expect(orderedToolsForApp(tools, undefined).map((tool) => tool.name)).toEqual(['inventory_sources', 'browse_library']);
+  });
+
+  it('prefers the launch that includes portable and labels a launch by its shared targets (#747)', () => {
+    const launches = [
+      { launchId: 'codex-only', targets: ['codex'] },
+      { launchId: 'shared', targets: ['claude', 'portable'] },
+    ];
+    expect(preferredLaunch(launches)?.launchId).toBe('shared');
+    expect(preferredLaunch(launches.slice(0, 1))?.launchId).toBe('codex-only');
+    expect(preferredLaunch([])).toBeUndefined();
+    expect(launchLabel(launches[1]!)).toBe('claude · portable');
   });
 
   it('carries the browser correlation id beside plain MCP params, never as a browser-sent _meta', () => {

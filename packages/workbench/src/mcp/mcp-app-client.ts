@@ -88,9 +88,15 @@ export interface McpAppPreviewCreateRequest {
   readonly host: McpAppHostContext;
   readonly input: McpAppJsonValue;
   readonly previewProfile: McpAppPreviewProfile;
-  readonly result: McpAppJsonValue;
+  /** Omitted while the opening call is in flight; `settle` publishes its outcome (#751). */
+  readonly result?: McpAppJsonValue;
   readonly toolName: string;
 }
+
+/** The one terminal outcome of an opening call the preview was created without. */
+export type McpAppPreviewTerminal =
+  | Readonly<{ readonly result: McpAppJsonValue }>
+  | Readonly<{ readonly cancelled: string }>;
 
 export interface McpAppPreview {
   readonly bindingId: string;
@@ -1206,6 +1212,15 @@ export class McpAppClient implements McpAppRuntimeClient {
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     })).preview, foregroundOrigin);
+  }
+
+  /** Settles a binding created without its result; `accepted` is false once the binding has an outcome or is gone. */
+  async settle(bindingId: string, terminal: McpAppPreviewTerminal): Promise<McpAppRouteMessages> {
+    return messages(await this.#json(`${this.#bindingPath(bindingId)}/result`, {
+      body: JSON.stringify(detachedJson(terminal)),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }));
   }
 
   async message(bindingId: string, message: McpAppJsonValue, signal?: AbortSignal): Promise<McpAppRouteMessages> {

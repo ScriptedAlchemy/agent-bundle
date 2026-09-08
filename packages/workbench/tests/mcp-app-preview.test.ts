@@ -284,6 +284,68 @@ describe('MCP App preview', () => {
     expect(forceClosed).toEqual([]);
   });
 
+  it('creates a pending preview without a result and settles its one terminal outcome through the relay (#751)', async () => {
+    const created = deferred<Preview>();
+    const { client, creates } = fakeClient(created.promise);
+    const settles: Array<{ readonly bindingId: string; readonly terminal: unknown }> = [];
+    const delivered: unknown[] = [];
+    const settlingClient: McpAppPreviewClient = {
+      ...client,
+      async settle(bindingId, terminal) {
+        settles.push({ bindingId, terminal });
+        return Object.freeze({
+          accepted: settles.length === 1,
+          lifecycle: 'initialized',
+          messages: settles.length === 1 ? Object.freeze([Object.freeze({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: terminal })]) : Object.freeze([]),
+        });
+      },
+    };
+    const frameRelayFactory: McpAppFrameRelayFactory = () => ({
+      async close() {},
+      deliverHostMessages(messages) { delivered.push(...messages); return true; },
+      start() { return true; },
+    });
+    const controller = createMcpAppPreviewController({
+      client: settlingClient,
+      frameRelayFactory,
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+
+    const started = controller.start();
+    // The outcome may land before the binding exists; settle waits for it.
+    const settled = controller.settle({ result: { temperature: 22 } });
+    created.resolve(preview());
+    await started;
+    controller.attachFrame(iframe(), browserWindow);
+
+    expect(creates).toEqual([{ host, input: { city: 'Paris' }, previewProfile: 'portable', toolName: 'show-weather' }]);
+    await expect(settled).resolves.toBe(true);
+    expect(settles).toEqual([{ bindingId: 'binding-weather', terminal: { result: { temperature: 22 } } }]);
+    expect(delivered).toEqual([{ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { result: { temperature: 22 } } }]);
+    // One outcome per call: the controller refuses a second before asking the route.
+    await expect(controller.settle({ cancelled: 'too late' })).resolves.toBe(false);
+    expect(settles).toHaveLength(1);
+    await controller.close();
+
+    // A preview created with its result has nothing to settle.
+    const complete = createMcpAppPreviewController({
+      client: settlingClient,
+      frameRelayFactory,
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      result: Object.freeze({ temperature: 22 }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+    await complete.start();
+    await expect(complete.settle({ cancelled: 'not pending' })).resolves.toBe(false);
+    expect(settles).toHaveLength(1);
+    await complete.close();
+  });
+
   it('keeps the ordinary fallback visible and closes its unused binding when no canonical App frame is available', async () => {
     const fallback: McpAppJsonValue = Object.freeze({
       input: Object.freeze({ city: 'Paris' }),

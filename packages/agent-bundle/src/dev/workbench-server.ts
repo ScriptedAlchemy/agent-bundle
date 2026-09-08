@@ -315,6 +315,10 @@ class DeferredMcpAppPreviewService implements McpAppRoutePreviewService {
     return this.#active().receive(bindingId, action);
   }
 
+  async settle(bindingId: string, terminal: Parameters<NonNullable<McpAppRoutePreviewService['settle']>>[1]) {
+    return await this.#active().settle?.(bindingId, terminal) ?? false;
+  }
+
   takeOutbound(bindingId: string) {
     return this.#active().takeOutbound(bindingId);
   }

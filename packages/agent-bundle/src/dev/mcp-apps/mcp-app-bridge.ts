@@ -170,6 +170,13 @@ export interface McpAppBridgeCloseOptions {
   readonly reason?: string;
 }
 
+/**
+ * The binding result of an opening call still in flight: an empty tool result
+ * the App never receives, since `deferInitialToolResult` leaves the terminal
+ * notification to `publishToolResult` or `publishToolCancelled`.
+ */
+export const pendingMcpAppToolResult: McpAppJsonValue = Object.freeze({ content: Object.freeze([]) });
+
 export interface CreateMcpAppBridgeOptions {
   readonly binding: McpAppBinding;
   readonly consentAuthority?: McpAppConsentAuthority;

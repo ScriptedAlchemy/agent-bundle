@@ -64,6 +64,13 @@ interface LaunchCandidate {
   readonly target: string;
 }
 
+/** One materially distinct launch of a server and every declared projection that shares it. */
+export interface WebLaunchGroup {
+  readonly launchId: string;
+  /** Sorted; the first is the deterministic representative a session opens with. */
+  readonly targets: readonly string[];
+}
+
 const normalizedStdioEntry = (
   value: string,
   artifactRoot: string,
@@ -150,19 +157,33 @@ const launchIdentityOf = async (
 const listOf = (targets: readonly string[]): string => targets.join(', ');
 
 /**
- * Resolves the one effective launch of a web-exposed server across the
- * artifact's declared projections. Candidate order never matters: targets are
- * sorted before grouping, so a selection over reversed host declarations is
- * identical. Ambiguity is kept whenever normalized descriptors cannot prove
- * equivalence; nothing synthesizes a portable launch.
+ * The declared projections that launch the server, grouped by normalized
+ * launch identity and ordered by their first target. Candidate order never
+ * matters: targets are sorted before grouping, so a selection over reversed
+ * host declarations is identical. Nothing synthesizes a portable launch.
  */
-export const selectWebLaunch = async (options: SelectWebLaunchOptions): Promise<SelectedWebLaunch> => {
+export const webLaunchGroups = async (options: Omit<SelectWebLaunchOptions, 'requestedTarget'>): Promise<readonly WebLaunchGroup[]> => {
   const targets = [...new Set(options.declaredTargets)].sort((left, right) => left.localeCompare(right));
-  const candidates: LaunchCandidate[] = [];
+  const groups = new Map<string, string[]>();
   for (const target of targets) {
     const launchId = await launchIdentityOf(options, target);
-    if (launchId !== undefined) candidates.push(Object.freeze({ launchId, target }));
+    if (launchId === undefined) continue;
+    const group = groups.get(launchId);
+    if (group === undefined) groups.set(launchId, [target]);
+    else group.push(target);
   }
+  return Object.freeze([...groups].map(([launchId, members]) => Object.freeze({ launchId, targets: Object.freeze(members) })));
+};
+
+/**
+ * Resolves the one effective launch of a web-exposed server across the
+ * artifact's declared projections. Ambiguity is kept whenever normalized
+ * descriptors cannot prove equivalence.
+ */
+export const selectWebLaunch = async (options: SelectWebLaunchOptions): Promise<SelectedWebLaunch> => {
+  const candidates: LaunchCandidate[] = (await webLaunchGroups(options))
+    .flatMap((group) => group.targets.map((target) => Object.freeze({ launchId: group.launchId, target })))
+    .sort((left, right) => left.target.localeCompare(right.target));
   const candidateNames = Object.freeze(candidates.map((candidate) => candidate.target));
   const requested = options.requestedTarget;
   if (requested !== undefined) {

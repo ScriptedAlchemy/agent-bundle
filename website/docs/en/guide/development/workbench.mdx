@@ -111,7 +111,15 @@ to rerun its epoch-bound input; there is no separate lifecycle destination.
 ### App and Skill leaves
 
 An App leaf places the sandboxed MCP App preview in the center of the workspace, bound to its
-server. A bound App can also be reached from its tool's projection details. The same host stack
+server. Its **Launch** selector lists the launches the dev server judges eligible for that
+server on the published build — the declared targets grouped by launch identity, with installed
+hosts consulted — and the session opens with the chosen launch's representative target, so a
+target the build declares but no host can launch is never offered. Calling a tool mounts the
+preview at once: the App receives `ui/notifications/tool-input` while the call is in flight, then
+exactly one terminal outcome — the tool result (including an `isError` result) as
+`ui/notifications/tool-result`, or `ui/notifications/tool-cancelled` when **Cancel call** aborts
+it. A late outcome for a call the workspace no longer shows is dropped rather than delivered to a
+newer preview. A bound App can also be reached from its tool's projection details. The same host stack
 serves one App standalone in a plain browser tab through `agent-bundle serve-app`; when the
 project configures [`web`](../../reference/configuration.mdx#web), `agent-bundle dev` also serves
 `GET /web/<server>/<app>` on the foreground server — the same page, relay, routes, sandbox proxy,
