@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -192,6 +192,25 @@ describe('AB4834 generated route declarations outside the TypeScript program', (
       'tsconfig.json': tsconfig(['src/scripts/*.ts']),
     });
     expect(codesOf((await validate({ root: declaration })).diagnostics)).toContain('AB4834');
+  });
+
+  it('judges the project by its own files: a workspace-linked package that imports the runtime is not the consumer', async () => {
+    // A `workspace:*` link resolves outside the project root, where the host
+    // cannot decline it by path; its declaration imports the runtime, as the
+    // framework's own `agent-bundle/routes` declaration may.
+    const linked = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      'src/scripts/build.ts': "import type { AgentRouteModule } from 'agent-bundle/routes';\nexport type Module = AgentRouteModule;\n",
+      'tsconfig.json': tsconfig(['src/scripts/*.ts']),
+    });
+    const sibling = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-route-types-linked-')));
+    roots.push(sibling);
+    await mkdir(join(sibling, 'agent-bundle'), { recursive: true });
+    await writeFile(join(sibling, 'agent-bundle/package.json'), '{"name":"agent-bundle","type":"module","exports":{"./routes":{"types":"./routes.d.ts"}}}\n');
+    await writeFile(join(sibling, 'agent-bundle/routes.d.ts'), "import type { RegisteredRouteId } from '@agent-bundle/runtime';\nexport interface AgentRouteModule { readonly id: RegisteredRouteId }\n");
+    await mkdir(join(linked, 'node_modules'), { recursive: true });
+    await symlink(join(sibling, 'agent-bundle'), join(linked, 'node_modules/agent-bundle'), 'dir');
+    expect(codesOf((await validate({ root: linked })).diagnostics)).not.toContain('AB4834');
   });
 
   it('follows imports from a narrow root, as tsc does: the consumer an entry point imports is in the program', async () => {

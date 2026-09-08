@@ -102,16 +102,20 @@ const programs = (rootTsconfigPath: string): readonly Program[] => {
 };
 
 /**
- * Whether one of the project's files in the program imports an entry the
- * generated declaration augments. The scanner's import pre-processing
+ * Whether one of the project's own files in the program imports an entry the
+ * generated declaration augments. A declaration the program reached outside
+ * the project — a workspace-linked package's `dist`, which the host could not
+ * decline by path — is not the project's consumer even when it imports the
+ * runtime itself. The scanner's import pre-processing
  * reads static and dynamic import specifiers only — a specifier in a comment
  * or a string literal is not an import — and a user's own `.d.ts` counts like
  * any other file, since `import type` from a consumer entry reads the
  * registration too.
  */
-const consumesRegistration = (sourceFiles: readonly ts.SourceFile[]): boolean =>
+const consumesRegistration = (projectRoot: string, sourceFiles: readonly ts.SourceFile[]): boolean =>
   sourceFiles.some((sourceFile) =>
-    ts.preProcessFile(sourceFile.text, true, false).importedFiles
+    !relative(projectRoot, sourceFile.fileName).startsWith('..')
+    && ts.preProcessFile(sourceFile.text, true, false).importedFiles
       .some((imported) => consumerEntries.has(imported.fileName)));
 
 /**
@@ -134,7 +138,7 @@ export const routeTypesProgramDiagnostics = (projectRoot: string): readonly Diag
   return programs(rootTsconfigPath)
     .filter((candidate) =>
       !candidate.sourceFiles.some((sourceFile) => comparablePath(sourceFile.fileName) === expected)
-      && consumesRegistration(candidate.sourceFiles))
+      && consumesRegistration(projectRoot, candidate.sourceFiles))
     .map((candidate) => {
       const tsconfig = relative(projectRoot, candidate.tsconfigPath).replaceAll('\\', '/');
       const include = JSON.stringify(relative(dirname(candidate.tsconfigPath), routeTypesPath).replaceAll('\\', '/'));
