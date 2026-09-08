@@ -1072,11 +1072,12 @@ it: `create-agent-bundle` templates and the `examples/*` projects list
 because `**/*` never descends into dot-directories), while the file itself
 stays gitignored. After publishing the declaration, `agent-bundle validate`
 resolves the root `tsconfig.json` program the way `tsc -p` does — `extends`,
-`files`, `include`, `exclude` — and every program it `references`,
-transitively, and reports `AB4834` (a **warning**, surfaced by `validate`
-only) once per program that *consumes* the registration but does not compile
-the published file. A program consumes it when one of its source files
-imports `agent-bundle/app`, `agent-bundle/test`, `agent-bundle/eval`, or
+`files`, `include`, `exclude`, then the modules those roots import, so a
+narrow `files: ["src/index.ts"]` still reaches the consumer it imports — and
+every program it `references`, transitively, and reports `AB4834` (a
+**warning**, surfaced by `validate` only) once per program that *consumes*
+the registration but does not compile the published file. A program consumes
+it when one of the project's files in it imports `agent-bundle/app`, `agent-bundle/test`, `agent-bundle/eval`, or
 `@agent-bundle/runtime`; a build-only project that imports none of them is
 left alone, and a solution whose server project includes the file cannot
 hide a browser project that omits it. A project with no root

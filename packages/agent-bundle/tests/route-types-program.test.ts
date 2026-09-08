@@ -194,6 +194,26 @@ describe('AB4834 generated route declarations outside the TypeScript program', (
     expect(codesOf((await validate({ root: declaration })).diagnostics)).toContain('AB4834');
   });
 
+  it('follows imports from a narrow root, as tsc does: the consumer an entry point imports is in the program', async () => {
+    const narrow = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      // The root file imports nothing augmented itself; the module it imports does.
+      'src/index.ts': "export { status } from './status.js';\n",
+      'src/status.ts': "import { invokeMcpTool } from 'agent-bundle/test';\nexport const status = () => invokeMcpTool('report', { input: {} });\n",
+      'tsconfig.json': tsconfig([], { files: ['src/index.ts'] }),
+    });
+    const diagnostics = (await validate({ root: narrow })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4834');
+    expect(diagnostics.map((diagnostic) => diagnostic.sourcePath)).toEqual([join(narrow, 'tsconfig.json')]);
+
+    // The declaration reached through an import counts as compiled, like any other module.
+    const referenced = await createProject({
+      'src/mcp/status/tools/report.ts': routeModule,
+      'src/index.ts': "/// <reference path=\"../.agent-bundle/routes.d.ts\" />\nimport { invokeMcpTool } from 'agent-bundle/test';\nexport const status = () => invokeMcpTool('report', { input: {} });\n",
+      'tsconfig.json': tsconfig([], { files: ['src/index.ts'] }),
+    });
+    expect(codesOf((await validate({ root: referenced })).diagnostics)).not.toContain('AB4834');
+  });
+
   it('tailors the recovery to a config without its own include array, whose patterns an include would replace', async () => {
     const defaults = await createProject({
       'src/mcp/status/tools/report.ts': routeModule,
