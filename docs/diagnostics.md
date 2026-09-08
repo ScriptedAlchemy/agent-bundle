@@ -827,17 +827,17 @@ skill's `AB3003`.
 
 ## The composite plugin root (`AB4100`, `AB4103`, `AB4105`, `AB4106`)
 
-`build` emits **one** plugin root at the artifact directory (#555). The
+`build` emits **one** composite root at the artifact directory (#555). The
 `targets` list selects which host *projections* the root carries —
 `amp`, `claude`, `codex`, `cursor`, `portable`. `claude`, `codex`, `cursor`, and
 `portable` read the artifact directory itself as their plugin root: their
-manifests sit in their own dotfolders (`.claude-plugin/`, `.codex-plugin/`,
-`.cursor-plugin/`, or `plugin.json` for the portable format), while `skills/`,
-`hooks/`, `mcp/`, `scripts/`, `bin/`, and `INSTALL.md` are shared. Amp is the
-exception: its plugin root is the nested `.amp/plugins/<plugin>/` directory,
-self-contained down to its own `skills/` and `hooks/`, and `install amp` copies
-that subdirectory rather than the composite root. There is no `<root>/<host>/` partition
-and no `plugin` target: the composite *is* the output. Only those five
+manifests sit in `.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, or the
+portable root `plugin.json`, while `skills/`, `hooks/`, `mcp/`, `scripts/`,
+`bin/`, and `INSTALL.md` are shared. Amp is the exception: its plugin root is
+the nested `.amp/plugins/<plugin>/` directory, self-contained down to its own
+`skills/` and `hooks/`, and `install amp` copies that subdirectory rather than
+the composite root. There is no `<root>/<host>/` partition and no `plugin`
+target: the composite *is* the output. Only those five
 built-in hosts share a root; an adapter registered on an advanced
 `TargetRegistry` is built alone (`AB4106`). `validate` and `inspect` plan the
 same composite root the build stages, so they report `AB4103` and `AB4105`
