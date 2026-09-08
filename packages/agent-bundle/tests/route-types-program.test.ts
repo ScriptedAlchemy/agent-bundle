@@ -221,15 +221,19 @@ describe('AB4834 generated route declarations outside the TypeScript program', (
       'tsconfig.json': `${JSON.stringify({ compilerOptions: { module: 'NodeNext', strict: true } }, null, 2)}\n`,
     });
     const [warning] = (await validate({ root: defaults })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4834');
-    expect(warning?.recovery).toContain('Add ".agent-bundle/routes.d.ts" to the "include" array of the config tsconfig.json extends, or declare an "include" array in tsconfig.json that lists ".agent-bundle/routes.d.ts" beside the patterns it compiles today (the default is "**/*")');
+    expect(warning?.recovery).toContain('Declare an "include" array in tsconfig.json that lists ".agent-bundle/routes.d.ts" beside the patterns it compiles today (an "include" array replaces the inherited or default "**/*" patterns)');
 
+    // The inherited patterns live in another directory: the path is spelled
+    // for the config being edited, never for the one it extends.
     const inherited = await createProject({
       'src/mcp/status/tools/report.ts': routeModule,
-      'tsconfig.base.json': tsconfig(['agent-bundle.config.ts', 'src/**/*.ts']),
-      'tsconfig.json': '{ "extends": "./tsconfig.base.json" }\n',
+      'config/tsconfig.base.json': tsconfig(['../agent-bundle.config.ts', '../src/**/*.ts']),
+      'tsconfig.json': tsconfig([], { compilerOptions: { composite: true, module: 'NodeNext' }, files: [], references: [{ path: './config/tsconfig.app.json' }] }),
+      'config/tsconfig.app.json': '{ "extends": "./tsconfig.base.json", "compilerOptions": { "composite": true } }\n',
     });
     const [inheritedWarning] = (await validate({ root: inherited })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4834');
-    expect(inheritedWarning?.recovery).toContain('the config tsconfig.json extends');
+    expect(inheritedWarning?.sourcePath).toBe(join(inherited, 'config/tsconfig.app.json'));
+    expect(inheritedWarning?.recovery).toContain('Declare an "include" array in config/tsconfig.app.json that lists "../.agent-bundle/routes.d.ts" beside the patterns it compiles today');
   });
 
   it('matches the declaration path the way the host file system does', async () => {

@@ -140,9 +140,11 @@ export const routeTypesProgramDiagnostics = (projectRoot: string): readonly Diag
       const include = JSON.stringify(relative(dirname(candidate.tsconfigPath), routeTypesPath).replaceAll('\\', '/'));
       // An `include` array replaces the default (`**/*`) or the inherited
       // patterns, so a config without its own must keep them when it adds one.
+      // The path is spelled for this config; the one it extends may sit in
+      // another directory, so the recovery never points there.
       const where = candidate.ownInclude
         ? `Add ${include} to the "include" array of ${tsconfig}`
-        : `Add ${include} to the "include" array of the config ${tsconfig} extends, or declare an "include" array in ${tsconfig} that lists ${include} beside the patterns it compiles today (the default is "**/*")`;
+        : `Declare an "include" array in ${tsconfig} that lists ${include} beside the patterns it compiles today (an "include" array replaces the inherited or default "**/*" patterns)`;
       return {
         code: 'AB4834',
         message: `${tsconfig} imports agent-bundle/app, agent-bundle/test, agent-bundle/eval, or @agent-bundle/runtime but does not include the generated ${routeTypesRelativePath}, so that program type-checks route ids as string and input/result/provider values as unknown.`,
