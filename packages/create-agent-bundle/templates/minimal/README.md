@@ -22,9 +22,9 @@ npm run check      # validate + build + typecheck + test
 
 ## Tests
 
-`npm test` runs ordinary module tests — here, one test that keeps the
-Skill's frontmatter aligned with its directory — and `npm run check` runs them
-after validate, build, and typecheck.
+`npm test` runs ordinary module tests — here, one test that keeps the Skill's
+frontmatter and host-layout guidance aligned with the template — and
+`npm run check` runs them after validate, build, and typecheck.
 
 A skills-only project compiles no route modules, so the framework's consumer
 harness (`agent-bundle/rstest` + `agent-bundle/test`) has nothing to render:
