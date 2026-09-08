@@ -2,6 +2,8 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
+import type { DescriptiveMetadataResult } from './descriptive-metadata.ts';
+import { packageDescriptiveMetadata } from './descriptive-metadata.ts';
 import type { Diagnostic } from './diagnostics.ts';
 import { digest } from './digest.ts';
 import { deepFreeze } from './freeze.ts';
@@ -166,6 +168,16 @@ export const snapshotPackageIdentity = (root: string): PackageIdentitySnapshot =
     ...(packageName === undefined ? {} : { packageName }),
     ...(packageVersion === undefined ? {} : { packageVersion }),
   });
+};
+
+/**
+ * The descriptive metadata a project's `package.json` already declares, read
+ * through the same containment-checked document as release identity so one
+ * file feeds every derived judgement. A missing package.json shares nothing.
+ */
+export const snapshotPackageDescriptiveMetadata = (root: string): DescriptiveMetadataResult => {
+  const read = readPackageDocument(root);
+  return read.kind === 'document' ? packageDescriptiveMetadata(read.document) : deepFreeze({ issues: [], value: {} });
 };
 
 /**
@@ -493,6 +505,18 @@ export const canonicalizeNormalizedModel = (
     metadata: {
       ...detached.metadata,
       provenance: canonicalProvenance(root, detached.metadata.provenance),
+      ...(detached.metadata.shared?.packageSource === undefined
+        ? {}
+        : {
+          shared: {
+            ...detached.metadata.shared,
+            packageSource: canonicalCompilerPath(
+              root,
+              detached.metadata.shared.packageSource,
+              'Shared metadata package path',
+            ),
+          },
+        }),
     },
     ...(detached.nativeHooks === undefined
       ? {}

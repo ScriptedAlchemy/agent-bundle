@@ -83,7 +83,34 @@ also compiled for that operation. See
 | `name` | Required. The host-native plugin slug, never the npm package name. |
 | `description` | One sentence written into generated manifests. |
 | `logo` | Project-relative image path. Missing, non-file, or outside the project reports `AB4012`; missing from the built artifact or escaping the deploy tree reports `AB6025`. |
+| `metadata` | The shared descriptive layer: `author`, `homepage`, `keywords`, `license`, `repository`. Each field defaults to the same field in `package.json`; a value here overrides it, and `null` shares nothing. A malformed value reports `AB4014`. |
 | `version` | **Deprecated.** |
+
+### Shared descriptive metadata
+
+`author`, `homepage`, `keywords`, `license`, and `repository` are declared once, not once per
+host block. Each field resolves in one order:
+
+1. the host block for that artifact — `portable.license`, `cursor.license`, `codex.license`, or
+   `claude.marketplace.plugin.license`;
+2. `plugin.metadata.license`;
+3. the `license` field of the project's `package.json`.
+
+`null` is a deliberate absence rather than a value: `plugin.metadata.homepage: null` keeps a
+`package.json` homepage out of every artifact, and `cursor: { homepage: null }` keeps a shared
+homepage out of the Cursor manifest alone while the other hosts still carry it.
+
+Each host emits only what its pinned schema admits, and the value still passes that host's own
+validation. Cursor's author object is closed to `name` and `email`, so a shared `author.url` is
+dropped for Cursor and kept for the others; Claude Code's marketplace entry requires
+`author.name`, so a `package.json` author that is only an email address shares no author there.
+
+Two `package.json` shapes are read: npm's person string (`"Ada <ada@example.com> (https://ada.example.com)"`)
+and its object form, and for `repository`, an absolute `http(s)` URL or the
+`git+https://github.com/owner/repo.git` URL npm writes for one, whose `git+` prefix and trailing
+`.git` are removed. Shorthands like `owner/repo` and SSH URLs are **not** converted to a
+provider's web URL: the field is withheld with the `AB4015` warning, and
+`plugin.metadata.repository` declares it explicitly.
 
 `package.json` is authoritative for release identity. Declare the release version only there:
 a `plugin.version` that disagrees with `package.json` reports the `AB4008` warning, and a release

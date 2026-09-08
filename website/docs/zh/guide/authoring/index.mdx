@@ -101,6 +101,12 @@ shell 形式的 `command` 处理器。各适配器拥有的字段如下：
 Cursor 插件的其余一切都从跨宿主模型推导。[宿主参考](../../reference/hosts.md)中的宿主能力表
 记录了每个被固定的宿主版本实际认可其中哪些表面。
 
+其中四个块共享的五个描述字段——`author`、`homepage`、`keywords`、`license` 与 `repository`——不必重复声明。
+每个字段默认取项目 `package.json` 中的同名字段，`plugin.metadata` 一次性覆盖所有宿主，而宿主块对自己的产物
+仍然优先。把字段写成 `null` 即可让共享值不出现：写在 `plugin.metadata` 中表示不共享，写在某个宿主块中则只让
+该值不进入那一份清单。解析顺序以及编译器读取的两种 `package.json` 形状，见
+[配置](../../reference/configuration.mdx#共享描述元数据)。
+
 有两个 Claude Code 表面值得细看，因为它们的契约比名字所暗示的更窄：
 
 - **`claude.lspServers`** —— 只要 `claude` 在选中的投影之中，就输出为根目录的

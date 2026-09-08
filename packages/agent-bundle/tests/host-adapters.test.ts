@@ -1056,11 +1056,6 @@ it('emits validated Codex manifest package metadata with extension provenance', 
 it.each([
   {
     code: 'codex.manifest.author.invalid',
-    declaration: { author: null },
-    label: 'a null author',
-  },
-  {
-    code: 'codex.manifest.author.invalid',
     declaration: { author: { name: 'Review Tools', unknown: true } },
     label: 'an author with an unknown field',
   },

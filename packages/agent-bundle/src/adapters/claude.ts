@@ -1,4 +1,11 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
+import {
+  isAbsoluteHttpUrl,
+  isNonemptyString,
+  mergeDescriptiveMetadata,
+  projectDescriptiveMetadata,
+  type DescriptiveMetadataProjection,
+} from '../core/descriptive-metadata.ts';
 import { hasErrors, type Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import { isValidPackageName } from '../core/project-context.ts';
@@ -305,7 +312,8 @@ export type ClaudeMarketplacePluginSource =
  * to the generated relative `./` path and may identify a distributed copy.
  */
 export interface ClaudeMarketplacePluginConfig {
-  readonly author?: ClaudeMarketplaceContactConfig & { readonly name: string };
+  /** Descriptive fields default to the shared `plugin.metadata` layer; `null` opts this manifest out. */
+  readonly author?: (ClaudeMarketplaceContactConfig & { readonly name: string }) | null;
   readonly category?: string;
   readonly defaultEnabled?: boolean;
   readonly description?: string;
@@ -314,12 +322,12 @@ export interface ClaudeMarketplacePluginConfig {
   readonly headers?: Readonly<Record<string, string>>;
   /** Archive-download header command; requires an archive source and strict: false. */
   readonly headersHelper?: string;
-  readonly homepage?: string;
-  readonly keywords?: readonly string[];
-  readonly license?: string;
+  readonly homepage?: string | null;
+  readonly keywords?: readonly string[] | null;
+  readonly license?: string | null;
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly relevance?: ClaudeMarketplaceRelevanceConfig;
-  readonly repository?: string;
+  readonly repository?: string | null;
   readonly source?: ClaudeMarketplacePluginSource;
   readonly strict?: boolean;
   readonly tags?: readonly string[];
@@ -1002,18 +1010,6 @@ const marketplaceDiagnostic = (code: string, message: string, recovery: string):
   recovery,
 });
 
-const isNonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0;
-
-const isHttpUrl = (value: string): boolean => {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
-
 const planMarketplaceContact = (
   declared: unknown,
   kind: 'author' | 'owner',
@@ -1061,7 +1057,7 @@ const planMarketplaceContact = (
     ));
   }
   const url = declared['url'];
-  if (url !== undefined && (typeof url !== 'string' || !isHttpUrl(url))) {
+  if (url !== undefined && !isAbsoluteHttpUrl(url)) {
     diagnostics.push(marketplaceDiagnostic(
       `${prefix}.url.invalid`,
       `Claude ${label} url must be an absolute HTTP(S) URL.`,
@@ -1448,7 +1444,7 @@ const planMarketplacePluginSource = (
       }
       const registry = declared['registry'];
       if (registry !== undefined) {
-        if (typeof registry !== 'string' || !isHttpUrl(registry)) {
+        if (!isAbsoluteHttpUrl(registry)) {
           diagnostics.push(marketplaceDiagnostic(
             'claude.marketplace.plugin.source.registry.invalid',
             'Claude marketplace npm source registry must be an absolute HTTP(S) URL.',
@@ -1542,6 +1538,17 @@ const planMarketplacePluginSource = (
   }
 };
 
+/**
+ * Claude Code's marketplace entry requires `author.name`, and admits the same
+ * five descriptive fields as the shared layer; `category`, `tags`, and the
+ * source/trust fields have no shared counterpart and stay authored.
+ */
+const claudeMarketplaceProjection: DescriptiveMetadataProjection = Object.freeze({
+  authorFields: Object.freeze(['email', 'name', 'url'] as const),
+  authorRequiredFields: Object.freeze(['name'] as const),
+  fields: Object.freeze(['author', 'homepage', 'keywords', 'license', 'repository'] as const),
+});
+
 const planMarketplacePlugin = (
   declared: unknown,
   pluginRoot: string | undefined,
@@ -1581,7 +1588,7 @@ const planMarketplacePlugin = (
   for (const field of ['homepage', 'repository'] as const) {
     const entry = declared[field];
     if (entry === undefined) continue;
-    if (typeof entry !== 'string' || !isHttpUrl(entry)) {
+    if (!isAbsoluteHttpUrl(entry)) {
       diagnostics.push(marketplaceDiagnostic(
         `claude.marketplace.plugin.${field}.invalid`,
         `Claude marketplace plugin ${field} must be an absolute HTTP(S) URL.`,
@@ -1704,9 +1711,16 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
   const declared = extension !== undefined && isDataRecord(extension.value)
     ? extension.value['marketplace']
     : undefined;
-  const inputs = declared === undefined || extension === undefined
-    ? []
-    : sourceInputs(extension.provenance.sourcePath);
+  // The shared descriptive layer (issue #753) supplies the entry's descriptive
+  // fields; the authored `marketplace.plugin` overlay still wins field by
+  // field, and `null` there opts the field out of this manifest. Shared values
+  // are emitted through the pinned marketplace schema like any other, so a
+  // shape it refuses is reported rather than shipped.
+  const shared = projectDescriptiveMetadata(model.metadata.shared?.value, claudeMarketplaceProjection);
+  const marketplaceInputs = sourceInputs(
+    ...(declared === undefined || extension === undefined ? [] : [extension.provenance.sourcePath]),
+    ...(Object.keys(shared).length === 0 ? [] : [model.metadata.shared?.packageSource]),
+  );
   const basePlugin: Record<string, unknown> = {
     description: model.metadata.description ?? model.metadata.name,
     name: model.metadata.name,
@@ -1718,11 +1732,11 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
     description: model.metadata.description ?? model.metadata.name,
     name: generatedName,
     owner: { name: model.metadata.name },
-    plugins: [basePlugin],
+    plugins: [{ ...shared, ...basePlugin }],
   };
   if (declared === undefined) {
     if (!reservedMarketplaceNames.has(generatedName)) {
-      return { diagnostics: [], document: base, sourceInputs: inputs };
+      return { diagnostics: [], document: base, sourceInputs: marketplaceInputs };
     }
     return {
       diagnostics: [marketplaceDiagnostic(
@@ -1730,7 +1744,7 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
         `Claude marketplace name ${JSON.stringify(generatedName)} is reserved for official Anthropic use.`,
         'Override claude.marketplace.name with a distinct lowercase kebab-case marketplace identifier, then rebuild.',
       )],
-      sourceInputs: inputs,
+      sourceInputs: marketplaceInputs,
     };
   }
   if (!isPlainDataRecord(declared)) {
@@ -1740,7 +1754,7 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
         'Claude marketplace must be a plain authored overlay object.',
         'Set claude.marketplace to an object of documented marketplace fields, then rebuild.',
       )],
-      sourceInputs: inputs,
+      sourceInputs: marketplaceInputs,
     };
   }
 
@@ -1757,7 +1771,7 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
   for (const field of ['$schema', 'description', 'version'] as const) {
     const value = declared[field];
     if (value === undefined) continue;
-    if (!isNonemptyString(value) || (field === '$schema' && !isHttpUrl(value))) {
+    if (!isNonemptyString(value) || (field === '$schema' && !isAbsoluteHttpUrl(value))) {
       diagnostics.push(marketplaceDiagnostic(
         `claude.marketplace.${field === '$schema' ? 'schema' : field}.invalid`,
         field === '$schema'
@@ -1874,11 +1888,12 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
         typeof marketplaceMetadata['pluginRoot'] === 'string'
       ? marketplaceMetadata['pluginRoot']
       : undefined;
-    const planned = planMarketplacePlugin(pluginOverlay, pluginRoot);
+    const merged = isPlainDataRecord(pluginOverlay)
+      ? mergeDescriptiveMetadata(pluginOverlay, shared).value
+      : pluginOverlay;
+    const planned = planMarketplacePlugin(merged, pluginRoot);
     diagnostics.push(...planned.diagnostics);
-    if (planned.value !== undefined) {
-      document['plugins'] = [{ ...basePlugin, ...planned.value }];
-    }
+    if (planned.value !== undefined) document['plugins'] = [{ ...basePlugin, ...planned.value }];
   }
   const effectiveName = document['name'];
   if (
@@ -1895,7 +1910,7 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
   return {
     diagnostics,
     ...(diagnostics.length === 0 ? { document } : {}),
-    sourceInputs: inputs,
+    sourceInputs: marketplaceInputs,
   };
 };
 

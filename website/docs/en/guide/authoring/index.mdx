@@ -110,6 +110,14 @@ Everything else about a Cursor plugin is derived from the cross-host model. The 
 tables in the [host reference](../../reference/hosts.md) record which of these surfaces each pinned
 host version actually honours.
 
+The five descriptive fields four of those blocks share — `author`, `homepage`, `keywords`,
+`license`, and `repository` — do not have to be repeated. Each one defaults to the same field in
+the project's `package.json`, `plugin.metadata` overrides that for every host at once, and a host
+block still wins for its own artifact. Write a field as `null` to keep a shared value out: in
+`plugin.metadata` it shares nothing, and in one host block it keeps the value out of that one
+manifest. The resolution order and the two `package.json` shapes the compiler reads are in
+[Configuration](../../reference/configuration.mdx#shared-descriptive-metadata).
+
 Two Claude Code surfaces deserve a closer look because their contracts are narrower than their
 names suggest:
 

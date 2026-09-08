@@ -1,4 +1,10 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
+import {
+  isNonemptyString,
+  mergeDescriptiveMetadata,
+  projectDescriptiveMetadata,
+  type DescriptiveMetadataProjection,
+} from '../core/descriptive-metadata.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import { isPlainDataRecord, ownDataValue } from '../core/strict-json.ts';
@@ -77,15 +83,16 @@ export interface CursorAuthorConfig {
  * author object is closed), and Cursor documents no `nativeHooks` surface.
  */
 export interface CursorHostConfig {
-  readonly author?: CursorAuthorConfig;
+  /** Descriptive fields default to the shared `plugin.metadata` layer; `null` opts this manifest out. */
+  readonly author?: CursorAuthorConfig | null;
   readonly category?: string;
-  readonly homepage?: string;
-  readonly keywords?: readonly string[];
-  readonly license?: string;
+  readonly homepage?: string | null;
+  readonly keywords?: readonly string[] | null;
+  readonly license?: string | null;
   /** Minimum client versions keyed by client identifier, e.g. `{ cursor: '3.13.0' }`. */
   readonly minClientVersions?: Readonly<Record<string, string>>;
   readonly publisher?: string;
-  readonly repository?: string;
+  readonly repository?: string | null;
   readonly tags?: readonly string[];
 }
 
@@ -302,9 +309,6 @@ export interface CursorManifestPointers {
   readonly variables?: Record<string, unknown>;
 }
 
-const isNonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0;
-
 const isAbsoluteUrl = (value: unknown): value is string => {
   if (!isNonemptyString(value) || !validateSchemaUri(value)) return false;
   try {
@@ -355,19 +359,43 @@ export interface CursorManifestMetadataPlanContext {
 }
 
 /**
- * Validates the authored `cursor.*` manifest metadata against the pinned
- * plugin schema's field shapes. A diagnostic never yields a partial document:
- * either every authored field is valid and emitted verbatim, or none is.
+ * The pinned Cursor plugin schema closes the author object to name and email,
+ * so a shared `author.url` is dropped here rather than emitted and refused.
+ * `category`, `publisher`, `tags`, and `minClientVersions` have no shared
+ * counterpart and stay authored under `cursor`.
+ */
+const cursorProjection: DescriptiveMetadataProjection = Object.freeze({
+  authorFields: Object.freeze(['email', 'name'] as const),
+  fields: Object.freeze(['author', 'homepage', 'keywords', 'license', 'repository'] as const),
+});
+
+/**
+ * Validates the `cursor.*` manifest metadata against the pinned plugin
+ * schema's field shapes. Descriptive fields the `cursor` block omits come from
+ * the shared layer (`plugin.metadata` over `package.json`), and `null` there
+ * keeps a shared value out of this manifest. A diagnostic never yields a
+ * partial document: either every field is valid and emitted verbatim, or none
+ * is.
  */
 export const planCursorManifestMetadata = (
   model: NormalizedPlugin,
   { codePrefix, errorDiagnostic }: CursorManifestMetadataPlanContext,
 ): CursorManifestMetadataPlan => {
   const extension = model.extensions[cursorName];
-  if (extension === undefined || !isPlainDataRecord(extension.value)) return noManifestMetadataPlan;
-  const value = extension.value;
+  const authored = extension !== undefined && isPlainDataRecord(extension.value) ? extension.value : undefined;
+  const merged = mergeDescriptiveMetadata(
+    authored,
+    projectDescriptiveMetadata(model.metadata.shared?.value, cursorProjection),
+  );
+  const value = merged.value;
+  if (cursorManifestMetadataFields.every((field) => value[field] === undefined)) return noManifestMetadataPlan;
   const diagnostics: Diagnostic[] = [];
-  const sourceInputs = Object.freeze([extension.provenance.sourcePath]);
+  const sourceInputs = Object.freeze([
+    ...(extension === undefined ? [] : [extension.provenance.sourcePath]),
+    ...(merged.usedShared && model.metadata.shared?.packageSource !== undefined
+      ? [model.metadata.shared.packageSource]
+      : []),
+  ]);
   const unknownFields = Object.keys(value).filter((field) =>
     !(cursorManifestMetadataFields as readonly string[]).includes(field));
   if (unknownFields.length > 0) {

@@ -1,4 +1,12 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
+import {
+  isAbsoluteHttpUrl,
+  isEmailAddress as isEmail,
+  isNonemptyString,
+  mergeDescriptiveMetadata,
+  projectDescriptiveMetadata,
+  type DescriptiveMetadataProjection,
+} from '../core/descriptive-metadata.ts';
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
@@ -67,13 +75,14 @@ export interface PortableAuthorConfig {
  * Every field is optional; omitted fields are omitted from the manifest.
  */
 export interface PortableManifestConfig {
-  readonly author?: PortableAuthorConfig;
+  /** Descriptive fields default to the shared `plugin.metadata` layer; `null` opts this manifest out. */
+  readonly author?: PortableAuthorConfig | null;
   /** Client extension namespaces (reverse-domain, §8) mapped to their opaque object payloads. */
   readonly extensions?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
-  readonly homepage?: string;
-  readonly keywords?: readonly string[];
-  readonly license?: string;
-  readonly repository?: string;
+  readonly homepage?: string | null;
+  readonly keywords?: readonly string[] | null;
+  readonly license?: string | null;
+  readonly repository?: string | null;
 }
 
 export interface PortableConfigExtension {
@@ -177,22 +186,6 @@ const isPlainDataRecord = (value: unknown): value is Readonly<Record<string, unk
   value !== null &&
   !Array.isArray(value) &&
   [null, Object.prototype].includes(Object.getPrototypeOf(value));
-
-const isNonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0;
-
-const isAbsoluteHttpUrl = (value: unknown): value is string => {
-  if (!isNonemptyString(value)) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
-
-const isEmail = (value: unknown): value is string =>
-  isNonemptyString(value) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
 
 /** §8: client extension namespaces are reverse-domain identifiers such as `com.example.client`. */
 const isExtensionNamespace = (value: string): boolean =>
@@ -326,16 +319,29 @@ const planExtensions = (
   return valid ? Object.freeze({ ...planned }) : undefined;
 };
 
+/** §5.4 admits every shared descriptive field, including the author's `url`. */
+const portableProjection: DescriptiveMetadataProjection = Object.freeze({
+  authorFields: Object.freeze(['email', 'name', 'url'] as const),
+  fields: Object.freeze(['author', 'homepage', 'keywords', 'license', 'repository'] as const),
+});
+
 /**
- * Agent Plugins 1.0.0 §5.4 metadata and §5.6 `extensions` authored under the
- * `portable` config extension. Metadata beyond the JSON-type floor is checked
- * (§5.4 recommends SPDX and URL forms; a client MUST NOT reject them, but this
- * compiler refuses to ship values it knows to be malformed).
+ * Agent Plugins 1.0.0 §5.4 metadata and §5.6 `extensions`: the descriptive
+ * fields come from the shared layer (`plugin.metadata` over `package.json`)
+ * unless the `portable` config extension declares its own, and `null` there
+ * keeps a shared value out of this manifest. Metadata beyond the JSON-type
+ * floor is checked (§5.4 recommends SPDX and URL forms; a client MUST NOT
+ * reject them, but this compiler refuses to ship values it knows to be
+ * malformed).
  */
 const planPortableManifestMetadata = (model: NormalizedPlugin): PortableManifestMetadataPlan => {
   const extension = model.extensions[portableName];
-  if (extension === undefined || !isPlainDataRecord(extension.value)) return noManifestMetadataPlan;
-  const declared = extension.value;
+  const authored = extension !== undefined && isPlainDataRecord(extension.value) ? extension.value : undefined;
+  const merged = mergeDescriptiveMetadata(
+    authored,
+    projectDescriptiveMetadata(model.metadata.shared?.value, portableProjection),
+  );
+  const declared = merged.value;
   if (manifestMetadataFields.every((field) => declared[field] === undefined)) return noManifestMetadataPlan;
 
   const diagnostics: Diagnostic[] = [];
@@ -390,7 +396,10 @@ const planPortableManifestMetadata = (model: NormalizedPlugin): PortableManifest
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     document: Object.freeze(document),
-    sourceInputs: Object.freeze([extension.provenance.sourcePath]),
+    sourceInputs: sourceInputs(
+      extension?.provenance.sourcePath,
+      merged.usedShared ? model.metadata.shared?.packageSource : undefined,
+    ),
   });
 };
 

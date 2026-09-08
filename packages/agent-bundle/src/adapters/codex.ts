@@ -2,6 +2,13 @@ import { posix } from 'node:path';
 
 import { createTargetDiagnostics } from './diagnostics.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
+import {
+  isAbsoluteHttpUrl as isAbsoluteUrl,
+  isNonemptyString,
+  mergeDescriptiveMetadata,
+  projectDescriptiveMetadata,
+  type DescriptiveMetadataProjection,
+} from '../core/descriptive-metadata.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import { dataArrayValues } from '../core/strict-json.ts';
@@ -114,14 +121,15 @@ export interface CodexMarketplaceConfig {
 export interface CodexHostConfig extends AgentBundleHostConfig {
   /** Registered MCP connection mappings emitted to the root `.app.json` compatibility document. */
   readonly apps?: Readonly<Record<string, CodexRegisteredAppConfig>>;
-  readonly author?: CodexAuthorConfig;
-  readonly homepage?: string;
+  /** Descriptive fields default to the shared `plugin.metadata` layer; `null` opts this manifest out. */
+  readonly author?: CodexAuthorConfig | null;
+  readonly homepage?: string | null;
   /** Install-surface metadata merged over the compiler's generated defaults. */
   readonly interface?: CodexInterfaceConfig;
-  readonly keywords?: readonly string[];
-  readonly license?: string;
+  readonly keywords?: readonly string[] | null;
+  readonly license?: string | null;
   readonly marketplace?: CodexMarketplaceConfig;
-  readonly repository?: string;
+  readonly repository?: string | null;
 }
 
 export interface CodexConfigExtension {
@@ -250,19 +258,6 @@ const isPlainDataRecord = (value: unknown): value is Readonly<Record<string, unk
   value !== null &&
   !Array.isArray(value) &&
   [null, Object.prototype].includes(Object.getPrototypeOf(value));
-
-const isNonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0;
-
-const isAbsoluteUrl = (value: unknown): value is string => {
-  if (!isNonemptyString(value)) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
 
 /**
  * Every `interface` field the adapter can emit — generated or authored through
@@ -460,14 +455,30 @@ const manifestMetadataDiagnostic = (
   recovery,
 });
 
+/** Codex's publisher metadata admits every shared field, author `url` included. */
+const codexProjection: DescriptiveMetadataProjection = Object.freeze({
+  authorFields: Object.freeze(['email', 'name', 'url'] as const),
+  authorRequiredFields: Object.freeze(['name'] as const),
+  fields: Object.freeze(['author', 'homepage', 'keywords', 'license', 'repository'] as const),
+});
+
+/**
+ * Publisher metadata for `.codex-plugin/plugin.json`. Fields the `codex` block
+ * omits come from the shared layer (`plugin.metadata` over `package.json`),
+ * and `null` there keeps a shared value out of this manifest.
+ */
 const planCodexManifestMetadata = (model: NormalizedPlugin): CodexManifestMetadataPlan => {
   const extension = model.extensions[codexName];
-  if (extension === undefined || !isPlainDataRecord(extension.value)) return noManifestMetadataPlan;
-  const author = extension.value['author'];
-  const homepage = extension.value['homepage'];
-  const keywords = extension.value['keywords'];
-  const license = extension.value['license'];
-  const repository = extension.value['repository'];
+  const authored = extension !== undefined && isPlainDataRecord(extension.value) ? extension.value : undefined;
+  const merged = mergeDescriptiveMetadata(
+    authored,
+    projectDescriptiveMetadata(model.metadata.shared?.value, codexProjection),
+  );
+  const author = merged.value['author'];
+  const homepage = merged.value['homepage'];
+  const keywords = merged.value['keywords'];
+  const license = merged.value['license'];
+  const repository = merged.value['repository'];
   if (
     author === undefined &&
     homepage === undefined &&
@@ -569,7 +580,10 @@ const planCodexManifestMetadata = (model: NormalizedPlugin): CodexManifestMetada
     ));
   }
 
-  const inputs = [extension.provenance.sourcePath];
+  const inputs = sourceInputs(
+    extension?.provenance.sourcePath,
+    merged.usedShared ? model.metadata.shared?.packageSource : undefined,
+  );
   if (diagnostics.length > 0) return { diagnostics, sourceInputs: inputs };
   return {
     diagnostics,

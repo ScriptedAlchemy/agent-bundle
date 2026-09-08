@@ -14,12 +14,35 @@ import type {
 } from '../routes/types.ts';
 import type { SkillHostDocument, SkillIr, SkillTreeLayoutDecision } from '../skills/ir.ts';
 import type { CapabilityState } from './capabilities.ts';
+import type { DescriptiveAuthor, DescriptiveMetadata } from './descriptive-metadata.ts';
 import type { ServeAppAllowCapability } from './mcp-app-allow.ts';
+
+/**
+ * The shared descriptive layer authored once under `plugin.metadata`. `null`
+ * opts a field out of every host artifact even when `package.json` declares
+ * it; omitting a field takes the `package.json` value.
+ */
+export interface AgentBundleSharedMetadata {
+  author?: DescriptiveAuthor | string | null;
+  homepage?: string | null;
+  keywords?: readonly string[] | null;
+  license?: string | null;
+  repository?: string | { readonly url: string } | null;
+}
 
 export interface AgentBundlePluginConfig {
   description?: string;
   /** Project-relative path to a logo image copied into host artifacts that support it. */
   logo?: string;
+  /**
+   * The descriptive fields every host manifest that carries them projects
+   * from: `author`, `homepage`, `keywords`, `license`, and `repository`.
+   * Each one defaults to the same field in the project's `package.json`;
+   * declaring it here overrides that, and `null` shares nothing for that
+   * field. A host block still wins for its own artifact, and `null` there
+   * keeps a shared value out of that one host.
+   */
+  metadata?: AgentBundleSharedMetadata;
   name: string;
   /**
    * The host-facing declared version. Omit it to derive the version from the
@@ -389,7 +412,24 @@ export interface NormalizedMetadata {
   /** The validated semantic version derived from the project's package.json. */
   readonly packageVersion?: string;
   readonly provenance: SourceProvenance;
+  /**
+   * The one resolved descriptive layer every host projection reads:
+   * `plugin.metadata` over the project's `package.json`. A host block still
+   * overrides its own artifact's fields.
+   */
+  readonly shared?: NormalizedSharedMetadata;
   readonly version: string;
+}
+
+/** The resolved shared descriptive layer, with the file that produced it. */
+export interface NormalizedSharedMetadata {
+  /**
+   * The project's `package.json`, present when any resolved field came from
+   * it. A projection that emits a shared value records this among its source
+   * inputs so the artifact's provenance names every file its bytes depend on.
+   */
+  readonly packageSource?: string;
+  readonly value: DescriptiveMetadata;
 }
 
 export interface NormalizedTarget {

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { readFile, readdir, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, extname, posix, relative, resolve, sep, win32 } from 'node:path';
+import { basename, dirname, extname, join, posix, relative, resolve, sep, win32 } from 'node:path';
 
 import { digest } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
@@ -16,7 +16,7 @@ import {
 import { isRecord } from '../core/strict-json.ts';
 import { isServeAppAllowCapability } from '../core/mcp-app-allow.ts';
 import { conventionalEntryAt } from './conventional-entry.ts';
-import { pluginIdentity } from './plugin-identity.ts';
+import { pluginDescriptiveMetadata, pluginIdentity } from './plugin-identity.ts';
 import {
   canonicalHookEvents,
   isPrebuiltEntryInput,
@@ -58,6 +58,7 @@ import type {
   NormalizedRuntime,
   NormalizedRule,
   NormalizedScript,
+  NormalizedSharedMetadata,
   NormalizedSkill,
   NormalizedStateDefinition,
   NormalizedWeb,
@@ -1302,6 +1303,17 @@ export const normalizeProject = async (
   // remains the host-facing declared version during the migration. The same
   // derivation serves `agent-bundle/meta` to rendered skills at discovery.
   const identity = pluginIdentity(loaded.context.projectRoot, loaded.config);
+  // The descriptive layer every host projection shares (issue #753): resolved
+  // once here so `author`, `homepage`, `keywords`, `license`, and `repository`
+  // are declared once, not once per host block. Withheld fields are
+  // `validateSource`'s AB4014/AB4015 to report, not this stamp's to correct.
+  const descriptive = pluginDescriptiveMetadata(loaded.context.projectRoot, loaded.config);
+  const shared: NormalizedSharedMetadata | undefined = Object.keys(descriptive.value).length === 0
+    ? undefined
+    : {
+      ...(descriptive.packageDerived ? { packageSource: join(loaded.context.projectRoot, 'package.json') } : {}),
+      value: descriptive.value,
+    };
   const hostBins = await normalizeHostBins(loaded, targetNames, registry);
   const hostOutputStyles = await normalizeHostPayloadDirectories(
     loaded,
@@ -1356,6 +1368,7 @@ export const normalizeProject = async (
       ...(identity.packageName === undefined ? {} : { packageName: identity.packageName }),
       ...(identity.packageVersion === undefined ? {} : { packageVersion: identity.packageVersion }),
       provenance: configProvenance,
+      ...(shared === undefined ? {} : { shared }),
       version: identity.version,
     },
     mcpApps,
