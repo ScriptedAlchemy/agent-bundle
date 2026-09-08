@@ -52,8 +52,10 @@ harness. `mcp-server` ships a route-unit pool (`agentBundleRstest()` from
 `agent-bundle/rstest`, `renderRoute` and `expectDocument` from
 `agent-bundle/test`) and a separate in-memory MCP projection pool; `cli-tool`
 ships one projection pool at the `cli-dispatch` (`invokeCli`, `cliJson`) and
-`script-dispatch` (`runScript`) levels. Each pool is labeled with the proof
-level it carries and run by `check`. The `minimal` template compiles no route
+`script-dispatch` (`runScript`) levels. `npm test` runs every pool the
+template ships, each as its own labeled run, so a broken route or projection
+fails the ordinary test command; `test:unit`, `test:routes`, and
+`test:projection` remain for a focused loop. The `minimal` template compiles no route
 modules, so it ships no harness pool that would pass without addressing
 anything; its README documents the wiring to add with the first route.
 

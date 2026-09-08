@@ -127,16 +127,18 @@ it('returns the greeting as structured data', async () => {
 });
 ```
 
-Run the existing aggregate command:
+Run the ordinary test command:
 
 ```sh
-npm run check
+npm test
 ```
 
-In the current MCP starter, `npm test` alone excludes route and projection tests. `check` runs
-validation, build, typecheck, and all three test groups. Use it for the complete starter gate;
-`npm run test:routes` is the focused route loop. More proof levels, including real MCP processes
-and browser Apps, are covered in [testing](../development/testing.mdx).
+In the MCP starter, `npm test` runs every test pool the project ships — the plain module tests,
+the route-unit pool, and the in-memory MCP projection pool — each as its own labeled run, so a
+route that stops rendering fails it even while the domain tests stay green. `npm run check` adds
+build and typecheck in front of it for the complete starter gate; `npm run test:routes` is the
+focused route loop. More proof levels, including real MCP processes and browser Apps, are covered
+in [testing](../development/testing.mdx).
 
 The generated `.agent-bundle/routes.d.ts` must be included in the TypeScript project consuming
 route/provider/App types. It is generated, not an authored registry. For a standalone typecheck

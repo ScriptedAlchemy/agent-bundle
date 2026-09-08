@@ -118,14 +118,15 @@ it('returns the greeting as structured data', async () => {
 });
 ```
 
-运行现有的聚合命令：
+运行普通的测试命令：
 
 ```sh
-npm run check
+npm test
 ```
 
-当前 MCP starter 的 `npm test` 单独运行时会排除路由和投影测试。
-`check` 执行校验、构建、类型检查及全部三组测试；完整门禁使用它，聚焦路由时使用
+在 MCP starter 中，`npm test` 会运行项目附带的每个测试池——普通模块测试、route-unit 池与内存 MCP
+投影池——每个池作为独立的带标签运行，因此路由停止渲染时即使领域测试仍然通过，它也会失败。
+`npm run check` 在其前面加上构建与类型检查，构成完整的 starter 门禁；聚焦路由时使用
 `npm run test:routes`。真实 MCP 进程和浏览器 App 等进一步的证明级别见[测试](../development/testing.mdx)。
 
 消费路由、provider 或 App 类型的 TypeScript 项目必须包含生成的 `.agent-bundle/routes.d.ts`。

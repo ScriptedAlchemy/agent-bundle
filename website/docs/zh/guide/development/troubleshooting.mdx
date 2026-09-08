@@ -52,7 +52,7 @@ npx --no-install agent-bundle validate --artifact artifact
 | 安装拒绝清单版本或变动的摘要 | 对齐发射编译器与消费它的生命周期实现，保持公开包配对一致。不要独立升级私有源码 reader，也不要编辑封闭的清单版本或 digest。 |
 | 只读安装插件在写入时失败 | 保持代码/assets 不可变，使用观测到的框架 state 位置和明确的领域数据策略。取得的 session 或 cache 不是打包 asset，也不是改写已安装 `.env` 的理由。 |
 | MCP stdio 无法解析输出 | 不要向 JSON-RPC stdout 通道写应用日志。使用生成生命周期或正确限定的自定义服务器入口，诊断写 stderr。 |
-| 默认测试通过，却没发现路由损坏 | 检查脚本收集哪些测试。当前 MCP starter 的 `check` 包含 route/projection pools，但单独 `npm test` 不包含。在脚本契约更新前使用完整的文档 check。 |
+| 默认测试通过，却没发现路由损坏 | 检查脚本收集哪些测试。MCP starter 的 `npm test` 会依次运行 unit、route-unit 与 projection 池；若项目的 `test` 脚本排除了某个池，需要把它加回来或显式运行该池的脚本。 |
 | 原生测试被跳过，或账户不可用 | 记录缺失前提和未完成证明。mock、构建或安装成功不是已认证的工具/hook 执行；unverified 与 unsupported 不同。 |
 
 ## 全新工作区中的生成类型
@@ -70,9 +70,10 @@ npm run typecheck
 对于 solution-style 配置，验证每个实际消费程序；不要只把文件加进无关根程序以消除警告。
 不要为获取类型而把服务器实现导入浏览器运行时代码。
 
-starter 当前完整检查命令是：
+starter 的普通测试命令会运行它附带的每个池；完整检查在其前面加上构建与类型检查：
 
 ```sh
+npm test
 npm run check
 ```
 

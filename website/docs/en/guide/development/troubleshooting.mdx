@@ -54,7 +54,7 @@ their numeric versions must be equal.
 | Installation rejects a manifest revision or changed digest | Align the emitting compiler and consuming lifecycle implementation. Keep public packages coherent; do not independently update a private source reader or edit the closed manifest version/digests. |
 | A read-only installed plugin fails on a write | Keep code/assets immutable and use the observed framework state location plus an explicit domain-data policy. An acquired session or cache is not a packaged asset or a reason to rewrite the installed `.env`. |
 | MCP stdio fails to parse output | Keep application logs off the JSON-RPC stdout channel. Use the generated lifecycle or a correctly scoped custom-server entry, and send diagnostics to stderr. |
-| A green default test did not catch a broken route | Check which tests the script collects. The current MCP starter's `check` includes route/projection pools, while its `npm test` alone excludes them. Use the full documented check until the script contract changes. |
+| A green default test did not catch a broken route | Check which tests the script collects. The MCP starter's `npm test` runs its unit, route-unit, and projection pools in turn; a project whose `test` script excludes a pool must add it back or run that pool's script explicitly. |
 | A native test was skipped or an account is unavailable | Record the missing prerequisite and the proof not performed. A successful mock, build, or install is not authenticated tool/hook execution; unverified is not the same as unsupported. |
 
 ## Generated types on a clean checkout
@@ -73,9 +73,11 @@ warning is not a complete audit of every project reference. For solution-style c
 verify each consuming program rather than adding a file to an unrelated root program merely to
 silence a warning. Do not import server implementations into browser runtime code to get types.
 
-The starter's current complete check is:
+The starter's ordinary test command runs every pool it ships; its complete check adds build and
+typecheck:
 
 ```sh
+npm test
 npm run check
 ```
 
