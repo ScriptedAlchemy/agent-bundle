@@ -216,7 +216,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     // The skills-only template has no install section and passes through, so
     // its prose must not name hosts the selection may not carry.
     const minimalReadme = yield* readText(path.join(minimal.root, 'README.md'));
-    expect(minimalReadme).not.toMatch(/Claude Code|Codex|Cursor/u);
+    expect(minimalReadme).not.toMatch(/Amp|Claude|Codex|Cursor/u);
     expect(minimalReadme).toBe(
       (yield* readText(path.join(templateRoot(path, 'minimal'), 'README.md'))).replaceAll(placeholderName, 'skills-only'),
     );

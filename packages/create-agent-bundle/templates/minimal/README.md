@@ -1,8 +1,8 @@
 # my-agent-plugin
 
 A skills-only agent plugin built with [agent-bundle](https://github.com/ScriptedAlchemy/agent-bundle).
-One `agent-bundle.config.ts` describes the plugin; the compiler emits an installable
-artifact for every host target that file selects.
+One `agent-bundle.config.ts` describes the plugin; the compiler emits one artifact
+per target listed in that file.
 
 ## Commands
 
