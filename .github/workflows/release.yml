@@ -89,7 +89,7 @@ jobs:
       # duplicate run: that token's pull_request event already starts CI.
       - name: Dispatch CI for Version Packages candidate
         if: >-
-          steps.changesets.outputs.has-changesets == 'true' &&
+          steps.changesets.outputs.hasChangesets == 'true' &&
           env.CHANGESETS_TOKEN_CONFIGURED != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -101,7 +101,7 @@ jobs:
         id: qualify
         if: >-
           env.PUBLISH_ENABLED != 'true' &&
-          steps.changesets.outputs.has-changesets == 'false' &&
+          steps.changesets.outputs.hasChangesets == 'false' &&
           startsWith(github.event.head_commit.message, 'Version Packages')
         run: pnpm check:release
       # Registry proof is a separate authorized-publication step. Disabled
@@ -128,7 +128,7 @@ jobs:
       - name: Release outcome summary
         if: always()
         env:
-          HAS_CHANGESETS: ${{ steps.changesets.outputs.has-changesets }}
+          HAS_CHANGESETS: ${{ steps.changesets.outputs.hasChangesets }}
           PUBLISHED: ${{ steps.changesets.outputs.published }}
           QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
           CHANGESETS_OUTCOME: ${{ steps.changesets.outcome }}
