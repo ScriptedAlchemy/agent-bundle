@@ -198,11 +198,6 @@ interface PendingRequest {
   readonly abort?: () => void;
 }
 
-interface AppOriginPin {
-  readonly incoming: string;
-  readonly outgoing: string;
-}
-
 type AnyListener = (value: unknown) => Promise<void> | void;
 
 const allowedMessageKeys = Object.freeze(['error', 'id', 'jsonrpc', 'method', 'params', 'result']);
@@ -240,17 +235,6 @@ const trustedOrigin = (value: string | undefined): string | undefined => {
     throw new TypeError('App client targetOrigin must be an exact trusted http: or https: origin.');
   }
   return value;
-};
-
-const originPin = (value: string): AppOriginPin => {
-  if (value === '*' || !nonempty(value)) {
-    throw new TypeError('App client cannot pin an empty or wildcard origin.');
-  }
-  try {
-    return { incoming: value, outgoing: trustedOrigin(value)! };
-  } catch {
-    return { incoming: value, outgoing: '*' };
-  }
 };
 
 const currentWindow = (): AppWindow => {
@@ -354,8 +338,6 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
   let boundWindow = options.window ?? currentWindow();
   let parent = options.parent ?? boundWindow.parent;
   let configuredOrigin = trustedOrigin(options.targetOrigin);
-  let pinnedOrigin = configuredOrigin;
-  let postOrigin = configuredOrigin;
   let nextId = 0;
   let connectionGeneration = 0;
   let connection: Promise<AppInitializeResult> | undefined;
@@ -400,13 +382,13 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
   };
 
   const notifyCancelled = (id: null | number | string, reason: string): void => {
-    if (connectedResult === undefined || postOrigin === undefined) return;
+    if (connectedResult === undefined) return;
     try {
       post({
         jsonrpc: '2.0',
         method: 'notifications/cancelled',
         params: { reason, requestId: id },
-      }, postOrigin);
+      }, configuredOrigin ?? '*');
     } catch {
       // The original timeout or abort remains the observable request failure.
     }
@@ -424,8 +406,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
   };
 
   const sendResponse = (id: null | number | string, result: JsonObject): void => {
-    if (postOrigin === undefined) return;
-    post({ id, jsonrpc: '2.0', result }, postOrigin);
+    post({ id, jsonrpc: '2.0', result }, configuredOrigin ?? '*');
   };
 
   const publishOpening = (listeners: Map<string, Set<AnyListener>>, value: unknown): void => {
@@ -445,8 +426,6 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     connection = undefined;
     connectedResult = undefined;
     openingToolName = undefined;
-    pinnedOrigin = undefined;
-    postOrigin = undefined;
     inputListeners.clear();
     resultListeners.clear();
     errorListeners.clear();
@@ -455,7 +434,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
 
   const receive = (event: AppMessageEvent): void => {
     if (isDisposed || event.source !== parent) return;
-    if (pinnedOrigin !== undefined && event.origin !== pinnedOrigin) return;
+    if (configuredOrigin !== undefined && event.origin !== configuredOrigin) return;
     const message = rpcMessage(event.data);
     if (message === undefined) {
       const id = candidateId(event.data);
@@ -468,15 +447,6 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     if (message.method === undefined) {
       const request = message.id === undefined ? undefined : clearPending(message.id);
       if (request === undefined) return;
-      let responseOrigin: AppOriginPin | undefined;
-      if (request.initialize && configuredOrigin === undefined) {
-        try {
-          responseOrigin = originPin(event.origin);
-        } catch {
-          request.reject(new AppClientError('invalid-message', 'The App host returned an unpinnable origin.'));
-          return;
-        }
-      }
       if (message.error !== undefined) {
         request.reject(errorFromRpc(message.error));
         return;
@@ -489,15 +459,11 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
         request.reject(new AppClientError('invalid-message', `The App host did not negotiate protocol ${APP_PROTOCOL_VERSION}.`));
         return;
       }
-      if (responseOrigin !== undefined) {
-        pinnedOrigin = responseOrigin.incoming;
-        postOrigin = responseOrigin.outgoing;
-      }
       request.resolve(message.result);
       return;
     }
 
-    if (postOrigin === undefined || connectedResult === undefined) return;
+    if (connectedResult === undefined) return;
     if (message.id !== undefined) {
       if (message.method === 'ui/resource-teardown') {
         try {
@@ -511,7 +477,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
         error: { code: -32601, message: `${message.method} is not supported by this App client.` },
         id: message.id,
         jsonrpc: '2.0',
-      }, postOrigin);
+      }, configuredOrigin ?? '*');
       return;
     }
     if (message.method === 'ui/notifications/tool-input') {
@@ -571,10 +537,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
       return Promise.reject(new AppClientError('invalid-message', 'App client request params must be finite strict JSON.'));
     }
     const id = ++nextId;
-    const targetOrigin = initialize ? configuredOrigin ?? '*' : postOrigin;
-    if (targetOrigin === undefined) {
-      return Promise.reject(new AppClientError('capability-unavailable', 'The App client is not connected.'));
-    }
+    const targetOrigin = configuredOrigin ?? '*';
     return new Promise<JsonValue>((resolvePromise, rejectPromise) => {
       const timeout = setTimeout(() => {
         if (clearPending(id) === undefined) return;
@@ -625,10 +588,10 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
         throw new AppClientError('connection-rebound', 'The App client connection was rebound.');
       }
       const initialized = initializeResult(result);
-      if (initialized === undefined || pinnedOrigin === undefined || postOrigin === undefined) {
+      if (initialized === undefined) {
         throw new AppClientError('invalid-message', 'The App host returned an invalid initialize result.');
       }
-      post({ jsonrpc: '2.0', method: 'ui/notifications/initialized' }, postOrigin);
+      post({ jsonrpc: '2.0', method: 'ui/notifications/initialized' }, configuredOrigin ?? '*');
       connectedResult = initialized;
       const toolInfo = isPlainDataRecord(initialized.hostContext.toolInfo)
         ? initialized.hostContext.toolInfo
@@ -735,8 +698,6 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
       connection = undefined;
       connectedResult = undefined;
       openingToolName = undefined;
-      pinnedOrigin = undefined;
-      postOrigin = undefined;
       const replacementWindow = rebindOptions.window ?? boundWindow;
       if (replacementWindow !== boundWindow) {
         boundWindow.removeEventListener('message', receive);
@@ -745,8 +706,6 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
       }
       parent = rebindOptions.parent ?? boundWindow.parent;
       configuredOrigin = nextOrigin;
-      pinnedOrigin = configuredOrigin;
-      postOrigin = configuredOrigin;
       return await connect();
     },
     dispose,

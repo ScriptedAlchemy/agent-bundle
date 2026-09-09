@@ -919,32 +919,33 @@ that is not a function; `call()` rejects with that `TypeError` for a malformed r
 per-request `timeoutMs`. None of this is an `AB` diagnostic: App-side failures are browser
 errors, not build output.
 
-**Lifecycle and origin pinning.** The Workbench and `serve-app` put the App behind their separate
-loopback HTTP sandbox proxy, while Codex can render it in an opaque sandbox. In either case the
-document cannot know its parent's origin up front. `connect()` therefore sends exactly one frame
-to `'*'` — the framework-owned `ui/initialize` — and accepts a response only from the configured
-parent window (`event.source`), with that request's id and a valid initialize result (protocol
-version `2026-01-26`, `hostInfo`, `hostCapabilities`, `hostContext`). An exact `http:`/`https:`
-response origin is pinned raw for inbound messages. Exact `http:`/`https:` origins are also used
-as the outbound target. Opaque `"null"` and host-private origins such as Codex Desktop's
-`codex-sandbox://…` use `'*'` outbound because those targets cannot be addressed portably by
-origin; later inbound messages must still come from the same parent with the exact raw pinned
-origin. Empty and literal `'*'` origins fail the handshake with `invalid-message`; messages from
-another window or any origin change after pinning are ignored. A host that can supply a trusted
-origin passes `targetOrigin` — an exact `http:`/`https:` origin; `'*'`, `"null"`, and custom
-schemes are rejected — and no wildcard frame is sent at all. `connect()` is idempotent: a
-connected client resolves the cached result, a connecting one returns the in-flight handshake.
-`rebind({ parent?, targetOrigin?, window? })` rejects the previous generation's pending requests
-with `connection-rebound` — a `connect()` still in flight included, which never becomes the live
-connection — clears both the incoming pin and outgoing target, keeps the configured `targetOrigin`
-unless the call names one, and performs the handshake again against the new parent. `dispose()`,
-also idempotent,
-removes the listener, rejects pending requests with `disposed`, and drops every registration; a
-host's `ui/resource-teardown` request is accepted only through the current source-and-origin pin,
-acknowledged, and then disposes the client. Cancellation and teardown replies use that same
-current parent and outbound mode before the connection state is cleared. The transport is
-DOM-shaped rather than bound to the global `window`: `window` and `parent` are injectable, which
-is how tests and non-DOM hosts drive the same client.
+**Lifecycle and transport authentication.** Every inbound frame must come from the exact
+configured parent (`event.source === parent`) and pass strict JSON-RPC validation. When
+`targetOrigin` is omitted, `connect()` sends the framework-owned `ui/initialize` to that parent
+with `'*'` and accepts only the matching request id with a valid initialize result (protocol
+version `2026-01-26`, `hostInfo`, `hostCapabilities`, `hostContext`). Every later outgoing frame
+also uses `'*'`; incoming `event.origin` values are not pinned or allowlisted. The exact parent
+`WindowProxy` identity is the load-bearing authentication control, so a foreign window is ignored
+even when it reports the same origin.
+
+A host that can supply a trusted origin passes `targetOrigin` — an exact `http:` or `https:`
+origin; `'*'`, `"null"`, custom schemes, and non-origin strings are rejected. The client then uses
+that exact origin for every outgoing frame and requires every incoming `event.origin` to match it.
+The Workbench, `serve-app`, and their separate loopback HTTP sandbox proxy keep validating sources
+and origins on the host side before relaying.
+
+`connect()` is idempotent: a connected client resolves the cached result, a connecting one returns
+the in-flight handshake. `rebind({ parent?, targetOrigin?, window? })` rejects the previous
+generation's pending requests with `connection-rebound` — a `connect()` still in flight included,
+which never becomes the live connection — keeps the configured `targetOrigin` unless the call
+names one, adopts the new parent, and performs the handshake again. `dispose()`, also idempotent,
+removes the listener, rejects pending requests with `disposed`, and drops every registration. A
+host's `ui/resource-teardown` request must come from the exact current parent, is acknowledged,
+and then disposes the client; with configured `targetOrigin`, its origin must match too.
+Cancellation and teardown replies use the current parent and configured exact origin or `'*'`
+before connection state is cleared. The transport is DOM-shaped rather than bound to the global
+`window`: `window` and `parent` are injectable, which is how tests and non-DOM hosts drive the
+same client.
 
 **The host-side boundary.** The client is the App-inside-the-iframe half of the bridge. The other
 half — the frame relay, sandbox proxy, host page, `/api/mcp/...` routes, and consent authority —

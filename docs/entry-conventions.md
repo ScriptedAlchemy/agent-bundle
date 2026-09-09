@@ -1726,7 +1726,7 @@ client rather than by hand-written frames: `tests/serve-app.test.ts` connects
 relay uses, and the Workbench real-App E2E
 (`packages/workbench/tests/mcp-app-real.e2e.test.ts`) compiles a fixture view
 on `createAppClient` and reads its `call()` result through the relay. The
-client's own contract — envelopes, handshake, pinning, dispatch, cancellation,
+client's own contract — envelopes, handshake, transport authentication, dispatch, cancellation,
 rebind, disposal — is proven in `tests/app-client.test.ts` over injected
 ports. The client never decides which server a call reaches or which
 capability needs consent.
@@ -1742,8 +1742,8 @@ capability needs consent.
 | `request(method, params?, options?)` | The typed JSON-RPC escape hatch for `resources/read` and supported `ui/*` methods; resolves the raw result. An empty method rejects with a `TypeError`. |
 | `onToolInput(routeId, listener)` / `onToolResult(routeId, listener)` / `onToolError(routeId, listener)` | The opening call's `ui/notifications/tool-input` arguments, the decoded `structuredContent` of a successful `ui/notifications/tool-result`, and that notification's failures as an `AppClientError` — `isError: true` is `rpc` with the whole result on `data`; a malformed envelope or one without an object `structuredContent` is `invalid-message`; a failed result never reaches `onToolResult`. The notifications carry no tool name, so dispatch keys on the tool the handshake named: `hostContext.toolInfo.tool.name` from the initialize result, matched against the final segment of each registered route id. Listeners for other tools stay silent; when the initialize result names no tool, `tool-input` and `tool-result` reach no listener. Listeners run on a microtask, exceptions dropped. Each returns its unsubscribe function. |
 | `onToolCancelled(listener)` | `ui/notifications/tool-cancelled` as `{ reason? }`, unfiltered; returns its unsubscribe function. |
-| `rebind({ parent?, targetOrigin?, window? })` | Bumps the connection generation and rejects the previous generation's pending requests with `connection-rebound` — a `connect()` still in flight included; its late response can never become the live connection — clears the pinned origin and the opening tool name, moves the message listener when `window` changes, adopts the new parent, keeps the configured `targetOrigin` unless the call names the key, and runs `connect()` again. |
-| `dispose()` | Idempotent. Removes the message listener, rejects pending requests with `disposed`, drops every registration and the pin. A host `ui/resource-teardown` request is answered with `{}` and disposes the client; any other host request is answered `-32601`. |
+| `rebind({ parent?, targetOrigin?, window? })` | Bumps the connection generation and rejects the previous generation's pending requests with `connection-rebound` — a `connect()` still in flight included; its late response can never become the live connection — clears the opening tool name, moves the message listener when `window` changes, adopts the new parent, keeps the configured `targetOrigin` unless the call names the key, and runs `connect()` again. |
+| `dispose()` | Idempotent. Removes the message listener, rejects pending requests with `disposed`, and drops every registration. A host `ui/resource-teardown` request is answered with `{}` and disposes the client; any other host request is answered `-32601`. |
 | `connected` / `disposed` | Read-only state. |
 
 `CreateAppClientOptions` are `appInfo` (`{ name, version }`, default
@@ -1799,25 +1799,24 @@ that cancellation cannot bypass consent or reach a request the App did not
 start. Hosts outside the framework apply their own policy; the client's
 behavior is the same either way.
 
-### Dynamic sandbox handshake
+### Parent transport authentication
 
 The Workbench and `serve-app` render the App as `<iframe sandbox="allow-scripts"
 referrerpolicy="no-referrer" srcdoc=…>`, so the document has an opaque
-origin and no referrer to learn its host origin from. The client therefore
-sends exactly one frame to `'*'` — its own `ui/initialize` — and accepts a
-response only when `event.source` is the configured parent, the id is that
-bootstrap request's, and the result validates; it then pins `event.origin`
-raw for inbound messages. Exact `http:` or `https:` origins are also used as
-the outbound target; opaque `'null'` and host-private origins such as
-`codex-sandbox://…` use `'*'` outbound. An empty or literal `'*'` origin fails
-the handshake as `invalid-message`. Every later inbound message must match
-both the parent and exact raw pinned origin. The initialize result also names the opening tool
-(`hostContext.toolInfo.tool.name`), which is what the opening-notification
-listeners dispatch on. A malformed message that still names a pending id
-rejects that request as `invalid-message`. A host that can name its origin
-passes `targetOrigin` — an exact `http:` or `https:` origin; `'*'`, `'null'`,
-other schemes, and non-origin strings are a `TypeError` — and no wildcard frame
-is sent. The transport is DOM-shaped
+origin and no referrer to learn its host origin from. Without `targetOrigin`,
+the client sends every frame to `'*'` and authenticates every incoming frame
+by exact `event.source === parent` identity plus strict JSON-RPC validation.
+It does not inspect or pin `event.origin`. The initialize result also names
+the opening tool (`hostContext.toolInfo.tool.name`), which is what the
+opening-notification listeners dispatch on. A malformed message that still
+names a pending id rejects that request as `invalid-message`.
+
+A host that can name a trusted origin passes `targetOrigin` — an exact
+`http:` or `https:` origin; `'*'`, `'null'`, other schemes, and non-origin
+strings are a `TypeError`. The client then uses that exact origin for every
+outgoing frame and requires every incoming `event.origin` to match it. The
+Workbench and `serve-app` sandbox proxy keep their exact HTTP source-and-origin
+checks on the host side before relaying. The transport is DOM-shaped
 (`AppWindow`, `AppMessageTarget`) rather than bound to the global `window`, so
 `tests/app-client.test.ts` and non-DOM hosts drive the same core through
 injected ports.
