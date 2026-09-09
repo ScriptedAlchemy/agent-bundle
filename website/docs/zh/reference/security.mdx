@@ -49,7 +49,7 @@ Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器�
 检查；App 文档运行在框架沙箱内的第二个 loopback origin 上，并且每一个 App 动作仍与 Workbench 一样经过同一
 个同意授权（`--allow` 代操作者预先批准指定能力）。它是本地预览宿主，不是部署目标。
 
-App 文档内的 `agent-bundle/app` 客户端也不会信任任意 `postMessage` 发送者。Workbench 与
+App 文档内的 `agent-bundle/app` 客户端也不会信任任意 `postMessage` 发送者。
 每一帧入站消息都必须来自完全相同的 configured parent（`event.source === parent`），并通过严格的
 JSON-RPC 校验。省略 `targetOrigin` 时，客户端遵循 MCP Apps transport contract：每一帧出站消息都以
 `'*'` 发送到该 parent，`event.origin` 不参与入站消息认证。完全相同的 parent `WindowProxy` 身份是承担
