@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { fork, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, posix, resolve } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { AgentDocument, AgentDocumentNode, AgentRenderEvent } from '@agent-bundle/runtime';
@@ -537,7 +537,6 @@ const childPath = (): string => {
     : [
         join(here, 'route-invocation-child.js'),
         join(here, 'route-invocation-child.ts'),
-        resolve(process.cwd(), 'packages/agent-bundle/src/dev/routes/route-invocation-child.ts'),
       ];
   const found = candidates.find(existsSync);
   if (found === undefined) throw new Error('Unable to locate the route invocation render child.');

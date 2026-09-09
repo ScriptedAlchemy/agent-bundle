@@ -1,7 +1,7 @@
 import { fork } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createJiti } from 'jiti';
@@ -133,7 +133,6 @@ const lifecycleRenderChildPath = (): string => {
     : [
         join(here, 'lifecycle-render-child.js'),
         join(here, 'lifecycle-render-child.ts'),
-        resolve(process.cwd(), 'packages/agent-bundle/src/dev/playground/lifecycle-render-child.ts'),
       ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
