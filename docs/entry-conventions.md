@@ -1799,25 +1799,25 @@ that cancellation cannot bypass consent or reach a request the App did not
 start. Hosts outside the framework apply their own policy; the client's
 behavior is the same either way.
 
-### Opaque sandbox handshake
+### Dynamic sandbox handshake
 
 The Workbench and `serve-app` render the App as `<iframe sandbox="allow-scripts"
 referrerpolicy="no-referrer" srcdoc=…>`, so the document has an opaque
 origin and no referrer to learn its host origin from. The client therefore
 sends exactly one frame to `'*'` — its own `ui/initialize` — and accepts a
 response only when `event.source` is the configured parent, the id is that
-bootstrap request's, and the result validates; it then pins `event.origin`,
-held to the same rule as `targetOrigin` — an exact `http:` or `https:` origin;
-an empty, `'null'`, or other-scheme origin fails the handshake as
-`invalid-message` — posts `ui/notifications/initialized` and every later
-request to that exact origin, and ignores every message from another source or
-origin. The initialize result also names the opening tool
+bootstrap request's, and the result validates; it then pins `event.origin`
+raw for inbound messages. Exact `http:` or `https:` origins are also used as
+the outbound target; opaque `'null'` and host-private origins such as
+`codex-sandbox://…` use `'*'` outbound. An empty or literal `'*'` origin fails
+the handshake as `invalid-message`. Every later inbound message must match
+both the parent and exact raw pinned origin. The initialize result also names the opening tool
 (`hostContext.toolInfo.tool.name`), which is what the opening-notification
 listeners dispatch on. A malformed message that still names a pending id
 rejects that request as `invalid-message`. A host that can name its origin
 passes `targetOrigin` — an exact `http:` or `https:` origin; `'*'`, `'null'`,
 other schemes, and non-origin strings are a `TypeError` — and no wildcard frame
-is sent. Author code has no wildcard send path. The transport is DOM-shaped
+is sent. The transport is DOM-shaped
 (`AppWindow`, `AppMessageTarget`) rather than bound to the global `window`, so
 `tests/app-client.test.ts` and non-DOM hosts drive the same core through
 injected ports.

@@ -380,6 +380,44 @@ it('imports the externalized config entry from a packed npm consumer', async () 
   }
 }, 30_000);
 
+it('runs the packed App client through a Codex custom-scheme parent', async () => {
+  const { tarball } = await sharedPackedTarball('agent-bundle');
+  const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-app-client-'));
+  try {
+    await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
+    await execFile(
+      'npm', ['install', ...cachedNpmInstallArguments, tarball],
+      { cwd: consumerRoot, env: isolatedCommandEnvironment() },
+    );
+
+    const { stdout } = await execFile(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      [
+        "import { APP_PROTOCOL_VERSION, createAppClient } from 'agent-bundle/app';",
+        'const listeners = new Set();',
+        'const posts = [];',
+        'const parent = { postMessage(message, targetOrigin) { posts.push({ message, targetOrigin }); } };',
+        "const appWindow = { parent, addEventListener(_type, listener) { listeners.add(listener); }, removeEventListener(_type, listener) { listeners.delete(listener); } };",
+        "const emit = (data) => { for (const listener of listeners) listener({ data, origin: 'codex-sandbox://packed-dashboard-id', source: parent }); };",
+        'const client = createAppClient({ window: appWindow });',
+        'const connecting = client.connect();',
+        'emit({ id: posts.at(-1).message.id, jsonrpc: \'2.0\', result: { hostCapabilities: { serverTools: {} }, hostContext: {}, hostInfo: { name: \'codex\', version: \'0.153.4\' }, protocolVersion: APP_PROTOCOL_VERSION } });',
+        'await connecting;',
+        "const called = client.call('tool:hauler/hauler_status', { limit: 40 });",
+        'emit({ id: posts.at(-1).message.id, jsonrpc: \'2.0\', result: { content: [{ text: \'healthy\', type: \'text\' }], structuredContent: { active: 0, status: \'healthy\' } } });',
+        'const result = await called;',
+        "if (!posts.every(({ targetOrigin }) => targetOrigin === '*')) throw new Error('custom-origin post target was not wildcard');",
+        'console.log(JSON.stringify(result));',
+      ].join('\n'),
+    ], { cwd: consumerRoot, env: isolatedCommandEnvironment() });
+
+    expect(JSON.parse(stdout)).toEqual({ active: 0, status: 'healthy' });
+  } finally {
+    await rm(consumerRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
   const { tarball } = await sharedPackedTarball('agent-bundle');
 
