@@ -925,18 +925,20 @@ document cannot know its parent's origin up front. `connect()` therefore sends e
 to `'*'` — the framework-owned `ui/initialize` — and accepts a response only from the configured
 parent window (`event.source`), with that request's id and a valid initialize result (protocol
 version `2026-01-26`, `hostInfo`, `hostCapabilities`, `hostContext`). An exact `http:`/`https:`
-response origin is pinned for both inbound and outbound messages. An opaque `"null"` response
-origin from that same parent enters opaque mode: later inbound messages must still come from the
-same parent with origin `"null"`, and outbound messages use `'*'` because an opaque target cannot
-be addressed by origin. Empty and other-scheme origins fail the handshake with `invalid-message`;
-messages from another window or a changed origin are ignored. A host that can supply a trusted
-origin passes `targetOrigin` — an exact `http:`/`https:` origin; both `'*'` and `"null"` are
-rejected — and no wildcard frame is sent at all. `connect()` is idempotent: a connected client
-resolves the cached result, a connecting one returns the in-flight handshake.
+response origin is pinned raw for inbound messages. Exact `http:`/`https:` origins are also used
+as the outbound target. Opaque `"null"` and host-private origins such as Codex Desktop's
+`codex-sandbox://…` use `'*'` outbound because those targets cannot be addressed portably by
+origin; later inbound messages must still come from the same parent with the exact raw pinned
+origin. Empty and literal `'*'` origins fail the handshake with `invalid-message`; messages from
+another window or any origin change after pinning are ignored. A host that can supply a trusted
+origin passes `targetOrigin` — an exact `http:`/`https:` origin; `'*'`, `"null"`, and custom
+schemes are rejected — and no wildcard frame is sent at all. `connect()` is idempotent: a
+connected client resolves the cached result, a connecting one returns the in-flight handshake.
 `rebind({ parent?, targetOrigin?, window? })` rejects the previous generation's pending requests
 with `connection-rebound` — a `connect()` still in flight included, which never becomes the live
-connection — clears either origin mode, keeps the configured `targetOrigin` unless the call names
-one, and performs the handshake again against the new parent. `dispose()`, also idempotent,
+connection — clears both the incoming pin and outgoing target, keeps the configured `targetOrigin`
+unless the call names one, and performs the handshake again against the new parent. `dispose()`,
+also idempotent,
 removes the listener, rejects pending requests with `disposed`, and drops every registration; a
 host's `ui/resource-teardown` request is accepted only through the current source-and-origin pin,
 acknowledged, and then disposes the client. Cancellation and teardown replies use that same

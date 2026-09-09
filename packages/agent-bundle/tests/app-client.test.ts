@@ -73,6 +73,12 @@ interface PostedMessage {
 }
 
 const hostOrigin = 'https://host.example';
+const codexOrigin = 'codex-sandbox://stable-dashboard-id';
+const dynamicHostOriginMatrix = [
+  { host: 'Codex Desktop registered scheme', incoming: codexOrigin, outgoing: '*' },
+  { host: 'Codex opaque sandbox', incoming: 'null', outgoing: '*' },
+  { host: 'Workbench HTTP parent', incoming: hostOrigin, outgoing: hostOrigin },
+] as const;
 const typeProofs: readonly [
   RouteIdProof,
   RouteInputProof,
@@ -151,6 +157,16 @@ it('uses one shared protocol version for the App client and MCP App profile', ()
   expect(APP_PROTOCOL_VERSION).toBe(MCP_APP_PROTOCOL_VERSION);
 });
 
+it('conforms to the dynamic host origin matrix', async () => {
+  for (const profile of dynamicHostOriginMatrix) {
+    const target = harness();
+    const client = createAppClient({ window: target.window });
+    await connect(client, target, profile.incoming);
+    expect(target.posts.at(-1)?.targetOrigin, profile.host).toBe(profile.outgoing);
+    client.dispose();
+  }
+});
+
 it('accepts AbortController signals through the structural app contract', () => {
   const signal: AppAbortSignal = new AbortController().signal;
   const options: AppRequestOptions = { signal };
@@ -222,6 +238,47 @@ it('connects and calls through Codex opaque origin only for the matching parent'
   await expect(called).resolves.toEqual({ active: 3, status: 'healthy' });
 });
 
+it('connects and calls through a pinned Codex custom-scheme origin', async () => {
+  const target = harness();
+  const foreignParent = {};
+  const client = createAppClient({ window: target.window });
+  const connecting = client.connect();
+
+  let initialized = false;
+  void connecting.then(() => { initialized = true; }, () => { initialized = true; });
+  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, codexOrigin, foreignParent);
+  await flushListeners();
+  expect(initialized).toBe(false);
+  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, codexOrigin);
+  await expect(connecting).resolves.toEqual(initializeResult);
+  expect(target.posts.at(-1)).toEqual({
+    message: { jsonrpc: '2.0', method: 'ui/notifications/initialized' },
+    targetOrigin: '*',
+  });
+
+  const called = client.call('tool:hauler/hauler_status', { limit: 40 });
+  expect(target.posts.at(-1)?.targetOrigin).toBe('*');
+  const callId = responseId(target.posts.at(-1)!);
+  const result = {
+    id: callId,
+    jsonrpc: '2.0',
+    result: {
+      content: [{ text: 'healthy', type: 'text' }],
+      structuredContent: { active: 3, status: 'healthy' },
+    },
+  } as const;
+  let settled = false;
+  void called.then(() => { settled = true; }, () => { settled = true; });
+  target.emit(result, codexOrigin, foreignParent);
+  target.emit(result, 'https://host.example');
+  target.emit(result, 'null');
+  target.emit(result, 'codex-sandbox://changed-dashboard-id');
+  await flushListeners();
+  expect(settled).toBe(false);
+  target.emit(result, codexOrigin);
+  await expect(called).resolves.toEqual({ active: 3, status: 'healthy' });
+});
+
 it('dynamically pins the Workbench HTTP parent origin', async () => {
   const target = harness();
   const client = createAppClient({ window: target.window });
@@ -270,14 +327,24 @@ it('uses an exact trusted targetOrigin from the first message and rejects a mism
     targetOrigin: 'file:///tmp/host.html',
     window: target.window,
   })).toThrow(/exact trusted http/u);
+  expect(() => createAppClient({
+    targetOrigin: codexOrigin,
+    window: target.window,
+  })).toThrow(/exact trusted http/u);
+  expect(() => createAppClient({
+    targetOrigin: '',
+    window: target.window,
+  })).toThrow(/exact trusted origin/u);
 });
 
-it('rejects a bootstrap response whose origin is not an exact supported web origin', async () => {
-  const target = harness();
-  const client = createAppClient({ window: target.window });
-  const connecting = client.connect();
-  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, 'file://');
-  await expect(connecting).rejects.toMatchObject({ code: 'invalid-message' });
+it('rejects an empty or wildcard dynamic bootstrap origin', async () => {
+  for (const origin of ['', '*']) {
+    const target = harness();
+    const client = createAppClient({ window: target.window });
+    const connecting = client.connect();
+    target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, origin);
+    await expect(connecting).rejects.toMatchObject({ code: 'invalid-message' });
+  }
 });
 
 it('calls a route by its protocol tool name and returns structuredContent directly', async () => {
@@ -578,6 +645,25 @@ it('rejects old pending work on rebind and establishes a fresh exact-origin conn
   expect(second.posts.at(-1)?.targetOrigin).toBe(secondOrigin);
 });
 
+it('clears a custom origin pin and wildcard post target on rebind', async () => {
+  const first = harness();
+  const second = harness();
+  const client = createAppClient({ window: first.window });
+  await connect(client, first, codexOrigin);
+
+  const rebound = client.rebind({ window: second.window });
+  expect(second.posts[0]?.targetOrigin).toBe('*');
+  const reboundId = responseId(second.posts[0]!);
+  let settled = false;
+  void rebound.then(() => { settled = true; }, () => { settled = true; });
+  second.emit({ id: reboundId, jsonrpc: '2.0', result: initializeResult }, codexOrigin, first.parent);
+  await flushListeners();
+  expect(settled).toBe(false);
+  second.emit({ id: reboundId, jsonrpc: '2.0', result: initializeResult }, hostOrigin);
+  await expect(rebound).resolves.toEqual(initializeResult);
+  expect(second.posts.at(-1)?.targetOrigin).toBe(hostOrigin);
+});
+
 it('validates a rebind origin before changing the live connection', async () => {
   const target = harness();
   const client = createAppClient({ window: target.window });
@@ -690,4 +776,23 @@ it('acknowledges host teardown before disposing and makes disposal idempotent', 
   expect(target.posts).toHaveLength(postCount);
   await expect(client.connect()).rejects.toBeInstanceOf(AppClientError);
   await expect(client.connect()).rejects.toMatchObject({ code: 'disposed' });
+});
+
+it('uses the custom origin wildcard target before dispose clears both pins', async () => {
+  const target = harness();
+  const client = createAppClient({ window: target.window });
+  await connect(client, target, codexOrigin);
+
+  target.emit({
+    id: 'close-custom',
+    jsonrpc: '2.0',
+    method: 'ui/resource-teardown',
+    params: {},
+  }, codexOrigin);
+  expect(target.posts.at(-1)).toEqual({
+    message: { id: 'close-custom', jsonrpc: '2.0', result: {} },
+    targetOrigin: '*',
+  });
+  expect(client.disposed).toBe(true);
+  expect(client.connected).toBe(false);
 });
