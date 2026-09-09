@@ -124,8 +124,10 @@ because they change no publishable package.
    events created with the built-in `GITHUB_TOKEN`, so for that PR to get
    PR CI the repository needs a `CHANGESETS_GITHUB_TOKEN` secret (fine-grained
    PAT or GitHub App installation token with `contents: write` and
-   `pull-requests: write` on this repository); the workflow falls back to
-   `GITHUB_TOKEN`, in which case close and reopen the PR to trigger CI.
+   `pull-requests: write` on this repository). When the workflow falls back to
+   `GITHUB_TOKEN`, it explicitly dispatches `ci.yml` on the generated
+   `changeset-release/main` branch after confirming the Version Packages PR
+   exists, so no close/reopen is needed.
 3. Merging Version Packages pushes a `Version Packages` commit to `main`
    with no pending changesets. With publishing disabled (the default) the
    workflow then runs the release gates (`pnpm check:release`) and stops;
