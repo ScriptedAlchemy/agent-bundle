@@ -37,8 +37,8 @@ selection and the separately versioned compiler/runtime pairing used by released
 | `mcp-server` | Conventional MCP tools with route/projection tests. The current starter also demonstrates an optional library export and an artifact script. |
 | `cli-tool` | A standalone routed CLI, with a script and library example. |
 
-The routed templates pin React and React DOM to the same release so a fresh install cannot select
-an incompatible peer pair.
+The routed templates intentionally pin one known-good React and React DOM release so generated
+projects start reproducibly and a fresh install cannot select an incompatible peer pair.
 
 The scaffolder offers every target the compiler builds: `amp`, `portable`, `claude`, `codex`, and
 `cursor`. One combination is refused — `amp` with this MCP starter, because Amp's skill-scoped MCP

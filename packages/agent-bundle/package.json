@@ -144,7 +144,7 @@
   "peerDependencies": {
     "@agent-bundle/runtime": ">=0.0.0 <1",
     "@rstest/core": "^0.11.10",
-    "react": "19.2.8"
+    "react": "^19.2.0"
   },
   "peerDependenciesMeta": {
     "@agent-bundle/runtime": {

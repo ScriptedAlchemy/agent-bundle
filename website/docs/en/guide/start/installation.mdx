@@ -67,6 +67,12 @@ These are installed only when a project uses the surface that needs them:
 | `react` | Rendering route modules and asserting on them. Also an optional peer dependency. |
 | `typescript` | `lib.dts` declaration generation, which resolves `typescript` from the project. |
 
+`agent-bundle` and `@agent-bundle/runtime` accept the same React `^19.2.0` line. The runtime
+declares that range for both React and React DOM, so a clean npm install can select one matching
+pair without preinstalling React or bypassing peer checks. Routed scaffolds still pin one
+known-good React/React DOM pair intentionally: generated projects start reproducibly, and their
+committed lockfiles preserve that pair.
+
 ## Once npm releases exist
 
 The commands below are the **future** installation path. They do not work yet, because no npm
