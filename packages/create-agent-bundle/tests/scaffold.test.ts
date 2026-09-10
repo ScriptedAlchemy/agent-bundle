@@ -251,14 +251,24 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
   // nothing (`agent-bundle prepack` reports a stray runtime dependency as AB7014).
   it.effect('pins the paired runtime for the routed cli-tool template as a dev dependency', () => Effect.gen(function* () {
     const path = yield* Path.Path;
-    const { frameworkSpec, root } = yield* scaffoldTemplate('cli-tool', { pluginName: 'greeter' });
-    const manifest = yield* readJson<{
+    const [cliTool, mcpServer] = yield* Effect.all([
+      scaffoldTemplate('cli-tool', { pluginName: 'greeter' }),
+      scaffoldTemplate('mcp-server', { pluginName: 'status-plugin' }),
+    ], { concurrency: 'unbounded' });
+    const cliManifest = yield* readJson<{
       readonly dependencies?: Record<string, string>;
       readonly devDependencies: Record<string, string>;
-    }>(path.join(root, 'package.json'));
-    expect(manifest.dependencies).toBeUndefined();
-    expect(manifest.devDependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec, testPairing));
-    expect(manifest.devDependencies['zod']).toBeDefined();
+    }>(path.join(cliTool.root, 'package.json'));
+    expect(cliManifest.dependencies).toBeUndefined();
+    expect(cliManifest.devDependencies['@agent-bundle/runtime'])
+      .toBe(runtimeSpecForFramework(cliTool.frameworkSpec, testPairing));
+    expect(cliManifest.devDependencies['react-dom']).toBe('19.2.8');
+    expect(cliManifest.devDependencies['zod']).toBeDefined();
+
+    const mcpManifest = yield* readJson<{
+      readonly devDependencies: Record<string, string>;
+    }>(path.join(mcpServer.root, 'package.json'));
+    expect(mcpManifest.devDependencies['react-dom']).toBe('19.2.8');
   }));
 
   it.effect('replaces every placeholder and pins the framework spec', () => Effect.gen(function* () {
