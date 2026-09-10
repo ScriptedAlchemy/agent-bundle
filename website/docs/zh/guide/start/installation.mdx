@@ -60,6 +60,11 @@ pnpm 与 yarn 接受同样的 URL（`pnpm add <url>`、`yarn add agent-bundle@<u
 | `react` | 渲染路由模块并对其断言。同样是可选 peer 依赖。 |
 | `typescript` | `lib.dts` 声明生成，它会从项目中解析 `typescript`。 |
 
+`agent-bundle` 与 `@agent-bundle/runtime` 接受相同的 React `^19.2.0` 版本范围。runtime 对
+React 和 React DOM 声明同一个范围，因此全新的 npm 安装可以选择一组匹配版本，无需预先安装
+React，也无需绕过 peer 检查。路由式脚手架仍会有意固定一组已验证的 React/React DOM 版本：
+生成的项目由此保持可复现，提交后的 lockfile 会继续保留这组版本。
+
 ## 等到 npm 正式发布之后
 
 下面这些命令是**未来**的安装路径。它们现在还不可用，因为尚未发布任何 npm 版本：

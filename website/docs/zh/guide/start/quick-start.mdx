@@ -35,7 +35,8 @@ npm run check
 | `mcp-server` | 约定式 MCP 工具及路由、投影测试；当前 starter 还演示了可选的库导出与产物脚本。 |
 | `cli-tool` | 独立的路由式 CLI，附带脚本和库示例。 |
 
-路由式模板将 React 与 React DOM 固定为同一版本，避免全新安装选中不兼容的 peer 组合。
+路由式模板会有意固定一组已验证的 React 与 React DOM 版本，使生成项目保持可复现，并避免全新安装
+选中不兼容的 peer 组合。
 
 脚手架提供编译器构建的每一个 target：`amp`、`portable`、`claude`、`codex` 和 `cursor`。
 只有一种组合被拒绝——`amp` 与这个 MCP starter，因为 Amp 的 Skill 级 MCP 契约会拒绝 starter 中

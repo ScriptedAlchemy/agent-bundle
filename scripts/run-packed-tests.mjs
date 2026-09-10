@@ -105,9 +105,6 @@ try {
     '--ignore-scripts',
     '--no-audit',
     '--no-fund',
-    '--prefer-offline',
-    'react@19.2.8',
-    'react-dom@19.2.8',
     ...packedRecords.map((record) => record.tarball),
   ], { cwd: binConsumer, env: environment });
   const executedBins = [];
