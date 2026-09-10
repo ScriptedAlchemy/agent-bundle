@@ -61,20 +61,19 @@ authority as in the Workbench (`--allow` pre-approves named capabilities on the 
 It is a local preview host, not a deployment target.
 
 Inside the App document, the `agent-bundle/app` client trusts no arbitrary `postMessage` sender.
-The Workbench and `serve-app` use a separate loopback HTTP sandbox proxy, while hosts such as
-Codex can provide an opaque parent, so the document cannot know its parent's origin before the
-first frame. Each `connect()` handshake attempt sends one framework-owned `ui/initialize` request
-to `'*'` and accepts a response only from the configured parent window with that request's id and
-a valid initialize result. The raw nonempty response origin is pinned for inbound traffic.
-An exact `http:`/`https:` origin is also used as the outbound target. Opaque `"null"` and
-host-private origins such as Codex Desktop's `codex-sandbox://…` instead use `'*'` outbound,
-because those targets cannot be addressed portably by origin; later inbound messages must still
-keep both the same source and exact raw pinned origin. Empty and literal `'*'` origins fail the
-handshake, and an origin cannot change after pinning. A host that can name its origin passes
-`targetOrigin` (an exact `http:`/`https:` origin; `'*'`, `"null"`, and custom schemes are rejected)
-and no wildcard frame is sent. `rebind()` and `dispose()` revoke both the incoming pin and
-outgoing target and reject every request still pending, a handshake still in flight included, so
-a stale generation cannot receive a later host's messages.
+Every inbound frame must come from the exact configured parent (`event.source === parent`) and
+pass strict JSON-RPC validation. When `targetOrigin` is omitted, the client follows the MCP Apps
+transport contract: every outgoing frame is posted to that parent with `'*'`, and `event.origin`
+does not authenticate incoming messages. The exact parent `WindowProxy` identity is the
+load-bearing authentication control.
+
+A host that can name a trusted origin may pass `targetOrigin`. It must be an exact `http:` or
+`https:` origin; `'*'`, `"null"`, custom schemes, and non-origin strings are rejected. The client
+then uses that exact origin for every outgoing frame and also requires every incoming
+`event.origin` to match it. The Workbench and `serve-app` keep this stronger host-side boundary
+in their separate loopback HTTP sandbox proxy: the proxy validates sources and origins before
+relaying to MCP. `rebind()` and `dispose()` still reject pending work and invalidate stale
+connection generations.
 
 The host relay is the security boundary. The App client speaks only to its expected parent; the
 Workbench, `serve-app`, or an embedding MCP host forwards permitted requests to the one server the

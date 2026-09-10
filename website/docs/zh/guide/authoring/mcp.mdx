@@ -803,22 +803,26 @@ JSON-RPC result。两者都会在尚未 `connect()` 时先连接；每个请求�
 `targetOrigin`、缺少浏览器 window，或非法的 `appInfo` / `appCapabilities`——抛出 `TypeError`；
 超时不是 1 到 2,147,483,647 毫秒之间的安全整数则抛出 `RangeError`。这些都不是 `AB` 诊断。
 
-**生命周期与 origin pin。** Workbench 与 `serve-app` 把 App 放在独立的 loopback HTTP sandbox proxy
-之后，而 Codex 可以把它渲染在 opaque sandbox 中；两种情况下文档都无法事先知道 parent origin。
-`connect()` 只向 `'*'` 发送一帧——框架拥有的 `ui/initialize`——并且只接受 configured parent window
-（`event.source`）以同一 request id 返回的有效 initialize result（协议版本 `2026-01-26`，以及
-`hostInfo`、`hostCapabilities`、`hostContext`）。客户端会把非空的原始响应 origin 固定用于入站消息；
-精确的 `http:` / `https:` origin 也会作为出站 target。opaque `"null"` 与 Codex Desktop 的
-`codex-sandbox://…` 等宿主私有 origin 使用 `'*'` 出站，因为浏览器无法可靠地按 origin 寻址这些
-target；之后的入站消息仍须来自同一个 parent 且带完全相同的原始 origin。空 origin 与字面值 `'*'` 会以
-`invalid-message` 令握手失败；其他 window 或固定后发生变化的 origin 所发消息会被忽略。能预先给出
-可信 origin 的宿主可传入精确的 `http:` / `https:` `targetOrigin`；`'*'`、`"null"` 与自定义 scheme
-都会被拒绝，且不会有任何 wildcard frame。`connect()` 幂等。
+**生命周期与 transport 认证。** 每一帧入站消息都必须来自完全相同的 configured parent
+（`event.source === parent`），并通过严格的 JSON-RPC 校验。省略 `targetOrigin` 时，`connect()` 以
+`'*'` 向该 parent 发送框架拥有的 `ui/initialize`，并且只接受同一 request id 对应的有效 initialize
+result（协议版本 `2026-01-26`，以及 `hostInfo`、`hostCapabilities`、`hostContext`）。之后的每一帧
+出站消息也使用 `'*'`；入站 `event.origin` 不会被固定或加入 allowlist。完全相同的 parent
+`WindowProxy` 身份是承担安全性的认证控制，因此即使报告相同 origin，其他 window 仍会被忽略。
+
+能够给出可信 origin 的宿主可以传入 `targetOrigin`——精确的 `http:` 或 `https:` origin；`'*'`、
+`"null"`、自定义 scheme 与非 origin 字符串都会被拒绝。此时客户端会对每一帧出站消息使用该精确 origin，
+并要求每一帧入站消息的 `event.origin` 与之匹配。Workbench、`serve-app` 及其独立的 loopback HTTP
+sandbox proxy 会在 relay 之前继续于宿主侧校验 source 与 origin。
+
+`connect()` 幂等：已连接客户端返回缓存结果，连接中的客户端返回进行中的握手。
 `rebind({ parent?, targetOrigin?, window? })` 以 `connection-rebound` 拒绝旧 generation 的 pending
-request、清除入站 pin 与出站 target，再对新 parent 握手。`dispose()` 同样幂等：移除 listener，以
-`disposed` 拒绝 pending request，并丢弃所有注册；只有通过当前 source 与 origin pin 的
-`ui/resource-teardown` request 才会先得到确认，再 dispose 客户端。取消与 teardown 回复会在连接状态
-清除之前沿当前 parent 及出站模式发送。可注入的 `window` 与 `parent` 让测试及非 DOM 宿主能驱动同一个客户端。
+request——进行中的 `connect()` 也包括在内，且永远不会成为 live connection——除非调用显式指定新的
+`targetOrigin`，否则保留已配置的值；然后采用新 parent 并重新握手。`dispose()` 同样幂等：移除 listener，
+以 `disposed` 拒绝 pending request，并丢弃所有注册。宿主的 `ui/resource-teardown` request 必须来自完全
+相同的当前 parent，先得到确认，再 dispose 客户端；配置 `targetOrigin` 时，其 origin 也必须匹配。取消与
+teardown 回复会在连接状态清除之前，沿当前 parent 使用已配置的精确 origin 或 `'*'` 发送。可注入的
+`window` 与 `parent` 让测试及非 DOM 宿主能驱动同一个客户端。
 
 **宿主侧边界。** 客户端只是 iframe 内的半座桥。frame relay、sandbox proxy、宿主页面、
 `/api/mcp/...` 路由与 consent authority 都属于宿主；Workbench MCP 页面、`agent-bundle serve-app`、

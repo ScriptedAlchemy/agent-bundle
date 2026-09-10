@@ -74,10 +74,12 @@ interface PostedMessage {
 
 const hostOrigin = 'https://host.example';
 const codexOrigin = 'codex-sandbox://stable-dashboard-id';
-const dynamicHostOriginMatrix = [
-  { host: 'Codex Desktop registered scheme', incoming: codexOrigin, outgoing: '*' },
-  { host: 'Codex opaque sandbox', incoming: 'null', outgoing: '*' },
-  { host: 'Workbench HTTP parent', incoming: hostOrigin, outgoing: hostOrigin },
+const dynamicHostOrigins = [
+  hostOrigin,
+  'null',
+  'codex-sandbox://x',
+  'vscode-webview://x',
+  'https://abc.claudemcpcontent.com',
 ] as const;
 const typeProofs: readonly [
   RouteIdProof,
@@ -157,12 +159,23 @@ it('uses one shared protocol version for the App client and MCP App profile', ()
   expect(APP_PROTOCOL_VERSION).toBe(MCP_APP_PROTOCOL_VERSION);
 });
 
-it('conforms to the dynamic host origin matrix', async () => {
-  for (const profile of dynamicHostOriginMatrix) {
+it('connects and calls through arbitrary origins from the exact parent', async () => {
+  for (const origin of dynamicHostOrigins) {
     const target = harness();
     const client = createAppClient({ window: target.window });
-    await connect(client, target, profile.incoming);
-    expect(target.posts.at(-1)?.targetOrigin, profile.host).toBe(profile.outgoing);
+    await connect(client, target, origin);
+    const called = client.call('tool:hauler/hauler_status', { limit: 40 }, { timeoutMs: 50 });
+    const request = target.posts.at(-1)!;
+    target.emit({
+      id: responseId(request),
+      jsonrpc: '2.0',
+      result: {
+        content: [{ text: 'healthy', type: 'text' }],
+        structuredContent: { active: 3, status: 'healthy' },
+      },
+    }, origin === hostOrigin ? 'vscode-webview://response-changed' : hostOrigin);
+    await expect(called, origin).resolves.toEqual({ active: 3, status: 'healthy' });
+    expect(target.posts.every(({ targetOrigin }) => targetOrigin === '*'), origin).toBe(true);
     client.dispose();
   }
 });
@@ -173,7 +186,7 @@ it('accepts AbortController signals through the structural app contract', () => 
   expect(options.signal?.aborted).toBe(false);
 });
 
-it('connects and calls through Codex opaque origin only for the matching parent', async () => {
+it('ignores a foreign WindowProxy even when its origin matches the exact parent', async () => {
   expect(typeProofs).toEqual([true, true, true, true, true, true]);
   const target = harness();
   const foreignParent = {};
@@ -199,12 +212,12 @@ it('connects and calls through Codex opaque origin only for the matching parent'
 
   let initialized = false;
   void connecting.then(() => { initialized = true; }, () => { initialized = true; });
-  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, 'null', foreignParent);
-  target.emit({ id: 99, jsonrpc: '2.0', result: initializeResult }, 'null');
+  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, hostOrigin, foreignParent);
+  target.emit({ id: 99, jsonrpc: '2.0', result: initializeResult }, hostOrigin);
   await flushListeners();
   expect(initialized).toBe(false);
 
-  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, 'null');
+  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, hostOrigin);
   await expect(connecting).resolves.toEqual(initializeResult);
   expect(client.connected).toBe(true);
   expect(target.posts.at(-1)).toEqual({
@@ -212,53 +225,11 @@ it('connects and calls through Codex opaque origin only for the matching parent'
     targetOrigin: '*',
   });
 
-  const called = client.call('tool:hauler/hauler_status', { limit: 40 });
+  const called = client.call('tool:hauler/hauler_status', { limit: 40 }, { timeoutMs: 50 });
   expect(target.posts.at(-1)?.targetOrigin).toBe('*');
   const callId = responseId(target.posts.at(-1)!);
   let settled = false;
   void called.then(() => { settled = true; }, () => { settled = true; });
-  target.emit({
-    id: callId,
-    jsonrpc: '2.0',
-    result: {
-      content: [{ text: 'forged', type: 'text' }],
-      structuredContent: { active: 99, status: 'forged' },
-    },
-  }, hostOrigin);
-  await flushListeners();
-  expect(settled).toBe(false);
-  target.emit({
-    id: callId,
-    jsonrpc: '2.0',
-    result: {
-      content: [{ text: 'healthy', type: 'text' }],
-      structuredContent: { active: 3, status: 'healthy' },
-    },
-  }, 'null');
-  await expect(called).resolves.toEqual({ active: 3, status: 'healthy' });
-});
-
-it('connects and calls through a pinned Codex custom-scheme origin', async () => {
-  const target = harness();
-  const foreignParent = {};
-  const client = createAppClient({ window: target.window });
-  const connecting = client.connect();
-
-  let initialized = false;
-  void connecting.then(() => { initialized = true; }, () => { initialized = true; });
-  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, codexOrigin, foreignParent);
-  await flushListeners();
-  expect(initialized).toBe(false);
-  target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, codexOrigin);
-  await expect(connecting).resolves.toEqual(initializeResult);
-  expect(target.posts.at(-1)).toEqual({
-    message: { jsonrpc: '2.0', method: 'ui/notifications/initialized' },
-    targetOrigin: '*',
-  });
-
-  const called = client.call('tool:hauler/hauler_status', { limit: 40 });
-  expect(target.posts.at(-1)?.targetOrigin).toBe('*');
-  const callId = responseId(target.posts.at(-1)!);
   const result = {
     id: callId,
     jsonrpc: '2.0',
@@ -267,34 +238,11 @@ it('connects and calls through a pinned Codex custom-scheme origin', async () =>
       structuredContent: { active: 3, status: 'healthy' },
     },
   } as const;
-  let settled = false;
-  void called.then(() => { settled = true; }, () => { settled = true; });
-  target.emit(result, codexOrigin, foreignParent);
-  target.emit(result, 'https://host.example');
-  target.emit(result, 'null');
-  target.emit(result, 'codex-sandbox://changed-dashboard-id');
+  target.emit(result, hostOrigin, foreignParent);
   await flushListeners();
   expect(settled).toBe(false);
-  target.emit(result, codexOrigin);
+  target.emit(result, 'vscode-webview://response-changed');
   await expect(called).resolves.toEqual({ active: 3, status: 'healthy' });
-});
-
-it('dynamically pins the Workbench HTTP parent origin', async () => {
-  const target = harness();
-  const client = createAppClient({ window: target.window });
-  await connect(client, target);
-
-  const request = client.request('ping', {});
-  expect(target.posts.at(-1)?.targetOrigin).toBe(hostOrigin);
-  const pingId = responseId(target.posts.at(-1)!);
-  let settled = false;
-  void request.then(() => { settled = true; }, () => { settled = true; });
-  target.emit({ id: pingId, jsonrpc: '2.0', result: { forged: true } }, 'null');
-  target.emit({ id: pingId, jsonrpc: '2.0', result: { forged: true } }, 'https://attacker.example');
-  await flushListeners();
-  expect(settled).toBe(false);
-  target.emit({ id: pingId, jsonrpc: '2.0', result: { accepted: true } });
-  await expect(request).resolves.toEqual({ accepted: true });
 });
 
 it('uses an exact trusted targetOrigin from the first message and rejects a mismatched response origin', async () => {
@@ -314,6 +262,17 @@ it('uses an exact trusted targetOrigin from the first message and rejects a mism
   expect(settled).toBe(false);
   target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult });
   await expect(connecting).resolves.toEqual(initializeResult);
+
+  const requested = client.request('ping', {});
+  const request = target.posts.at(-1)!;
+  expect(request.targetOrigin).toBe(hostOrigin);
+  let requestSettled = false;
+  void requested.then(() => { requestSettled = true; }, () => { requestSettled = true; });
+  target.emit({ id: responseId(request), jsonrpc: '2.0', result: { forged: true } }, 'https://other.example');
+  await flushListeners();
+  expect(requestSettled).toBe(false);
+  target.emit({ id: responseId(request), jsonrpc: '2.0', result: { accepted: true } });
+  await expect(requested).resolves.toEqual({ accepted: true });
 
   expect(() => createAppClient({
     targetOrigin: '*',
@@ -337,16 +296,6 @@ it('uses an exact trusted targetOrigin from the first message and rejects a mism
   })).toThrow(/exact trusted origin/u);
 });
 
-it('rejects an empty or wildcard dynamic bootstrap origin', async () => {
-  for (const origin of ['', '*']) {
-    const target = harness();
-    const client = createAppClient({ window: target.window });
-    const connecting = client.connect();
-    target.emit({ id: 1, jsonrpc: '2.0', result: initializeResult }, origin);
-    await expect(connecting).rejects.toMatchObject({ code: 'invalid-message' });
-  }
-});
-
 it('calls a route by its protocol tool name and returns structuredContent directly', async () => {
   const target = harness();
   const client = createAppClient({ window: target.window });
@@ -365,7 +314,7 @@ it('calls a route by its protocol tool name and returns structuredContent direct
         name: 'hauler_status',
       },
     },
-    targetOrigin: hostOrigin,
+    targetOrigin: '*',
   });
   target.emit({
     id: responseId(request),
@@ -469,7 +418,7 @@ it('times out and aborts pending connected requests while notifying the host of 
       method: 'notifications/cancelled',
       params: { reason: 'timeout', requestId: 2 },
     },
-    targetOrigin: hostOrigin,
+    targetOrigin: '*',
   });
 
   const controller = new AbortController();
@@ -482,7 +431,7 @@ it('times out and aborts pending connected requests while notifying the host of 
       method: 'notifications/cancelled',
       params: { reason: 'aborted', requestId: 3 },
     },
-    targetOrigin: hostOrigin,
+    targetOrigin: '*',
   });
 
   const alreadyAborted = new AbortController();
@@ -645,11 +594,11 @@ it('rejects old pending work on rebind and establishes a fresh exact-origin conn
   expect(second.posts.at(-1)?.targetOrigin).toBe(secondOrigin);
 });
 
-it('clears a custom origin pin and wildcard post target on rebind', async () => {
+it('rebinds an unconfigured client to a new exact parent and resets its generation', async () => {
   const first = harness();
   const second = harness();
   const client = createAppClient({ window: first.window });
-  await connect(client, first, codexOrigin);
+  await connect(client, first, 'vscode-webview://first');
 
   const rebound = client.rebind({ window: second.window });
   expect(second.posts[0]?.targetOrigin).toBe('*');
@@ -661,7 +610,7 @@ it('clears a custom origin pin and wildcard post target on rebind', async () => 
   expect(settled).toBe(false);
   second.emit({ id: reboundId, jsonrpc: '2.0', result: initializeResult }, hostOrigin);
   await expect(rebound).resolves.toEqual(initializeResult);
-  expect(second.posts.at(-1)?.targetOrigin).toBe(hostOrigin);
+  expect(second.posts.at(-1)?.targetOrigin).toBe('*');
 });
 
 it('validates a rebind origin before changing the live connection', async () => {
@@ -738,13 +687,7 @@ it('acknowledges host teardown before disposing and makes disposal idempotent', 
     jsonrpc: '2.0',
     method: 'ui/resource-teardown',
     params: {},
-  }, 'null', {});
-  target.emit({
-    id: 'changed-origin-close',
-    jsonrpc: '2.0',
-    method: 'ui/resource-teardown',
-    params: {},
-  }, hostOrigin);
+  }, hostOrigin, {});
   expect(client.disposed).toBe(false);
 
   target.emit({
@@ -752,7 +695,7 @@ it('acknowledges host teardown before disposing and makes disposal idempotent', 
     jsonrpc: '2.0',
     method: 'ui/resource-teardown',
     params: {},
-  }, 'null');
+  }, 'vscode-webview://teardown-origin-changed');
   expect(target.posts.slice(-2)).toEqual([
     {
       message: { id: 'close-1', jsonrpc: '2.0', result: {} },
@@ -776,23 +719,4 @@ it('acknowledges host teardown before disposing and makes disposal idempotent', 
   expect(target.posts).toHaveLength(postCount);
   await expect(client.connect()).rejects.toBeInstanceOf(AppClientError);
   await expect(client.connect()).rejects.toMatchObject({ code: 'disposed' });
-});
-
-it('uses the custom origin wildcard target before dispose clears both pins', async () => {
-  const target = harness();
-  const client = createAppClient({ window: target.window });
-  await connect(client, target, codexOrigin);
-
-  target.emit({
-    id: 'close-custom',
-    jsonrpc: '2.0',
-    method: 'ui/resource-teardown',
-    params: {},
-  }, codexOrigin);
-  expect(target.posts.at(-1)).toEqual({
-    message: { id: 'close-custom', jsonrpc: '2.0', result: {} },
-    targetOrigin: '*',
-  });
-  expect(client.disposed).toBe(true);
-  expect(client.connected).toBe(false);
 });
