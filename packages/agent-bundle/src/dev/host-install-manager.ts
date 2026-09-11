@@ -395,6 +395,7 @@ const reconcilePublishedEntries = async (
   epochId: string,
   nextEntries: readonly string[],
   publish: ((published: string[]) => Promise<void>) | undefined,
+  afterManifest?: () => Promise<void>,
 ): Promise<void> => {
   const previousEntries = new Set(previous?.entries ?? []);
   const stale = [...previousEntries].filter((entry) => !nextEntries.includes(entry));
@@ -411,6 +412,7 @@ const reconcilePublishedEntries = async (
     : publish === undefined ? stale : [...previousEntries];
   if (backup !== undefined) await mkdir(backup, { recursive: true });
   const published: string[] = [];
+  let manifestPublished = false;
   try {
     for (const entry of canRepublishPrevious ? stale : backupEntries) {
       const path = join(destination, entry);
@@ -426,24 +428,39 @@ const reconcilePublishedEntries = async (
     }
     await publish?.(published);
     await writePublishedEntries(destination, epochId, nextEntries);
+    manifestPublished = true;
+    await afterManifest?.();
   } catch (error) {
-    for (const entry of published) {
-      if (backup !== undefined || !previousEntries.has(entry)) {
-        await rm(join(destination, entry), { force: true, recursive: true });
+    try {
+      for (const entry of published) {
+        if (backup !== undefined || !previousEntries.has(entry)) {
+          await rm(join(destination, entry), { force: true, recursive: true });
+        }
       }
-    }
-    if (canRepublishPrevious && previous !== undefined) {
-      await publishInstalledGeneration(destination, previous.epochId);
-    } else if (backup !== undefined) {
-      for (const entry of backupEntries) {
-        const path = join(backup, entry);
-        if (await pathExists(path)) await rename(path, join(destination, entry));
+      if (canRepublishPrevious && previous !== undefined) {
+        await publishInstalledGeneration(destination, previous.epochId);
+      } else if (backup !== undefined) {
+        for (const entry of backupEntries) {
+          const path = join(backup, entry);
+          if (await pathExists(path)) await rename(path, join(destination, entry));
+        }
       }
+      if (manifestPublished) {
+        if (previous === undefined) {
+          await rm(publishedEntriesPath(destination), { force: true });
+        } else {
+          await writePublishedEntries(destination, previous.epochId, previous.entries);
+        }
+      }
+      if (backup !== undefined) await rm(backup, { force: true, recursive: true });
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], 'Failed to roll back development host publication.', {
+        cause: rollbackError,
+      });
     }
     throw error;
-  } finally {
-    if (backup !== undefined) await rm(backup, { force: true, recursive: true });
   }
+  if (backup !== undefined) await rm(backup, { force: true, recursive: true }).catch(() => undefined);
 };
 
 const pruneGenerations = async (
@@ -650,23 +667,24 @@ export class DevHostInstallManager {
               if (plugin === undefined || marketplaceDocument === undefined) {
                 throw new TypeError('Cannot refresh a Codex development install with no plugin marketplace identity.');
               }
-              await request('plugin/install', {
-                marketplacePath: join(source, marketplaceDocument),
-                pluginName: plugin,
-              });
+              await reconcilePublishedEntries(
+                installed.destination,
+                previousPublished,
+                epochId,
+                nextEntries,
+                undefined,
+                async () => {
+                  await request('plugin/install', {
+                    marketplacePath: join(source, marketplaceDocument),
+                    pluginName: plugin,
+                  });
+                },
+              );
               return true;
             },
           ) === true;
         }
-        if (refreshedByAppServer) {
-          await reconcilePublishedEntries(
-            installed.destination,
-            previousPublished,
-            epochId,
-            nextEntries,
-            undefined,
-          );
-        } else {
+        if (!refreshedByAppServer) {
           await installGeneration(installed.destination, prepared.root, epochId);
           await reconcilePublishedEntries(
             installed.destination,

@@ -15,10 +15,13 @@ it('removes app-server-managed entries on the first Codex filesystem fallback', 
   const destination = join(root, 'installed');
   const stableSource = join(root, '.agent-bundle/dev/codex');
   const appServer = rs.spyOn(codexAppServer, 'withCodexAppServer');
-  const refresh = async () => {
+  const refresh = async (
+    _codexRoot: string,
+    action: Parameters<typeof codexAppServer.withCodexAppServer>[1],
+  ) => action(async () => {
     await cp(stableSource, destination, { recursive: true });
-    return true;
-  };
+    return undefined as never;
+  });
   appServer.mockImplementationOnce(refresh).mockImplementationOnce(refresh).mockResolvedValue(undefined);
   const manager = new DevHostInstallManager({
     epochStore: {
