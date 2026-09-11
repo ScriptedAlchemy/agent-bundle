@@ -4,7 +4,7 @@ import { planHooks } from '../src/adapters/hook-contract.ts';
 import { eventRuntimeHosting, planCompiledHooks, planHooksSurface, selectedServerHosts } from '../src/build/entries.ts';
 import { runtimeIgnoredRoot } from '../src/build/runtime-path.ts';
 import type { NormalizedHook, NormalizedMcpServer, NormalizedPlugin } from '../src/core/types.ts';
-import type { CompiledEventPreflight } from '../src/routes/types.ts';
+import type { CompiledEventHandler } from '../src/routes/types.ts';
 
 describe('runtime ignored root', () => {
   it('anchors a source runtime to its package when the checkout is under dist', () => {
@@ -88,14 +88,15 @@ describe('event runtime hosting', () => {
   });
 });
 
-describe('event-route preflight source graph (#595)', () => {
-  const preflight: CompiledEventPreflight = Object.freeze({
-    provenance: Object.freeze({ kind: 'conventional' as const, relativePath: 'src/events/tool/before.preflight.ts' }),
-    source: '/project/src/events/tool/before.preflight.ts',
+describe('event-route handler source graph (#595)', () => {
+  const handler: CompiledEventHandler = Object.freeze({
+    provenance: Object.freeze({ kind: 'conventional' as const, relativePath: 'src/events/tool/before.handler.ts' }),
+    source: '/project/src/events/tool/before.handler.ts',
+  view: '/project/src/events/tool/before.view.tsx',
   });
   const hook: NormalizedHook = {
     event: 'beforeTool',
-    eventRoute: { event: 'tool/before', fallback: 'none', preflight, runtime: 'shared' },
+    eventRoute: { event: 'tool/before', fallback: 'none', handler, runtime: 'shared' },
     id: 'hook:event-route:tool-before',
     name: 'event-route-tool-before',
     provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/before.tsx' },
@@ -108,8 +109,8 @@ describe('event-route preflight source graph (#595)', () => {
     hooks: [hook],
     mcpServers: [],
     metadata: {
-      id: 'plugin:preflight-entries',
-      name: 'preflight-entries',
+      id: 'plugin:handler-entries',
+      name: 'handler-entries',
       provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
       version: '1.0.0',
     },
@@ -135,14 +136,15 @@ describe('event-route preflight source graph (#595)', () => {
     wrapperSource: () => 'config-hook-only\n',
   }).hookEntries;
 
-  it('names the preflight leaf among the wrapper source inputs and keeps the rendered route as the entry source', () => {
+  it('names the handler leaf among the wrapper source inputs and keeps the rendered route as the entry source', () => {
     const compiled = planCompiledHooks(planned, { outDir: '/tmp/artifact' });
     expect(compiled).toHaveLength(1);
     expect(compiled[0]!.source).toBe(hook.source);
     expect(compiled[0]!.sourceInputs).toEqual([
       hook.provenance.sourcePath,
       hook.source,
-      preflight.source,
+      handler.source,
+      handler.view,
     ]);
     expect(compiled[0]!.target).toBe('claude');
     expect(compiled[0]!.output).toBe('/tmp/artifact/hooks/event-route-tool-before.claude.mjs');
@@ -150,9 +152,9 @@ describe('event-route preflight source graph (#595)', () => {
 
   it('aliases the cheap event runtimes onto the per-host wrapper and applies the operator env layer', () => {
     const surface = planHooksSurface(planned, {
-      artifactEpoch: 'preflight-entries@1.0.0',
+      artifactEpoch: 'handler-entries@1.0.0',
       outDir: '/tmp/artifact',
-      plugin: { name: 'preflight-entries', version: '1.0.0' },
+      plugin: { name: 'handler-entries', version: '1.0.0' },
     });
     expect(surface.entries).toHaveLength(2);
     const entry = surface.entries[0]!;
@@ -161,15 +163,15 @@ describe('event-route preflight source graph (#595)', () => {
       'agent-bundle/event-ipc': expect.any(String),
       'agent-bundle/event-project': expect.any(String),
     });
-    expect(entry.virtualSource).toContain('executeEventPreflight');
-    expect(entry.virtualSource).toContain(preflight.source);
+    expect(entry.virtualSource).toContain('executeEventHandler');
+    expect(entry.virtualSource).toContain(handler.source);
     expect(entry.virtualSource).not.toContain('__AGENT_BUNDLE_EVENT_ARTIFACT_EPOCH__');
     expect(entry.virtualModules).toBeDefined();
     expect(entry.rscManifest).toBeUndefined();
     const executor = surface.entries[1]!;
     expect(executor.outputRelativePath).toBe('hooks/event-route-tool-before.claude.execute.mjs');
     expect(executor.virtualSource).toContain('requestEventRuntime');
-    expect(executor.virtualSource).toContain('preflight-entries@1.0.0');
+    expect(executor.virtualSource).toContain('handler-entries@1.0.0');
   });
 
   it('emits the standalone worker beside a nested host wrapper', () => {
@@ -188,7 +190,7 @@ describe('event-route preflight source graph (#595)', () => {
       manifestPath: '.amp/hooks.json',
       matchers: {},
       registration: 'api',
-      wrapperPath: (candidate) => `.amp/plugins/preflight-entries/hooks/${candidate.name}.mjs`,
+      wrapperPath: (candidate) => `.amp/plugins/handler-entries/hooks/${candidate.name}.mjs`,
       wrapperSource: () => 'config-hook-only\n',
     }).hookEntries;
     const rootWrapper = {
@@ -199,16 +201,16 @@ describe('event-route preflight source graph (#595)', () => {
     const combined = [rootWrapper, ...nested];
     const workers = [
       'hooks/hooks-flight.mjs',
-      '.amp/plugins/preflight-entries/hooks/hooks-flight.mjs',
+      '.amp/plugins/handler-entries/hooks/hooks-flight.mjs',
     ];
 
     expect(planCompiledHooks(combined, { outDir: '/tmp/artifact' })
       .flatMap((entry) => entry.workerOutput === undefined ? [] : [entry.workerOutput]))
       .toEqual(workers.map((worker) => `/tmp/artifact/${worker}`));
     const outputs = planHooksSurface(combined, {
-      artifactEpoch: 'preflight-entries@1.0.0',
+      artifactEpoch: 'handler-entries@1.0.0',
       outDir: '/tmp/artifact',
-      plugin: { name: 'preflight-entries', version: '1.0.0' },
+      plugin: { name: 'handler-entries', version: '1.0.0' },
     }).entries.map((entry) => entry.outputRelativePath);
     expect(outputs).toEqual(expect.arrayContaining(workers));
   });

@@ -106,8 +106,8 @@ const eventTraceWireSchema = z.strictObject({
     nativeEvent: textSchema,
   }),
   kind: z.enum([
-    'preflight.start',
-    'preflight.outcome',
+    'handler.start',
+    'handler.outcome',
     'execute.start',
     'providers.start',
     'providers.finish',
@@ -115,8 +115,8 @@ const eventTraceWireSchema = z.strictObject({
     'render.finish',
     'failure',
   ]),
-  outcome: z.enum(['execute', 'continue', 'deny']).optional(),
-  phase: z.enum(['preflight', 'execute', 'providers', 'render']),
+  outcome: z.enum(['render', 'continue', 'deny']).optional(),
+  phase: z.enum(['handler', 'execute', 'providers', 'render']),
   runtime: z.enum(['shared', 'standalone']).optional(),
   sequence: z.number().int().nonnegative(),
 });

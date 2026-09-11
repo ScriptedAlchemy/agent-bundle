@@ -149,10 +149,7 @@ export const snapshotRequest = (context: AgentRequestContext): JsonObject => ({
   host: asJson(context.host),
   invocation: asJson(context.invocation),
   lineage: asJson(context.lineage),
-  providers: {
-    keys: Object.keys(context.providers).sort((left, right) => left.localeCompare(right)),
-    processLifetime: asJson(context.providers.processLifetime),
-  },
+  process: asJson(context.process),
   session: asJson(context.session),
   workspace: asJson(context.workspace),
 });

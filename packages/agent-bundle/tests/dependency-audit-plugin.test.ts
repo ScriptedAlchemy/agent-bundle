@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { Diagnostic } from '../src/core/diagnostics.ts';
 import type { CompilationEvidence } from '../src/build/compile-result.ts';
 import { ArtifactDependencyAuditPlugin } from '../src/build/dependency-audit-plugin.ts';
 import { composeEntryLibConfig, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
@@ -50,6 +51,7 @@ const buildRecording = async (
   root: string,
   entries: readonly RslibEntry[],
   mutate: RspackMutator = () => undefined,
+  diagnostics: Diagnostic[] = [],
 ): Promise<readonly CompilationEvidence[]> => {
   const records: CompilationEvidence[] = [];
   const rslib = await createRslib({
@@ -59,6 +61,7 @@ const buildRecording = async (
       lib: entries.map((entry) => composeEntryLibConfig(entry, {
         cwd: root,
         meta: testMeta,
+        onFrameworkImport: (diagnostic) => diagnostics.push(diagnostic),
         outputRoot: join(root, 'dist'),
         tools: {
           rspack: (config) => {
@@ -268,3 +271,30 @@ describe('ArtifactDependencyAuditPlugin', () => {
     }
   }, 20_000);
 });
+
+it('uses transformed dependencies to allow types and reject direct or aliased compiler imports', async () => {
+  const { entry, root, source } = await probeProject([
+    "import type { BuildOptions } from 'agent-bundle/api';",
+    "import { OtherType } from 'agent-bundle/test';",
+    'export const value: BuildOptions | OtherType = {};',
+  ]);
+  try {
+    await buildRecording(root, [entry]);
+    const compilerRoot = join(root, 'node_modules', 'renamed-framework');
+    await mkdir(compilerRoot, { recursive: true });
+    await writeFile(join(compilerRoot, 'package.json'), JSON.stringify({
+      name: 'agent-bundle', type: 'module', exports: { './api': { import: './api.js' } },
+    }));
+    await writeFile(join(compilerRoot, 'api.js'), "throw new Error('compiler must never execute'); export const build = 1;");
+    for (const request of ['agent-bundle/api', 'compiler-alias']) {
+      const diagnostics: Diagnostic[] = [];
+      await writeFile(source, `import { build } from ${JSON.stringify(request)}; console.log(build);`);
+      await expect(buildRecording(root, [entry], (config) => {
+        config.resolve = { ...config.resolve, alias: { 'compiler-alias': join(compilerRoot, 'api.js') } };
+      }, diagnostics)).rejects.toThrow();
+      expect(diagnostics).toEqual([expect.objectContaining({ code: 'AB4837', sourcePath: source })]);
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 60_000);

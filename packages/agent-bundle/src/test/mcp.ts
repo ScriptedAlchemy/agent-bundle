@@ -483,7 +483,7 @@ export const openInMemoryMcpServer = async <
             explicit: context.providers,
             invocation: request.invocation,
             manifest,
-            processHit,
+            processHit: context.process ?? processHit,
             ...(descriptor === undefined ? {} : { provenance: routeProvenance(descriptor, manifest) }),
           });
           return streamOf(await dependencies.runAgentRequest({

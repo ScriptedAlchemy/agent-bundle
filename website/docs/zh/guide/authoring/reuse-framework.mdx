@@ -61,7 +61,7 @@ export const config = {
 此处 `confirm: false` 是对只读问候操作的明确选择。不要未经审核就把它复制到修改型操作。
 生成的命令调用同一工具，并使用它的规范 schema 校验。
 
-受支持的 aliases、flags、positionals 和同步 `mapInput` 仅用于转换 CLI 语法。
+受支持的 aliases、flags、positionals 和同步或异步 `mapInput` 仅用于转换 CLI 语法。
 不要在 mapper 中重复领域操作或结果渲染器。真正独立的聚合工作流仍可使用单独的 `src/cli/**` 路由。
 
 自动 flag 推导使用有界 schema 语法。复杂嵌套或 union schema 即使不能投影为命名 flags，仍然可以是有效工具。
@@ -112,7 +112,7 @@ App 仍然负责本地选择、格式化、轮询策略，以及 loading/error �
 ## 有意识地选择语义事件或普通 hook
 
 框架生命周期处理器统一使用 `src/events/**`：`.ts` 返回轻量决策，`.tsx` 渲染 JSX，
-可选的 `before()` 在渲染之前进行判断。原生钩子文档仍作为适配器扩展入口。
+`.ts` 处理器通过 `ctx.render()` 请求独立的 `.view.tsx` 视图。原生钩子文档仍作为适配器扩展入口。
 
 原生 payload 字段并不跨宿主统一；
 可用时读取规范字段，并如实保留 unknown 或缺失证据。stop、deny、continue 或更新输入必须保留宿主的真实决定语义。

@@ -60,12 +60,13 @@ describe('agent request store', () => {
       expect(context.capabilities.network.state).toBe('unavailable');
       expect(context.capabilities.projectRoot.state).toBe('unavailable');
       expect(context.services).toEqual({ snapshot: { stateVersion: 1 } });
-      expect(context.providers).toEqual({ gitWorktree: { path: '/tmp/worktree' } });
+      expect(await context.provider('gitWorktree')).toEqual({ path: '/tmp/worktree' });
       expect(context.state).toBeUndefined();
       expect(context.notices).toBeUndefined();
       expect(Object.hasOwn(context, 'state')).toBe(true);
       expect(Object.hasOwn(context, 'notices')).toBe(true);
-      expect(Object.hasOwn(context, 'providers')).toBe(true);
+      expect(Object.hasOwn(context, 'providers')).toBe(false);
+      expect(context.process).toBeUndefined();
       expect(Object.isFrozen(context)).toBe(true);
       expect(Object.isFrozen(context.invocation)).toBe(true);
       expect(Object.isFrozen(context.host)).toBe(true);
@@ -195,7 +196,7 @@ describe('agent request store', () => {
       const context = await agent();
       return {
         id: context.invocation.id,
-        provider: context.providers.edit,
+        provider: await context.provider('edit'),
         session: context.session.state === 'available' ? context.session.value.sessionId : 'missing',
       };
     });
@@ -208,7 +209,7 @@ describe('agent request store', () => {
       const context = await agent();
       return {
         id: context.invocation.id,
-        provider: context.providers.edit,
+        provider: await context.provider('edit'),
         session: context.session.state === 'available' ? context.session.value.sessionId : 'missing',
       };
     });
@@ -377,13 +378,12 @@ describe('agent request store', () => {
       state: stateHandle as never,
     }, async () => {
       events.push('operation');
-      return (await agent()).providers;
+      return (await agent()).provider('topology');
     });
 
     // Order: lease open → providers → operation → lease close; the resolver saw the real inbox and published view.
     expect(events).toEqual(['open:evt-1', 'providers', 'inbox', 'published', 'operation', 'close']);
-    expect(result).toEqual({ topology: { pending: 0, published: ['attempted'], revision: 3, siblings: 0, stateRoot: '/plugin/state' } });
-    expect(Object.isFrozen(result)).toBe(true);
+    expect(result).toEqual({ pending: 0, published: ['attempted'], revision: 3, siblings: 0, stateRoot: '/plugin/state' });
     // The view is frozen, carries exactly the read-only members, and the handles are narrowed by construction.
     expect(Object.isFrozen(view)).toBe(true);
     expect(Object.keys(view!).sort()).toEqual(['host', 'lineage', 'notices', 'plugin', 'session', 'signal', 'state', 'workspace']);
@@ -431,7 +431,7 @@ describe('agent request store', () => {
     expect(ran).toBe(false);
     expect(closed).toBe(true);
     // A plain record is still mounted as before.
-    expect(await runAgentRequest({ ...init('tool'), providers: { library: 'x' } }, async () => (await agent()).providers)).toEqual({ library: 'x' });
+    expect(await runAgentRequest({ ...init('tool'), providers: { library: 'x' } }, async () => (await agent()).provider('library'))).toBe('x');
   });
 
   it('re-exports the request store from the plugin entry', () => {

@@ -1,11 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import { extname, relative, resolve } from 'node:path';
+import { dirname, extname, relative, resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
 
 import { conventionalEntryAt } from '../config/conventional-entry.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
-import { isRenderedScriptRoute } from '../config/script-routes.ts';
 import { resolveAppRouteTemplate } from './app-template.ts';
 import {
   compileCliCommands,
@@ -29,18 +28,17 @@ import {
   resolveRouteConfigAppReferences,
 } from './config-extract.ts';
 import {
-  discoverEventRoutePreflight,
   scanRouteModuleExports,
-  type EventRoutePreflightDiscovery,
   validateEventRouteModuleContract,
   validateLayoutModuleContract,
   validateProviderModuleContract,
   validateRouteModuleContract,
 } from './contract.ts';
-import { validateRouteFrameworkImports } from './framework-imports.ts';
+import { readRouteDefinition } from './definition-syntax.ts';
+import { parseModule } from './syntax.ts';
 import { eventHandlerEntry } from './event-handler.ts';
-import { extractInputSchema, type ExtractedInputSchema, type ResolvedSchemaOrigin } from './input-schema.ts';
-import { isLayoutRouteKind, layoutChainFor } from './layouts.ts';
+import { parseInputSchema, type ExtractedInputSchema, type ResolvedSchemaOrigin } from './input-schema.ts';
+import { isLayoutRouteKind } from './layouts.ts';
 import { providerKeyFromName } from './providers.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
@@ -56,7 +54,7 @@ import {
   type CompiledAgentRoute,
   type CompiledCliMode,
   type CompiledCliSurface,
-  type CompiledEventPreflight,
+  type CompiledEventHandler,
   type CompiledLayout,
   type CompiledProvider,
   type CompiledRouteGraph,
@@ -489,44 +487,6 @@ const decideServerMode = (
   return withEntry('conflict');
 };
 
-/**
- * AB4837 (#558) for one route module a generated executable bundles: the
- * caller decides *whether* the route ships (a generated server or CLI, a
- * conventional script, an event route); this names the self-contained
- * executable the module is inlined into. App routes are browser builds and
- * never bundle into a Node executable, so they are exempt.
- */
-const routeFrameworkImportDiagnostics = (
-  route: CompiledAgentRoute,
-  moduleText: string | undefined,
-): readonly Diagnostic[] => {
-  if (moduleText === undefined) return [];
-  let executable: string;
-  switch (route.kind) {
-    case 'app':
-      return [];
-    case 'cli':
-      executable = 'routed CLI executable';
-      break;
-    case 'script':
-      executable = 'script executable';
-      break;
-    case 'tool':
-    case 'resource':
-    case 'prompt':
-      executable = 'generated MCP server';
-      break;
-    case 'event-route':
-      executable = 'hook wrapper';
-      break;
-    default: {
-      const unreachable: never = route.kind;
-      throw new TypeError(`Unhandled route kind ${String(unreachable)}.`);
-    }
-  }
-  return validateRouteFrameworkImports(moduleText, route.provenance.relativePath, route.source, executable);
-};
-
 /** The contract a route binds: the id and the one normalized `input` object every bound route shares. */
 interface ContractBinding {
   readonly id: string;
@@ -546,7 +506,7 @@ const compiledRoute = (
   config: Readonly<Record<string, unknown>>,
   resultSchemaState: RouteResultSchemaState,
   contract?: ContractBinding,
-  preflight?: CompiledEventPreflight,
+  handler?: CompiledEventHandler,
 ): CompiledAgentRoute => ({
   config,
   ...(contract === undefined ? {} : { contract: contract.id }),
@@ -554,7 +514,7 @@ const compiledRoute = (
   id: module.id,
   ...(contract === undefined ? {} : { inputSchema: contract.input }),
   kind: module.kind,
-  ...(preflight === undefined ? {} : { preflight }),
+  ...(handler === undefined ? {} : { handler }),
   provenance: { kind: 'conventional', relativePath: module.relativePath },
   resultSchemaState,
   ...(module.serverName === undefined ? {} : { serverId: `mcp:${module.serverName}` }),
@@ -583,8 +543,8 @@ const readRouteModuleText = async (source: string): Promise<string | undefined> 
 interface ExtractedModuleMetadata {
   readonly extracted: ExtractedRouteConfig;
   readonly inputSchema?: ExtractedInputSchema;
-  readonly preflight?: CompiledEventPreflight;
-  readonly preflightDiagnostics: readonly Diagnostic[];
+  readonly handler?: CompiledEventHandler;
+  readonly handlerDiagnostics: readonly Diagnostic[];
   readonly resultSchemaState: RouteResultSchemaState;
 }
 
@@ -597,40 +557,38 @@ const emptyExtractedRouteConfig: ExtractedRouteConfig = deepFreeze({
 const extractedModuleMetadata = (
   module: DiscoveredRouteModule,
   moduleText: string | undefined,
-  projectRoot: string,
-  preflightDiscovery?: EventRoutePreflightDiscovery,
 ): ExtractedModuleMetadata => {
   if (moduleText === undefined) {
-    return { extracted: emptyExtractedRouteConfig, preflightDiagnostics: [], resultSchemaState: 'unknown' };
+    return { extracted: emptyExtractedRouteConfig, handlerDiagnostics: [], resultSchemaState: 'unknown' };
   }
-  const extracted = extractRouteConfig(moduleText, module.relativePath, module.source, { projectRoot });
-  const inputSchema = extractInputSchema(moduleText, module.relativePath, { projectRoot, source: module.source });
-  const discovery = module.kind === 'event-route'
-    ? preflightDiscovery ?? discoverEventRoutePreflight(moduleText, module.relativePath, module.source)
-    : undefined;
-  let preflight: CompiledEventPreflight | undefined = discovery?.source === undefined
-    ? undefined
-    : {
-        provenance: {
-          kind: 'conventional' as const,
-          relativePath: toPosixPath(relative(projectRoot, discovery.source)),
-        },
-        source: discovery.source,
-      };
-  const handlerDiagnostics: Diagnostic[] = [];
-  if (module.kind === 'event-route' && preflight === undefined && (discovery?.diagnostics.length ?? 0) === 0) {
+  const extracted = extractRouteConfig(moduleText, module.relativePath, module.source);
+  let inputSchema: ExtractedInputSchema | undefined;
+  const metadataDiagnostics: Diagnostic[] = [];
+  if (extracted.config['inputJsonSchema'] !== undefined) {
     try {
-      preflight = eventHandlerEntry(moduleText, module.relativePath, module.source) ?? preflight;
+      inputSchema = {
+        origin: { module: module.relativePath, binding: 'inputJsonSchema' },
+        schema: parseInputSchema(extracted.config['inputJsonSchema'], `${module.relativePath} config.inputJsonSchema`),
+      };
     } catch (error) {
-      handlerDiagnostics.push({ code: 'AB4840', severity: 'error', sourcePath: module.source, message: String(error), recovery: 'Keep before() self-contained or import its dependencies from separate modules.' });
+      metadataDiagnostics.push({ code: 'AB4814', severity: 'error', sourcePath: module.source, message: String(error), recovery: 'Declare inputJsonSchema as an object JSON Schema of scalar fields or scalar arrays, or use JSON input.' });
+    }
+  }
+  let handler: CompiledEventHandler | undefined;
+  const handlerDiagnostics: Diagnostic[] = [];
+  if (module.kind === 'event-route') {
+    try {
+      handler = eventHandlerEntry(moduleText, module.relativePath, module.source);
+    } catch (error) {
+      handlerDiagnostics.push({ code: 'AB4840', severity: 'error', sourcePath: module.source, message: String(error), recovery: 'Use a .ts event handler and an optional sibling .view.tsx rendered module.' });
     }
   }
   return {
-    extracted,
+    extracted: { ...extracted, diagnostics: [...extracted.diagnostics, ...metadataDiagnostics] },
     ...(inputSchema === undefined ? {} : { inputSchema }),
-    ...(preflight === undefined ? {} : { preflight }),
-    preflightDiagnostics: [...(discovery?.diagnostics ?? []), ...handlerDiagnostics],
-    resultSchemaState: scanRouteModuleExports(moduleText, module.relativePath, { source: module.source }).named.has('resultSchema')
+    ...(handler === undefined ? {} : { handler }),
+    handlerDiagnostics,
+    resultSchemaState: scanRouteModuleExports(moduleText, module.relativePath).named.has('resultSchema')
       ? 'unprojectable'
       : 'absent',
   };
@@ -670,7 +628,7 @@ const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unkno
   id: route.id,
   ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
   kind: route.kind,
-  ...(route.preflight === undefined ? {} : { preflight: route.preflight.provenance.relativePath, ...(route.preflight.mode === undefined ? {} : { eventExecution: route.preflight.mode }) }),
+  ...(route.handler === undefined ? {} : { handler: route.handler.provenance.relativePath, ...(route.handler.view === undefined ? {} : { view: toPosixPath(relative(dirname(route.source), route.handler.view)) }) }),
   relativePath: route.provenance.relativePath,
   ...(route.serverId === undefined ? {} : { serverId: route.serverId }),
 });
@@ -725,49 +683,6 @@ export const compileRouteGraph = async (
 
   const claimed = configClaimedSources(projectRoot, config);
   const moduleTextBySource = new Map<string, string>();
-  const preflightDiscoveryBySource = new Map<string, EventRoutePreflightDiscovery>();
-  const preflightSupportSources = new Set<string>();
-  // Resolve preflight support modules before classifying every glob match:
-  // a colocated `before.preflight.ts` is application code named by the
-  // canonical `before.ts` route, not a second event route.
-  for (const source of sources) {
-    if (claimed.artifact.has(source)) continue;
-    const relativePath = toPosixPath(relative(projectRoot, source));
-    if (claimed.bin.has(source) && !isConventionalScriptPath(relativePath)) continue;
-    if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
-    const module = classifyModule(source, relativePath);
-    if (
-      module.surface !== 'route'
-      || module.kind !== 'event-route'
-      || !canonicalAgentEvents.includes(module.event!)
-    ) {
-      continue;
-    }
-    const moduleText = await readRouteModuleText(source);
-    if (moduleText === undefined) continue;
-    moduleTextBySource.set(source, moduleText);
-    const discovery = discoverEventRoutePreflight(moduleText, relativePath, source);
-    preflightDiscoveryBySource.set(source, discovery);
-  }
-  for (const [source, discovery] of preflightDiscoveryBySource) {
-    if (discovery.candidateSource === undefined) continue;
-    if (!preflightDiscoveryBySource.has(discovery.candidateSource)) {
-      preflightSupportSources.add(discovery.candidateSource);
-      continue;
-    }
-    preflightDiscoveryBySource.set(source, Object.freeze({
-      candidateSource: discovery.candidateSource,
-      diagnostics: Object.freeze([
-        ...discovery.diagnostics,
-        routeError(
-          'AB4840',
-          `Event route ${toPosixPath(relative(projectRoot, source))} re-exports preflight from another conventional event route.`,
-          'Move preflight to a separate support module that is not itself an event route.',
-          source,
-        ),
-      ]),
-    }));
-  }
   const modules: DiscoveredModule[] = [];
   const modulesById = new Map<string, DiscoveredModule>();
   const providerModulesByKey = new Map<string, DiscoveredProviderModule>();
@@ -777,7 +692,12 @@ export const compileRouteGraph = async (
     const relativePath = toPosixPath(relative(projectRoot, source));
     if (claimed.bin.has(source) && !isConventionalScriptPath(relativePath)) continue;
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
-    if (preflightSupportSources.has(source)) continue;
+    if (/^src\/events\/.+\.view\.tsx$/u.test(relativePath)) {
+      if (!sources.includes(source.replace(/\.view\.tsx$/u, '.ts'))) {
+        diagnostics.push(routeError('AB4840', `Event view ${relativePath} has no .ts handler.`, 'Add its sibling .ts event handler, or remove .view from the name for a directly rendered event.', source));
+      }
+      continue;
+    }
     // A tool's CLI projection module (#596) is paired with its sibling once
     // every route id is known; it never derives an id of its own. The same
     // suffix under resources, prompts, or apps names nothing that has an
@@ -829,15 +749,6 @@ export const compileRouteGraph = async (
     }
     if (module.surface === 'provider') {
       const key = providerKeyFromName(module.name);
-      if (key === 'processLifetime') {
-        diagnostics.push(routeError(
-          'AB4942',
-          `Provider module ${relativePath} derives the reserved framework provider key "processLifetime".`,
-          'Rename the provider file so its camel-cased key is not processLifetime.',
-          source,
-        ));
-        continue;
-      }
       const existingProvider = providerModulesByKey.get(key);
       if (existingProvider !== undefined) {
         diagnostics.push(routeError(
@@ -952,13 +863,17 @@ export const compileRouteGraph = async (
     const moduleText = moduleTextBySource.get(module.source) ?? await readRouteModuleText(module.source);
     if (moduleText !== undefined) {
       moduleTextBySource.set(module.source, moduleText);
+      try {
+        readRouteDefinition(parseModule(module.relativePath, moduleText));
+      } catch (error) {
+        diagnostics.push(routeError('AB4810', String(error), 'Use a direct defineTool({ ... }, handler) or events.family.event({ ... }, handler) default export.', module.source));
+        continue;
+      }
     }
     pending.push({
       metadata: extractedModuleMetadata(
         module,
         moduleText,
-        projectRoot,
-        preflightDiscoveryBySource.get(module.source),
       ),
       module,
     });
@@ -970,9 +885,6 @@ export const compileRouteGraph = async (
     }
   }
   const appTargets = appReferenceTargets(pending, serverModes);
-  // Routes declaring one schema — the same module and binding at the end of
-  // the alias chain — bind one contract and share its normalized `input`
-  // object; the first route by id supplies it.
   const contractBindings = new Map<string, ContractBinding>();
   for (const { metadata } of [...pending].sort((left, right) => left.module.id.localeCompare(right.module.id))) {
     if (metadata.inputSchema === undefined) continue;
@@ -1000,13 +912,13 @@ export const compileRouteGraph = async (
       )
       : metadata.extracted;
     diagnostics.push(...resolved.diagnostics);
-    diagnostics.push(...metadata.preflightDiagnostics);
+    diagnostics.push(...metadata.handlerDiagnostics);
     const route = compiledRoute(
       module,
       resolved.config,
       metadata.resultSchemaState,
       metadata.inputSchema === undefined ? undefined : contractBindings.get(contractIdOf(metadata.inputSchema.origin)),
-      metadata.preflight,
+      metadata.handler,
     );
     if (route.kind === 'event-route' && moduleText !== undefined) {
       diagnostics.push(...validateEventRouteModuleContract(
@@ -1031,7 +943,7 @@ export const compileRouteGraph = async (
         // judged here; MCP and CLI routes are judged once their server or
         // CLI surface is known to be generated, because a route of a
         // custom/command/remote server or a conventional CLI never bundles.
-        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleText));
+
         break;
       case 'cli':
         cliRoutes.push(route);
@@ -1039,7 +951,7 @@ export const compileRouteGraph = async (
       case 'script':
         scripts.push(route);
         // Conventional scripts compile into every selected target.
-        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleText));
+
         break;
       default: {
         const unreachable: never = route.kind;
@@ -1137,7 +1049,7 @@ export const compileRouteGraph = async (
         }
         // The generated server inlines the route, so a compiler-carrying
         // framework import would break its bundle (AB4837, #558).
-        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleText));
+
         // The route's render budget (#454) is read by the generated server
         // from this compiled config, so it is validated here, once.
         diagnostics.push(...validateRouteRenderConfig(route, 'MCP route').diagnostics);
@@ -1169,10 +1081,6 @@ export const compileRouteGraph = async (
     }
   }
 
-  // A projection pairs with a tool route of a generated server only; its text
-  // is read once here, like every other module the graph judges. The tool's
-  // own text is what the projected command re-parses when the tool has no
-  // static contract (AB4814/AB4838/AB4839 under the tool's label).
   const pairs: CliProjectionPair[] = [];
   for (const projection of pairedProjections) {
     const server = servers.find((candidate) => candidate.name === projection.module.server && candidate.mode === 'generated');
@@ -1181,14 +1089,12 @@ export const compileRouteGraph = async (
     const moduleText = await readRouteModuleText(projection.source);
     if (moduleText === undefined) continue;
     moduleTextBySource.set(projection.source, moduleText);
-    const toolText = moduleTextBySource.get(tool.source);
     pairs.push({
       module: projection.module,
       moduleText,
       relativePath: projection.relativePath,
       source: projection.source,
       tool,
-      ...(toolText === undefined ? {} : { toolText }),
     });
   }
   // One command per operation: a tool with a projection module leaves the
@@ -1226,25 +1132,11 @@ export const compileRouteGraph = async (
     // A projection module is judged in every mode, as the bulk projection's
     // selection is: its contract and binding errors name the module to fix
     // whether or not the CLI compiles this time.
-    const projections = compileProjectedCliCommands(pairs, { projectRoot });
+    const projections = compileProjectedCliCommands(pairs);
     if (mode === 'generated') {
       const compiled = await compileCliCommands(cliRoutes, async (route) =>
-        moduleTextBySource.get(route.source), projected, { projectRoot }, projections);
+        moduleTextBySource.get(route.source), projected, projections);
       diagnostics.push(...compiled.diagnostics);
-      // The routed CLI executable inlines every command route and every
-      // projection module (AB4837, #558).
-      for (const route of cliRoutes) {
-        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleTextBySource.get(route.source)));
-      }
-      for (const pair of pairs) {
-        diagnostics.push(...validateRouteFrameworkImports(
-          pair.moduleText,
-          pair.relativePath,
-          pair.source,
-          'routed CLI executable',
-          'CLI projection module',
-        ));
-      }
       const backingRoutes = new Map(
         [...cliRoutes, ...(projected?.routes ?? []), ...projections.routes].map((route) => [route.id, route] as const),
       );
@@ -1273,50 +1165,6 @@ export const compileRouteGraph = async (
         ));
       }
       cli = { mode, routes: mode === 'conventional' ? [] : cliRoutes };
-    }
-  }
-
-  // AB4837 (#558) for layouts and providers, judged once the generated
-  // surfaces are known, against what the build inlines (build/entry-shell.ts,
-  // build/cli-bins.ts, build/entries.ts). A worker imports only the layouts
-  // some route it renders composes through (`workerLayouts`): the non-App
-  // routes of a generated server, the rendered commands of a generated CLI
-  // (plain `.ts` commands run without a render session), and rendered
-  // scripts. A layout none of them reaches — a root layout in a project of
-  // Apps and event routes, a server layout of a custom server — is never
-  // bundled and is not judged. Providers mount in every generated request
-  // scope — a generated server, the routed CLI executable (plain commands
-  // too), a rendered script's worker, a hook wrapper — but a plain script is
-  // bundled from its own source and mounts none.
-  const generatedServers = servers.filter((server) => server.mode === 'generated');
-  const renderedCommandRouteIds = new Set(
-    (cli?.mode === 'generated' ? cli.commands ?? [] : []).filter((command) => command.rendered).map((command) => command.routeId),
-  );
-  const renderedCliRoutes = cli?.mode === 'generated' ? cli.routes.filter((route) => renderedCommandRouteIds.has(route.id)) : [];
-  const renderedScripts = scripts.filter(isRenderedScriptRoute);
-  const layoutRoutes = [...generatedServers.flatMap((server) => server.routes), ...renderedCliRoutes, ...renderedScripts];
-  for (const layout of layouts) {
-    const layoutText = moduleTextBySource.get(layout.source);
-    if (layoutText === undefined || !layoutRoutes.some((route) => layoutChainFor(route, [layout]).length > 0)) continue;
-    diagnostics.push(...validateRouteFrameworkImports(
-      layoutText,
-      layout.provenance.relativePath,
-      layout.source,
-      'generated executable',
-      'Layout module',
-    ));
-  }
-  if (generatedServers.length > 0 || cli?.mode === 'generated' || renderedScripts.length > 0 || events.length > 0) {
-    for (const provider of providers) {
-      const providerText = moduleTextBySource.get(provider.source);
-      if (providerText === undefined) continue;
-      diagnostics.push(...validateRouteFrameworkImports(
-        providerText,
-        provider.provenance.relativePath,
-        provider.source,
-        'generated executable',
-        'Provider module',
-      ));
     }
   }
 

@@ -1028,7 +1028,7 @@ const startEventRuntime = async (
             payload: {
               canonical: props.canonical,
               native: props.native,
-              ...(request.preflight === undefined ? {} : { preflight: request.preflight }),
+              ...(request.renderInput === undefined ? {} : { renderInput: request.renderInput }),
             } as never,
           },
         },

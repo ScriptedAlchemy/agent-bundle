@@ -8,24 +8,10 @@ import ts from 'typescript-5';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import { isRelativeSpecifier } from './module-candidates.ts';
-import {
-  createModuleScopeResolver,
-  describeExpression,
-  rootReferencePath,
-  type ModuleScopeResolver,
-  type ModuleSourceFile,
-  type ReferencePath,
-} from './module-scope.ts';
-import { hasExportModifier, positionOf, unwrapExpression, type SyntaxNode } from './syntax.ts';
+import { isRelativeSpecifier } from '../core/paths.ts';
+import { describeExpression, hasExportModifier, parseModule, positionOf, unwrapExpression } from './syntax.ts';
 import { emptyRouteConfig } from './types.ts';
-import { routeDefinitionSource } from './definition-syntax.ts';
-
-// The scope model hands out structural node slices so its shipped declaration
-// never names typescript-5 (see module-scope.ts); every slice is a compiler
-// node, narrowed back here, once, at the boundary.
-const compilerExpression = (node: SyntaxNode): ts.Expression => node as ts.Expression;
-const compilerSourceFile = (sourceFile: ModuleSourceFile): ts.SourceFile => sourceFile as ts.SourceFile;
+import { readRouteDefinition } from './definition-syntax.ts';
 
 /** The package subpath route modules import compile-time authoring helpers from. */
 export const routeHelpersSpecifier = 'agent-bundle/routes';
@@ -62,19 +48,6 @@ export interface ExtractedRouteConfig {
   readonly diagnostics: readonly Diagnostic[];
 }
 
-export interface RouteConfigExtractionOptions {
-  /**
-   * Absolute project root. A relative import that resolves outside it is not
-   * project source and stays dynamic. Unset means unconstrained (tests).
-   */
-  readonly projectRoot?: string;
-  /**
-   * Reads one sibling module's text; `undefined` when the path is not a
-   * readable file. Defaults to a synchronous filesystem read.
-   */
-  readonly readModule?: (path: string) => string | undefined;
-}
-
 /**
  * The accepted route-config expression grammar. Extraction is fully static —
  * the module is parsed, never executed — so the initializer must be built
@@ -89,13 +62,8 @@ export interface RouteConfigExtractionOptions {
  * - `true`, `false`, and `null`;
  * - `as`/`satisfies` casts, non-null assertions, and parentheses around any
  *   accepted form (they unwrap to their inner expression);
- * - two constrained reference forms for string values: an identifier bound
- *   to a top-level `const` whose initializer is a string literal, declared
- *   in the same module or `export const`-ed by a module reached through
- *   relative imports inside the project, following alias hops
- *   (`export const a = b`) any depth (module-scope.ts); and `appResourceUri('<app>')`
- *   imported from `agent-bundle/routes`, which the route-graph compiler
- *   replaces with the referenced App route's `resourceUri`.
+ * - a local top-level const string literal, or `appResourceUri('<app>')`
+ *   imported from `agent-bundle/routes`.
  *
  * Everything else — other identifier references, calls, functions,
  * templates with substitutions, `undefined`, bigints, regular expressions,
@@ -111,7 +79,7 @@ const emptyExtraction: ExtractedRouteConfig = deepFreeze({
 });
 
 const declarationRecovery = 'Export the route config as a single top-level `export const config = { ... }` object literal, then inspect again.';
-const grammarRecovery = `Restrict the config initializer to the static grammar (${routeConfigGrammar}). A string value may reference a top-level const string literal declared in this module or exported by a relative sibling module (\`import { X } from './constants'\`), or reference an MCP App route through \`${appResourceUriHelperName}('<app>')\` imported from ${routeHelpersSpecifier}; then inspect again.`;
+const grammarRecovery = `Use literal metadata, local const string literals, or ${appResourceUriHelperName}() references imported from ${routeHelpersSpecifier}; imported values and alias chains are not evaluated.`;
 const appReferenceRecovery = `Reference an App route of the same generated server as '<app>', '<server>/<app>', 'app:<server>/<app>', or a relative module path from the referencing module, and make sure that App route declares a static config.resourceUri; then inspect again.`;
 
 const routeConfigError = (
@@ -155,56 +123,16 @@ const finiteNumber = (value: number, node: ts.Node): Extraction =>
     ? { kind: 'value', value }
     : dynamic(`the non-finite number \`${String(value)}\``, node);
 
-/** Per-extraction state: the route module's `config` reference path, the shared resolver, and the App-reference sink. */
 interface ExtractionContext {
   readonly appReferences: RouteConfigAppReference[];
-  readonly resolver: ModuleScopeResolver;
-  /** The `config` binding in the route module: every identifier in the initializer resolves from here. */
-  readonly root: ReferencePath;
+  readonly sourceFile: ts.SourceFile;
+  readonly strings: ReadonlyMap<string, string>;
+  readonly imports: ReadonlyMap<string, { readonly importedName: string; readonly specifier: string }>;
 }
 
-/**
- * Resolves one identifier through the const string-literal reference form:
- * a top-level `const` in this module or an `export const` of a module reached
- * through relative imports inside the project, following alias hops
- * (`export const a = b`) any depth. The first hop keeps the wording the
- * grammar documents; a failure deeper in the chain prints the chain, so the
- * boundary is named where it lies.
- */
 const extractIdentifier = (node: ts.Identifier, context: ExtractionContext): Extraction => {
-  if (node.text === 'undefined') return dynamic(describeExpression(node), node);
-  const reference = `a reference to the identifier ${JSON.stringify(node.text)}`;
-  const resolved = context.resolver.resolve(context.root, node.text);
-  switch (resolved.kind) {
-    case 'resolved': {
-      const value = stringLiteralText(compilerExpression(resolved.initializer));
-      if (value !== undefined) return { kind: 'value', value };
-      return resolved.scope === context.root.scope
-        ? dynamic(`${reference}, whose top-level const initializer is not a string literal`, node)
-        : dynamic(
-          `${reference}, declared in ${resolved.scope.relativePath}, whose \`export const ${resolved.binding}\` initializer is not a string literal`,
-          node,
-        );
-    }
-    case 'unresolved': {
-      if (resolved.chain.length > 2) {
-        return dynamic(`${reference} resolving through ${resolved.chain.slice(1).join(' -> ')}, ${resolved.reason}`, node);
-      }
-      if (resolved.boundary === 'non-const') {
-        return dynamic(`${reference}, which is not a top-level \`const\` string literal`, node);
-      }
-      if (resolved.boundary === 'unknown') {
-        return dynamic(`${reference}, which is neither a top-level const string literal in this module nor a named import from a relative module`, node);
-      }
-      return dynamic(`${reference}, ${resolved.reason}`, node);
-    }
-    case 'cycle':
-      return dynamic(`${reference}, whose alias chain ${resolved.chain.slice(1).join(' -> ')} is a reference cycle`, node);
-    default: {
-      const unreachable: never = resolved;
-      throw new TypeError(`Unhandled reference resolution ${String(unreachable)}.`);
-    }
-  }
+  const value = context.strings.get(node.text);
+  return value === undefined ? dynamic(describeExpression(node), node) : { kind: 'value', value };
 };
 
 /** Recognizes `appResourceUri('<app>')` imported from the route helpers subpath. */
@@ -215,7 +143,7 @@ const extractAppReferenceCall = (
 ): Extraction => {
   const callee = unwrapExpression(node.expression);
   if (!ts.isIdentifier(callee)) return dynamic(describeExpression(node), node);
-  const binding = context.root.scope.imports.get(callee.text);
+  const binding = context.imports.get(callee.text);
   if (binding === undefined || binding.importedName !== appResourceUriHelperName) {
     if (callee.text === appResourceUriHelperName) {
       return dynamic(`a call to ${JSON.stringify(callee.text)} that is not imported from ${routeHelpersSpecifier}`, node);
@@ -239,7 +167,7 @@ const extractAppReferenceCall = (
   }
   context.appReferences.push({
     path,
-    position: positionOf(context.root.scope.sourceFile, node),
+    position: positionOf(context.sourceFile, node),
     reference: extracted.value,
   });
   // The reference text stands in until the graph compiler substitutes the
@@ -293,11 +221,21 @@ const extractExpression = (
     return { kind: 'value', value: values };
   }
   if (ts.isObjectLiteralExpression(node)) {
+    return extractProperties(node.properties, path, context);
+  }
+  return dynamic(describeExpression(node), node);
+};
+
+const extractProperties = (
+  properties: readonly ts.ObjectLiteralElementLike[],
+  path: readonly (number | string)[],
+  context: ExtractionContext,
+): Extraction => {
     // A null-prototype carrier keeps a literal `__proto__` key an ordinary
     // own property; assigning through a plain `{}` would invoke the legacy
     // prototype setter and silently drop the declared property.
     const value: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    for (const property of node.properties) {
+    for (const property of properties) {
       if (!ts.isPropertyAssignment(property)) return dynamic(describeExpression(property), property);
       const name = literalPropertyName(property.name);
       if (name === undefined) return dynamic(describeExpression(property.name), property.name);
@@ -306,8 +244,6 @@ const extractExpression = (
       value[name] = extracted.value;
     }
     return { kind: 'value', value };
-  }
-  return dynamic(describeExpression(node), node);
 };
 
 /** The named binding this pattern would introduce for `config`, if any. */
@@ -360,27 +296,42 @@ const findConfigExport = (sourceFile: ts.SourceFile): ConfigExportSite | undefin
  * one route module. The module is parsed with the TypeScript compiler and
  * never executed, so only the accepted grammar (see
  * {@link routeConfigGrammar}) produces a value; a module without a config
- * export extracts silently to {@link emptyRouteConfig}. Sibling modules a
- * const reference imports are parsed the same way, never executed.
+ * export extracts silently to {@link emptyRouteConfig}.
  */
 export const extractRouteConfig = (
   moduleText: string,
   relativePath: string,
   sourcePath: string,
-  options: RouteConfigExtractionOptions = {},
 ): ExtractedRouteConfig => {
-  const resolver = createModuleScopeResolver(options);
-  const scope = resolver.scopeOf(routeDefinitionSource(moduleText, relativePath), relativePath, sourcePath);
-  const sourceFile = compilerSourceFile(scope.sourceFile);
+  const sourceFile = parseModule(relativePath, moduleText) as ts.SourceFile;
+  const strings = new Map<string, string>();
+  const imports = new Map<string, { importedName: string; specifier: string }>();
+  for (const statement of sourceFile.statements) {
+    if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.Const) !== 0) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) continue;
+        const value = stringLiteralText(declaration.initializer);
+        if (value !== undefined) strings.set(declaration.name.text, value);
+      }
+    } else if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && !statement.importClause?.isTypeOnly) {
+      const names = statement.importClause?.namedBindings;
+      if (names !== undefined && ts.isNamedImports(names)) {
+        for (const name of names.elements) {
+          if (!name.isTypeOnly) imports.set(name.name.text, { importedName: (name.propertyName ?? name.name).text, specifier: statement.moduleSpecifier.text });
+        }
+      }
+    }
+  }
+  const definition = readRouteDefinition(sourceFile);
   const site = findConfigExport(sourceFile);
-  if (site === undefined) return emptyExtraction;
-  if (site.initializer === undefined) {
+  if (site === undefined && definition === undefined) return emptyExtraction;
+  if (site !== undefined && (site.initializer === undefined || definition !== undefined)) {
     return deepFreeze({
       appReferences: [],
       config: emptyRouteConfig,
       diagnostics: [routeConfigError(
         'AB4805',
-        `Route module ${relativePath} exports config through ${site.rejection!}; only a single top-level \`export const config = <expression>\` declaration is extracted.`,
+        `Route module ${relativePath} exports config through ${site.rejection ?? 'both a definition helper and a config export'}; only a single top-level \`export const config = <expression>\` declaration is extracted.`,
         declarationRecovery,
         sourcePath,
       )],
@@ -388,10 +339,13 @@ export const extractRouteConfig = (
   }
   const context: ExtractionContext = {
     appReferences: [],
-    resolver,
-    root: rootReferencePath(scope, 'config'),
+    sourceFile,
+    strings,
+    imports,
   };
-  const extracted = extractExpression(site.initializer, [], context);
+  const extracted = definition === undefined
+    ? extractExpression(site!.initializer!, [], context)
+    : extractProperties(definition.metadata as readonly ts.ObjectLiteralElementLike[], [], context);
   if (extracted.kind === 'dynamic') {
     return deepFreeze({
       appReferences: [],

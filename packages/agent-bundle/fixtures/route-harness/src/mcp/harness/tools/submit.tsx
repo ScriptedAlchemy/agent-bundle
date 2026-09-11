@@ -2,6 +2,49 @@ import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "argv": {
+        "description": "The command line to run.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "cwd": {
+        "type": "string",
+        "description": "Working directory of the command."
+      },
+      "laneKey": {
+        "type": "string",
+        "description": "Lane the work is queued under."
+      },
+      "regions": {
+        "description": "Regions the work may run in.",
+        "items": {
+          "enum": [
+            "eu",
+            "us"
+          ],
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "tags": {
+        "description": "Tags attached to the request.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "argv",
+      "cwd"
+    ],
+    "type": "object"
+  },
   annotations: { readOnlyHint: false },
   description: 'Submits one command line as lane work and echoes the accepted request.',
   title: 'Submit',

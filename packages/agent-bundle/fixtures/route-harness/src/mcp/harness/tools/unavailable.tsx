@@ -2,6 +2,11 @@ import { Agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
   description: 'Returns a typed unavailable result for projection checks.',
   title: 'Unavailable',
 };

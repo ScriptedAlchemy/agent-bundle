@@ -326,7 +326,7 @@ describe('conventional providers through the harness', () => {
   it('uses an explicit context.providers map verbatim instead of discovering providers', async () => {
     const [plain, rendered, tool] = await Promise.all([
       invokeCli(['tooling', 'inspect'], {
-        context: { providers: { libraryTooling: 'stubbed', requestView: null, processLifetime: { hits: 1, instanceId: 'test', pid: 1 } } },
+        context: { process: { hits: 1, instanceId: 'test', pid: 1 }, providers: { libraryTooling: 'stubbed', requestView: null } },
       }),
       renderRoute('script:tooling-summary', { context: { providers: { other: true, libraryTooling: null, requestView: null } } }),
       invokeMcpTool('tooling', { context: { providers: { libraryTooling: null, requestView: null } } }),
@@ -338,8 +338,8 @@ describe('conventional providers through the harness', () => {
       libraryTooling: 'stubbed',
       processLifetime: { hits: 1, instanceId: 'test', pid: 1 },
     });
-    expect(rendered.result).toEqual({ arguments: 0, keys: ['libraryTooling', 'other', 'requestView'], libraryTooling: null, requestView: null });
-    expect(tool.structuredContent).toEqual({ keys: ['libraryTooling', 'requestView'], libraryTooling: null, requestView: null });
+    expect(rendered.result).toEqual({ arguments: 0, keys: ['libraryTooling', 'processLifetime', 'requestView'], libraryTooling: null, requestView: null });
+    expect(tool.structuredContent).toEqual({ keys: ['libraryTooling', 'processLifetime', 'requestView'], libraryTooling: null, requestView: null, processLifetime: { hits: 1, instanceId: expect.any(String), pid: expect.any(Number) } });
   });
 
   it('fails a request closed when a provider factory throws, naming the provider like the generated scope', async () => {

@@ -2,18 +2,17 @@ export { projectEventPayload } from './payload.ts';
 export {
   createCanonicalEventProps,
   projectEventDocument,
-  projectEventPreflightResult,
+  projectEventHandlerResult,
   validateNativeEventEnvelope,
   type NativeEventEnvelopeValidation,
 } from './projection.ts';
 export {
-  eventHandlerPreflight,
-  executeEventPreflight,
-  validateEventPreflightResult,
-  type EventPreflight,
-  type EventPreflightContext,
-  type EventPreflightResult,
-} from './preflight.ts';
+  executeEventHandler,
+  validateEventHandlerResult,
+  type EventHandler,
+  type EventHandlerContext,
+  type EventHandlerResult,
+} from './handler.ts';
 export {
   createEventTracer,
   eventTraceObserver,
@@ -31,9 +30,9 @@ export {
   type EventTraceFailure,
   type EventTraceObserver,
   type EventTracePhase,
-  type EventTracePreflightOutcome,
-  type EventTracePreflightOutcomeEvent,
-  type EventTracePreflightStart,
+  type EventTraceHandlerOutcome,
+  type EventTraceHandlerOutcomeEvent,
+  type EventTraceHandlerStart,
   type EventTraceProvidersFinish,
   type EventTraceProvidersStart,
   type EventTracer,

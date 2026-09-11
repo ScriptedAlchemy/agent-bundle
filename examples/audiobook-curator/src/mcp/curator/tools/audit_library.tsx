@@ -12,6 +12,30 @@ import { discoveryOperations } from '../../../operations/discovery.js';
 const operation = discoveryOperations.libraryAudit;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "concurrency": {
+        "type": "number"
+      },
+      "report": {
+        "type": "string"
+      },
+      "sources": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "strict": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "sources"
+    ],
+    "type": "object"
+  },
   annotations: { readOnlyHint: false },
   description: 'Audit audiobook library metadata, duplicates, and multipart evidence without deletion advice.',
   exitCode: 'result',

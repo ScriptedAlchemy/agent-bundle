@@ -1,23 +1,17 @@
 import { extname } from 'node:path';
 
 import {
-  extractCliArgv,
   projectInputSchemaOptions,
   type CliOptionOverride,
   type CliOptionPolicy,
   type CliReservedKey,
-  type ExtractedCliArgv,
+  type ProjectedCliOptions,
 } from './cli-argv.ts';
 import {
   cliProjectionBindingError,
-  cliProjectionContractError,
   extractCliProjection,
-  inputKeysRecovery,
   jsonInputRecovery,
-  relaxationRecovery,
-  relaxationWithoutMapInputDetail,
   stringArray,
-  unknownInputKeyDetail,
   type CliProjectionModule,
 } from './cli-projection.ts';
 import { scanRouteModuleExports } from './contract.ts';
@@ -43,7 +37,7 @@ import {
  * argv grammar supplies the option surface. Plain (`.ts`) routes execute
  * directly; rendered (`.tsx`/`.jsx`) routes render through the dispatcher
  * (#102 stage 3) — both share one contract: `inputSchema`, `resultSchema`,
- * and one async default function.
+ * and one default function.
  */
 
 const renderedCliExtensions = new Set(['.jsx', '.tsx']);
@@ -103,7 +97,7 @@ const mcpSelectionError = (message: string, recovery?: string): Diagnostic => ({
 const contractError = (message: string, sourcePath: string): Diagnostic => ({
   code: 'AB4815',
   message,
-  recovery: 'Export const inputSchema and resultSchema, plus one async default function receiving { input, signal }.',
+  recovery: 'Export const inputSchema and resultSchema, plus one default function receiving { input, signal }.',
   severity: 'error',
   sourcePath,
 });
@@ -154,6 +148,9 @@ const routeCliConfig = (route: CompiledAgentRoute): RouteCliConfig => {
       `CLI route ${relativePath} config.exitCode must be "result" when declared; the default policy exits 0 on success.`,
       route.source,
     ));
+  }
+  if (route.config['input'] !== undefined && route.config['input'] !== 'json') {
+    diagnostics.push(contractError(`CLI route ${relativePath} config.input must be "json" when declared.`, route.source));
   }
   const declaredPositionals = route.config['positionals'];
   const positionals = declaredPositionals === undefined ? undefined : stringArray(declaredPositionals);
@@ -401,43 +398,12 @@ export const compileMcpCliCommands = (
   });
 };
 
-export interface CompileCliCommandsOptions {
-  /** Absolute project root; an `inputSchema` reference resolving outside it is rejected (AB4838). */
-  readonly projectRoot?: string;
-}
+const routeArgv = (route: CompiledAgentRoute, policy: CliOptionPolicy = {}): ProjectedCliOptions =>
+  route.inputSchema === undefined
+    ? { diagnostics: [{ code: 'AB4814', severity: 'error', sourcePath: route.source, message: `Route ${route.provenance.relativePath} needs config.inputJsonSchema to declare CLI flags.`, recovery: 'Declare inputJsonSchema as literal input metadata, or use JSON input.' }] }
+    : projectInputSchemaOptions(route.inputSchema, route.provenance.relativePath, route.source, policy);
 
-/**
- * The argv surface of one route: a projection of its canonical contract when
- * the graph bound one (`route.inputSchema` is the contract's normalized
- * `input`), so the command grammar and the route's declared input are one
- * object; otherwise the module is parsed again, which is what reports why no
- * contract exists (AB4814, AB4838, AB4839). `policy` is the projection
- * module's respelling of the keys and the label its diagnostics name (#596).
- */
-const routeArgv = (
-  route: CompiledAgentRoute,
-  moduleText: string,
-  options: CompileCliCommandsOptions,
-  policy: CliOptionPolicy = {},
-): ExtractedCliArgv => {
-  const relativePath = route.provenance.relativePath;
-  if (route.inputSchema !== undefined) {
-    return { ...projectInputSchemaOptions(route.inputSchema, relativePath, route.source, policy), found: true };
-  }
-  return extractCliArgv(moduleText, relativePath, route.source, {
-    policy,
-    ...(options.projectRoot === undefined ? {} : { projectRoot: options.projectRoot }),
-    source: route.source,
-  });
-};
-
-/**
- * One tool route of a generated server paired with the `<tool>.cli.{ts,tsx}`
- * module beside it (#596). `toolText` is the tool module's own source, read
- * by the graph; it is parsed again only when the tool has no static
- * contract, so the reason (AB4814/AB4838/AB4839) is reported under the
- * tool's label.
- */
+/** A generated tool paired with its explicit CLI projection module. */
 export interface CliProjectionPair {
   readonly module: CliProjectionModule;
   readonly moduleText: string;
@@ -446,7 +412,6 @@ export interface CliProjectionPair {
   /** Absolute path of the projection module. */
   readonly source: string;
   readonly tool: CompiledAgentRoute;
-  readonly toolText?: string;
 }
 
 /** The commands the projection modules compile, the tool routes behind them, and where each module lives. */
@@ -474,11 +439,10 @@ const confirmationKeyReservation: CliReservedKey = {
  * rules judge the final spellings and aliases. A pair whose module or
  * binding fails compiles no command; the diagnostics name the module. The
  * command runs the tool (`routeId`, `mcp`) with the projected grammar
- * (`projection`), never `--input`.
+ * (`projection`), using flags or JSON input.
  */
 export const compileProjectedCliCommands = (
   pairs: readonly CliProjectionPair[],
-  compileOptions: CompileCliCommandsOptions = {},
 ): CompiledProjectedCliCommandSurface => {
   const diagnostics: Diagnostic[] = [];
   const commands: CompiledCliCommand[] = [];
@@ -489,9 +453,7 @@ export const compileProjectedCliCommands = (
     const { module, relativePath, source, tool } = pair;
     const binding = (detail: string, recovery?: string): Diagnostic =>
       cliProjectionBindingError(relativePath, tool.id, detail, source, recovery);
-    const extracted = extractCliProjection(pair.moduleText, relativePath, source, tool.inputSchema, tool, {
-      ...(compileOptions.projectRoot === undefined ? {} : { projectRoot: compileOptions.projectRoot }),
-    });
+    const extracted = extractCliProjection(pair.moduleText, relativePath, source, tool.inputSchema, tool);
     diagnostics.push(...extracted.diagnostics);
     if (extracted.diagnostics.length > 0) continue;
     const { config } = extracted;
@@ -536,7 +498,11 @@ export const compileProjectedCliCommands = (
     // cannot express is exactly what the mode is for, and the tool's own
     // inputSchema validates the object at run time, as under `--input` of
     // the bulk projection.
-    if (config.input === 'json') {
+    if (config.input === 'json' || tool.inputSchema === undefined) {
+      if (config.flags !== undefined || config.positionals !== undefined || extracted.mapInput) {
+        diagnostics.push(binding('flag mapping requires config.inputJsonSchema on the tool', jsonInputRecovery));
+        continue;
+      }
       routes.push(tool);
       projectionSources[tool.id] = source;
       commands.push({
@@ -549,10 +515,9 @@ export const compileProjectedCliCommands = (
 
     // The tool text is absent only when the graph's read raced a deletion;
     // the next source snapshot settles it, as for a CLI route.
-    if (tool.inputSchema === undefined && pair.toolText === undefined) continue;
     const overrides: Record<string, CliOptionOverride> = {};
     for (const [key, flag] of Object.entries(config.flags ?? {})) overrides[key] = flag;
-    const argv = routeArgv(tool, pair.toolText ?? '', compileOptions, {
+    const argv = routeArgv(tool, {
       label: `Tool route ${tool.provenance.relativePath} (CLI projection ${relativePath})`,
       overrideError: (detail, recovery) => binding(detail, recovery),
       overrides,
@@ -560,38 +525,12 @@ export const compileProjectedCliCommands = (
     });
     // A tool without an extractable inputSchema is judged by its server's
     // contract diagnostics; the projection has nothing to bind until then.
-    if (!argv.found) continue;
     // A grammar the flag binding cannot express has a second way out here
     // that a CLI route lacks: JSON mode.
     diagnostics.push(...argv.diagnostics.map((diagnostic) =>
       diagnostic.code === 'AB4814' ? { ...diagnostic, recovery: jsonInputRecovery } : diagnostic));
     if (argv.options === undefined) continue;
     let options = argv.options;
-
-    // Without a canonical contract the binding checks ran against nothing
-    // in extractCliProjection; the parsed schema is the contract here.
-    if (tool.inputSchema === undefined) {
-      const keys = new Set(options.map((option) => option.key));
-      const keyRecovery = inputKeysRecovery([...keys]);
-      let bound = true;
-      for (const [key, flag] of Object.entries(config.flags ?? {})) {
-        if (!keys.has(key)) {
-          diagnostics.push(binding(unknownInputKeyDetail('flags', key), keyRecovery));
-          bound = false;
-        }
-        if (!extracted.mapInput && argv.relaxed?.includes(key) === true) {
-          diagnostics.push(cliProjectionContractError(
-            relativePath,
-            tool.id,
-            relaxationWithoutMapInputDetail(key, flag),
-            source,
-            relaxationRecovery(key),
-          ));
-          bound = false;
-        }
-      }
-      if (!bound) continue;
-    }
 
     if (config.positionals !== undefined) {
       const positioned = applyPositionals(options, config.positionals, (detail) => binding(detail, positionalsRecovery));
@@ -635,7 +574,6 @@ export const compileCliCommands = async (
   routes: readonly CompiledAgentRoute[],
   readModuleText: (route: CompiledAgentRoute) => Promise<string | undefined>,
   projected: CompiledMcpCliCommandSurface = emptyMcpSurface,
-  compileOptions: CompileCliCommandsOptions = {},
   projections: CompiledProjectedCliCommandSurface = emptyProjectedSurface,
 ): Promise<CompiledCliCommandSurface> => {
   const diagnostics: Diagnostic[] = [...projected.diagnostics, ...projections.diagnostics];
@@ -649,19 +587,20 @@ export const compileCliCommands = async (
     const config = routeCliConfig(route);
     diagnostics.push(...config.diagnostics);
 
-    const exports = scanRouteModuleExports(moduleText, relativePath, { source: route.source });
+    const exports = scanRouteModuleExports(moduleText, relativePath);
     // A default re-exported from a module the scan cannot read is judged at
     // run time, like the MCP route contract.
-    const asyncDefault = exports.asyncDefault || exports.defaultReExport?.resolution === 'unresolved';
-    const argv = routeArgv(route, moduleText, compileOptions);
+    const hasDefault = exports.named.has('default');
+    const jsonInput = route.config['input'] === 'json' || route.inputSchema === undefined;
+    const argv: ProjectedCliOptions = jsonInput ? { diagnostics: [], options: [toolOption] } : routeArgv(route);
     const missing = [
-      ...(argv.found ? [] : ['inputSchema']),
+      ...(exports.named.has('inputSchema') ? [] : ['inputSchema']),
       ...(exports.named.has('resultSchema') ? [] : ['resultSchema']),
     ];
-    if (missing.length > 0 || !asyncDefault) {
+    if (missing.length > 0 || !hasDefault) {
       const details = [
         ...(missing.length === 0 ? [] : [`missing named ${missing.join(' and ')}`]),
-        ...(asyncDefault ? [] : ['default export is not an async function']),
+        ...(hasDefault ? [] : ['missing default export']),
       ];
       diagnostics.push(contractError(
         `CLI route ${relativePath} does not satisfy the routed command contract: ${details.join('; ')}.`,
@@ -685,6 +624,7 @@ export const compileCliCommands = async (
       aliases: config.aliases,
       ...(config.description === undefined ? {} : { description: config.description }),
       exitCode: config.exitCode,
+      ...(jsonInput ? { input: 'json' as const } : {}),
       options,
       path: cliCommandPath(route),
       ...(config.render === undefined ? {} : { render: config.render }),

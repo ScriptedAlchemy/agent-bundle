@@ -1,23 +1,22 @@
-import { canonicalAgentEvents, type CanonicalAgentEvent } from './events.ts';
+import { canonicalAgentEvents, type DenyingEvent, type CanonicalAgentEvent } from './events.ts';
 import type { AgentRequestContext } from '@agent-bundle/runtime';
 import type { AgentEventRouteConfig, AgentEventRouteProps } from './public.ts';
 
-type DenyingEvent = 'agent/idle' | 'agent/start' | 'agent/stop' | 'compact/before' | 'config/change'
-  | 'model-switch/before' | 'permission/request' | 'prompt/submit' | 'stop' | 'task/create' | 'tool/before';
+import type { EventHandlerResult } from '../events/handler.ts';
+import type { JsonValue } from '../core/strict-json.ts';
 
 export type EventResult<Event extends CanonicalAgentEvent = CanonicalAgentEvent> =
+  | Extract<EventHandlerResult, { outcome: 'render' }>
   | void
   | { readonly outcome: 'continue' }
   | (Event extends DenyingEvent ? { readonly outcome: 'deny'; readonly reason: string } : never);
 
-export type EventContext<Event extends CanonicalAgentEvent = CanonicalAgentEvent> = AgentEventRouteProps<Event> & Pick<AgentRequestContext, 'provider'>;
+export type EventContext<Event extends CanonicalAgentEvent = CanonicalAgentEvent> = AgentEventRouteProps<Event> & Pick<AgentRequestContext, 'provider' | 'process'> & {
+  readonly render: (module: string, data: JsonValue) => Extract<EventHandlerResult, { outcome: 'render' }>;
+};
 
 export type EventHandler<Event extends CanonicalAgentEvent = CanonicalAgentEvent> =
   (context: EventContext<Event>) => EventResult<Event> | Promise<EventResult<Event>>;
-
-export type EventBefore<Event extends CanonicalAgentEvent = CanonicalAgentEvent> =
-  (context: EventContext<Event>) => EventResult<Event> | { readonly outcome: 'render' }
-    | Promise<EventResult<Event> | { readonly outcome: 'render' }>;
 
 type Definition<Event extends CanonicalAgentEvent> =
   (config: AgentEventRouteConfig, handler: EventHandler<Event>) => EventHandler<Event>;

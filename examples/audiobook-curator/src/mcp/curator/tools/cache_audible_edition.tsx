@@ -10,6 +10,43 @@ import { audibleOperations } from '../../../operations/audible.js';
 const operation = audibleOperations.audibleCache;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "asin": {
+        "type": "string"
+      },
+      "attempts": {
+        "type": "number"
+      },
+      "cacheDirectory": {
+        "type": "string"
+      },
+      "receipt": {
+        "type": "string"
+      },
+      "region": {
+        "enum": [
+          "au",
+          "ca",
+          "de",
+          "es",
+          "fr",
+          "in",
+          "it",
+          "jp",
+          "uk",
+          "us"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "asin",
+      "cacheDirectory"
+    ],
+    "type": "object"
+  },
   annotations: { openWorldHint: true, readOnlyHint: false },
   description: 'Cache a reviewed Audible edition and retained source evidence.',
 };

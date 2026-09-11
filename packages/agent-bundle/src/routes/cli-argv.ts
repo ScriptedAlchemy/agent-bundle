@@ -1,14 +1,5 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import {
-  parseInputSchema,
-  type InputSchemaExtractionOptions,
-  type InputSchemaResolutionFailure,
-  type ParsedInputSchemaEntry,
-  type ResolvedSchemaOrigin,
-  type ScalarBase,
-  type StaticInputSchemaProperty,
-} from './input-schema.ts';
 import type { CliProjectionFlagDefault } from './public.ts';
 import type {
   CompiledCliOption,
@@ -17,15 +8,22 @@ import type {
   RouteInputSchema,
 } from './types.ts';
 
-/**
- * The bounded zod-to-argv grammar (#102 stage 2). A routed CLI command's
- * `inputSchema` is projected onto argv statically — the module is parsed,
- * never executed. Parsing and property-chain interpretation are shared with
- * the route JSON-Schema projection; argv-specific naming and flag policy stay
- * here.
- */
-export const cliArgvGrammar =
-  'z.object of z.string/z.number/z.boolean/z.enum/z.array chains with optional/default/describe and bounded validation-only refinements';
+/** The explicit JSON Schema metadata representable as CLI flags. */
+export const cliArgvGrammar = 'object JSON Schema with string, number, boolean, enum, or scalar-array properties';
+
+interface ScalarBase {
+  readonly choices?: readonly string[];
+  readonly kind: 'boolean' | 'enum' | 'number' | 'string';
+}
+interface StaticInputSchemaProperty {
+  readonly base: ScalarBase;
+  readonly defaultValue?: unknown;
+  readonly description?: string;
+  readonly hasDefault: boolean;
+  readonly key: string;
+  readonly optional: boolean;
+  readonly repeated: boolean;
+}
 
 /** Option names the generated CLI shell owns; schema keys must not project onto them. */
 export const reservedCliOptionNames: ReadonlySet<string> = Object.freeze(new Set([
@@ -34,19 +32,6 @@ export const reservedCliOptionNames: ReadonlySet<string> = Object.freeze(new Set
   'ndjson',
   'version',
 ]));
-
-/**
- * The statically extracted argv projection of one CLI route module's
- * `inputSchema` export. `found` is false when the module has no extractable
- * `export const inputSchema` declaration (the route-contract diagnostic owns
- * that state); `options` is absent whenever a diagnostic fired; `origin` is
- * where the schema is declared whenever that is known; `relaxed` is the
- * projection's, as `ProjectedCliOptions` documents.
- */
-export interface ExtractedCliArgv extends ProjectedCliOptions {
-  readonly found: boolean;
-  readonly origin?: ResolvedSchemaOrigin;
-}
 
 /**
  * How a CLI projection module (`<tool>.cli.{ts,tsx}`, #596) respells one
@@ -77,7 +62,7 @@ export interface CliReservedKey {
 
 /**
  * What one caller adds to the default argv policy. `label` names the schema's
- * owner in AB4814/AB4838/AB4839 messages (`CLI route <path>` when absent); a
+ * owner in AB4814 messages (`CLI route <path>` when absent); a
  * projected tool relabels them so the tool module, not a CLI route, is named.
  * `overrides` are the projection's per-key `flags`; a failure they cause —
  * a spelling that is not kebab-case, reserved, or claimed twice, a default
@@ -95,7 +80,7 @@ export interface CliOptionPolicy {
   readonly reservedKeys?: Readonly<Record<string, CliReservedKey>>;
 }
 
-const grammarRecovery = `Restrict the inputSchema initializer to the bounded argv grammar (${cliArgvGrammar}), then inspect again.`;
+const grammarRecovery = `Restrict config.inputJsonSchema to the bounded argv grammar (${cliArgvGrammar}), then inspect again.`;
 
 const argvError = (message: string, sourcePath: string): Diagnostic => ({
   code: 'AB4814',
@@ -105,38 +90,7 @@ const argvError = (message: string, sourcePath: string): Diagnostic => ({
   sourcePath,
 });
 
-const resolutionRecovery = 'Declare the schema inline, or reference a top-level `export const` of a module reached through relative imports inside the project (alias chains such as `export const inputSchema = shared` are followed); then inspect again.';
-
 const defaultLabel = (relativePath: string): string => `CLI route ${relativePath}`;
-
-/**
- * The parser (input-schema.ts) words every grammar issue for the CLI route
- * it was written for, `CLI route <relativePath> ...`; a caller projecting
- * another owner's schema (a tool route with a CLI projection) reads the same
- * issue under its own label.
- */
-const relabelIssue = (issue: string, relativePath: string, label: string): string => {
-  const prefix = defaultLabel(relativePath);
-  return label !== prefix && issue.startsWith(prefix) ? `${label}${issue.slice(prefix.length)}` : issue;
-};
-
-/** AB4838 for a reference the static resolver cannot follow; AB4839 for a reference cycle. */
-const resolutionError = (
-  failure: InputSchemaResolutionFailure,
-  label: string,
-  sourcePath: string,
-): Diagnostic => {
-  const chain = failure.chain.join(' -> ');
-  return {
-    code: failure.kind === 'cycle' ? 'AB4839' : 'AB4838',
-    message: failure.kind === 'cycle'
-      ? `${label} inputSchema: ${chain} is a reference cycle.`
-      : `${label} inputSchema: ${chain} ${failure.reason}.`,
-    recovery: resolutionRecovery,
-    severity: 'error',
-    sourcePath,
-  };
-};
 
 const optionNameOf = (key: string): string => key
   .replace(/([a-z0-9])([A-Z])/gu, '$1-$2')
@@ -313,7 +267,7 @@ interface SpellingClaim {
 }
 
 const projectOptions = (
-  entries: readonly ParsedInputSchemaEntry[],
+  entries: readonly { readonly property: StaticInputSchemaProperty }[],
   policy: ResolvedCliOptionPolicy,
 ): ProjectedCliOptions => {
   const defaults: Record<string, CliProjectionFlagDefault> = {};
@@ -322,10 +276,6 @@ const projectOptions = (
   const relaxed: string[] = [];
   const seenSpellings = new Map<string, SpellingClaim>();
   for (const entry of entries) {
-    if ('issue' in entry) {
-      diagnostics.push(argvError(entry.issue, policy.sourcePath));
-      continue;
-    }
     const projected = cliOptionFor(entry.property, policy);
     if ('diagnostic' in projected) {
       diagnostics.push(projected.diagnostic);
@@ -412,43 +362,3 @@ export const projectInputSchemaOptions = (
   })),
   resolvePolicy(policy, relativePath, sourcePath),
 ));
-
-/** Where the module's `inputSchema` references resolve, plus the option policy its owner runs under. */
-export interface ExtractCliArgvOptions extends InputSchemaExtractionOptions {
-  readonly policy?: CliOptionPolicy;
-}
-
-/**
- * Statically projects one CLI route module's `export const inputSchema`
- * declaration onto the argv contract. The module is parsed with the
- * TypeScript compiler and never executed; validation-only refinements pass
- * through uninterpreted because the real zod schema validates at run time. A
- * schema reached through a reference the resolver cannot follow is AB4838
- * (AB4839 for a cycle); grammar issues stay AB4814. A tool route with a CLI
- * projection is parsed the same way, under its own `policy.label`.
- */
-export const extractCliArgv = (
-  moduleText: string,
-  relativePath: string,
-  sourcePath: string,
-  options: ExtractCliArgvOptions = {},
-): ExtractedCliArgv => {
-  const { policy = {}, ...extraction } = options;
-  const resolved = resolvePolicy(policy, relativePath, sourcePath);
-  const parsed = parseInputSchema(moduleText, relativePath, extraction);
-  if (!parsed.found) return deepFreeze({ diagnostics: [], found: false });
-  const origin = parsed.origin === undefined ? {} : { origin: parsed.origin };
-  if (parsed.entries === undefined) {
-    return deepFreeze({
-      diagnostics: [
-        ...parsed.issues.map((issue) => argvError(relabelIssue(issue, relativePath, resolved.label), sourcePath)),
-        ...(parsed.resolution === undefined ? [] : [resolutionError(parsed.resolution, resolved.label, sourcePath)]),
-      ],
-      found: true,
-      ...origin,
-    });
-  }
-  const entries = parsed.entries.map((entry) =>
-    'issue' in entry ? { issue: relabelIssue(entry.issue, relativePath, resolved.label) } : entry);
-  return deepFreeze({ ...projectOptions(entries, resolved), found: true, ...origin });
-};

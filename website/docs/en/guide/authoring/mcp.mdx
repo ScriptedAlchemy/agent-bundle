@@ -11,7 +11,7 @@ lifecycle.
 
 ## Inferred tool definitions
 
-Use `defineTool` from `agent-bundle/routes` to define metadata, schemas, and one handler together.
+`defineTool` is the canonical tool authoring API. Use it from `agent-bundle/routes` to define metadata, schemas, and one handler together.
 The file determines the route identity. Callers supply schema input; the handler receives parsed
 schema output, including defaults and transformations. The existing renderer validates
 `Agent.Result` values against `resultSchema` across MCP, CLI, and browser projections.
@@ -37,6 +37,9 @@ export default defineTool({
 Metadata remains statically extractable: import the helper directly, pass an object literal,
 and keep schemas at their explicit schema properties. Inspection never imports the handler.
 Ordinary imported handler functions are supported; the compiler does not inspect their bodies.
+The default export must be the direct helper call with an inline object literal. Aliasing a
+constructed definition, passing computed options, or wrapping the call is rejected with
+`AB4810`; the compiler does not evaluate composition. Named import aliases are supported.
 
 ## Generated route servers
 
@@ -53,8 +56,11 @@ src/mcp/curator/
 The path supplies identity: `src/mcp/curator/tools/status.tsx` is the `status` tool of the
 `curator` server. No declaration is needed for the server to exist.
 
-Each executable module exports static `config`, its schemas, and one async default Server
-Component:
+### Compatibility: split tool exports
+
+Existing tools can still export `config`, schemas, and an default Server Component
+separately. This is a compatibility format; use `defineTool` for new tools. Resources, prompts,
+and apps retain their existing contracts. A legacy tool looks like this:
 
 ```tsx
 // src/mcp/curator/tools/status.tsx
@@ -113,13 +119,9 @@ same way under both, `$defs` is reached through JSON-pointer `$ref`s under eithe
 2020-12-only keyword such as `unevaluatedProperties` or `dependentRequired` is ignored by a lax
 draft-07 validator rather than misapplied.
 
-Neither schema has to be written in the route module: `inputSchema` and `resultSchema` may both be
-bound to schemas imported from a relative module inside the project
-(`export const inputSchema = statusInputSchema`), and every route that binds the same declared
-`inputSchema` — a tool here, a `src/cli/**` command elsewhere — shares one
-[route contract](./index.mdx#route-contracts-application-ir) in the compiled graph; the
-resolution rules and the `AB4838`/`AB4839` diagnostics are under
-[Share one schema between MCP and CLI](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
+Runtime schemas may be imported or built by factories. Optional literal `config.inputJsonSchema`
+provides execution-free forms and CLI flag metadata; `tools/list` and runtime validation use the
+actual schema. See [input metadata](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
 A generated tool can also expose an idiomatic CLI command without a second route: a colocated
 `<tool>.cli.ts` projection module is a CLI surface projection of the same operation
 (`tool:<server>/<tool>`), never a route. A route observes `kind: 'cli'` whenever it runs from
@@ -144,10 +146,9 @@ export const config = {
 export { default, inputSchema, resultSchema } from '../../curator/tools/status.tsx';
 ```
 
-The route contract check (`AB4810`) follows relative re-exports (`export { default } from`,
-`export { Page as default } from`) and judges the default export in the module that declares it,
-so a sync component behind the re-export is still reported here. A default re-exported from a
-package the check cannot read is accepted and verified when the route loads.
+The route contract check (`AB4810`) checks that the required exports are declared.
+The bundler resolves re-exports, and the runtime checks the loaded component is callable.
+Both sync and async components are accepted.
 
 `ToolConfig` and `ToolRouteProps` are public types:
 
@@ -282,7 +283,7 @@ export default async function agentTopology({ lineage, state }: AgentProviderCon
 Providers load and resolve on first access. Concurrent readers share the request's promise,
 including a failure; unused modules are not evaluated. Factories run outside the request's async
 context (`agent()` throws `outside-invocation` there) and receive the read-only view above. The
-source harness uses the same semantics; explicit `context.providers` values override discovery.
+source harness uses the same semantics; explicit test initialization `providers` values override discovery. The public request context exposes `provider(key)`.
 
 ## Rich Markdown blocks as JSX
 
@@ -876,8 +877,7 @@ file) — `input` inferred from each route's `inputSchema` **input** type (what 
 `.default()`ed field is optional, a `.transform()`ed field is spelled as the wire carries it; the
 route component receives the parsed output), `result` from its `resultSchema` output. Once
 that file is in the App's TypeScript program (the templates list `".agent-bundle/routes.d.ts"`
-in `tsconfig.json` `include`; `AB4834` names each program that imports `agent-bundle/app` and
-leaves it out), a literal route id is checked against the compiled tools, `input` is typed from
+in `tsconfig.json` `include`; existing projects must include it and run their own TypeScript check), a literal route id is checked against the compiled tools, `input` is typed from
 that route, and the result is that route's structured object. `onToolInput` delivers the host's
 opening payload with the same input type: it is the message before the server parses it, so a
 default the schema would fill is not promised to be present. The declaration imports the route modules type-only, so no route

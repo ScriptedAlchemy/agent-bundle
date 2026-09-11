@@ -46,6 +46,7 @@ import {
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
   stdioPreludeVirtualModule,
+  eventHandlerStateSource,
   providerRegistrySource,
   providersFieldSource,
 } from './entry-shell.ts';
@@ -95,7 +96,7 @@ interface PlannedScriptEntry extends CompiledEntry {
 
 export interface CompiledHookEntry extends CompiledEntry {
   readonly event: TargetHookEntry['event'];
-  /** Heavy sibling process started only after a preflight gate returns execute. */
+  /** Heavy sibling process started only after a handler gate returns render. */
   readonly executorOutput?: string;
   readonly executorSourceInputs?: readonly string[];
   readonly id: string;
@@ -566,16 +567,16 @@ export const planMcpEntriesSurface = async (
 };
 
 const hookEntrySourceInputs = (entry: TargetHookEntry): readonly string[] => {
-  const preflight = entry.hook.eventRoute?.preflight;
+  const handler = entry.hook.eventRoute?.handler;
   return Object.freeze([
     entry.hook.provenance.sourcePath,
     entry.hook.source,
-    ...(preflight === undefined ? [] : [preflight.source]),
+    ...(handler === undefined ? [] : [handler.source, ...(handler.view === undefined ? [] : [handler.view])]),
   ]);
 };
 
 const requiresStandaloneHookWorker = (entry: TargetHookEntry): boolean =>
-  entry.hook.eventRoute?.preflight?.mode !== 'handler'
+  (entry.hook.eventRoute?.handler === undefined || entry.hook.eventRoute.handler.view !== undefined)
   && (entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone');
 
 const hookWorkerPath = (entry: TargetHookEntry): string =>
@@ -705,15 +706,14 @@ export const planHooksSurface = (
           source: entry.source,
           sourceInputs: entry.sourceInputs,
           virtualSource: hook.virtualSource
-            .replace(eventProviderRegistryToken, providerRegistrySource(options.providers ?? []).join('\n'))
-            .replace(eventProviderFieldsToken, providersFieldSource(options.providers ?? [], { indent: '    ', invocation: '{ kind: "event", props: { event: canonicalEvent, payload: native } }' }).join('\n'))
+            .replace(eventProviderRegistryToken, [...eventHandlerStateSource(options.state, options), ...providerRegistrySource(options.providers ?? [])].join('\n'))
+            .replace(eventProviderFieldsToken, providersFieldSource(options.providers ?? [], { indent: '    ', invocation: '{ kind: "event", props: { event: canonicalEvent, payload: native } }', observe: 'true', observer: 'observeProvider' }).join('\n'))
             .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
             .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
           // The layer module the wrapper imports first; a shared-runtime
           // event-route wrapper runs no plugin code and imports none.
           virtualModules: [
             ...(hookWrapperAppliesOperatorEnv(hook) ? [operatorEnvLayerVirtualModule()] : []),
-            ...(hook.hook.eventRoute?.preflight?.virtualSource === undefined ? [] : [{ name: 'agent-bundle/event-gate', source: hook.hook.eventRoute.preflight.virtualSource }]),
           ],
         };
         if (hook.executeVirtualSource === undefined) return [wrapperEntry];

@@ -3,6 +3,11 @@ import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
   description: 'Renders the request providers a rendered command observes.',
 } satisfies CliRouteConfig;
 
@@ -17,7 +22,7 @@ export const resultSchema = z.object({
 export default async function ToolingReport(_props: CliRouteProps<typeof inputSchema>) {
   const context = await agent();
   const providers = {
-    ...context.providers,
+    processLifetime: context.process,
     libraryTooling: await context.provider('libraryTooling'),
     requestView: await context.provider('requestView'),
   };

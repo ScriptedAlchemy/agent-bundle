@@ -143,3 +143,7 @@ export const exists = async (path: string): Promise<boolean> => {
 /** Absolute paths pass through; relative paths must resolve inside root. */
 export const resolveContained = (root: string, path: string): string =>
   isAbsolute(path) ? path : assertInside(root, resolve(root, path));
+
+/** A module path relative to its importer. */
+export const isRelativeSpecifier = (specifier: string): boolean =>
+  specifier.startsWith('./') || specifier.startsWith('../');

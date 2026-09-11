@@ -11,8 +11,7 @@ const inspection = {
       event: 'tool/after',
       hooks: [],
       id: 'event:tool/after',
-      preflight: 'src/events/tool/after.preflight.ts',
-      providers: ['library'],
+      handler: 'src/events/tool/after.handler.ts',
     }],
     hooks: [],
     hosts: [{
@@ -73,8 +72,7 @@ it('reads one epoch inspection over the same foreground session', async () => {
   await expect(client.inspect('epoch-1')).resolves.toMatchObject({
     application: {
       events: [{
-        preflight: 'src/events/tool/after.preflight.ts',
-        providers: ['library'],
+        handler: 'src/events/tool/after.handler.ts',
       }],
     },
     epochId: 'epoch-1',

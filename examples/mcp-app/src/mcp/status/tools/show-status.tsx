@@ -7,6 +7,23 @@ import { z } from 'zod';
 import { serviceSchema, serviceStatus, serviceStatusSchema } from '../../../service-status.ts';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "service": {
+        "enum": [
+          "compiler",
+          "payments-api"
+        ],
+        "type": "string",
+        "description": "The example service to inspect."
+      }
+    },
+    "required": [
+      "service"
+    ],
+    "type": "object"
+  },
   _meta: { ui: { resourceUri: appResourceUri('status') } },
   annotations: { readOnlyHint: true },
   description: 'Show the health of one example service.',

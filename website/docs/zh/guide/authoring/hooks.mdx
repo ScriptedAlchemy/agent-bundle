@@ -11,7 +11,7 @@ description: '声明 agent-bundle 生命周期钩子：规范事件、工具选�
 ## 事件路由
 
 在 `src/events/` 下按规范事件路径创建文件：`.ts` 处理器返回轻量事件结果，`.tsx` 处理器渲染 JSX。
-`.tsx` 文件也可以导出 `before()`，在加载渲染处理器之前执行轻量门控。两种形式使用相同的事件路径、
+`.ts` 处理器也可以用 `ctx.render('./name.view.js', data)` 请求独立的 `.view.tsx` 同级模块。两种形式使用相同的事件路径、
 宿主适配器与结果校验。渲染形式可以声明静态配置：
 
 ```tsx
@@ -73,37 +73,44 @@ export default events.tool.before({}, async ({ canonical, provider }) => {
 辅助函数推断该事件的载荷与允许的结果，事件名称必须与文件路径一致。也可使用普通默认函数，并用
 `EventHandler<'tool/before'>` 标注类型。
 
-需要先判断再渲染时，在 `.tsx` 模块中导出 `before()`：
+需要先判断再渲染时，将 JSX 放入独立的同级模块：
+
+```ts
+// src/events/tool/before.ts
+import { events } from 'agent-bundle/routes';
+
+export default events.tool.before({}, async (ctx) => {
+  if (ctx.canonical.payload.toolName?.value !== 'Write') return;
+  return ctx.render('./before.view.js', { message: 'A write is about to run.' });
+});
+```
 
 ```tsx
-// src/events/tool/before.tsx
+// src/events/tool/before.view.tsx
 import { Agent } from '@agent-bundle/runtime';
-import type { EventBefore } from 'agent-bundle/routes';
+import type { AgentEventRouteProps } from 'agent-bundle';
 
-export async function before({ canonical }: Parameters<EventBefore<'tool/before'>>[0]) {
-  return canonical.payload.toolName?.value === 'Write'
-    ? { outcome: 'render' as const }
-    : { outcome: 'continue' as const };
-}
-
-export default async function BeforeWrite() {
-  return <Agent.Result><Agent.Context>A write is about to run.</Agent.Context></Agent.Result>;
+export default async function BeforeWrite(
+  { renderInput }: AgentEventRouteProps<'tool/before', { message: string }>,
+) {
+  return <Agent.Result><Agent.Context>{renderInput?.message}</Agent.Context></Agent.Result>;
 }
 ```
 
-编译器单独打包该函数及其引用的导入，轻量路径不会执行渲染模块的顶层初始化。将局部值放进
-`before()`，或从独立模块导入依赖；捕获模块级运行时变量会触发 `AB4840`。导入依赖仍是该判断
-路径的一部分。只有 `{ outcome: 'render' }` 会启动渲染；拒绝结果需要非空原因，且事件族的宿主
-投影必须支持拒绝。其他渲染式决策继续通过 JSX 返回。
+处理器和视图是两个独立的编译入口。只有处理器返回 `ctx.render()` 时才加载视图；处理器中的
+普通导入、局部常量和辅助函数无需特殊限制。模块参数必须指向同级的 `.view.js` 文件。
+数据必须是严格 JSON，视图通过 `renderInput` 接收；其他路径或非 JSON 值会导致执行失败。
+事件配置写在 `.ts` 处理器中，`.view.tsx` 只是配套视图，不会注册第二个事件。
+拒绝结果必须有非空原因，且事件族必须支持拒绝。
 
 ### 执行跟踪事件
 
 导出的 `EventTraceEvent` 可辨识联合为开发工具提供稳定且不含载荷的事件内核词汇：
-`preflight.start`、`preflight.outcome`、`execute.start`、`providers.start` /
+`handler.start`、`handler.outcome`、`execute.start`、`providers.start` /
 `providers.finish`、`render.start` / `render.finish`，以及终止性的 `failure`。每个冻结事件
 都携带同一份 `EventTraceExecution` 身份、单调时间戳和序号，并且只包含该阶段的元数据。
 编译后的钩子包装器发出门控与执行边界，渲染处理器发出渲染边界；只有处理器请求 provider 时才会记录
-对应观测。内部跟踪词汇保留 `preflight` 阶段名称。失败使用有长度上限且不含堆栈的
+对应观测。处理器结果为 `continue`、`deny` 或 `render`。失败使用有长度上限且不含堆栈的
 `EventTraceErrorSummary`。`createEventTracer` 会发送到显式 observer，没有时则发送到每次发出时当前的进程级 observer（尚未安装时为空操作）；observer 抛错也不会改变执行。
 开发工具通过 `installEventTraceObserver` 安装进程级 sink；返回的 disposer 会恢复之前的 sink。
 相关类型与辅助函数从 `agent-bundle` 和 `agent-bundle/api` 导出。
@@ -112,17 +119,19 @@ export default async function BeforeWrite() {
 
 ### 迁移已有事件
 
-将独立的 `*.preflight.ts` 模块与 `preflight` 重导出替换为 `.tsx` 事件文件中导出的
-`before()` 函数。返回 `{ outcome: 'render' }` 以渲染 JSX；`continue` 与 `deny` 保持原有事件含义。
-只返回决定的处理器可以改为 `.ts` 事件文件的默认导出。删除 `config.providers`，改用
-`context.provider(key)` 请求所需值。原生配置钩子保留为宿主特定集成的高级兼容接口。
+将原预检函数改为 `.ts` 事件文件的默认导出，将 JSX 移至同级 `.view.tsx`，并用
+`ctx.render('./name.view.js', data)` 替换 `execute` 结果。删除 `preflight` 重导出。
+内联 `before()` 和旧 `preflight` 导出现在都会触发 `AB4840`。`continue` 和 `deny` 含义不变。
+删除 `config.providers`，改用 `context.provider(key)`。原生配置钩子保留为高级兼容接口。
 
 ### 请求级 provider
 
 普通事件中使用 `await context.provider('writePolicy')`，JSX 中使用
 `await (await agent()).provider('writePolicy')`。模块只在请求该值时加载；同一请求内的并发读取共享
 一个 Promise，包括失败结果。生成的类型推断键名和值，不再需要声明 `config.providers`。
-取消信号和请求上下文过期检查同样适用于 provider 访问。
+取消信号和请求上下文过期检查同样适用于 provider 访问。`context.providers` 已移除；
+框架进程身份改由 `context.process` 提供。`runAgentRequest({ providers })` 和测试输入仍可预置值，
+处理器统一通过 `provider(key)` 读取。
 
 ### 规范载荷
 

@@ -109,20 +109,17 @@ The frozen result is a `CompiledRouteGraph` (`routes/types.ts`):
   `remote` / `conflict`), each holding `CompiledAgentRoute` rows of kind
   `tool`, `resource`, `prompt`, or `app`.
 - `cli?` — `CompiledCliSurface` (`generated` / `conventional` / `conflict`)
-  with `CompiledCliCommand` rows whose argv grammar comes from a bounded
-  `inputSchema`.
+  with `CompiledCliCommand` rows whose argv grammar comes from literal
+  `config.inputJsonSchema` or JSON input.
 - `events[]` — `CompiledAgentRoute` rows of kind `event-route`.
 - `scripts[]` — kind `script`.
 - `providers[]` — `CompiledProvider` (not a route kind; they wrap execution).
 - `layouts?` — `CompiledLayout` (`root` or `server` scope). Event routes and
   browser Apps are never wrapped.
-- `contracts?` — `RouteContract` rows (`id` =
-  `contract:<module>#<binding>`), one per statically resolved `inputSchema`
-  declaration. Routes that import the same binding share one contract
-  ([#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593)).
-- `digest` — sha256 over project-relative identity.
-- `diagnostics` — route-graph errors (`AB48xx` and `AB494x`; `AB4838` /
-  `AB4839` when a schema import cannot be followed).
+- `contracts?` — route-local `config.inputJsonSchema` metadata, identified by
+  `contract:<module>#inputJsonSchema`.
+- `digest` — sha256 over project-relative identity and declared metadata.
+- `diagnostics` — route-graph errors (`AB48xx` and `AB494x`).
 
 Each `CompiledAgentRoute` carries `id`, `kind`, `source`, conventional
 `provenance`, a statically extracted `config` (or `emptyRouteConfig`), an
@@ -535,23 +532,13 @@ walk the whole model and emit host documents. `compose.ts` merges bytes; it does
 replace those planners with a single `project(application, capabilities)`
 function.
 
-**Three hook systems.** Config-declared `hooks.<event>.handler`
-(`config/normalize.ts` `normalizeHooks`), conventional `src/events/**`
-event routes (same function, `eventRoute` set), and `nativeHooks` from
-adapter-declared documents. Generated wrappers (`adapters/hook-contract.ts`)
-are per-host source templates. High-frequency shell hooks that cannot pay
-the rendered event-route startup cost stay on the config handler path
-([#595](https://github.com/ScriptedAlchemy/agent-bundle/issues/595)).
+**Event execution.** Conventional `src/events/**` routes support plain `.ts` handlers,
+rendered `.tsx` handlers, and explicit lazy `.view.tsx` modules. Host-native documents remain
+adapter inputs. Providers resolve lazily through the request context.
 
-**Duplicate MCP / CLI route modules.** Automatic MCP-to-CLI projection
-exists (`routes/cli-commands.ts` `compileMcpCliCommands`), but a mature CLI
-still authors a second module under `src/cli/**` when it needs its own
-command path, positionals, or flag names
-([#596](https://github.com/ScriptedAlchemy/agent-bundle/issues/596)).
-Local `inputSchema` imports now resolve into one `RouteContract`
-([#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593)
-landed): an unresolvable chain is `AB4838`, a cycle is `AB4839`, and a
-grammar error inside a resolved schema stays `AB4814`.
+**MCP and CLI.** A colocated `<tool>.cli.ts` projects the tool without a second operation.
+Flag metadata is literal `config.inputJsonSchema`; runtime schemas are loaded by compiled
+executables. Inspection does not interpret schema imports or alias chains.
 
 **Browser bridge was forked.** One host-side relay now lives in
 `web-host/browser/frame-relay.ts` (`McpAppFrameRelay`) and is mounted by the

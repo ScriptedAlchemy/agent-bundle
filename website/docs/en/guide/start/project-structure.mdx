@@ -78,8 +78,8 @@ non-TypeScript assets or native executables; do not assume an arbitrary source d
 | `assets/` | Conventional static assets. | Copied under the artifact's `assets/`; explicit configuration can narrow the selection. |
 
 Private path segments beginning with `_` or `.` and declaration files are excluded from route
-discovery. Event files use `.ts` for lightweight results and `.tsx` for JSX; export `before()`
-from a `.tsx` file when it needs a cheap gate before rendering. See
+discovery. Event files use `.ts` for lightweight results and `.tsx` for JSX; call `ctx.render()`
+from a `.ts` handler to load its separate `.view.tsx` sibling. See
 [hooks](../authoring/hooks.mdx) for execution and provider access.
 
 Route-specific `config` exports use a bounded static grammar. Keep runtime work in the handler

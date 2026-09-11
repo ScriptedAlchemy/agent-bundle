@@ -39,12 +39,8 @@ it('renders the catalog from injected library context with its contents envelope
 });
 
 it('renders an honest degraded catalog when library context is absent', async () => {
-  // The harness mounts `src/providers/library.ts` automatically, so the
-  // degraded path needs an explicit empty provider map to keep it absent.
-  // The generated `.agent-bundle/routes.d.ts` (in this project's tsconfig
-  // program) makes the declared `library` key required, so this deliberate
-  // contract violation is spelled out as a cast rather than left implicit.
-  const absentProviders = {} as unknown as AgentProviderValues;
+  // Explicit undefined exercises the degraded runtime value without provider discovery.
+  const absentProviders = { library: undefined } as unknown as AgentProviderValues;
   const rendered = await renderRoute('resource:curator/catalog', {
     context: { providers: absentProviders },
     input: { uri: 'audiobook-curator://catalog' },

@@ -2,6 +2,30 @@ import { Agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "includeDiagnostics": {
+        "type": "boolean"
+      },
+      "includeExecArgv": {
+        "type": "boolean"
+      },
+      "includeTail": {
+        "type": "boolean"
+      },
+      "status": {
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed"
+        ],
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
   description: 'Returns a cargo-conductor-shaped ticket status with optional diagnostics fields.',
   title: 'Ticket',
 };

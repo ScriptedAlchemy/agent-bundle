@@ -52,7 +52,7 @@ const writeProject = async (root: string): Promise<void> => {
     writeProjectFile(root, 'src/mcp/harness/tools/lookup.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
-      "export const config = { annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"default\":\"ready\"}},\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
       'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
       "export const resultSchema = z.object({ message: z.string() }).strict();",
       'export default async function Lookup({ input }) {',
@@ -71,7 +71,7 @@ const writeProject = async (root: string): Promise<void> => {
     writeProjectFile(root, 'src/cli/report.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
-      "export const config = { description: 'Render a report.', positionals: ['root'] };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"root\":{\"type\":\"string\"}},\"required\":[\"root\"],\"type\":\"object\"}, description: 'Render a report.', positionals: ['root'] };",
       'export const inputSchema = z.object({ root: z.string().min(1) }).strict();',
       'export const resultSchema = z.object({ root: z.string() }).strict();',
       'export default async function Report({ input }) {',

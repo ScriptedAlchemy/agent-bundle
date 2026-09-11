@@ -15,6 +15,32 @@ import { dumpCaptures, dumpInputSchema, dumpResultSchema, renderDumpMarkdown } f
 export const DEFAULT_DUMP_LIMIT = 50;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "conversation": {
+        "type": "string"
+      },
+      "full": {
+        "type": "boolean"
+      },
+      "kinds": {
+        "items": {
+          "enum": [
+            "event",
+            "mcp",
+            "cli"
+          ],
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "limit": {
+        "type": "number"
+      }
+    },
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description:
     'Dump what the host-test probe has recorded from this host: every hook payload, the framework request context each one saw, and the MCP calls. Filter by any conversation, session, or subagent id. Returns the newest 50 matching records unless `limit` is given; `matched` counts every record the filter hit.',

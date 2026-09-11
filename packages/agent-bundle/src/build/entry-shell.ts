@@ -301,6 +301,23 @@ const generatedStateOwner = (
   ];
 };
 
+/** Reuse the generated state owner for a lightweight event request. */
+export const eventHandlerStateSource = (
+  state: NormalizedStateDefinition | undefined,
+  policy: GeneratedNoticePolicy,
+): readonly string[] => [
+  ...generatedStateImports(state),
+  ...generatedStateOwner(state, policy),
+  ...(state === undefined
+    ? ['const withEventState = (_signal, run) => run(undefined);']
+    : [
+        'const withEventState = async (signal, run) => {',
+        '  const bindings = await runtimeState.requestBindings({ signal });',
+        '  try { return await run(bindings); } finally { await bindings.close(); }',
+        '};',
+      ]),
+];
+
 /**
  * The worker-backed render-session factory shared by generated CLI
  * executables and rendered scripts: one worker per rendered invocation, raw
@@ -479,8 +496,8 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     ...(runtimeBacked ? [
     'const execute = async (command, input, context) => {',
     '  const route = routes[command.routeId];',
-    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
-    '  const parsed = parseInput(command, route, input);',
+    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export a function.');",
+    '  const parsed = await parseInput(command, route, input);',
     '  const cwd = process.cwd();',
     ...processHitSource('  '),
     ...(options.state === undefined
@@ -518,9 +535,9 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
       ? [
         ...renderedSessionSource(options.workerFile!),
         '',
-        'const render = (command, input, context) => {',
+        'const render = async (command, input, context) => {',
         '  const route = routes[command.routeId];',
-        '  const parsed = parseInput(command, route, input);',
+        '  const parsed = await parseInput(command, route, input);',
         '  return openRenderedSession({',
         "    invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } },",
         '    limits: command.render,',
@@ -687,7 +704,7 @@ export const generatedRenderedRouteWorkerSource = (
     '',
     'const render = async (message) => {',
     '  const route = routes[message.routeId];',
-    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export an async function component.');",
+    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export a function component.');",
     '  const observedRoute = message.observe !== true ? route : { ...route, module: { ...route.module, default: async (props) => {',
     '    const handlerStartedAt = performance.now();',
     "    try { return await route.module.default(props); } finally { parentPort.postMessage({ durationMs: performance.now() - handlerStartedAt, id: message.id, type: 'observed-handler' }); }",
@@ -941,7 +958,7 @@ const eventRouteImports = (
   routes: readonly NormalizedHook[],
   offset: number,
 ): readonly string[] => routes.map((route, index) =>
-  `import * as route${String(offset + index)} from ${JSON.stringify(route.source)};`);
+  `import * as route${String(offset + index)} from ${JSON.stringify(route.eventRoute?.handler?.view ?? route.source)};`);
 
 /**
  * Event route records stay keyed by the hook identity the worker resolves
@@ -971,7 +988,7 @@ export const providerRegistrySource = (providers: readonly CompiledProvider[]): 
  * Claims this request's hit on the process identity and snapshots it in the
  * same synchronous step, before any state binding or provider `await`, so a
  * concurrent request on the same scope cannot move the value this request
- * mounts as `providers.processLifetime`.
+ * mounts as `context.process`.
  */
 const processHitSource = (indent: string): readonly string[] => [
   `${indent}processLifetime.hits += 1;`,
@@ -987,36 +1004,39 @@ export const providersFieldSource = (
     readonly indent: string;
     readonly invocation: string;
     readonly observe?: string;
+    readonly observer?: string;
     readonly providers?: string;
   },
 ): readonly string[] => {
-  const { indent, invocation, observe, providers: providerExpression = 'providers' } = expressions;
+  const { indent, invocation, observe, observer, providers: providerExpression = 'providers' } = expressions;
+  const publish = observer ?? 'parentPort.postMessage';
+  const observationId = observer === undefined ? 'id: message.id, ' : '';
   return [
-    `${indent}providers: { processLifetime: ${processLifetimeValueSource} },`,
+    `${indent}process: ${processLifetimeValueSource},`,
     ...(providers.length === 0 ? [] : [
       `${indent}resolveProvider: async (key, request) => {`,
       `${indent}  const provider = ${providerExpression}.find((candidate) => candidate.key === key);`,
       `${indent}  if (provider === undefined) throw new TypeError('Unknown provider ' + JSON.stringify(key));`,
       ...(observe === undefined ? [] : [
         `${indent}  const providerStartedAt = performance.now();`,
-        `${indent}  if (${observe}) parentPort.postMessage({ id: message.id, type: 'observed-providers-start' });`,
+        `${indent}  if (${observe}) ${publish}({ ${observationId}type: 'observed-providers-start' });`,
       ]),
       `${indent}  try {`,
       `${indent}    const module = await provider.load();`,
       `${indent}    if (typeof module.default !== 'function') throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
       `${indent}    const value = await module.default({ ...request, invocation: ${invocation} });`,
       ...(observe === undefined ? [] : [
-        `${indent}    if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, source: provider.source, status: 'mounted', type: 'observed-provider' });`,
+        `${indent}    if (${observe}) ${publish}({ ${observationId}durationMs: performance.now() - providerStartedAt, key: provider.key, source: provider.source, status: 'mounted', type: 'observed-provider' });`,
       ]),
       `${indent}    return value;`,
       `${indent}  } catch (error) {`,
       ...(observe === undefined ? [] : [
-        `${indent}    if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, message: error instanceof Error ? error.message : String(error), source: provider.source, status: 'failed', type: 'observed-provider' });`,
+        `${indent}    if (${observe}) ${publish}({ ${observationId}durationMs: performance.now() - providerStartedAt, key: provider.key, message: error instanceof Error ? error.message : String(error), source: provider.source, status: 'failed', type: 'observed-provider' });`,
       ]),
       `${indent}    throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
       ...(observe === undefined ? [] : [
         `${indent}  } finally {`,
-        `${indent}    if (${observe}) parentPort.postMessage({ count: 1, durationMs: performance.now() - providerStartedAt, id: message.id, type: 'observed-providers-finish' });`,
+        `${indent}    if (${observe}) ${publish}({ ${observationId}count: 1, durationMs: performance.now() - providerStartedAt, type: 'observed-providers-finish' });`,
       ]),
       `${indent}  }`,
       `${indent}},`,
@@ -1027,7 +1047,7 @@ export const providersFieldSource = (
 /** The long-lived react-server worker used by one generated MCP process. */
 export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWorkerOptions): string => {
   const routes = executableMcpRoutes(options.routes);
-  const eventRoutes = (options.eventRoutes ?? []).filter((route) => route.eventRoute?.preflight?.mode !== 'handler');
+  const eventRoutes = (options.eventRoutes ?? []).filter((route) => (route.eventRoute?.handler === undefined || route.eventRoute.handler.view !== undefined));
   const wiresInbox = wiresInboxRoute(options);
   const providers = orderedProviders(options.providers ?? []);
   const layouts = workerLayouts(options.layouts ?? [], routes);
@@ -1070,7 +1090,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     '  }',
     "  const routeId = message.invocation.kind === 'event' ? `hook:event-route:${message.invocation.props.event.replace('/', '-')}` : message.invocation.props.operationId;",
     '  const route = routes[routeId];',
-    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated route must default-export an async Server Component.');",
+    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated route must default-export a Server Component.');",
     '  const observedRoute = message.observe !== true ? route : { ...route, module: { ...route.module, default: async (props) => {',
     '    const handlerStartedAt = performance.now();',
     "    try { return await route.module.default(props); } finally { parentPort.postMessage({ durationMs: performance.now() - handlerStartedAt, id: message.id, type: 'observed-handler' }); }",
@@ -1106,7 +1126,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     '    }, async () => {',
     '      let validationError;',
     "      const props = message.invocation.kind === 'event'",
-    '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), ...(message.invocation.props.payload.preflight === undefined ? {} : { preflight: Object.freeze(message.invocation.props.payload.preflight) }), signal: controller.signal })',
+    '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), ...(message.invocation.props.payload.renderInput === undefined ? {} : { renderInput: Object.freeze(message.invocation.props.payload.renderInput) }), signal: controller.signal })',
     // The MCP server hands the worker input the SDK already validated; only
     // the Workbench, which bypasses the SDK, asks the worker to validate.
     '        : message.validateInput !== true ? { input: message.invocation.props.input, signal: controller.signal } : (() => {',

@@ -3,6 +3,21 @@ import { Suspense } from 'react';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "enum": [
+          "ok",
+          "throw",
+          "reject-boundary"
+        ],
+        "type": "string",
+        "default": "ok"
+      }
+    },
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description: 'Throws from the route or from a nested Suspense boundary, for thrown-error projection proof.',
 };

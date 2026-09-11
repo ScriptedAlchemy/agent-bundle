@@ -2,6 +2,16 @@ import { Agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "label": {
+        "type": "string",
+        "default": "probe"
+      }
+    },
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description: 'Renders a bare valued result so the layout chain around it is observable.',
   title: 'Layout probe',

@@ -277,7 +277,7 @@ export interface AgentProgressReporter {
 export type AgentServiceRegistry = Readonly<Record<string, unknown>>;
 
 /**
- * The framework-owned `processLifetime` provider every generated request
+ * The framework-owned process identity every generated request
  * scope installs: one identity per generated process (Flight worker,
  * rendered-route worker, or routed-CLI executable) with a per-request hit
  * counter. Absent outside generated scopes, so it is typed optional.
@@ -298,7 +298,6 @@ export interface AgentProcessLifetime {
  */
 export interface AgentProviderValues {
   readonly [key: string]: unknown;
-  readonly processLifetime?: AgentProcessLifetime;
 }
 
 /**
@@ -442,7 +441,7 @@ export interface AgentRequestContext {
   readonly progress: AgentProgressReporter;
   readonly signal: AbortSignal;
   readonly services: AgentServiceRegistry;
-  readonly providers: Readonly<Partial<AgentProviderValues>>;
+  readonly process: Readonly<AgentProcessLifetime> | undefined;
   provider<Key extends keyof AgentProviderValues & string>(key: Key): Promise<AgentProviderValues[Key]>;
   /**
    * State kernel handle (#98) installed by the host wiring via
@@ -500,7 +499,7 @@ export interface AgentProviderRequest {
  * request by `runAgentRequest`, after the identity axes are frozen and the
  * notice lease is open (so `notices.inbox()` is real) and before the
  * operation runs, over the read-only {@link AgentProviderRequest}. The record
- * it returns is frozen and mounted as `(await agent()).providers`; a rejection
+ * it returns seeds `context.provider(key)`; a rejection
  * fails the request closed exactly as a rejected operation does.
  */
 export type AgentProviderResolver = (request: AgentProviderRequest) => Partial<AgentProviderValues> | Promise<Partial<AgentProviderValues>>;
@@ -511,6 +510,7 @@ export type AgentRequestProvidersInit = {
 };
 
 export interface AgentRequestInitBase {
+  readonly process?: AgentProcessLifetime;
   readonly resolveProvider?: (key: string, request: AgentProviderRequest) => unknown | Promise<unknown>;
   readonly actor?: Observed<AgentActorIdentity>;
   readonly capabilities?: AgentRequestCapabilities;
@@ -622,7 +622,7 @@ interface FrozenValues {
   readonly notices: AgentNoticesHandle | undefined;
   readonly plugin: Observed<AgentPluginIdentity>;
   readonly progress: AgentProgressReporter;
-  readonly providers: Readonly<Partial<AgentProviderValues>>;
+  readonly process: Readonly<AgentProcessLifetime> | undefined;
   readonly services: AgentServiceRegistry;
   readonly session: Observed<AgentSessionIdentity>;
   readonly signal: AbortSignal;
@@ -713,8 +713,8 @@ const createHandle = (lease: Lease): AgentRequestContext => Object.freeze({
   get services() {
     return open(lease).services;
   },
-  get providers() {
-    return open(lease).providers;
+  get process() {
+    return open(lease).process;
   },
   async provider<Key extends keyof AgentProviderValues & string>(key: Key): Promise<AgentProviderValues[Key]> {
     const values = open(lease);
@@ -830,7 +830,7 @@ export const runAgentRequest = async <T>(
       notices: noticeLease?.handle,
       plugin,
       progress: init.progress ?? silentProgress,
-      providers: Object.freeze({ ...(providers ?? {}) }),
+      process: init.process === undefined ? undefined : Object.freeze({ ...init.process }),
       services: Object.freeze({ ...(init.services ?? {}) }),
       session,
       signal,

@@ -1,6 +1,6 @@
 export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './graph.ts';
-export { cliArgvGrammar, extractCliArgv, projectInputSchemaOptions, reservedCliOptionNames } from './cli-argv.ts';
-export type { CliOptionOverride, CliOptionPolicy, ExtractedCliArgv, ProjectedCliOptions } from './cli-argv.ts';
+export { cliArgvGrammar, projectInputSchemaOptions, reservedCliOptionNames } from './cli-argv.ts';
+export type { CliOptionOverride, CliOptionPolicy, ProjectedCliOptions } from './cli-argv.ts';
 export {
   cliCommandPath,
   compileCliCommands,
@@ -10,7 +10,6 @@ export {
 } from './cli-commands.ts';
 export type {
   CliProjectionPair,
-  CompileCliCommandsOptions,
   CompiledCliCommandSurface,
   CompiledMcpCliCommandSurface,
   CompiledProjectedCliCommandSurface,
@@ -24,7 +23,6 @@ export {
 } from './cli-projection.ts';
 export type {
   CliProjectionConfigRecord,
-  CliProjectionExtractionOptions,
   CliProjectionModule,
   ExtractedCliProjection,
 } from './cli-projection.ts';
@@ -40,7 +38,6 @@ export type {
   AppReferenceTarget,
   ExtractedRouteConfig,
   RouteConfigAppReference,
-  RouteConfigExtractionOptions,
 } from './config-extract.ts';
 export { appRouteTemplatePath, resolveAppRouteTemplate } from './app-template.ts';
 export type { AppRouteTemplateResolution } from './app-template.ts';
@@ -78,16 +75,6 @@ export {
   validateRouteModuleContract,
 } from './contract.ts';
 export type { RouteModuleExports } from './contract.ts';
-export {
-  compilerCarryingSpecifiers,
-  scanFrameworkValueImports,
-  validateRouteFrameworkImports,
-} from './framework-imports.ts';
-export type {
-  FrameworkValueImport,
-  FrameworkValueImportForm,
-  ScanFrameworkValueImportsOptions,
-} from './framework-imports.ts';
 export { routeRenderLimits, validateRouteRenderConfig } from './render-budget.ts';
 export type { RouteRenderBudget, ValidatedRouteRenderConfig } from './render-budget.ts';
 export { routeTaskSupport, toolTaskSupportValues, validateRouteExecutionConfig } from './task-support.ts';

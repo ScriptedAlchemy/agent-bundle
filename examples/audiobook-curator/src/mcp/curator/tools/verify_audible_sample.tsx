@@ -10,6 +10,55 @@ import { evidenceOperations } from '../../../operations/evidence.js';
 const operation = evidenceOperations.acousticVerify;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "asin": {
+        "type": "string"
+      },
+      "attempts": {
+        "type": "number"
+      },
+      "audiolocatePython": {
+        "type": "string"
+      },
+      "chunkSeconds": {
+        "type": "number"
+      },
+      "file": {
+        "type": "string"
+      },
+      "receipt": {
+        "type": "string"
+      },
+      "region": {
+        "enum": [
+          "au",
+          "ca",
+          "de",
+          "es",
+          "fr",
+          "in",
+          "it",
+          "jp",
+          "uk",
+          "us"
+        ],
+        "type": "string"
+      },
+      "sampleUrl": {
+        "type": "string"
+      },
+      "verbose": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "asin",
+      "file"
+    ],
+    "type": "object"
+  },
   annotations: { openWorldHint: true, readOnlyHint: false },
   description: 'Compare a bounded Audible sample with local audio through an optional Audiolocate Python capability.',
   exitCode: 'result',

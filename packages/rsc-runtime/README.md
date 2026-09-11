@@ -127,7 +127,7 @@ export default defineTool({
 ```
 
 Events use the same conventional route graph: `.ts` handlers return a decision,
-`.tsx` handlers render JSX, and an optional exported `before()` gates rendering.
+`.tsx` handlers render JSX; `.ts` handlers request separate `.view.tsx` modules with `ctx.render('./name.view.js', data)`.
 Resolve conventional providers with `await context.provider('key')`; each provider
 module loads on demand and its promise is cached for the request. The rendering-free
 `@agent-bundle/runtime/request` entry exposes the same request context to hosts.

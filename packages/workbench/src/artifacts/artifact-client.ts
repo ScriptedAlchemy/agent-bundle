@@ -127,10 +127,9 @@ const isExplorerEventHook = (value: unknown): boolean =>
   (!Object.hasOwn(value, 'timeout') || finiteNumber(value.timeout));
 
 const isExplorerEvent = (value: unknown): boolean =>
-  exactRecord(value, ['event', 'hooks', 'id'], ['preflight', 'providers']) &&
+  exactRecord(value, ['event', 'hooks', 'id'], ['handler']) &&
   typeof value.event === 'string' && arrayOf(value.hooks, isExplorerEventHook) && typeof value.id === 'string' &&
-  (!Object.hasOwn(value, 'preflight') || typeof value.preflight === 'string') &&
-  (!Object.hasOwn(value, 'providers') || arrayOf(value.providers, (provider) => typeof provider === 'string'));
+  (!Object.hasOwn(value, 'handler') || typeof value.handler === 'string');
 
 const isExplorerConfigHook = (value: unknown): boolean =>
   exactRecord(value, ['event', 'id', 'kind', 'name', 'path'], ['timeout']) &&

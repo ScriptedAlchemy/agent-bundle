@@ -1,7 +1,19 @@
 import { Agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
-export const config = { mimeType: 'text/markdown', title: 'Notes', uri: 'harness://notes' };
+export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "uri": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "uri"
+    ],
+    "type": "object"
+  }, mimeType: 'text/markdown', title: 'Notes', uri: 'harness://notes' };
 
 export const inputSchema = z.object({ uri: z.string() });
 

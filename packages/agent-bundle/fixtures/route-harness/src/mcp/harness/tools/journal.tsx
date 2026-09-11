@@ -2,6 +2,15 @@ import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "note": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
   description: 'Records and reads durable route-harness journal entries.',
   title: 'Journal',
 };

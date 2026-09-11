@@ -94,6 +94,12 @@ import { z } from 'zod';
 export const config = {
   description: 'Inspect a bounded source tree without changing it.',
   positionals: ['root'],
+  inputJsonSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { maxFiles: { type: 'number' }, root: { type: 'string' } },
+    required: ['root'],
+  },
 } satisfies CliRouteConfig;
 
 export const inputSchema = z.object({
@@ -111,7 +117,7 @@ export default async function inspect(
 }
 ```
 
-The compiler statically projects `inputSchema` onto argv, generates nested help (`--help` at
+The compiler statically projects `config.inputJsonSchema` onto argv, generates nested help (`--help` at
 every level, `--version` at the root), and emits `bin/<plugin-name>.mjs` in the composite
 artifact. At run time the shell resolves the command path, parses and
 coerces argv, validates through the module's own schemas, executes the default function inside
@@ -140,7 +146,7 @@ Under `--json` stdout stays empty and stderr carries one canonical
 `{"error":{"code":"CLI_INPUT_INVALID","issues":[...],"usage":"..."}}` line; under `--ndjson` the
 stream carries one `type: "error"` event with the same `error` object.
 
-A `.tsx` command route swaps the default function for an async default Server Component with the
+A `.tsx` command route swaps the default function for a default Server Component with the
 same props and renders through the runtime dispatcher against a sibling
 `dist/bin/<plugin-name>-flight.mjs` worker. It gains the four output modes described in
 [Scripts and assets](./scripts-assets.mdx). Routed CLI projects need `@agent-bundle/runtime` as a
@@ -157,81 +163,39 @@ Opt out with `bin: false`, `routes.cli: 'conventional'`, or by prefixing a path 
 
 ### Share one schema between MCP and CLI
 
-The argv grammar is projected from `inputSchema` wherever that schema is declared. A CLI command
-and an MCP tool that expose the same operation bind one schema module instead of each carrying a
-copy:
+Runtime `inputSchema` and `resultSchema` may be imported or created by a factory.
+The compiler checks export presence; the generated executable loads the actual schemas.
+TypeScript infers route input/output types from those exports, including defaults and transforms.
+
+For execution-free inspection, Workbench forms, and named CLI flags, declare literal
+`config.inputJsonSchema`. It accepts an object with `additionalProperties: false`, scalar
+string/number/boolean properties, string enums, arrays of scalars, and optional
+`required`, `description`, and `default` metadata. The runtime schema remains authoritative
+for validation, defaults, and transforms; metadata does not replace it.
 
 ```ts
-// src/lib/protocol-schemas.ts
-import { z } from 'zod';
-
-// `export const requestStatuses = ['queued', …] as const` in ../daemon/protocol.ts
-import { requestStatuses } from '../daemon/protocol.js';
-
-const requestStatusSchema = z.enum(requestStatuses);
-
-export const statusInputSchema = z.object({
-  laneKey: z.string().min(1).optional(),
-  limit: z.number().int().min(1).max(500).optional(),
-  statuses: z.array(requestStatusSchema).max(8).optional(),
-  tickets: z.array(z.string().min(1)).max(100).optional(),
-}).strict();
-export const statusResultSchema = z.object({ /* ... */ }).strict();
+export const config = {
+  inputJsonSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      laneKey: { type: 'string' },
+      limit: { type: 'number' },
+    },
+  },
+};
 ```
 
-```ts
-// src/cli/status.tsx
-import { statusInputSchema, statusResultSchema } from '../lib/protocol-schemas.js';
-
-export const inputSchema = statusInputSchema;
-export const resultSchema = statusResultSchema;
-```
-
-The tool route (`src/mcp/hauler/tools/hauler_status.tsx`) exports the same two lines, importing
-from `'../../../lib/protocol-schemas.js'`. The compiler resolves the reference without executing
-any module and parses the zod expression in the module that declares it, under the same bounded
-grammar as an inline schema:
-
-- A reference may be the whole `inputSchema` initializer, a property initializer, the root of a
-  method chain (`requestStatusSchema.optional()`), or the argument of `z.array(...)`,
-  `z.enum(...)` (an `as const` array of string literals), `z.object(...)` / `z.strictObject(...)`
-  (an object literal), or `.default(...)` (a static literal).
-- It resolves to a top-level `const` of the same module, exported or not, or to the
-  `export const` of a module imported through a **relative** specifier that resolves inside the
-  project (`.js` specifiers map onto their `.ts`/`.tsx` source). Alias chains
-  (`export const a = b`) are followed to any depth, and every visited binding is recorded, so a
-  cycle is detected rather than walked twice.
-- Bare package specifiers, modules outside the project or missing, a target module with no
-  `export const` of that name, `let`/`var`, destructured, function, class, default-import, and
-  namespace-import bindings, and dynamic initializers (a bare call, a function, a template with
-  substitutions) are boundaries the resolver does not cross.
-- A grammar violation inside the resolved schema is still `AB4814`, its position qualified by the
-  declaring module. A reference that cannot be followed is `AB4838`, whose message prints the
-  reference chain (`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) ->
-  requestStatusSchema -> requestStatuses`) and the boundary that stopped the resolver; a cyclic
-  chain is `AB4839`, whose message prints the cycle.
-- Only CLI routes, or a tool route with a CLI projection, raise `AB4838`/`AB4839`, because only
-  there the static grammar is load-bearing. An MCP route without a projection whose schema the
-  resolver cannot follow keeps working exactly as an out-of-grammar inline schema does: the
-  generated server derives its JSON Schema from the real zod object. On a tool route with a CLI
-  projection the message prefix is `Tool route <path> (CLI projection <module>)` instead of
-  `CLI route <path>`.
-- `resultSchema` may be imported the same way. Its presence is checked statically, its type
-  flows through TypeScript, and the runtime validates with the real zod object.
-
-Both routes then bind one canonical
-[route contract](./index.mdx#route-contracts-application-ir), which is what the argv grammar,
-the static MCP `inputSchema`, the generated route types, the Workbench, and
-`agent-bundle inspect --routes` read.
+A standalone CLI route or tool projection without this metadata accepts `--input` JSON.
+Declare `input: 'json'` explicitly to select that mode even when metadata exists.
+Flag or positional mappings require metadata; missing tool metadata reports `AB4845`.
+Malformed metadata or invalid standalone argv policy reports `AB4814`.
+The compiler does not interpret Zod expressions or follow schema alias chains;
+`AB4838` and `AB4839` are retired.
 
 ### Project one tool as an idiomatic command
 
-Sharing one `RouteContract` still leaves two *routes* when the CLI grammar cannot be the
-automatic kebab projection of the schema. cargo-hauler keeps `src/cli/status.tsx` beside
-`src/mcp/hauler/tools/hauler_status.tsx` so `--lane` can mean `laneKey`, and
-`src/cli/request.tsx` beside `hauler_request.tsx` so `hauler request -- cargo check` can feed
-`argv` and `mapInput` can derive `cwd`. That second module is a second operation (`cli:status`)
-with its own `operationId` and typegen entry. A colocated `<tool>.cli.ts` projection module is
+A separate CLI route has its own operation identity. A colocated `<tool>.cli.ts` projection module is
 the CLI *surface* projection of the same operation — identity stays `tool:<server>/<tool>` —
 and is never a route. Host projection (`targets`) is unchanged and orthogonal.
 
@@ -266,7 +230,7 @@ export const config = {
 } satisfies CliProjectionConfig<typeof inputSchema>;
 ```
 
-Request needs positionals plus a synchronous `mapInput` that fills canonical-required `cwd`
+Request needs positionals plus a sync or async `mapInput` that fills canonical-required `cwd`
 from `process.cwd()` and splits comma-separated `--after` lists:
 
 ```ts
@@ -336,7 +300,7 @@ without `mapInput` rejects an unknown enum value while parsing argv, as a `src/c
 | `positionals` | Canonical keys consumed as bare arguments, in order (same rules as a `src/cli` route). |
 | `flags.<key>.name` | CLI spelling (kebab-case, no leading dashes); default `kebab(key)`. |
 | `flags.<key>.aliases` | Extra long-form `--spellings`, kebab-case, no leading dashes. |
-| `flags.<key>.description` | Overrides the schema `.describe()`. |
+| `flags.<key>.description` | Overrides the input metadata description. |
 | `flags.<key>.default` | CLI-only default the shell applies before `mapInput` (recorded in `projection.defaults`; a schema `.default()` is zod's to apply, after `mapInput`). |
 | `flags.<key>.required` | `false` relaxes a canonical-required key; legal only when `mapInput` is exported. |
 | `aliases` | Command aliases (same rules as a `src/cli` route's `config.aliases`). |
@@ -346,11 +310,8 @@ without `mapInput` rejects an unknown enum value while parsing argv, as a `src/c
 
 ### JSON input for a schema flags cannot spell
 
-The bounded argv grammar covers scalars, enums, and arrays of them. A tool whose `inputSchema`
-nests an object, a union, or a transform is a valid tool — the MCP surface takes it as is — but
-it has no faithful flag form, so a flag-bound projection over it fails `AB4814` (its recovery
-names this mode). Declare `input: 'json'` and the projected command takes the whole input at
-once:
+Named flags use explicit input metadata. Nested input can use JSON directly; commands without
+metadata default to this mode. Declare `input: 'json'` to select it explicitly:
 
 ```ts title="src/mcp/curator/tools/select.cli.ts"
 import type { CliProjectionConfig } from 'agent-bundle/routes';
@@ -378,17 +339,15 @@ and the artifact manifest record the mode (`projection.input: "json"`).
 `.cli.{ts,tsx}` before identity derivation and pairs the file with the sibling `.{ts,tsx}`. The
 suffix is reserved under `src/mcp/**`; prefix `_` parks it. An orphan, or a `.cli.*` under
 `resources/`, `prompts/`, or `apps/`, is `AB4843`. A missing or dynamic `config`, a key outside
-the closed set, a field of the wrong shape, a `mapInput` that is not statically a function, or
-`required: false` / a CLI `default` on a canonical-required key without `mapInput`, is `AB4844`.
+the closed set, a field of the wrong shape, `required: false` / a CLI `default` on a canonical-required key without `mapInput`, is `AB4844`.
 A `flags`/`positionals` key absent from the contract, a `name`/alias that is not kebab-case, is
 reserved (`help`, `json`, `ndjson`, `version`, and `yes` when confirm), or collides, `name` or
 `aliases` on a positional key (a bare argument has no `--spelling`), a contract key `yes` on a
 confirming command (the shell strips `yes` as the confirmation, whatever it is spelled), or a
 `command` segment that is not a safe identity segment, is `AB4845`. Every message is
 `CLI projection <module> for tool:<server>/<tool>: <detail>.` (a misplaced module has no tool to
-name: `CLI projection <module>: <detail>.`). A tool whose schema has no static
-contract becomes load-bearing once it has a projection: `AB4814`/`AB4838`/`AB4839` fire on the
-tool module with the prefix `Tool route <path> (CLI projection <module>)`.
+name: `CLI projection <module>: <detail>.`). A flag mapping without tool `config.inputJsonSchema` reports `AB4845`.
+The runtime checks `mapInput` callability and awaits its result.
 
 `agent-bundle inspect --routes` dumps the compiled graph, so
 `cli.commands[].projection` (`module`, `mapInput`, `input?`, `defaults?`, `relaxed?`) and
@@ -401,10 +360,9 @@ mechanism produced the command. The generated MCP server still passes `kind: 'to
 No projection module means no command from this path — the bulk
 [`routes.mcpCommands`](#projecting-mcp-tools-into-the-cli) opt-in keeps working for every other
 tool. The MCP `inputSchema`, `tools/list`, annotations, and `_meta` are untouched by any
-projection field; `ToolConfig` gains nothing.
+projection field. `ToolConfig.inputJsonSchema` supplies optional flag metadata.
 
-Short `-x` aliases (the shell rejects single-dash tokens today) and an async `mapInput` are
-deferred.
+Short `-x` aliases remain unsupported. `mapInput` may be sync or async; the shell awaits it before schema validation.
 
 ### The same routed CLI in every distribution
 

@@ -102,18 +102,16 @@ src/scripts/**/*.{ts,tsx,jsx}
   `remote` / `conflict`），每个都持有 kind 为 `tool`、`resource`、`prompt` 或 `app` 的
   `CompiledAgentRoute` 行。
 - `cli?` —— `CompiledCliSurface`（`generated` / `conventional` / `conflict`），带有
-  `CompiledCliCommand` 行，其 argv 语法来自有界的 `inputSchema`。
+  `CompiledCliCommand` 行，其 argv 语法来自字面量 `config.inputJsonSchema` 或 JSON 输入。
 - `events[]` —— kind 为 `event-route` 的 `CompiledAgentRoute` 行。
 - `scripts[]` —— kind 为 `script`。
 - `providers[]` —— `CompiledProvider`（不是路由 kind；它们包裹执行）。
 - `layouts?` —— `CompiledLayout`（`root` 或 `server` 作用域）。事件路由与浏览器 App
   永不被包裹。
-- `contracts?` —— `RouteContract` 行（`id` = `contract:<module>#<binding>`），每个静态
-  解析到的 `inputSchema` 声明一份。导入同一绑定的路由共享一份契约
-  （[#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593)）。
-- `digest` —— 对相对项目的身份计算的 sha256。
-- `diagnostics` —— 路由图错误（`AB48xx` 与 `AB494x`；无法跟随 schema 导入时还有
-  `AB4838` / `AB4839`）。
+- `contracts?` —— 路由本地的 `config.inputJsonSchema` 元数据，id 为
+  `contract:<module>#inputJsonSchema`。
+- `digest` —— 根据项目相对身份和声明元数据计算的 sha256。
+- `diagnostics` —— 路由图错误（`AB48xx` 与 `AB494x`）。
 
 每个 `CompiledAgentRoute` 携带 `id`、`kind`、`source`、约定式的 `provenance`、一份静态
 提取的 `config`（或 `emptyRouteConfig`）、可选的有界 `inputSchema`、可选的 `contract`
@@ -470,19 +468,12 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 `compose.ts` 合并的是字节；它并没有用单个 `project(application, capabilities)` 函数取代
 这些规划器。
 
-**三套钩子系统。** 配置声明的 `hooks.<event>.handler`（`config/normalize.ts` 的
-`normalizeHooks`）、约定的 `src/events/**` 事件路由（同一个函数，设置了 `eventRoute`），
-以及来自适配器声明文档的 `nativeHooks`。生成的包装器（`adapters/hook-contract.ts`）是按
-宿主划分的源码模板。无法承担渲染式事件路由启动开销的高频 shell 钩子仍走配置处理器路径
-（[#595](https://github.com/ScriptedAlchemy/agent-bundle/issues/595)）。
+**事件执行。** 约定式 `src/events/**` 支持普通 `.ts` 处理器、渲染 `.tsx` 处理器和显式延迟加载的
+`.view.tsx` 模块。宿主原生文档仍是适配器输入。Provider 通过请求上下文延迟解析。
 
-**重复的 MCP / CLI 路由模块。** 自动的 MCP 到 CLI 投影是存在的（`routes/cli-commands.ts`
-的 `compileMcpCliCommands`），但成熟的 CLI 在需要自己的命令路径、位置参数或标志名时，
-仍会在 `src/cli/**` 下另写一个模块
-（[#596](https://github.com/ScriptedAlchemy/agent-bundle/issues/596)）。本地 `inputSchema`
-导入现在会解析成一份 `RouteContract`
-（[#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593) 已落地）：无法跟随的
-链是 `AB4838`，环是 `AB4839`，已解析 schema 内部的语法错误仍是 `AB4814`。
+**MCP 与 CLI。** 同级 `<tool>.cli.ts` 投影工具，不创建第二个操作。
+flag 元数据来自字面量 `config.inputJsonSchema`；编译后的可执行文件加载运行时 schema。
+检查阶段不解释 schema 导入或别名链。
 
 **浏览器桥接曾被分叉。** 现在只有一个宿主侧中继，位于
 `web-host/browser/frame-relay.ts`（`McpAppFrameRelay`），由 Workbench、`serve-app`、开发态

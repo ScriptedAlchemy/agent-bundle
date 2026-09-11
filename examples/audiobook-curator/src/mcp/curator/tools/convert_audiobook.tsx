@@ -13,6 +13,77 @@ import { outputOperations } from '../../../operations/output.js';
 const operation = outputOperations.convert;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "apply": {
+        "type": "boolean"
+      },
+      "artwork": {
+        "type": "string"
+      },
+      "audioBitrate": {
+        "type": "string"
+      },
+      "audioCodec": {
+        "enum": [
+          "aac",
+          "alac"
+        ],
+        "type": "string"
+      },
+      "author": {
+        "type": "string"
+      },
+      "engine": {
+        "enum": [
+          "audiobook-forge",
+          "ffmpeg"
+        ],
+        "type": "string"
+      },
+      "forgeAacEncoder": {
+        "type": "string"
+      },
+      "forgeCli": {
+        "type": "string"
+      },
+      "jobs": {
+        "type": "number"
+      },
+      "language": {
+        "type": "string"
+      },
+      "narrator": {
+        "type": "string"
+      },
+      "output": {
+        "type": "string"
+      },
+      "overwrite": {
+        "type": "boolean"
+      },
+      "receipt": {
+        "type": "string"
+      },
+      "selection": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "year": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "author",
+      "output",
+      "selection",
+      "title"
+    ],
+    "type": "object"
+  },
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
 };

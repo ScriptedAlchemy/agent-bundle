@@ -32,7 +32,7 @@ export interface RouteInvocation extends RouteInvocationSummary {
   readonly result?: JsonValue;
   /** Present when the render-history window evicted events; the one truthful account of what `events` no longer holds. */
   readonly retention?: RouteInvocationRenderRetention;
-  /** Event-kernel phase events emitted by a compiled preflight execution. */
+  /** Event-kernel phase events emitted by a compiled handler execution. */
   readonly trace?: readonly EventTraceEvent[];
 }
 

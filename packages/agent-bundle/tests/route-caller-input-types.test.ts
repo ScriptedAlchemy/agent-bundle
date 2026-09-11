@@ -93,7 +93,7 @@ const callTool = async (client: Client, name: string, input: Record<string, unkn
  * and a transformed field is spelled as the wire carries it — proved in the
  * project's own browser and server tsconfig programs, then at run time
  * through the generated MCP server. #748: those programs are the ones
- * `validate` judges for AB4834.
+ * the consumer TypeScript check compiles.
  */
 it('types callers by schema input and components by schema output in a clean generated project', { timeout: 120_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-caller-input-types-'));
@@ -189,10 +189,9 @@ it('types callers by schema input and components by schema output in a clean gen
     writeProjectFile(root, 'tsconfig.node.json', tsconfig(['src/**/tools/*.ts', 'src/handler-types.ts', '.agent-bundle/routes.d.ts'], ['ES2022'])),
   ]);
 
-  // The documented entry: `validate` publishes the declaration for a clean checkout, and judges both programs.
+  // The documented entry: `validate` publishes the declaration for a clean checkout, before the consumer checks both programs.
   const validated = await validate({ root });
   expect(validated.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
-  expect(validated.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB4834');
   const generated = await readFile(join(root, '.agent-bundle', 'routes.d.ts'), 'utf8');
   expect(generated).toContain('input: SchemaInput<InputSchema>;');
   expect(generated.split('\n').filter((line) => line.startsWith('import')).every((line) => line.startsWith('import type * as '))).toBe(true);
@@ -212,11 +211,9 @@ it('types callers by schema input and components by schema output in a clean gen
   expect(parsedAsCaller).toHaveLength(1);
   expect(parsedAsCaller[0]).toMatch(/Type 'number' is not assignable to type 'string'/u);
 
-  // Dropping the declaration from the browser program alone is reported on that program alone.
+  // The consumer compiler, rather than framework validation, proves declaration inclusion.
   await writeProjectFile(root, 'tsconfig.app.json', tsconfig(['src/mcp/**/apps/*.ts'], ['DOM', 'ES2022']));
-  const omitted = (await validate({ root })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4834');
-  expect(omitted).toHaveLength(1);
-  expect(omitted[0]).toMatchObject({ sourcePath: join(root, 'tsconfig.app.json') });
+  expect((await validate({ root })).diagnostics.filter(({ severity }) => severity === 'error')).toEqual([]);
   expect(typecheckProgram(root, 'tsconfig.app.json')).not.toEqual([]);
   await writeProjectFile(root, 'tsconfig.app.json', tsconfig(['src/mcp/**/apps/*.ts', '.agent-bundle/routes.d.ts'], ['DOM', 'ES2022']));
 

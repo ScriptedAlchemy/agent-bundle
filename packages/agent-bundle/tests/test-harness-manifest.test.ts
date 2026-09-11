@@ -138,6 +138,7 @@ describe('the compiled test manifest', () => {
       config: {
         annotations: { readOnlyHint: true },
         description: 'Echoes one message back with the observed workspace root.',
+        inputJsonSchema: { additionalProperties: false, properties: { message: { type: 'string' } }, type: 'object' },
         title: 'Echo',
       },
       id: 'tool:harness/echo',

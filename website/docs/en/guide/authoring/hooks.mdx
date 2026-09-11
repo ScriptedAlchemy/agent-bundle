@@ -12,8 +12,8 @@ matcher, and the result shape into whatever the selected host expects.
 ## Event routes
 
 Use one canonical event file under `src/events/`: `.ts` handlers return a lightweight event
-result, while `.tsx` handlers render JSX. A `.tsx` file may also export `before()` to gate
-rendering without loading the rendered handler. Both shapes use the same event paths,
+result, while `.tsx` handlers render JSX. A `.ts` handler can request its separate `.view.tsx`
+sibling with `ctx.render('./name.view.js', data)`. Both shapes use the same event paths,
 host adapters, and result validation. The rendered form can include static configuration:
 
 ```tsx
@@ -80,39 +80,45 @@ The helper infers the canonical payload and family-specific outcomes; its event 
 the file path. A plain default function with the same context and result is also supported.
 Use `EventHandler<'tool/before'>` when annotating that function.
 
-For a cheap gate followed by JSX, export `before()` from the `.tsx` module:
+For a cheap gate followed by JSX, put the view in a separate sibling module:
+
+```ts
+// src/events/tool/before.ts
+import { events } from 'agent-bundle/routes';
+
+export default events.tool.before({}, async (ctx) => {
+  if (ctx.canonical.payload.toolName?.value !== 'Write') return;
+  return ctx.render('./before.view.js', { message: 'A write is about to run.' });
+});
+```
 
 ```tsx
-// src/events/tool/before.tsx
+// src/events/tool/before.view.tsx
 import { Agent } from '@agent-bundle/runtime';
-import type { EventBefore } from 'agent-bundle/routes';
+import type { AgentEventRouteProps } from 'agent-bundle';
 
-export async function before({ canonical }: Parameters<EventBefore<'tool/before'>>[0]) {
-  return canonical.payload.toolName?.value === 'Write'
-    ? { outcome: 'render' as const }
-    : { outcome: 'continue' as const };
-}
-
-export default async function BeforeWrite() {
-  return <Agent.Result><Agent.Context>A write is about to run.</Agent.Context></Agent.Result>;
+export default async function BeforeWrite(
+  { renderInput }: AgentEventRouteProps<'tool/before', { message: string }>,
+) {
+  return <Agent.Result><Agent.Context>{renderInput?.message}</Agent.Context></Agent.Result>;
 }
 ```
 
-The compiler isolates the gate and its referenced imports. It does not execute the rendered
-module's top-level initialization on the cheap path. Keep gate-local values inside `before()`,
-or import dependencies from a separate module; capturing module-local runtime bindings is
-rejected with `AB4840`. Imported dependencies belong to the gate's execution cost. Only
-`{ outcome: 'render' }` starts the rendered path. Denials require a nonempty reason and a family
-whose host projection supports denial; other rendered decisions remain JSX results.
+The handler and view are separate compiler entries. The hook loads the view only when the
+handler returns `ctx.render()`; ordinary imports, local constants, and helper functions in the
+handler work normally. The module argument must name the sibling `.view.js` file shown above.
+Data must be strict JSON and reaches the view as `renderInput`; arbitrary paths and non-JSON
+values fail closed. Put event configuration on the `.ts` handler. A `.view.tsx` file is support
+code, not a second event. Denials require a nonempty reason and a deny-capable event family.
 
 ### Execution trace events
 
 The exported `EventTraceEvent` discriminated union gives developer tooling one stable,
-payload-free vocabulary for the event kernel: `preflight.start`, `preflight.outcome`,
+payload-free vocabulary for the event kernel: `handler.start`, `handler.outcome`,
 `execute.start`, `providers.start` / `providers.finish`, `render.start` / `render.finish`, and
 terminal `failure`. The compiled hook wrapper emits the gate and execution boundaries.
 Rendered handlers emit render boundaries; provider observations occur only when a handler
-requests a provider. The internal trace vocabulary retains the `preflight` phase names.
+requests a provider. The handler outcome is `continue`, `deny`, or `render`.
 Each frozen event carries one `EventTraceExecution` identity, a monotonic timestamp and sequence,
 and only phase-specific metadata; failures use a bounded, stack-free `EventTraceErrorSummary`.
 `createEventTracer` emits to its explicit observer or, without one, to the process-local observer
@@ -126,12 +132,11 @@ Rendered events default to `standalone`; opt into `runtime: 'shared'` to reuse a
 
 ### Migrating existing events
 
-Replace the separate `*.preflight.ts` module and `preflight` re-export with an exported
-`before()` function in the `.tsx` event file. Return `{ outcome: 'render' }` to render JSX;
-`continue` and `deny` retain their event meanings. A handler that only returns a decision can
-become the default export of a `.ts` event file. Remove `config.providers` and request values
-with `context.provider(key)` instead. Native config hooks remain an advanced compatibility
-surface for host-specific integrations.
+Move the old preflight function to the default export of the `.ts` event file, move JSX to
+its `.view.tsx` sibling, and replace `execute` results with `ctx.render('./name.view.js', data)`.
+Remove the `preflight` re-export. Inline `before()` and legacy `preflight` exports now fail
+with `AB4840`. `continue` and `deny` retain their meanings. Remove `config.providers` and use
+`context.provider(key)`. Native config hooks remain an advanced compatibility surface.
 
 ### Request providers
 
@@ -139,7 +144,9 @@ Call `await context.provider('writePolicy')` in a function event, or
 `await (await agent()).provider('writePolicy')` in JSX. The module loads only when requested;
 concurrent callers share one promise, including a rejection, within that request. Generated
 provider types infer keys and values. No `config.providers` declaration is needed. Cancellation
-and expired request-context checks apply to provider access too.
+and expired request-context checks apply to provider access too. `context.providers` is removed;
+use `context.process` for the framework-owned process identity. Pre-seeded values remain an
+explicit `runAgentRequest({ providers })` or test-harness input, read through `provider(key)`.
 
 ### The canonical payload
 

@@ -17,7 +17,7 @@ export const providerFactoryMissingMessage = (key: string, source: string): stri
 export const providerFailedMessage = (key: string, source: string, cause: unknown): string =>
   `Context provider "${key}" (${source}) failed: ${cause instanceof Error ? cause.message : String(cause)}`;
 
-/** The framework-owned process identity a request scope mounts at `providers.processLifetime`. */
+/** The framework-owned process identity a request scope mounts at `context.process`. */
 export interface ProviderProcessLifetime {
   hits: number;
   readonly instanceId: string;
@@ -76,26 +76,17 @@ export interface ProviderRequestView {
 export interface ExecuteProvidersOptions {
   /** The surface-specific provider invocation (`tool`, `event`, `cli`, `script`). */
   readonly invocation: unknown;
-  readonly processLifetime: ProviderProcessLifetime;
   /** Providers already in {@link orderedProviders} order. */
   readonly providers: readonly ExecutableProvider[];
   /** The request view `runAgentRequest` resolved; the factory context is this plus `invocation`. */
   readonly request: ProviderRequestView;
 }
 
-/**
- * Executes conventional providers for one request exactly as a generated
- * request scope does: as the request's provider resolver, after its identity
- * axes are frozen and its notice lease is open, before the route runs. The
- * caller increments `processLifetime.hits` before the call, as every generated
- * scope does before its request opens.
- */
+/** Runs the requested provider factories with the same read-only context as generated scopes. */
 export const executeProviders = async (
   options: ExecuteProvidersOptions,
 ): Promise<Readonly<Record<string, unknown>>> => {
-  const values: Record<string, unknown> = {
-    processLifetime: providerProcessLifetimeValue(options.processLifetime),
-  };
+  const values: Record<string, unknown> = {};
   for (const provider of options.providers) {
     const factory = provider.module.default;
     if (typeof factory !== 'function') {

@@ -5,11 +5,12 @@ import { z } from 'zod';
 import { extractRouteConfig } from '../src/routes/config-extract.ts';
 import { validateRouteModuleContract } from '../src/routes/contract.ts';
 import { defineTool, normalizeRouteModule } from '../src/routes/definitions.ts';
+import { parseModule } from '../src/routes/syntax.ts';
+import { readRouteDefinition } from '../src/routes/definition-syntax.ts';
 import { eventHandlerEntry } from '../src/routes/event-handler.ts';
 import { events } from '../src/routes/event-definitions.ts';
-import { extractInputSchema } from '../src/routes/input-schema.ts';
-import { eventHandlerPreflight, executeEventPreflight } from '../src/events/preflight.ts';
-import { createCanonicalEventProps, projectEventPreflightResult } from '../src/events/projection.ts';
+import { executeEventHandler } from '../src/events/handler.ts';
+import { createCanonicalEventProps, projectEventHandlerResult } from '../src/events/projection.ts';
 
 const path = '/project/src/mcp/runtime/tools/status.tsx';
 const source = `
@@ -21,7 +22,6 @@ export default tool({ description: 'Status', inputSchema: z.object({ verbose: z.
 
 it('extracts a bounded definition without inspecting or evaluating its handler', () => {
   expect(extractRouteConfig(source, path, path)).toMatchObject({ config: { description: 'Status' }, diagnostics: [] });
-  expect(extractInputSchema(source, path)).toBeDefined();
   expect(validateRouteModuleContract(source, path, path)).toEqual([]);
 });
 
@@ -30,7 +30,8 @@ it('extracts shorthand schemas in their original module scope', () => {
 import { z } from 'zod';
 const inputSchema = z.object({ verbose: z.boolean().default(false) });
 export default defineTool({ inputSchema, resultSchema: z.string() }, async () => 'ok');`;
-  expect(extractInputSchema(shorthand, path)?.schema).toEqual(extractInputSchema(source, path)?.schema);
+  expect(readRouteDefinition(parseModule(path, shorthand))?.inputSchema).toBeDefined();
+  expect(validateRouteModuleContract(shorthand, path, path)).toEqual([]);
 });
 
 it('normalizes the same inferred handler for generated and source execution', async () => {
@@ -45,20 +46,15 @@ it('normalizes the same inferred handler for generated and source execution', as
     () => module.default({ input: inputSchema.parse({}), signal: new AbortController().signal }))).toBe('false:ready');
 });
 
-it('isolates before() from JSX imports and top-level initialization, rejecting captures', () => {
-  const entry = eventHandlerEntry(`
-import { Agent } from '@agent-bundle/runtime';
-import { check } from '../../policy.js';
-throw new Error('heavy initialization');
-export async function before({canonical}) { return check(canonical); }
-export default async function View() { return <Agent.Result/>; }
-`, 'src/events/tool/before.tsx', '/project/src/events/tool/before.tsx');
-  expect(eventHandlerEntry('export default async function before() {}', 'before.tsx', '/before.tsx')).toBeUndefined();
-  expect(entry?.mode).toBe('gate');
-  expect(entry?.virtualSource).toContain('/project/src/policy.js');
-  expect(entry?.virtualSource).not.toMatch(/heavy initialization|Agent|View/u);
-  expect(() => eventHandlerEntry('const policy = true; export function before() { return { policy }; }', 'before.tsx', '/before.tsx')).toThrow('captures policy');
-  expect(() => eventHandlerEntry("export { gate as before } from './gate.js';", 'before.tsx', '/before.tsx')).toThrow('function declaration');
+it('rejects closure extraction and dynamic definition composition', () => {
+  expect(() => eventHandlerEntry('export function before() {} export default async function View() {}', 'before.tsx', '/before.tsx')).toThrow('no longer supported');
+  for (const declaration of [
+    'const tool = createMyTool(); export default tool;',
+    'const opts = getOptions(); export default defineTool(opts, handler);',
+    'export default wrapper(defineTool({}, handler));',
+  ]) {
+    expect(() => readRouteDefinition(parseModule(path, `import { defineTool } from 'agent-bundle/routes'; ${declaration}`))).toThrow('Unsupported route definition');
+  }
 });
 
 it('uses one event projection for implicit continue, denial, and a rendered gate', async () => {
@@ -67,11 +63,11 @@ it('uses one event projection for implicit continue, denial, and a rendered gate
   const props = createCanonicalEventProps('tool/before', native, 'claude', 'PreToolUse', 'test', signal);
   const context = { ...props, host: { name: 'claude', nativeEvent: 'PreToolUse' }, terminal: { hostSurface: 'hook' as const, sharesTarget: false, stderr: { color: 'none' as const, kind: 'none' as const }, stdout: { color: 'none' as const, kind: 'none' as const } } };
   const handler = events.tool.before({}, async () => ({ outcome: 'deny', reason: 'Writes disabled' }));
-  const denial = await executeEventPreflight(eventHandlerPreflight(() => handler({ ...props, provider: async () => undefined }), 'handler'), context);
+  const denial = await executeEventHandler((ctx) => handler({ ...props, ...ctx, process: undefined, provider: async () => undefined }), context);
   expect(denial).toEqual({ outcome: 'deny', reason: 'Writes disabled' });
-  const continued = await executeEventPreflight(eventHandlerPreflight(() => undefined, 'handler'), context);
+  const continued = await executeEventHandler(() => undefined, context);
   expect(continued).toEqual({ outcome: 'continue' });
-  expect(projectEventPreflightResult({ outcome: 'continue' }, 'tool/before', 'claude', 'PreToolUse', native)).toBeUndefined();
-  expect(await executeEventPreflight(eventHandlerPreflight(() => ({ outcome: 'render' }), 'gate'), context)).toBe('execute');
-  await expect(executeEventPreflight(eventHandlerPreflight(() => ({ outcome: 'render' }), 'handler'), context)).rejects.toThrow();
+  expect(projectEventHandlerResult({ outcome: 'continue' }, 'tool/before', 'claude', 'PreToolUse', native)).toBeUndefined();
+  expect(await executeEventHandler(({ render }) => render('./before.view.js', { value: 1 }), context, undefined, './before.view.js')).toEqual({ outcome: 'render', module: './before.view.js', data: { value: 1 } });
+  await expect(executeEventHandler(({ render }) => render('./missing.js', null), context)).rejects.toThrow('sibling');
 });

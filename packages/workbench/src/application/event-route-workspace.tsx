@@ -62,7 +62,7 @@ export const defaultEventHostSelection = (
   leaf: ApplicationLeaf,
   lifecycle: Lifecycle | undefined,
 ): EventHostSelection => {
-  if (leaf.preflight === undefined) return 'canonical';
+  if (leaf.handler === undefined) return 'canonical';
   const first = lifecycle?.targets.find((target) => isEventHost(target.target))?.target;
   return first !== undefined && isEventHost(first) ? first : eventHosts[0]!;
 };
@@ -244,10 +244,10 @@ export const EventRouteWorkspace = ({ actions, clients, controller, invocationId
   const invocation = invocationOf(controller.state);
   const [host, setHost] = useState<EventHostSelection>(() => defaultEventHostSelection(leaf, lifecycle));
 
-  // Repairs a selection the leaf forbids (canonical on a preflight route)
+  // Repairs a selection the leaf forbids (canonical on a handler route)
   // without overriding a loaded or chosen host when the catalog arrives.
   useEffect(() => {
-    setHost((current) => current === 'canonical' && leaf.preflight !== undefined
+    setHost((current) => current === 'canonical' && leaf.handler !== undefined
       ? defaultEventHostSelection(leaf, lifecycle)
       : current);
   }, [leaf, lifecycle]);
@@ -271,7 +271,7 @@ export const EventRouteWorkspace = ({ actions, clients, controller, invocationId
         aria-pressed={host === candidate}
         data-testid={`event-host-${candidate}`}
         disabled={
-          (candidate === 'canonical' && leaf.preflight !== undefined)
+          (candidate === 'canonical' && leaf.handler !== undefined)
           || missing
           || (candidate !== 'canonical' && lifecycleState.state === 'loading')
         }

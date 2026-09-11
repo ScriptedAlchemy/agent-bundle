@@ -74,7 +74,7 @@ presented as an empty application.
 ## Route workspace
 
 Selecting a leaf opens one workspace rather than sending you to a surface-specific page. For an
-executable route, the input editor is generated from its schema and offers applicable fixtures
+executable route, the input editor uses declared `config.inputJsonSchema` metadata (or JSON input without it) and offers applicable fixtures
 and the last input kept for that leaf. **Run** executes the production route path on the
 foreground server.
 
@@ -102,7 +102,7 @@ An event leaf has fixture choices **Canonical**, **Claude**, **Codex**, and **Cu
 host fixture decodes the native envelope exactly as that host wrapper would, then shows canonical
 input, request context, providers, the returned decision or document, and projected host results.
 Canonical-to-host mapping and native input/output are secondary projection details.
-For a `.ts` event handler or a `.tsx` event with `before()`, Canonical is disabled and the selector defaults to the
+For a `.ts` event handler, Canonical is disabled and the selector defaults to the
 project's first generated host target; submitting that route without a concrete host is `AB8255`.
 
 Observed event receipts appear in the leaf's **Replay** tab and in Trace. Select a receipt there
@@ -188,7 +188,7 @@ For example, running the `sessionStart` event route in
 
 ```text
 22:41:04.101 invocation.started       event:session/start
-22:41:04.118 kernel.preflight.start   session/start · claude
+22:41:04.118 kernel.handler.start   session/start · claude
 22:41:04.121 kernel.execute.start     event:session/start
 22:41:04.126 kernel.providers.start
 22:41:04.129 kernel.providers.finish
@@ -212,7 +212,7 @@ keys, optional status and duration, and, when a full record is available, an `hr
 | Source | Kinds | Correlation keys | Destination |
 | --- | --- | --- | --- |
 | `invocation` | `invocation.started`, `invocation.completed`, `invocation.failed`, `invocation.cancelled` | `correlationId`, `invocationId`, `routeId`, `epochId`, plus session/conversation when available | The Application route with `?invocation=<id>` |
-| `kernel` | `kernel.preflight.start`, `kernel.preflight.outcome`, `kernel.execute.start`, provider and render start/finish, `kernel.failure` | `executionId`, route, host, session and conversation identity when available | The corresponding route invocation |
+| `kernel` | `kernel.handler.start`, `kernel.handler.outcome`, `kernel.execute.start`, provider and render start/finish, `kernel.failure` | `executionId`, route, host, session and conversation identity when available | The corresponding route invocation |
 | `mcp` | request, response, notification, progress, logging, session, and stderr kinds | `mcpSessionId`, JSON-RPC `mcpRequestId`, `requestId`, route and host metadata when known | The route workspace with `?session=<id>`, or the bound Protocol session |
 | `hook` | receipt/completion/failure and host session start/end | `requestId`, `executionId`, `sessionId`, `conversationId`, `routeId`, `host` | The event route and captured receipt |
 | `session` | `session.started`, `session.attached`, `session.exited`, `session.terminated` | Host session, host, and epoch identity | `/sessions?session=<hs id>` |
@@ -375,7 +375,7 @@ artifact is `AB8250`; an ineligible host or
 surface, missing executable, or missing preparation row is `AB8251`; and a preparation module
 that cannot be imported or does not export its contract is `AB8252`. A gated or lightweight event route submitted
 without a host is refused as `AB8255`. These failures never reach the handler, and an import,
-preflight, or handler failure never causes another executable to run.
+handler, or handler failure never causes another executable to run.
 Production state lives at `<project>/.agent-bundle/state`, outside the published epochs that
 retirement removes. It is shared with dev MCP sessions through `AGENT_BUNDLE_STATE_ROOT`, so it
 survives a successful republish; `unit-render` still uses a fresh temporary state root per run.
@@ -396,7 +396,7 @@ final `document`, `result`, `outcome`, and `correlationId` are never truncated b
 the runtime's own `maxDocumentBytes` bounds the document before it reaches the service. When the worker reports observations,
 `providers` contains only providers it selected and reports each as `mounted` or `failed`;
 unselected catalog providers are absent. A `durationMs` appears only when measured. When the
-child reports no observations — a plain script, a preflight short-circuit, or a failure before
+child reports no observations — a plain script, a handler short-circuit, or a failure before
 observations began — every catalog provider is `unobserved` and `durationMs` is omitted; `0` is
 a measured zero, not "unknown". `timings` lists only measured phases: `render` (the child's
 render or script-run duration), `projection` (host-projection time in the service), and, when
@@ -406,8 +406,8 @@ A represented `Agent.Error` remains a rendered result; unknown routes or invocat
 unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed requests
 (`AB8237`), unknown fixture ids (`AB8238`), a queued invocation whose published revision
 moved before it acquired a slot (`AB8239`), unavailable compiled artifacts (`AB8250`), missing
-compiled route executables (`AB8251`), compiled projection or preflight failures (`AB8252`),
-CLI command/operation mismatches (`AB8253`), projected duplicate CLI ids (`AB8254`), preflight
+compiled route executables (`AB8251`), compiled projection or handler failures (`AB8252`),
+CLI command/operation mismatches (`AB8253`), projected duplicate CLI ids (`AB8254`), handler
 routes submitted without a concrete host (`AB8255`), and cancellation of an already-final
 invocation (`AB8256`) are reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and

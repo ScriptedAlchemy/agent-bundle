@@ -2,6 +2,18 @@ import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "host": {
+        "type": "string"
+      },
+      "session": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
   description: 'Returns the request identity axes observed by this route.',
   title: 'Context',
 };

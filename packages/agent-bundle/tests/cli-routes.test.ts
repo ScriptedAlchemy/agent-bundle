@@ -21,9 +21,9 @@ import {
 } from '../src/cli-entry.ts';
 import { normalizePackageBuild } from '../src/config/normalize.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
-import { extractCliArgv } from '../src/routes/cli-argv.ts';
+import { projectInputSchemaOptions } from '../src/routes/cli-argv.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
-import type { CompiledCliCommand, CompiledCliSurface } from '../src/routes/types.ts';
+import type { CompiledCliCommand, CompiledCliSurface, RouteInputSchema } from '../src/routes/types.ts';
 
 const roots: string[] = [];
 
@@ -53,147 +53,45 @@ const fixtureConfig = (extra: Readonly<Record<string, unknown>> = {}): AgentBund
 const codesOf = (diagnostics: readonly { readonly code: string }[]): string[] =>
   diagnostics.map((diagnostic) => diagnostic.code);
 
-const extract = (schema: string) => extractCliArgv(
-  `export const inputSchema = ${schema};\n`,
-  'src/cli/example.ts',
-  '/project/src/cli/example.ts',
-);
+const extract = (schema: RouteInputSchema) => projectInputSchemaOptions(schema, 'src/cli/example.ts', '/project/src/cli/example.ts');
 
-describe('static argv projection (bounded zod grammar)', () => {
-  it('projects the supported scalar, enum, array, wrapper, and refinement forms', () => {
-    const extracted = extract([
-      'z.object({',
-      "  format: z.enum(['json', 'table']).default('table'),",
-      "  maxFiles: z.number().int().min(1).max(256).optional().describe('Bound the scan.'),",
-      '  root: z.string().min(1),',
-      '  sources: z.array(z.string().min(1)).min(1),',
-      '  strict: z.boolean().default(false),',
-      '}).strict()',
-    ].join('\n'));
+it('projects explicit input metadata into scalar, enum, and repeated flags', () => {
+  const extracted = extract({ additionalProperties: false, type: 'object', required: ['root', 'sources'], properties: {
+    format: { type: 'string', enum: ['json', 'table'], default: 'table' },
+    maxFiles: { type: 'number', description: 'Bound the scan.' },
+    root: { type: 'string' },
+    sources: { type: 'array', items: { type: 'string' } },
+    strict: { type: 'boolean', default: false },
+  } });
+  expect(extracted.diagnostics).toEqual([]);
+  expect(extracted.options).toEqual([
+    { choices: ['json', 'table'], defaultValue: 'table', key: 'format', kind: 'enum', option: 'format', repeated: false, required: false },
+    { description: 'Bound the scan.', key: 'maxFiles', kind: 'number', option: 'max-files', repeated: false, required: false },
+    { key: 'root', kind: 'string', option: 'root', repeated: false, required: true },
+    { key: 'sources', kind: 'string', option: 'sources', repeated: true, required: true },
+    { defaultValue: false, key: 'strict', kind: 'boolean', option: 'strict', repeated: false, required: false },
+  ]);
+});
 
-    expect(extracted.diagnostics).toEqual([]);
-    // Options sort deterministically by projected option name.
-    expect(extracted.options).toEqual([
-      { choices: ['json', 'table'], defaultValue: 'table', key: 'format', kind: 'enum', option: 'format', repeated: false, required: false },
-      { description: 'Bound the scan.', key: 'maxFiles', kind: 'number', option: 'max-files', repeated: false, required: false },
-      { key: 'root', kind: 'string', option: 'root', repeated: false, required: true },
-      { key: 'sources', kind: 'string', option: 'sources', repeated: true, required: true },
-      { defaultValue: false, key: 'strict', kind: 'boolean', option: 'strict', repeated: false, required: false },
-    ]);
-  });
-
-  it('accepts z.strictObject and substitution-free template describe strings', () => {
-    const extracted = extract("z.strictObject({ name: z.string().describe(`The name.`) })");
-    expect(extracted.diagnostics).toEqual([]);
-    expect(extracted.options).toEqual([
-      { description: 'The name.', key: 'name', kind: 'string', option: 'name', repeated: false, required: true },
-    ]);
-  });
-
-  it('reports found: false when the module exports no inputSchema', () => {
-    const extracted = extractCliArgv('export const other = 1;\n', 'src/cli/example.ts', '/p/example.ts');
-    expect(extracted.found).toBe(false);
-    expect(extracted.diagnostics).toEqual([]);
-  });
-
-  it.each([
-    ['a union', 'z.object({ mode: z.union([z.string(), z.number()]) })', 'z.union'],
-    ['a nested object', 'z.object({ nested: z.object({ a: z.string() }) })', 'z.object'],
-    ['a transform', 'z.object({ root: z.string().transform((value) => value) })', '.transform()'],
-    ['a coercion', 'z.object({ count: z.coerce.number() })', 'outside the z.<base>(...) chain form'],
-    ['a dynamic default', 'z.object({ root: z.string().default(process.cwd()) })', '.default()'],
-    ['a spread', 'z.object({ ...shared, root: z.string() })', 'property outside the argv grammar'],
-    ['an enum with substitutions', 'z.object({ mode: z.enum([`a${1}`]) })', 'non-string-literal z.enum member'],
-    ['a non-object top level', 'z.string()', 'top level must be z.object'],
-    ['a passthrough top level', 'z.object({ a: z.string() }).passthrough()', '.passthrough()'],
-  ])('rejects %s with AB4814 naming the construct', (_label, schema, fragment) => {
-    const extracted = extract(schema);
-    expect(codesOf(extracted.diagnostics)).toEqual(['AB4814']);
-    expect(extracted.diagnostics[0]!.message).toContain(fragment);
-    expect(extracted.options).toBeUndefined();
-  });
-
-  it('rejects an unresolvable identifier reference with AB4838 naming the chain and reason', () => {
-    const extracted = extract('z.object({ root: pathSchema })');
-    expect(codesOf(extracted.diagnostics)).toEqual(['AB4838']);
-    expect(extracted.diagnostics[0]).toMatchObject({
-      severity: 'error',
-      sourcePath: '/project/src/cli/example.ts',
-    });
-    expect(extracted.diagnostics[0]!.message).toContain('inputSchema -> pathSchema');
-    expect(extracted.diagnostics[0]!.message).toContain(
-      'which is neither a top-level const in this module nor a named import from a relative module',
-    );
-    expect(extracted.diagnostics[0]!.recovery).toContain('relative');
-    expect(extracted.diagnostics[0]!.recovery).toContain('export const');
-    expect(extracted.diagnostics[0]!.recovery).toContain('inspect again');
-    expect(extracted.options).toBeUndefined();
-  });
-
-  it('rejects a cyclic inputSchema reference with AB4839', () => {
-    const files = new Map<string, string>([
-      ['/project/src/lib/a.ts', "import { y } from './b.js';\nexport const x = y;\n"],
-      ['/project/src/lib/b.ts', "import { x } from './a.js';\nexport const y = x;\n"],
-    ]);
-    const extracted = extractCliArgv(
-      "import { x } from '../lib/a.js';\nexport const inputSchema = x;\n",
-      'src/cli/example.ts',
-      '/project/src/cli/example.ts',
-      {
-        projectRoot: '/project',
-        readModule: (path) => files.get(path),
-        source: '/project/src/cli/example.ts',
-      },
-    );
-    expect(codesOf(extracted.diagnostics)).toEqual(['AB4839']);
-    expect(extracted.diagnostics[0]).toMatchObject({
-      severity: 'error',
-      sourcePath: '/project/src/cli/example.ts',
-    });
-    expect(extracted.diagnostics[0]!.message).toContain(
-      'inputSchema -> x (src/lib/a.ts) -> y (src/lib/b.ts) -> x (src/lib/a.ts)',
-    );
-    expect(extracted.diagnostics[0]!.message).toContain('is a reference cycle.');
-    expect(extracted.diagnostics[0]!.recovery).toContain('relative');
-    expect(extracted.diagnostics[0]!.recovery).toContain('export const');
-    expect(extracted.diagnostics[0]!.recovery).toContain('inspect again');
-    expect(extracted.options).toBeUndefined();
-  });
-
-  it('rejects required booleans, reserved options, and kebab-case collisions', () => {
-    const requiredBoolean = extract('z.object({ strict: z.boolean() })');
-    expect(codesOf(requiredBoolean.diagnostics)).toEqual(['AB4814']);
-    expect(requiredBoolean.diagnostics[0]!.message).toContain('required boolean');
-
-    const reserved = extract('z.object({ json: z.string() })');
-    expect(codesOf(reserved.diagnostics)).toEqual(['AB4814']);
-    expect(reserved.diagnostics[0]!.message).toContain('reserved option --json');
-
-    const collision = extract("z.object({ 'max-files': z.string(), maxFiles: z.number() })");
-    expect(codesOf(collision.diagnostics)).toEqual(['AB4814']);
-    expect(collision.diagnostics[0]!.message).toContain('--max-files');
-  });
-
-  it('rejects indirect and mutable inputSchema declarations', () => {
-    const indirect = extractCliArgv(
-      'const inputSchema = z.object({});\nexport { inputSchema };\n',
-      'src/cli/example.ts',
-      '/p/example.ts',
-    );
-    expect(codesOf(indirect.diagnostics)).toEqual(['AB4814']);
-    expect(indirect.diagnostics[0]!.message).toContain('indirect');
-
-    const mutable = extractCliArgv('export let inputSchema = z.object({});\n', 'src/cli/example.ts', '/p/example.ts');
-    expect(codesOf(mutable.diagnostics)).toEqual(['AB4814']);
-    expect(mutable.diagnostics[0]!.message).toContain('mutable');
-  });
+it('rejects required booleans, reserved options, and colliding spellings', () => {
+  const cases: readonly RouteInputSchema['properties'][] = [
+    { strict: { type: 'boolean' } },
+    { json: { type: 'string' } },
+    { 'max-files': { type: 'string' }, maxFiles: { type: 'number' } },
+  ];
+  for (const properties of cases) {
+    const result = extract({ type: 'object', additionalProperties: false, properties, required: Object.keys(properties) });
+    expect(result.options).toBeUndefined();
+    expect(result.diagnostics[0]?.code).toBe('AB4814');
+  }
 });
 
 const plainCommandModule = (options: {
   readonly config?: string;
   readonly schema?: string;
+  readonly inputJsonSchema?: RouteInputSchema | null;
 } = {}): string => [
-  ...(options.config === undefined ? [] : [`export const config = ${options.config};`]),
+  `export const config = ${(options.config ?? '{}').replace('{', '{ inputJsonSchema: ' + JSON.stringify(options.inputJsonSchema ?? { type: 'object', additionalProperties: false, properties: {} }) + ',')};`,
   `export const inputSchema = ${options.schema ?? 'z.object({}).strict()'};`,
   'export const resultSchema = {};',
   'export default async () => undefined;',
@@ -214,10 +112,12 @@ describe('compiled command graph', () => {
     await writeTree(root, {
       'src/cli/doctor.ts': plainCommandModule({
         config: "{ aliases: ['health'], description: 'Inspect the runtime.' }",
+        inputJsonSchema: {"additionalProperties":false,"properties":{"verbose":{"type":"boolean"}},"type":"object"},
         schema: 'z.object({ verbose: z.boolean().optional() })',
       }),
       'src/cli/library/audit.ts': plainCommandModule({
         config: "{ description: 'Audit sources.', exitCode: 'result', positionals: ['sources'] }",
+        inputJsonSchema: {"additionalProperties":false,"properties":{"report":{"type":"string"},"sources":{"items":{"type":"string"},"type":"array"}},"required":["report","sources"],"type":"object"},
         schema: 'z.object({ report: z.string(), sources: z.array(z.string()).min(1) }).strict()',
       }),
     });
@@ -251,7 +151,7 @@ describe('compiled command graph', () => {
     expect(Object.isFrozen(graph.cli!.commands)).toBe(true);
   });
 
-  it('projects an imported schema onto the same CompiledCliOption[] as its inline twin', async () => {
+  it('uses explicit input metadata independently of schema construction', async () => {
     const schema = [
       'z.object({',
       '  limit: z.number().int().min(1).optional(),',
@@ -260,6 +160,7 @@ describe('compiled command graph', () => {
     ].join('\n');
     const commandModule = (inputSchema: string): string => [
       `export const inputSchema = ${inputSchema};`,
+      'export const config = { inputJsonSchema: { type: "object", additionalProperties: false, properties: { limit: { type: "number" }, name: { type: "string" } }, required: ["name"] } };',
       'export const resultSchema = {};',
       'export default async () => undefined;',
       '',
@@ -333,12 +234,12 @@ describe('compiled command graph', () => {
       ].join('\n'),
     });
     const graph = await compileRouteGraph(root, fixtureConfig());
-    expect(codesOf(graph.diagnostics)).toEqual(['AB4815', 'AB4815', 'AB4815', 'AB4815']);
+    expect(codesOf(graph.diagnostics)).toEqual(['AB4815', 'AB4815', 'AB4815']);
     const messages = graph.diagnostics.map((diagnostic) => diagnostic.message).join('\n');
     expect(messages).toContain('config.aliases');
     expect(messages).toContain('config.exitCode');
     expect(messages).toContain('missing named resultSchema');
-    expect(messages).toContain('not an async function');
+    expect(graph.cli?.commands?.some((command) => command.routeId.endsWith('sync-default'))).toBe(true);
   });
 
   it('errors with AB4814 on positional policy violations', async () => {
@@ -346,6 +247,7 @@ describe('compiled command graph', () => {
     await writeTree(root, {
       'src/cli/copy.ts': plainCommandModule({
         config: "{ positionals: ['sources', 'destination'] }",
+        inputJsonSchema: {"additionalProperties":false,"properties":{"destination":{"type":"string"},"sources":{"items":{"type":"string"},"type":"array"}},"required":["destination","sources"],"type":"object"},
         schema: 'z.object({ destination: z.string(), sources: z.array(z.string()) }).strict()',
       }),
       'src/cli/pick.ts': plainCommandModule({
@@ -353,6 +255,7 @@ describe('compiled command graph', () => {
       }),
       'src/cli/scan.ts': plainCommandModule({
         config: "{ positionals: ['root', 'depth'] }",
+        inputJsonSchema: {"additionalProperties":false,"properties":{"depth":{"type":"number"},"root":{"type":"string"}},"required":["depth"],"type":"object"},
         schema: 'z.object({ depth: z.number(), root: z.string().optional() }).strict()',
       }),
     });

@@ -54,7 +54,7 @@ export const artifactRouteFor = (route: CompiledAgentRoute): ArtifactManifestRou
       : {
         execution: {
           fallback: execution.fallback,
-          ...(execution.preflight === undefined ? {} : { preflight: execution.preflight }),
+          ...(execution.handler === undefined ? {} : { handler: execution.handler }),
           runtime: execution.runtime,
         },
       }),
@@ -97,6 +97,7 @@ export const artifactCliCommandFor = (command: CompiledCliCommand): ArtifactMani
   aliases: [...command.aliases],
   ...(command.description === undefined ? {} : { description: command.description }),
   exitCode: command.exitCode,
+  ...(command.input === undefined ? {} : { input: command.input }),
   ...(command.mcp === undefined ? {} : { mcp: { ...command.mcp } }),
   options: command.options.map(artifactCliOptionFor),
   path: [...command.path],

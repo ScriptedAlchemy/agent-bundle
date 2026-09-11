@@ -681,7 +681,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   );
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(source).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
-  expect(source).toContain('preflight: Object.freeze(message.invocation.props.payload.preflight)');
+  expect(source).toContain('renderInput: Object.freeze(message.invocation.props.payload.renderInput)');
   expect(source).toContain('route.module.inputSchema.parse(message.invocation.props.input)');
   expect(source).toContain('message.validateInput !== true ? { input: message.invocation.props.input');
   expect(source).toContain("createElement(Agent.Error, { code: 'invalid-input' }");
@@ -1022,7 +1022,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
   expect(withProviders).toContain(
     'processLifetime.hits += 1;\n  const processHit = { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid };',
   );
-  expect(withProviders).toContain('providers: { processLifetime: processHit },');
+  expect(withProviders).toContain('process: processHit,');
 
   // A project without providers still mounts only the framework-owned process identity.
   const withoutProviders = entryShellModule.generatedCliBinEntrySource({
@@ -1031,7 +1031,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
     routes: [route],
   });
   expect(withoutProviders).not.toContain('const providers = Object.freeze([');
-  expect(withoutProviders).toContain('providers: { processLifetime: processHit },');
+  expect(withoutProviders).toContain('process: processHit,');
   expect(withoutProviders).not.toContain('import * as provider0');
 });
 
@@ -1124,9 +1124,8 @@ it('keeps the generated provider loop and the in-process execution helper identi
     'provider.source': 'src/providers/alpha-value.ts',
   })).toBe(providerFailedMessage('alphaValue', 'src/providers/alpha-value.ts', new Error('boom')));
 
-  // Behavior: processLifetime seeded first, deterministic order, fail-closed on both defects,
+  // Behavior: deterministic order, fail-closed on both defects,
   // and the request view spread onto the factory context beside the surface invocation (#459).
-  const lifetime = { hits: 3, instanceId: 'instance-1', pid: 42 };
   const signal = new AbortController().signal;
   // The runtime omits `notices`/`state` when the request mounted none; here state is mounted, notices not.
   const plugin = { source: 'derived', state: 'available', value: { root: '/plugin', stateRoot: '/plugin/state' } } as const;
@@ -1142,32 +1141,28 @@ it('keeps the generated provider loop and the in-process execution helper identi
   const calls: string[] = [];
   const values = await executeProviders({
     invocation: { kind: 'cli', props: { args: [], command: 'report' } },
-    processLifetime: lifetime,
     providers: [
       { key: 'alphaValue', module: { default: (context: { invocation: unknown; plugin: unknown }) => { calls.push('alphaValue'); return [context.invocation, context.plugin]; } }, source: 'src/providers/alpha-value.ts' },
       { key: 'zeta', module: { default: async (context: Record<string, unknown>) => { calls.push('zeta'); return Object.keys(context).sort(); } }, source: 'src/providers/zeta.ts' },
     ],
     request,
   });
-  expect(Object.keys(values)).toEqual(['processLifetime', 'alphaValue', 'zeta']);
+  expect(Object.keys(values)).toEqual(['alphaValue', 'zeta']);
   // Providers receive the invocation and, through the request view, the observed
   // plugin root (#468) — the same value the request scope publishes.
   expect(values).toEqual({
     alphaValue: [{ kind: 'cli', props: { args: [], command: 'report' } }, plugin],
-    processLifetime: { hits: 3, instanceId: 'instance-1', pid: 42 },
     zeta: ['host', 'invocation', 'lineage', 'plugin', 'session', 'signal', 'state', 'workspace'],
   });
   expect(source).toContain('await module.default({ ...request, invocation: message.invocation })');
   expect(calls).toEqual(['alphaValue', 'zeta']);
   await expect(executeProviders({
     invocation: undefined,
-    processLifetime: lifetime,
     providers: [{ key: 'zeta', module: {}, source: 'src/providers/zeta.ts' }],
     request,
   })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) must default-export a factory.');
   await expect(executeProviders({
     invocation: undefined,
-    processLifetime: lifetime,
     providers: [{ key: 'zeta', module: { default: () => { throw new Error('boom'); } }, source: 'src/providers/zeta.ts' }],
     request,
   })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) failed: boom');

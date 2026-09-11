@@ -50,7 +50,7 @@ const manifest: RouteManifest = {
   events: [
     route('event:tool/before', 'event-route', 'src/events/tool/before.ts', {
       event: 'tool/before',
-      execution: { fallback: 'standalone', preflight: 'src/events/tool/before.preflight.ts', runtime: 'standalone' },
+      execution: { fallback: 'standalone', handler: 'src/events/tool/before.handler.ts', runtime: 'standalone' },
     }),
   ],
   providers: [],
@@ -114,9 +114,9 @@ const tree = () => applicationTreeForManifest({
 });
 
 describe('application tree derivation', () => {
-  it('carries compiled event preflight metadata to the workspace leaf', () => {
+  it('carries compiled event handler metadata to the workspace leaf', () => {
     expect(applicationLeafForRouteId(tree(), 'event:tool/before')).toMatchObject({
-      preflight: 'src/events/tool/before.preflight.ts',
+      handler: 'src/events/tool/before.handler.ts',
     });
   });
 

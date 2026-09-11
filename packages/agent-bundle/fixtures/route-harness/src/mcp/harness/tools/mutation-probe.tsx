@@ -4,6 +4,15 @@ import { z } from 'zod';
 let executions = 0;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "marker": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
   description: 'Records how many times the mutation probe executed.',
   title: 'Mutation probe',
 };

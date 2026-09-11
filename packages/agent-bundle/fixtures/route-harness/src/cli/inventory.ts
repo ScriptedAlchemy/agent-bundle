@@ -3,6 +3,29 @@ import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "enum": [
+          "json",
+          "text"
+        ],
+        "type": "string",
+        "default": "text"
+      },
+      "limit": {
+        "type": "number"
+      },
+      "shelf": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "shelf"
+    ],
+    "type": "object"
+  },
   aliases: ['inv'],
   description: 'Lists the harness library inventory.',
   positionals: ['shelf'],

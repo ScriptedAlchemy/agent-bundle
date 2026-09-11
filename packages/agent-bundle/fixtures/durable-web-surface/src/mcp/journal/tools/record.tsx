@@ -2,6 +2,18 @@ import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "note": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "note"
+    ],
+    "type": "object"
+  },
   _meta: { ui: { resourceUri: 'ui://durable-web-surface-fixture/status.html' } },
   description: 'Appends one note to the durable journal and reports every entry.',
   title: 'Record',

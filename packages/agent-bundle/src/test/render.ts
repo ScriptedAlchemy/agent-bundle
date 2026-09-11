@@ -67,12 +67,11 @@ import type {
  * `capabilities` are the identity-injection seam for context-dependent route
  * tests; construct observed values with `available` or `unavailable` from
  * `@agent-bundle/runtime`. `providers` is the opt-out for conventional
- * provider discovery: when present it is mounted verbatim; when absent the
- * harness executes the project's `src/providers/*` exactly as the generated
- * request scopes do. It stays optional even once the generated
+ * provider discovery: supplied values seed provider(key); otherwise the harness
+ * loads requested factories from `src/providers/*` as generated scopes do. It stays optional even once the generated
  * `.agent-bundle/routes.d.ts` augmentation declares provider keys — omitting
- * it runs the real providers, which is the artifact's behavior — while an
- * explicit map must still carry every declared key, so a fixture cannot leave
+ * it runs requested providers, which is the artifact's behavior — while an
+ * explicit map seeds only the keys the test supplies, so a fixture can leave
  * a promised value `undefined`.
  */
 export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress' | 'providers' | 'signal'> & {
@@ -395,12 +394,12 @@ const componentProps = (
       // The public event-route contract is `{ canonical, native, signal }`,
       // and the generated Flight worker unwraps the payload into exactly that.
       const payload = (invocation.props as {
-        readonly payload?: { readonly canonical?: unknown; readonly native?: unknown; readonly preflight?: unknown };
+        readonly payload?: { readonly canonical?: unknown; readonly native?: unknown; readonly renderInput?: unknown };
       }).payload ?? {};
       return {
         canonical: payload.canonical,
         native: payload.native,
-        ...(payload.preflight === undefined ? {} : { preflight: payload.preflight }),
+        ...(payload.renderInput === undefined ? {} : { renderInput: payload.renderInput }),
         signal,
       };
     }
@@ -1089,7 +1088,7 @@ export interface PreparedCliRenderHost {
     input: Readonly<Record<string, unknown>>,
     context: GeneratedCliRenderContext,
     projectionModule?: Readonly<Record<string, unknown>>,
-  ) => GeneratedCliRenderSession;
+  ) => Promise<GeneratedCliRenderSession>;
 }
 
 /** Loads the dispatched command's explicit CLI projection through the generated registry. */
@@ -1146,12 +1145,12 @@ export const prepareCliRenderHost = async (
   }
   return Object.freeze({
     close: mounted.close,
-    render: (
+    render: async (
       command: CompiledCliCommand,
       input: Readonly<Record<string, unknown>>,
       execution: GeneratedCliRenderContext,
       projectionModule?: Readonly<Record<string, unknown>>,
-    ): GeneratedCliRenderSession => {
+    ): Promise<GeneratedCliRenderSession> => {
       const module = options.modules.get(command.routeId);
       if (module === undefined) {
         throw new AgentTestError(
@@ -1173,7 +1172,7 @@ export const prepareCliRenderHost = async (
           },
         );
       }
-      const parsed = mapGeneratedCliInput(command, module.inputSchema, projectionModule, input);
+      const parsed = await mapGeneratedCliInput(command, module.inputSchema, projectionModule, input);
       const commandName = command.path.join(' ');
       const invocation: AgentRenderInvocation = {
         kind: 'cli',
@@ -1199,7 +1198,7 @@ export const prepareCliRenderHost = async (
             explicit: context.providers,
             invocation,
             manifest: options.manifest,
-            processHit: claimProcessHit(options.processLifetime),
+            processHit: context.process ?? claimProcessHit(options.processLifetime),
             provenance: { ...options.provenance, routeId: command.routeId },
           });
           return {
@@ -1374,7 +1373,7 @@ export const prepareScriptRenderHost = async (
               explicit: context.providers,
               invocation,
               manifest: options.manifest,
-              processHit: claimProcessHit(options.processLifetime),
+              processHit: context.process ?? claimProcessHit(options.processLifetime),
               provenance: options.provenance,
             });
             return {
@@ -1505,7 +1504,7 @@ const prepareRender = async (
         explicit: context.providers,
         invocation: request.invocation,
         manifest: resolved.manifest,
-        processHit: claimProcessHit(processLifetime),
+        processHit: context.process ?? claimProcessHit(processLifetime),
         provenance: resolved.provenance,
       }),
       invocation: {

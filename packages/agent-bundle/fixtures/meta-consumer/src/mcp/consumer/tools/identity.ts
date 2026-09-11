@@ -5,6 +5,11 @@ import { z } from 'zod';
 import { banner, identity } from '../../../lib/identity.ts';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description: 'Reports the identity agent-bundle/meta resolved to.',
   title: 'Identity',

@@ -70,8 +70,8 @@ const invocation = Object.freeze({
       host: 'claude',
       nativeEvent: 'PostToolUse',
     }),
-    kind: 'preflight.start' as const,
-    phase: 'preflight' as const,
+    kind: 'handler.start' as const,
+    phase: 'handler' as const,
     sequence: 0,
   }]),
 }) satisfies RouteInvocation;

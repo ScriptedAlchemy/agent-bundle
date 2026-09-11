@@ -561,13 +561,13 @@ const normalizeHooks = (
       eventRoute: Object.freeze({
         event,
         fallback: execution.fallback,
-        ...(route.preflight === undefined
+        ...(route.handler === undefined
           ? {}
           : {
-            preflight: {
-              ...route.preflight,
-              provenance: { ...route.preflight.provenance },
-              source: route.preflight.source,
+            handler: {
+              ...route.handler,
+              provenance: { ...route.handler.provenance },
+              source: route.handler.source,
             },
           }),
         runtime: execution.runtime,

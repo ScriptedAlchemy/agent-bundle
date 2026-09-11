@@ -46,14 +46,12 @@ bundled nor recorded as an external` 失败。摘要匹配只证明字节是编�
 无效语法；`dist` 的发现以 `dist/<path>` 命名文件。预构建负载（`kind: 'prebuilt'`）保持不透明、仅做哈希
 锁定，声明文件（`.d.ts`）不会被遍历。
 
-路由图会在打包器运行之前守住同一份自包含性：
-路由模块、布局或 provider——或它们之一通过相对导入触达的模块——若值导入了携带编译器的框架入口
-（`agent-bundle`、`agent-bundle/api`、`agent-bundle/config`、`agent-bundle/eval`、`agent-bundle/rstest`、
-`agent-bundle/test`、`agent-bundle/test/browser`），会由 `inspect`、`validate`、`build` 与 `dev` 报告为
-`AB4837`，点名文件与说明符，而不是在打包器内部失败。浏览器安全且不携带编译器的
-`agent-bundle/app` 不在这份列表中，值导入不会触发 `AB4837`。`import type` 以及仅作为类型使用的导入
-也不会被报告。已安装产物通过 [`<plugin> web`](../../reference/cli.mdx#plugin-web) 提供 App；见
-[在浏览器中暴露 App](../authoring/mcp.mdx#在浏览器中暴露-app)。
+编译时，`AB4837` 拒绝导入携带编译器的框架入口：`agent-bundle`、
+`agent-bundle/api`、`agent-bundle/config`、`agent-bundle/eval`、`agent-bundle/rstest`、
+`agent-bundle/test` 和 `agent-bundle/test/browser`。检查使用转换后的依赖请求和解析后的
+包导出身份（包括别名），并指出导入模块。被配置的转换器擦除的类型导入仍然合法。
+仅分析源码的 `inspect` 和 `validate` 不证明此依赖边界。`agent-bundle/app` 是浏览器安全的叶入口。
+已安装产物通过 [`<plugin> web`](../../reference/cli.mdx#plugin-web) 提供 App。
 
 ## 编译证据记录
 

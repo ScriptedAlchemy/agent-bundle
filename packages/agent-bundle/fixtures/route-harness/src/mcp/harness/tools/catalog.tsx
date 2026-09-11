@@ -3,6 +3,15 @@ import { Suspense } from 'react';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "genre": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
   description: 'Streams the harness catalog behind one Suspense boundary.',
   // Its streamed Agent.Progress fallback is what a task reports through tasks/get (#369).
   execution: { taskSupport: 'optional' },

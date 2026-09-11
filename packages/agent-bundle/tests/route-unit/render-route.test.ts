@@ -438,12 +438,11 @@ describe('renderRoute through the real renderer', () => {
   it('mounts explicit provider fixture values through the context seam instead of discovering providers', async () => {
     const library = { stages: ['discover', 'curate'], tooling: { ffmpeg: { available: false } } };
     const Providers = async (): Promise<unknown> => {
-      const { providers } = await agent();
+      const context = await agent();
+      const value = await context.provider('library');
       return createElement(Agent.Result, {
         value: {
-          frozen: Object.isFrozen(providers),
-          keys: Object.keys(providers).sort(),
-          library: providers['library'] as never,
+          library: value as never,
         },
       }, createElement(Agent.Text, null, 'providers observed'));
     };
@@ -454,19 +453,12 @@ describe('renderRoute through the real renderer', () => {
     });
 
     expectDocument(rendered).toHaveStatus('success').toHaveValue({
-      frozen: true,
-      keys: ['library'],
       library,
     });
 
-    // A module rendered directly has no compiled manifest, so there is nothing
-    // to discover: it observes only the framework-owned process identity, the
-    // same map a generated scope without providers mounts. Manifest routes
-    // execute the project's conventional providers (projection/providers.test.ts).
-    const unfixtured = await renderRoute({ default: Providers as never }, {
+    await expect(renderRoute({ default: Providers as never }, {
       routeId: 'tool:harness/providers (module)',
-    });
-    expectDocument(unfixtured).toHaveValue({ frozen: true, keys: ['processLifetime'], library: undefined });
+    })).rejects.toThrow('Unknown provider');
   });
 
   it('serves useAgent() synchronously inside a rendered Server Component', async () => {
@@ -478,7 +470,6 @@ describe('renderRoute through the real renderer', () => {
       return createElement(Agent.Result, {
         value: {
           invocation: context.invocation.kind,
-          library: context.providers['library'] as never,
           workspace: context.workspace.state === 'available' ? context.workspace.value.root : context.workspace.reason,
         },
       }, createElement(Agent.Text, null, 'synchronous context observed'));
@@ -491,7 +482,6 @@ describe('renderRoute through the real renderer', () => {
 
     expectDocument(rendered).toHaveStatus('success').toHaveValue({
       invocation: 'tool',
-      library: { stages: ['discover'] },
       workspace: '/tmp/harness-library',
     });
   });

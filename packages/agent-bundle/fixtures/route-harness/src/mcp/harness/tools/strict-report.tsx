@@ -2,6 +2,15 @@ import { Agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "reportId": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
   _meta: { ui: { resourceUri: 'ui://route-harness/panel.html' } },
   description: 'Returns a closed-object report that rejects unknown serialized keys.',
   title: 'Strict report',

@@ -66,7 +66,7 @@ export const config = {
 reviewing the intended confirmation policy. The generated command calls the same tool and
 validates against its canonical schema.
 
-Use the supported aliases, flags, positionals and synchronous `mapInput` only to translate CLI
+Use the supported aliases, flags, positionals and sync or async `mapInput` only to translate CLI
 syntax. Do not repeat the domain operation or its result renderer inside the mapper. Keep a
 separate `src/cli/**` route for a genuinely independent aggregate workflow.
 
@@ -129,7 +129,7 @@ at runtime. Generated type-only imports must remain type-only.
 ## Use canonical event files
 
 Use `src/events/**` for every framework lifecycle handler. `.ts` returns a cheap decision,
-`.tsx` renders JSX, and an optional `before()` gates rendering. Native hook documents remain
+`.tsx` renders JSX; a `.ts` handler can request a separate `.view.tsx` with `ctx.render()`. Native hook documents remain
 an adapter escape hatch.
 
 Native payload fields are

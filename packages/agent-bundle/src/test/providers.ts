@@ -49,7 +49,7 @@ export interface MountProvidersOptions {
   readonly manifest: AgentBundleTestManifest | undefined;
   /**
    * This request's claimed hit on the simulated executable's process identity
-   * (see {@link claimProcessHit}); mounted verbatim as `providers.processLifetime`.
+   * (see {@link claimProcessHit}); mounted verbatim as `context.process`.
    */
   readonly processHit: ProviderProcessLifetimeValue;
   readonly provenance?: RenderedRouteProvenance;
@@ -115,20 +115,19 @@ export const harnessPluginRoot = (options: HarnessPluginRootOptions): Observed<A
     ?? options.resolvePluginRoot({ fallback: join(options.manifest?.projectRoot ?? process.cwd(), '.agent-bundle') }).identity;
 
 /** Supply explicit fixture values or a lazy resolver over the compiled provider catalog. */
-export const mountProviders = (options: MountProvidersOptions): Pick<AgentRequestInitBase, 'resolveProvider'> & { readonly providers: Partial<AgentProviderValues> } => {
-  if (options.explicit !== undefined) return { providers: options.explicit };
+export const mountProviders = (options: MountProvidersOptions): Pick<AgentRequestInitBase, 'resolveProvider' | 'process'> & { readonly providers?: Partial<AgentProviderValues> } => {
+  if (options.explicit !== undefined) return { providers: options.explicit, process: options.processHit };
   const manifest = options.manifest;
   if (manifest === undefined) {
-    return { providers: { processLifetime: options.processHit } };
+    return { process: options.processHit };
   }
   return {
-    providers: { processLifetime: options.processHit },
+    process: options.processHit,
     resolveProvider: async (key, request) => {
       const descriptor = (manifest.providers ?? []).find((provider) => provider.key === key);
       if (descriptor === undefined) throw new TypeError(`Unknown provider ${JSON.stringify(key)}.`);
       const values = await executeProviders({
         invocation: options.invocation,
-        processLifetime: { ...options.processHit },
         providers: [await loadProvider(manifest, descriptor, options.provenance)],
         request,
       });

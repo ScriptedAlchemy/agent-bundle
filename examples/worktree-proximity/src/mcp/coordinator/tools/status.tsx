@@ -7,6 +7,15 @@ import type { AgentTopologyProviderValue } from '../../../providers/agent-topolo
 import { ActivitySchema, BindingSchema } from '../../../state.js';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "actorId": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description: 'Show the live agent tree the runtime resolved for this call, the worktree bindings, active intents, refusals, and the state of the proximity notices this agent published.',
 } satisfies ToolConfig;

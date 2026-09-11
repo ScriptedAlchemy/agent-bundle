@@ -12,6 +12,27 @@ import { outputOperations } from '../../../operations/output.js';
 const operation = outputOperations.audit;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "conversionReceipt": {
+        "type": "string"
+      },
+      "file": {
+        "type": "string"
+      },
+      "fullDecode": {
+        "type": "boolean"
+      },
+      "receipt": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "file"
+    ],
+    "type": "object"
+  },
   annotations: { readOnlyHint: false },
   description: 'Validate chapter structure, optional conversion mapping, file/audio hashes, probe facts, and optional full decode.',
   exitCode: 'result',

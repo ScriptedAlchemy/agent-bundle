@@ -145,14 +145,13 @@ describe('the authoritative manifest combined proof', () => {
           "process.stdout.write(z.string().parse('prebuilt-runtime'));",
           '',
         ].join('\n'),
-        'src/events/tool/before.preflight.ts': [
+        'src/events/tool/before.ts': [
+          "export const config = { runtime: 'standalone', targets: ['claude'] };",
           'export default () => ({ outcome: \'continue\' });',
           '',
         ].join('\n'),
-        'src/events/tool/before.tsx': [
+        'src/events/tool/before.view.tsx': [
           "import { Agent } from '@agent-bundle/runtime';",
-          "export { default as preflight } from './before.preflight.js';",
-          "export const config = { providers: ['stateProbe'], runtime: 'standalone', targets: ['claude'] };",
           'export default async function BeforeTool() {',
           "  return <Agent.Result value={{ outcome: 'continue' }} />;",
           '}',
@@ -172,7 +171,7 @@ describe('the authoritative manifest combined proof', () => {
         'src/mcp/proof/tools/show-status.tsx': [
           "import { Agent } from '@agent-bundle/runtime';",
           "import { z } from 'zod';",
-          "export const config = { annotations: { readOnlyHint: true }, description: 'Show combined proof status.', _meta: { ui: { resourceUri: 'ui://manifest-combined-proof/status.html' } } };",
+          "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"],\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Show combined proof status.', _meta: { ui: { resourceUri: 'ui://manifest-combined-proof/status.html' } } };",
           'export const inputSchema = z.object({ message: z.string().min(1) }).strict();',
           'export const resultSchema = z.object({ message: z.string() }).strict();',
           'export default async function ShowStatus({ input }) {',
@@ -247,11 +246,11 @@ describe('the authoritative manifest combined proof', () => {
       event: 'tool/before',
       execution: {
         fallback: 'none',
-        preflight: 'src/events/tool/before.preflight.ts',
+        handler: 'src/events/tool/before.ts',
         runtime: 'standalone',
       },
       id: 'event:tool/before',
-      source: 'src/events/tool/before.tsx',
+      source: 'src/events/tool/before.ts',
     });
 
     const eventHooks = manifest.executables.hooks.filter((hook) => hook.routeId === 'event:tool/before');

@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
 import type { CanonicalAgentEvent } from '../routes/events.ts';
-import type { EventPreflightResult } from './preflight.ts';
+import type { EventHandlerResult } from './handler.ts';
 
 /**
  * The execution-kernel trace surface for conventional event routes (#600).
  *
  * One {@link EventTracer} lives for one hook execution — a hook wrapper
  * process or one shared-runtime request — and describes what the kernel did
- * with it as a sequence of frozen {@link EventTraceEvent}s: the preflight gate
+ * with it as a sequence of frozen {@link EventTraceEvent}s: the handler gate
  * (start, outcome), the deferred route load that only an `execute` gate
  * result triggers, provider materialization, the route render, and a terminal
  * failure. The surface is deliberately small and observer-agnostic: the
@@ -26,13 +26,13 @@ import type { EventPreflightResult } from './preflight.ts';
  */
 
 /** The kernel phases a trace can attribute time or a failure to. */
-export const eventTracePhases = Object.freeze(['preflight', 'execute', 'providers', 'render'] as const);
+export const eventTracePhases = Object.freeze(['handler', 'execute', 'providers', 'render'] as const);
 export type EventTracePhase = (typeof eventTracePhases)[number];
 
 /** Every discriminant of {@link EventTraceEvent}, for consumers that switch or filter. */
 export const eventTraceEventKinds = Object.freeze([
-  'preflight.start',
-  'preflight.outcome',
+  'handler.start',
+  'handler.outcome',
   'execute.start',
   'providers.start',
   'providers.finish',
@@ -46,7 +46,7 @@ export type EventTraceEventKind = (typeof eventTraceEventKinds)[number];
 export type EventTraceRuntime = 'shared' | 'standalone';
 
 /** The gate decision without its reason text: `deny` is enough for a trace. */
-export type EventTracePreflightOutcome = 'execute' | 'continue' | 'deny';
+export type EventTraceHandlerOutcome = 'render' | 'continue' | 'deny';
 
 /**
  * Identity shared by every event of one execution. `executionId` is unique
@@ -76,13 +76,13 @@ interface EventTraceEventBase<K extends EventTraceEventKind, P extends EventTrac
   readonly sequence: number;
 }
 
-export type EventTracePreflightStart = EventTraceEventBase<'preflight.start', 'preflight'>;
-export interface EventTracePreflightOutcomeEvent extends EventTraceEventBase<'preflight.outcome', 'preflight'> {
-  /** Present when `preflight.start` was observed on this tracer. */
+export type EventTraceHandlerStart = EventTraceEventBase<'handler.start', 'handler'>;
+export interface EventTraceHandlerOutcomeEvent extends EventTraceEventBase<'handler.outcome', 'handler'> {
+  /** Present when `handler.start` was observed on this tracer. */
   readonly durationMs?: number;
-  readonly outcome: EventTracePreflightOutcome;
+  readonly outcome: EventTraceHandlerOutcome;
 }
-/** The gate returned `execute`: the kernel now loads the rendered route runtime. */
+/** The gate returned `render`: the kernel now loads the rendered route runtime. */
 export interface EventTraceExecuteStart extends EventTraceEventBase<'execute.start', 'execute'> {
   readonly runtime: EventTraceRuntime;
 }
@@ -105,8 +105,8 @@ export interface EventTraceFailure extends EventTraceEventBase<'failure', EventT
 }
 
 export type EventTraceEvent =
-  | EventTracePreflightStart
-  | EventTracePreflightOutcomeEvent
+  | EventTraceHandlerStart
+  | EventTraceHandlerOutcomeEvent
   | EventTraceExecuteStart
   | EventTraceProvidersStart
   | EventTraceProvidersFinish
@@ -148,8 +148,8 @@ export interface EventTracer {
   /** Whether an explicit or process-local observer is currently available. */
   readonly enabled: boolean;
   readonly execution: EventTraceExecution;
-  preflightStart(): void;
-  preflightOutcome(result: EventPreflightResult): void;
+  handlerStart(): void;
+  handlerOutcome(result: EventHandlerResult): void;
   executeStart(runtime: EventTraceRuntime): void;
   providersStart(): void;
   providersFinish(count: number): void;
@@ -235,8 +235,8 @@ export const summarizeEventTraceError = (error: unknown): EventTraceErrorSummary
   return Object.freeze({ message: boundedMessage(printable(error)), name: NON_ERROR_NAME });
 };
 
-const preflightOutcomeOf = (result: EventPreflightResult): EventTracePreflightOutcome => {
-  if (result === 'execute' || result.outcome === 'execute') return 'execute';
+const handlerOutcomeOf = (result: EventHandlerResult): EventTraceHandlerOutcome => {
+  if (result.outcome === 'render') return 'render';
   switch (result.outcome) {
     case 'continue':
       return 'continue';
@@ -327,22 +327,22 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
         sequence: next,
       }), true);
     },
-    preflightOutcome: (result) => {
-      const outcome = preflightOutcomeOf(result);
+    handlerOutcome: (result) => {
+      const outcome = handlerOutcomeOf(result);
       emit((at, next) => ({
         at,
-        ...durationField(startedAt.preflight, at),
+        ...durationField(startedAt.handler, at),
         execution,
-        kind: 'preflight.outcome',
+        kind: 'handler.outcome',
         outcome,
-        phase: 'preflight',
+        phase: 'handler',
         sequence: next,
       }));
     },
-    preflightStart: () => {
+    handlerStart: () => {
       emit((at, next) => {
-        startedAt.preflight = at;
-        return { at, execution, kind: 'preflight.start', phase: 'preflight', sequence: next };
+        startedAt.handler = at;
+        return { at, execution, kind: 'handler.start', phase: 'handler', sequence: next };
       });
     },
     providersFinish: (count) => {

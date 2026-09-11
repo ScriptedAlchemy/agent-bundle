@@ -11,6 +11,40 @@ import { evidenceOperations } from '../../../operations/evidence.js';
 const operation = evidenceOperations.acousticIdentify;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "all": {
+        "type": "boolean"
+      },
+      "attempts": {
+        "type": "number"
+      },
+      "candidates": {
+        "type": "string"
+      },
+      "chunkSeconds": {
+        "type": "number"
+      },
+      "file": {
+        "type": "string"
+      },
+      "receipt": {
+        "type": "string"
+      },
+      "top": {
+        "type": "number"
+      },
+      "verbose": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "candidates",
+      "file"
+    ],
+    "type": "object"
+  },
   annotations: { openWorldHint: true, readOnlyHint: false },
   description: 'Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default.',
   exitCode: 'result',

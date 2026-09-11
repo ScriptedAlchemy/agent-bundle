@@ -13,6 +13,46 @@ import { CurationShelfStateSchema } from '../../../state.js';
 const operation = mediaMutationOperations.applyMetadata;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "apply": {
+        "type": "boolean"
+      },
+      "artwork": {
+        "type": "string"
+      },
+      "author": {
+        "type": "string"
+      },
+      "file": {
+        "type": "string"
+      },
+      "language": {
+        "type": "string"
+      },
+      "narrator": {
+        "type": "string"
+      },
+      "product": {
+        "type": "string"
+      },
+      "receipt": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "year": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "file",
+      "product"
+    ],
+    "type": "object"
+  },
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream.',
 };

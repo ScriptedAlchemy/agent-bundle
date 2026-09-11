@@ -1,3 +1,4 @@
+import type { RouteInputSchema } from './types.ts';
 import type { JsonValue } from '../core/strict-json.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
 import type { AgentEventPayload, CanonicalAgentEvent } from './events.ts';
@@ -54,11 +55,11 @@ export interface AgentEventCanonicalIdentity<E extends CanonicalAgentEvent = Can
 export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
 
 /**
- * Props received by an event route's async default Server Component.
+ * Props received by an event route's default Server Component.
  * `canonical.payload` is the cross-host reading of the envelope for the
  * route's family; `native` is the frozen host envelope itself, for the
- * host-specific fields the payload does not model; `preflight` is strict JSON
- * returned by the route's gate with an execute outcome.
+ * host-specific fields the payload does not model; `renderInput` is strict JSON
+ * passed by the event handler to ctx.render().
  *
  * Read transport-owned request context with `await agent()` from
  * `@agent-bundle/runtime`. The invocation, host, session, actor, workspace,
@@ -71,11 +72,11 @@ export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
  */
 export interface AgentEventRouteProps<
   E extends CanonicalAgentEvent = CanonicalAgentEvent,
-  Preflight extends JsonValue = JsonValue,
+  RenderInput extends JsonValue = JsonValue,
 > {
   readonly canonical: AgentEventCanonicalIdentity<E>;
   readonly native: AgentEventNativePayload;
-  readonly preflight?: Preflight;
+  readonly renderInput?: RenderInput;
   readonly signal: AbortSignal;
 }
 
@@ -358,7 +359,7 @@ export interface AgentEventRouteConfig {
 }
 
 /**
- * Props received by every executable MCP route's async default Server Component.
+ * Props received by every executable MCP route's default Server Component.
  *
  * Read transport-owned invocation, host, session, actor, and workspace axes
  * with `await agent()` from `@agent-bundle/runtime`. Every identity axis is
@@ -456,6 +457,8 @@ export interface ToolExecutionConfig {
 }
 
 export interface ToolConfig {
+  /** Execution-free input metadata for forms and CLI flags; the original schema owns validation. */
+  readonly inputJsonSchema?: RouteInputSchema;
   readonly _meta?: RouteMeta;
   readonly annotations?: Readonly<Record<string, boolean>>;
   readonly description?: string;
@@ -469,6 +472,8 @@ export interface ToolConfig {
 }
 
 export interface ResourceConfig {
+  /** Execution-free input metadata for forms and CLI flags; the original schema owns validation. */
+  readonly inputJsonSchema?: RouteInputSchema;
   readonly _meta?: RouteMeta;
   readonly description?: string;
   readonly mimeType?: string;
@@ -479,6 +484,8 @@ export interface ResourceConfig {
 }
 
 export interface PromptConfig {
+  /** Execution-free input metadata for forms and CLI flags; the original schema owns validation. */
+  readonly inputJsonSchema?: RouteInputSchema;
   readonly _meta?: RouteMeta;
   readonly description?: string;
   /** The render budget of one get. */
@@ -506,6 +513,10 @@ export interface AppRouteConfig {
  * itself comes from the file path, never from config.
  */
 export interface CliRouteConfig {
+  /** Take canonical input through --input JSON; the default when inputJsonSchema is absent. */
+  readonly input?: 'json';
+  /** Execution-free input metadata for forms and CLI flags; the original schema owns validation. */
+  readonly inputJsonSchema?: RouteInputSchema;
   /** Alternative command names at the same nesting level. */
   readonly aliases?: readonly string[];
   readonly description?: string;
@@ -577,7 +588,7 @@ export type RouteSchemaInputKey<Schema> = Schema extends { readonly _input: infe
  * tool's `inputSchema`, so declare it as
  * `satisfies CliProjectionConfig<typeof inputSchema>` with
  * `import type { inputSchema } from './<tool>.js'`. The module may also export
- * a synchronous `mapInput(input)` the shell applies to the parsed argv before
+ * a sync or async `mapInput(input)` the shell awaits and applies to the parsed argv before
  * the canonical schema validates.
  */
 export interface CliProjectionConfig<Schema = RouteSchema<Readonly<Record<string, unknown>>>> {
@@ -606,7 +617,7 @@ export interface CliProjectionConfig<Schema = RouteSchema<Readonly<Record<string
 }
 
 /**
- * Props received by every routed CLI command's async default function.
+ * Props received by every routed CLI command's default function.
  *
  * Read transport-owned invocation, host, session, actor, and workspace axes
  * with `await agent()` from `@agent-bundle/runtime`. Every identity axis is

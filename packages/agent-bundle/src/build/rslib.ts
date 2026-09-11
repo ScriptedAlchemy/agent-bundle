@@ -6,6 +6,8 @@ import { createRslib, mergeRslibConfig, rspack, type LibConfig, type Rspack } fr
 import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
+import { DiagnosticError, deduplicateDiagnostics, type Diagnostic } from '../core/diagnostics.ts';
+import { FrameworkImportBoundaryPlugin } from './framework-imports.ts';
 import { dependencyManifestPath } from '../core/dependency-manifest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual, posixRelativeWhenInside } from '../core/paths.ts';
@@ -507,6 +509,7 @@ export const composeEntryLibConfig = (
     /** The project identity served to plugin source as `agent-bundle/meta`. */
     readonly meta: AgentBundleMeta;
     readonly onCompilationEvidence?: (evidence: CompilationEvidence) => void;
+    readonly onFrameworkImport?: (diagnostic: Diagnostic) => void;
     /** Receives reserved specifiers that a function-form external resolved at build time. */
     readonly onReservedExternal?: (specifier: string) => void;
     readonly outputRoot: string;
@@ -597,6 +600,7 @@ export const composeEntryLibConfig = (
         ? [new (rslibVirtualModulesPlugin())(Object.fromEntries(generatedModules.map((module) => [module.path, module.source])))]
         : []),
       new ArtifactDependencyAuditPlugin(options.onCompilationEvidence ?? (() => undefined)),
+      new FrameworkImportBoundaryPlugin(options.onFrameworkImport ?? (() => undefined)),
     ];
     config.plugins = [...(config.plugins ?? []), ...frameworkPlugins];
     if (virtualSource !== undefined) {
@@ -825,6 +829,7 @@ const lowerEntries = async (
     readonly createRslib: NonNullable<RslibDependencies['createRslib']>;
     readonly logLevel: 'error' | 'silent';
     readonly onCompilationEvidence?: (evidence: CompilationEvidence) => void;
+    readonly onFrameworkImport?: (diagnostic: Diagnostic) => void;
     readonly onReservedExternal?: (specifier: string) => void;
   },
 ): Promise<{
@@ -838,6 +843,7 @@ const lowerEntries = async (
       lib: entries.map((entry) => composeEntryLibConfig(entry, {
         cwd: options.cwd,
         meta: options.meta,
+        ...(lowering.onFrameworkImport === undefined ? {} : { onFrameworkImport: lowering.onFrameworkImport }),
         ...(lowering.onCompilationEvidence === undefined ? {} : { onCompilationEvidence: lowering.onCompilationEvidence }),
         ...(lowering.onReservedExternal === undefined ? {} : { onReservedExternal: lowering.onReservedExternal }),
         outputRoot: options.outputRoot,
@@ -895,6 +901,7 @@ export const buildRslibSurfaces = async (
   await assertGeneratedModulesRootAbsent(options.cwd);
   const dependencyRoots = await declaredDependencyRoots(options.cwd);
 
+  const frameworkImportViolations: Diagnostic[] = [];
   const reservedExternalViolations: string[] = [];
   const compilationEvidence: CompilationEvidence[] = [...(dependencies.compilationEvidence ?? [])];
   const { rslib } = await lowerEntries(options, entries, {
@@ -902,6 +909,7 @@ export const buildRslibSurfaces = async (
     // The run reports at the most verbose level any surface asks for.
     logLevel: surfaces.some((surface) => surface.logLevel === 'error') ? 'error' : 'silent',
     onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
+    onFrameworkImport: (diagnostic) => frameworkImportViolations.push(diagnostic),
     onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
   });
   let result: Awaited<ReturnType<RslibInstance['build']>> | undefined;
@@ -911,10 +919,12 @@ export const buildRslibSurfaces = async (
     } catch (error) {
       // A violation raised inside the external factory reaches here only as
       // a generic bundler failure; surface the actionable diagnostic.
+      if (frameworkImportViolations.length > 0) throw new DiagnosticError(deduplicateDiagnostics(frameworkImportViolations));
       if (reservedExternalViolations.length > 0) throw reservedExternalError(reservedExternalViolations[0]!);
       throw error;
     }
-    if (reservedExternalViolations.length > 0) throw reservedExternalError(reservedExternalViolations[0]!);
+    if (frameworkImportViolations.length > 0) throw new DiagnosticError(deduplicateDiagnostics(frameworkImportViolations));
+      if (reservedExternalViolations.length > 0) throw reservedExternalError(reservedExternalViolations[0]!);
     const evidence = collectBundledOutputEvidence({
       expectedAssets: surfaces.flatMap((surface) => surface.entries.map((entry) => ({
         ...(surface.ignoredSourcePaths === undefined ? {} : { ignoredSourcePaths: surface.ignoredSourcePaths }),

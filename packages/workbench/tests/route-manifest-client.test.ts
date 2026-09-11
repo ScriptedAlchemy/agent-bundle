@@ -50,8 +50,7 @@ const manifest = {
     event: 'afterTool',
     execution: {
       fallback: 'none',
-      preflight: 'src/events/tool/after.preflight.ts',
-      providers: ['library'],
+      handler: 'src/events/tool/after.handler.ts',
       runtime: 'shared',
     },
     id: 'event:tool/after',
@@ -146,8 +145,7 @@ it('reads the compiled manifest over the shared foreground session', async () =>
   expect(decoded.servers[0]?.routes[0]?.resultSchemaState).toBe('unprojectable');
   expect(decoded.events[0]?.execution).toEqual({
     fallback: 'none',
-    preflight: 'src/events/tool/after.preflight.ts',
-    providers: ['library'],
+    handler: 'src/events/tool/after.handler.ts',
     runtime: 'shared',
   });
   expect(decoded.state).toEqual(manifest.state);

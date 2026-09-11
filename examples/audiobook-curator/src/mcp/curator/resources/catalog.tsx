@@ -7,6 +7,18 @@ import { Callout, DataList } from '../../../components/primitives.tsx';
 import type { LibraryContext } from '../../../providers/library.ts';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "uri": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "uri"
+    ],
+    "type": "object"
+  },
   description: 'Read the audiobook curator workflow catalog.',
   mimeType: 'application/json',
   uri: 'audiobook-curator://catalog',

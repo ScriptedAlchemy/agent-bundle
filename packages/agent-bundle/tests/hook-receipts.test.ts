@@ -251,8 +251,8 @@ it('lowers a failure to hook.failed with the kernel error summary, and a gate ou
   });
   const denied = receipt({
     events: [
-      { at: 0, kind: 'preflight.start', phase: 'preflight', sequence: 0 },
-      { at: 3, durationMs: 3, kind: 'preflight.outcome', outcome: 'deny', phase: 'preflight', sequence: 1 },
+      { at: 0, kind: 'handler.start', phase: 'handler', sequence: 0 },
+      { at: 3, durationMs: 3, kind: 'handler.outcome', outcome: 'deny', phase: 'handler', sequence: 1 },
     ],
   });
   const gated = lowerHookReceipt(denied);
@@ -260,7 +260,7 @@ it('lowers a failure to hook.failed with the kernel error summary, and a gate ou
     details: { gate: 'deny' },
     kind: 'hook.completed',
     status: 'ok',
-    summary: 'claude PreToolUse → tool/before denied by preflight',
+    summary: 'claude PreToolUse → tool/before denied by handler',
   });
   expect(gated[1]!.details).not.toHaveProperty('runtime');
 });

@@ -11,6 +11,27 @@ import { discoveryOperations } from '../../../operations/discovery.js';
 const operation = discoveryOperations.inventory;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "report": {
+        "type": "string",
+        "description": "Optional report destination."
+      },
+      "source": {
+        "type": "string",
+        "description": "Source audio path to inventory."
+      },
+      "strict": {
+        "type": "boolean",
+        "description": "Fail when any source cannot be probed."
+      }
+    },
+    "required": [
+      "source"
+    ],
+    "type": "object"
+  },
   annotations: { readOnlyHint: false },
   description: 'Inventory source audio with retained per-file probe evidence.',
   exitCode: 'result',

@@ -7,6 +7,16 @@ import { z } from 'zod';
  * `result` exit-code policy so the harness proves that mapping too.
  */
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "dryRun": {
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "type": "object"
+  },
   description: 'Applies pending harness migrations.',
   exitCode: 'result',
 } satisfies CliRouteConfig;

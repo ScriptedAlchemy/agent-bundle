@@ -165,7 +165,7 @@ const createBundle = async (
       scripts: [],
     },
     files,
-  manifestVersion: 5,
+  manifestVersion: 6,
     projections: [{
       builtInHost: 'claude',
       documents: {
