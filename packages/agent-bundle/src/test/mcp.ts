@@ -497,7 +497,7 @@ export const openInMemoryMcpServer = async <
             terminal: transport.terminal,
             workspace: transport.workspace,
             ...context,
-            providers,
+            ...providers,
             invocation: {
               kind: 'tool' as const,
               operationId: route.id,

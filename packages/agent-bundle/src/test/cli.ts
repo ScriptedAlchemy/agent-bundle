@@ -272,7 +272,7 @@ export const invokeCli = async (
           terminal: runtime.available(execution.terminal, 'native'),
           workspace: runtime.available({ root }, 'derived'),
           ...context,
-          providers,
+          ...providers,
           invocation: {
             kind: 'cli',
             operationId: command.routeId,

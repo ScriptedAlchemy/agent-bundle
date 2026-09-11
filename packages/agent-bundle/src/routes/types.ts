@@ -29,6 +29,8 @@ export interface RouteProvenance {
 
 /** The separately bundleable static preflight attached to one event route. */
 export interface CompiledEventPreflight {
+  readonly mode?: 'handler' | 'gate';
+  readonly virtualSource?: string;
   readonly provenance: RouteProvenance;
   /** Absolute preflight module path. */
   readonly source: string;

@@ -128,7 +128,7 @@ export default async function Status({
 }: ToolRouteProps<typeof inputSchema>) {
   // Everything this tool reports was read once, by the provider, from the
   // request the runtime opened for this call: no second read, no guess.
-  const { agents, intent: intentResult, notices } = topologyOf((await agent()).providers);
+  const { agents, intent: intentResult, notices } = topologyOf({ agentTopology: await (await agent()).provider('agentTopology') });
   let result: StatusResult;
   if (intentResult.state === 'unavailable') {
     result = {

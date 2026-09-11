@@ -248,7 +248,6 @@ describe('the authoritative manifest combined proof', () => {
       execution: {
         fallback: 'none',
         preflight: 'src/events/tool/before.preflight.ts',
-        providers: ['stateProbe'],
         runtime: 'standalone',
       },
       id: 'event:tool/before',

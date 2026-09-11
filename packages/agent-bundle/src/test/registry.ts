@@ -1,4 +1,5 @@
 import type { AgentStateDefinition, AgentStateEventSchemas } from '@agent-bundle/runtime/state';
+import { normalizeRouteModule } from '../routes/definitions.ts';
 
 import { AgentTestError } from './errors.ts';
 import type { AgentBundleTestManifest } from './manifest.ts';
@@ -120,7 +121,8 @@ export const registeredRouteLoader = (
 ): AgentRouteModuleLoader | undefined => {
   const registry = registered();
   if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
-  return registry.loaders[routeId];
+  const loader = registry.loaders[routeId];
+  return loader === undefined ? undefined : async () => normalizeRouteModule(await loader());
 };
 
 /** The state-module loader generated beside the registered manifest. */

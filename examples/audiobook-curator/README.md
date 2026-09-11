@@ -129,7 +129,7 @@ The conventional `library` provider probes `ffmpeg -version` and
 `ffprobe -version` concurrently for each request and publishes the probe time,
 tool availability and versions, and the `discover → identify → curate → verify`
 workflow stages. The catalog resource reads
-`(await agent()).providers.library`, validates the value, and renders either the
+`await (await agent()).provider('library')`, validates the value, and renders either the
 live request context or an explicit unavailable state. Tool availability is
 therefore observed at request time rather than assumed during the build.
 

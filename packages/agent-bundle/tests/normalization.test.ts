@@ -1379,17 +1379,14 @@ it('carries event-route preflight provenance and provider selection into normali
     event: 'tool/after',
     fallback: 'none',
     preflight: selected.preflight,
-    providers: ['zeta', 'alphaValue'],
-    runtime: 'shared',
+    runtime: 'standalone',
   });
   expect(model.hooks.find(({ id }) => id === 'hook:event-route:session-start')?.eventRoute).toEqual({
     event: 'session/start',
     fallback: 'none',
-    runtime: 'shared',
+    runtime: 'standalone',
   });
-  expect(Object.isFrozen(
-    model.hooks.find(({ id }) => id === 'hook:event-route:tool-after')?.eventRoute?.providers,
-  )).toBe(true);
+
 });
 
 it('normalizes generated MCP route servers without a handwritten server declaration', async () => {

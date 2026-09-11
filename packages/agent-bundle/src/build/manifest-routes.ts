@@ -55,7 +55,6 @@ export const artifactRouteFor = (route: CompiledAgentRoute): ArtifactManifestRou
         execution: {
           fallback: execution.fallback,
           ...(execution.preflight === undefined ? {} : { preflight: execution.preflight }),
-          ...(execution.providers === undefined ? {} : { providers: [...execution.providers].sort(byText) }),
           runtime: execution.runtime,
         },
       }),

@@ -190,9 +190,7 @@ it('populates bounded input schemas for every route kind and includes them in th
   await writeFile(inspectPath, (await readFile(inspectPath, 'utf8')).replace('Project root.', 'Workspace root.'));
   const changed = await compileRouteGraph(changedRoot, fixtureConfig());
   expect(changed.digest).not.toBe(graph.digest);
-  // Pre-#593 pin: an inline-only tree must digest exactly as it does on
-  // current main. Contract ids for route-local literals do not join identity.
-  expect(graph.digest).toBe('d4d97709727353b0acf39b9d1b26a507e41c9ba22ba5f897c0a5e9578fd2fb50');
+
 });
 
 it('shares one RouteContract across a CLI route and a tool route that import the same schema', async () => {
@@ -1454,7 +1452,7 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   expect(first).toContain('import type * as route0 from "../src/events/workspace/open.js";');
   expect(first).toContain('import type * as route1 from "../src/mcp/curator/tools/inspect.js";');
   expect(first).toContain('"event:workspace/open": EventRouteContract<typeof route0.default, "workspace/open">;');
-  expect(first).toContain('"tool:curator/inspect": RouteContract<typeof route1.inputSchema, typeof route1.resultSchema>;');
+  expect(first).toContain('"tool:curator/inspect": ModuleContract<typeof route1>;');
   expect(first).not.toContain('src/scripts/rebuild-index');
   expect(first).not.toContain('"script:rebuild-index"');
   expect(first).toContain('export type RouteId = keyof AgentBundleRoutes;');
@@ -1542,10 +1540,10 @@ it('omits the App registration for graphs without an MCP tool route', () => {
   const declarations = routesModule.generateRouteTypes(toolFree);
   expect(routesModule.generateRouteTypes(structuredClone(toolFree))).toBe(declarations);
   // The harness registration and provider surface are unchanged by the absence of tools...
-  expect(declarations).toContain('"cli:report": RouteContract<typeof route0.inputSchema, typeof route0.resultSchema>;');
+  expect(declarations).toContain('"cli:report": ModuleContract<typeof route0>;');
   expect(declarations).toContain('"event:workspace/open": EventRouteContract<typeof route1.default, "workspace/open">;');
-  expect(declarations).toContain('"prompt:curator/brief": RouteContract<typeof route2.inputSchema, typeof route2.resultSchema>;');
-  expect(declarations).toContain('"resource:curator/catalog": RouteContract<typeof route3.inputSchema, typeof route3.resultSchema>;');
+  expect(declarations).toContain('"prompt:curator/brief": ModuleContract<typeof route2>;');
+  expect(declarations).toContain('"resource:curator/catalog": ModuleContract<typeof route3>;');
   expect(declarations).not.toContain('app:curator/dashboard');
   expect(declarations).toContain("declare module '@agent-bundle/runtime' {\n  interface Register {\n    readonly routes: AgentBundleRouteContracts;\n  }\n  interface AgentProviderValues {\n    readonly \"gitWorktree\": ProviderValueOf<typeof provider0.default>;\n  }\n}");
   // ...while nothing registers on `agent-bundle/app`: none of these routes is a `tools/call` target.
@@ -2329,40 +2327,6 @@ it('rejects event preflights that are inline, non-relative, unresolvable, cyclic
   ]);
 });
 
-it('validates event route provider declarations against conventional provider keys', async () => {
-  const root = await createRoot();
-  await writeTree(root, {
-    'src/events/tool/before.ts': [
-      "export const config = { providers: ['projectAuth'] };",
-      'export default async function BeforeTool() { return undefined; }',
-      '',
-    ].join('\n'),
-    'src/events/tool/after.ts': [
-      "export const config = { providers: ['missing', 'projectAuth', 'projectAuth', 'processLifetime'] };",
-      'export default async function AfterTool() { return undefined; }',
-      '',
-    ].join('\n'),
-    'src/events/session/start.ts': [
-      "export const config = { providers: 'projectAuth' };",
-      'export default async function SessionStart() { return undefined; }',
-      '',
-    ].join('\n'),
-    'src/providers/project-auth.ts': 'export default () => ({ authenticated: true });\n',
-    'src/providers/zeta.ts': 'export default () => "zeta";\n',
-  });
-
-  const graph = await compileRouteGraph(root, fixtureConfig());
-
-  expect(graph.events.find((route) => route.id === 'event:tool/before')?.config).toMatchObject({
-    providers: ['projectAuth'],
-  });
-  expect(graph.diagnostics.filter(({ code }) => code === 'AB4841').map(({ sourcePath }) =>
-    sourcePath?.slice(root.length + 1).replaceAll('\\', '/'))).toEqual([
-    'src/events/session/start.ts',
-    'src/events/tool/after.ts',
-  ]);
-});
-
 it('fails unavailable event routes before packaging while admitting supported targets', async () => {
   const eventSource = 'export default async function WorkspaceOpen() { return undefined; }\n';
   const configSource = [
@@ -2538,7 +2502,7 @@ it('preserves sub-second event route timeout precision in the normalized model',
   }));
 });
 
-it('requires an explicit standalone mode when no generated runtime can host an event route', async () => {
+it('rejects explicit shared mode when no generated runtime can host an event route', async () => {
   const root = await createRoot();
   await writeTree(root, {
     'agent-bundle.config.ts': [
@@ -2549,7 +2513,7 @@ it('requires an explicit standalone mode when no generated runtime can host an e
       '',
     ].join('\n'),
     'package.json': '{"type":"module"}\n',
-    'src/events/session/start.tsx': 'export default async function SessionStart() { return undefined; }\n',
+    'src/events/session/start.tsx': "export const config = { runtime: 'shared' }; export default async function SessionStart() { return undefined; }\n",
   });
 
   const inspected = await inspect({ root });

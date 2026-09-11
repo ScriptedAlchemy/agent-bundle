@@ -7,6 +7,7 @@ export {
   type NativeEventEnvelopeValidation,
 } from './projection.ts';
 export {
+  eventHandlerPreflight,
   executeEventPreflight,
   validateEventPreflightResult,
   type EventPreflight,

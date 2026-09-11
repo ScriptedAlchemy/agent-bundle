@@ -532,7 +532,8 @@ export const composeEntryLibConfig = (
     ...virtualModules.map((module) => `${module.name}$`),
   ]);
   const enforceInvariants = (config: Rspack.Configuration): Rspack.Configuration => {
-    config.output = { ...config.output, asyncChunks: false };
+    // Standard ESM preserves lazy module evaluation for bundled dynamic imports.
+    config.output = { ...config.output, asyncChunks: false, library: { type: 'module' } };
     // Rslib 1.x treats a statically analyzable `new URL(…, import.meta.url)`
     // as a static asset to emit and `new Worker(new URL(…))` as a worker
     // entry to bundle. Generated entries spell their sibling Flight worker

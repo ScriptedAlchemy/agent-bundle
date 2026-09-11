@@ -246,12 +246,13 @@ describe('rendered scripts at the script dispatch level', () => {
     // An explicit fixture map is mounted verbatim: nothing under
     // src/providers/ runs for this invocation.
     const stubbed = await runScript('tooling-summary', ['--json', 'c.mp4'], {
-      context: { providers: { libraryTooling: { tool: 'stub' }, processLifetime: { hits: 7, instanceId: 'fixture', pid: 0 } } },
+      context: { providers: { libraryTooling: { tool: 'stub' }, requestView: null, processLifetime: { hits: 7, instanceId: 'fixture', pid: 0 } } },
     });
     expect(scriptJson(stubbed)).toEqual({
       arguments: 1,
-      keys: ['libraryTooling', 'processLifetime'],
+      keys: ['libraryTooling', 'processLifetime', 'requestView'],
       libraryTooling: { tool: 'stub' },
+      requestView: null,
     });
   });
 

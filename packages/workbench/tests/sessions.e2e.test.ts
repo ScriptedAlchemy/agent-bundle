@@ -77,7 +77,7 @@ e2e('accepts Claude and Codex host sessions at 1440×900', { timeout: 300_000 * 
       const events = join(project.root, 'src', 'events', 'session');
       await mkdir(events, { recursive: true });
       await writeFile(
-        join(events, 'start.ts'),
+        join(events, 'start.tsx'),
         "import { Agent } from '@agent-bundle/runtime';\n" +
           "import { createElement } from 'react';\n" +
           "export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };\n" +

@@ -32,10 +32,7 @@ Task-augmented tool calls (`CreateTaskResult`, `tasks/get`, `tasks/result`,
 the generated route servers of `agent-bundle` for tool routes that declare
 `config.execution.taskSupport`; the projector's `Agent.Progress` projection is
 what feeds a task's `tasks/get` status as well as `notifications/progress`.
-The operation-based `createRscMcpServer` in this package advertises no `tasks`
-capability and processes a task-augmented request as an ordinary `tools/call`
-— the fallback the utility requires of a receiver that declared no task
-support. See
+See
 [MCP conformance evidence](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/mcp-conformance.md#task-augmented-requests-served-2026-09-04).
 
 ```tsx
@@ -109,94 +106,31 @@ Structure — targets, skills, scripts, MCP servers, MCP apps — lives in
 `agent-bundle.config.ts` and file conventions; JSX renders. That split is the
 whole authoring model, described on one screen in
 [Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md).
-The `@agent-bundle/runtime/plugin` entry defines the application's runtime
-identity and typed operation catalog once and derives its CLI commands and
-MCP tool registrations from that one registry:
+Author tools with `defineTool` from `agent-bundle/routes`. The conventional file
+owns the route identity; one handler receives parsed input and the request context,
+and returns `Agent.*` JSX. MCP, CLI, and browser projections share that handler.
 
 ```tsx
-import { defineOperation, defineRscApplication } from '@agent-bundle/runtime/plugin';
-import { Mcp } from '@agent-bundle/runtime';
+import { defineTool } from 'agent-bundle/routes';
+import { Agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
-const inputSchema = z.object({}).strict();
-const resultSchema = z.object({ status: z.literal('ready') }).strict();
-
-const status = defineOperation({
-  cli: {
-    name: 'status',
-    parse: () => ({}),
-    summary: 'Read status.',
-    usage: 'status',
-  },
-  execute: async () => ({ status: 'ready' as const }),
-  id: 'status',
-  inputSchema,
-  mcp: {
-    _meta: { ui: { resourceUri: 'ui://example/status.html' } },
-    description: 'Read status.',
-    name: 'runtime_status',
-    readOnly: true,
-    server: 'runtime',
-    title: 'Runtime status',
-  },
-  render: (result) => (
-    <Mcp.Result structuredContent={result}>
-      <Mcp.Text>Ready.</Mcp.Text>
-    </Mcp.Result>
-  ),
-  resultSchema,
-});
-
-export const application = defineRscApplication({
-  name: 'example',
-  operations: [status],
-  version: '1.0.0',
-});
+export default defineTool({
+  description: 'Read runtime status.',
+  inputSchema: z.object({ verbose: z.boolean().default(false) }),
+  resultSchema: z.object({ status: z.literal('ready') }),
+}, async (input) => (
+  <Agent.Result value={{ status: 'ready' }}>
+    <Agent.Text>{input.verbose ? 'Runtime is ready.' : 'Ready.'}</Agent.Text>
+  </Agent.Result>
+));
 ```
 
-An operation is a host-neutral use-case definition, not a CLI command: the
-shared core (`id`, `inputSchema`, `execute`, `resultSchema`) is what both
-projections run — `inputSchema.parse` → `execute` → `resultSchema.parse` —
-while `cli` and `mcp` are optional per-surface declarations. `render` is
-required on every operation but consumed only by the MCP projection, where
-`lowerMcpResult` synchronously lowers its element tree into the
-`CallToolResult` (typed `McpCallToolResult`, assignable to both MCP SDK
-lines' `CallToolResult`); the `runRscCli` compatibility path never renders JSX and
-instead prints the validated result as one line of JSON. Operation modules
-are `.tsx` only because `render` returns JSX. (Routed `src/cli/**` commands
-are the framework-mode CLI: there, `.tsx` routes do render — through the
-Agent renderer's dispatcher with TTY/Markdown/`--json`/`--ndjson` output
-modes — while plain `.ts` routes keep the one-JSON-line contract.) The
-end-to-end walkthrough lives in
-[Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md).
-
-Use `runRscCli(application, argv)` in the conventional `src/cli.ts` entry and
-`createRscMcpServer(application, 'runtime')` in the conventional
-`src/mcp/runtime.ts` entry. Operation inputs, implementations, output
-validation, and result renderers cannot drift between the two surfaces, and
-`defineRscApplication` rejects duplicate operation ids, CLI commands, and MCP
-tools up front. The server name passed to `createRscMcpServer` selects the
-operations whose `mcp.server` matches; the server's structural declaration
-(entry, targets, apps) belongs to `agent-bundle.config.ts`.
-
-The optional `mcp.title` and `mcp._meta` ride the tool listing verbatim —
-`_meta: { ui: { resourceUri } }` is how MCP Apps hosts bind a tool to its
-widget. `createRscMcpServer` registers exactly the annotation hints an
-operation declares (`readOnly`, plus `destructive` / `idempotent` /
-`openWorld` when present); absent hints stay absent on the wire, where they
-keep their MCP-spec default semantics.
-
-The widget behind that `resourceUri` is structure, so it is declared in
-`agent-bundle.config.ts` under the owning server — `mcp.servers.<id>.apps.<name>`
-with an `entry`, the matching `resourceUri`, and optional `template`, `targets`,
-and `_meta`. Agent Bundle compiles each view into a self-contained HTML resource
-and hands it to the server through `import apps from 'agent-bundle/mcp-apps'`.
-`createRscMcpServer` registers tools only, so serving that resource remains an
-explicit `registerResource` call on the server it returns.
-
-This layer intentionally does not own transport persistence, and operations
-never receive implicit storage: application state is an opt-in kernel behind
-its own subpath, described next.
+Events use the same conventional route graph: `.ts` handlers return a decision,
+`.tsx` handlers render JSX, and an optional exported `before()` gates rendering.
+Resolve conventional providers with `await context.provider('key')`; each provider
+module loads on demand and its promise is cached for the request. The rendering-free
+`@agent-bundle/runtime/request` entry exposes the same request context to hosts.
 
 ## State (optional)
 

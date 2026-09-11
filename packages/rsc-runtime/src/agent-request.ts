@@ -9,9 +9,9 @@ import type {
 import type { AgentStateHandle, AgentStateReadOptions } from './state/contract.js';
 
 // Bumped to 3 when `lineage` joined the handle shape, to 4 when `terminal`
-// did, and to 5 when `plugin` did: a realm that already holds an older store
+// did, to 5 when `plugin` did, and to 6 for lazy `provider()` access: a realm that already holds an older store
 // must fail closed rather than hand out handles without them.
-export const AGENT_REQUEST_STORE_VERSION = 5;
+export const AGENT_REQUEST_STORE_VERSION = 6;
 
 const STORE_SYMBOL = Symbol.for('@agent-bundle/runtime/request-store');
 
@@ -292,7 +292,7 @@ export interface AgentProcessLifetime {
  * Request-scoped provider values keyed by camel-cased provider name. This is
  * an augmentable interface: the compiler's generated `.agent-bundle/routes.d.ts`
  * declares the project's conventional `src/providers/*` keys with their
- * resolved factory return types, so `(await agent()).providers.<key>` is typed
+ * resolved factory return types, so `await (await agent()).provider(key)` is typed
  * without a framework change per provider. Keys without a declaration remain
  * `unknown`.
  */
@@ -442,7 +442,8 @@ export interface AgentRequestContext {
   readonly progress: AgentProgressReporter;
   readonly signal: AbortSignal;
   readonly services: AgentServiceRegistry;
-  readonly providers: AgentProviderValues;
+  readonly providers: Readonly<Partial<AgentProviderValues>>;
+  provider<Key extends keyof AgentProviderValues & string>(key: Key): Promise<AgentProviderValues[Key]>;
   /**
    * State kernel handle (#98) installed by the host wiring via
    * `runAgentRequest({ state })`; undefined for stateless projects.
@@ -502,24 +503,15 @@ export interface AgentProviderRequest {
  * it returns is frozen and mounted as `(await agent()).providers`; a rejection
  * fails the request closed exactly as a rejected operation does.
  */
-export type AgentProviderResolver = (request: AgentProviderRequest) => AgentProviderValues | Promise<AgentProviderValues>;
+export type AgentProviderResolver = (request: AgentProviderRequest) => Partial<AgentProviderValues> | Promise<Partial<AgentProviderValues>>;
 
-/**
- * The `providers` member of {@link AgentRequestInit}: the resolved record, or
- * an {@link AgentProviderResolver} the request runs itself. It is optional
- * only while {@link AgentProviderValues} has no required keys. Once a
- * project's generated `.agent-bundle/routes.d.ts` augmentation declares its
- * conventional providers, every direct `runAgentRequest` caller — custom hosts
- * and route-unit fixtures alike — must supply the full record (or a resolver
- * returning it), so a handler typed against those keys never observes an
- * unchecked `undefined`. Generated request scopes always run the providers
- * before the handler and are unaffected.
- */
-export type AgentRequestProvidersInit = Record<never, never> extends AgentProviderValues
-  ? { readonly providers?: AgentProviderValues | AgentProviderResolver }
-  : { readonly providers: AgentProviderValues | AgentProviderResolver };
+/** Explicit host/test values; conventional providers resolve on demand instead. */
+export type AgentRequestProvidersInit = {
+  readonly providers?: Partial<AgentProviderValues> | AgentProviderResolver;
+};
 
 export interface AgentRequestInitBase {
+  readonly resolveProvider?: (key: string, request: AgentProviderRequest) => unknown | Promise<unknown>;
   readonly actor?: Observed<AgentActorIdentity>;
   readonly capabilities?: AgentRequestCapabilities;
   readonly host?: Observed<AgentHostIdentity>;
@@ -621,6 +613,7 @@ const invocationFrom = (input: AgentInvocationInput): AgentInvocation => Object.
 });
 
 interface FrozenValues {
+  readonly provider: (key: string) => Promise<unknown>;
   readonly actor: Observed<AgentActorIdentity>;
   readonly capabilities: AgentRequestCapabilities;
   readonly host: Observed<AgentHostIdentity>;
@@ -629,7 +622,7 @@ interface FrozenValues {
   readonly notices: AgentNoticesHandle | undefined;
   readonly plugin: Observed<AgentPluginIdentity>;
   readonly progress: AgentProgressReporter;
-  readonly providers: AgentProviderValues;
+  readonly providers: Readonly<Partial<AgentProviderValues>>;
   readonly services: AgentServiceRegistry;
   readonly session: Observed<AgentSessionIdentity>;
   readonly signal: AbortSignal;
@@ -723,6 +716,13 @@ const createHandle = (lease: Lease): AgentRequestContext => Object.freeze({
   get providers() {
     return open(lease).providers;
   },
+  async provider<Key extends keyof AgentProviderValues & string>(key: Key): Promise<AgentProviderValues[Key]> {
+    const values = open(lease);
+    values.signal.throwIfAborted();
+    const value = await values.provider(key);
+    open(lease).signal.throwIfAborted();
+    return value as AgentProviderValues[typeof key];
+  },
   get state() {
     return open(lease).state;
   },
@@ -807,7 +807,21 @@ export const runAgentRequest = async <T>(
         workspace,
       }))
       : init.providers;
+    const providerPromises = new Map<string, Promise<unknown>>();
+    const request = providerRequest({ host, lineage, notices: noticeLease?.handle, plugin, session, signal, state: init.state, workspace });
     const values: FrozenValues = Object.freeze({
+      provider: (key: string) => {
+        let pending = providerPromises.get(key);
+        if (pending === undefined) {
+          pending = getStore().storage.exit(async () => {
+            if (providers !== undefined && Object.hasOwn(providers, key)) return providers[key];
+            if (init.resolveProvider === undefined) throw new TypeError(`Unknown provider ${JSON.stringify(key)}.`);
+            return init.resolveProvider(key, request);
+          });
+          providerPromises.set(key, pending);
+        }
+        return pending;
+      },
       actor,
       capabilities: snapshotCapabilities(init.capabilities ?? emptyCapabilities()),
       host,
@@ -839,7 +853,7 @@ export const runAgentRequest = async <T>(
 const resolveProvidersDetached = (
   resolver: AgentProviderResolver,
   request: AgentProviderRequest,
-): Promise<AgentProviderValues> => getStore().storage.exit(async () => resolver(request));
+): Promise<Partial<AgentProviderValues>> => getStore().storage.exit(async () => resolver(request));
 
 interface ProviderRequestSources {
   readonly host: Observed<AgentHostIdentity>;

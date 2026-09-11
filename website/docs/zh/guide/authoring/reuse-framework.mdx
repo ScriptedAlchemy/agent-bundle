@@ -1,5 +1,5 @@
 ---
-description: '用同一个工具提供 CLI 与 App 表面，复用契约、事件 preflight、请求上下文、可写状态、payload 和安装能力，而不是手写框架胶水代码。'
+description: '用同一个工具提供 CLI 与 App 表面，复用契约、事件门禁、请求上下文、可写状态、payload 和安装能力，而不是手写框架胶水代码。'
 ---
 
 # 复用框架
@@ -111,11 +111,10 @@ App 仍然负责本地选择、格式化、轮询策略，以及 loading/error �
 
 ## 有意识地选择语义事件或普通 hook
 
-需要 Agent 输出、请求上下文和可选 preflight 时，使用 `src/events/**` 规范事件路由。
-简单执行加小结果已经足够时，使用配置声明的普通处理器及公开 `HookHandler`/`HookEvent` 类型。
-两种情况下都不需要重复原生 stdin/stdout 包装层。
+框架生命周期处理器统一使用 `src/events/**`：`.ts` 返回轻量决策，`.tsx` 渲染 JSX，
+可选的 `before()` 在渲染之前进行判断。原生钩子文档仍作为适配器扩展入口。
 
-preflight 门禁应位于昂贵操作或有副作用的工作之前。原生 payload 字段并不跨宿主统一；
+原生 payload 字段并不跨宿主统一；
 可用时读取规范字段，并如实保留 unknown 或缺失证据。stop、deny、continue 或更新输入必须保留宿主的真实决定语义。
 无关的日志失败不能悄悄把已确定的保护决定变成允许继续。
 

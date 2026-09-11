@@ -10,6 +10,8 @@ import {
   eventFlightArtifactEpochToken,
   eventIpcRuntimeSpecifier,
   eventProjectRuntimeSpecifier,
+  eventProviderFieldsToken,
+  eventProviderRegistryToken,
   hookWrapperAppliesOperatorEnv,
   type TargetHookEntry,
 } from '../adapters/hook-contract.ts';
@@ -44,6 +46,8 @@ import {
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
   stdioPreludeVirtualModule,
+  providerRegistrySource,
+  providersFieldSource,
 } from './entry-shell.ts';
 import { emptyRouteConfig, type CompiledLayout, type CompiledProvider } from '../routes/types.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
@@ -571,7 +575,8 @@ const hookEntrySourceInputs = (entry: TargetHookEntry): readonly string[] => {
 };
 
 const requiresStandaloneHookWorker = (entry: TargetHookEntry): boolean =>
-  entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone';
+  entry.hook.eventRoute?.preflight?.mode !== 'handler'
+  && (entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone');
 
 const hookWorkerPath = (entry: TargetHookEntry): string =>
   posix.join(posix.dirname(entry.relativePath), posix.basename(hooksFlightWorkerPath));
@@ -700,11 +705,16 @@ export const planHooksSurface = (
           source: entry.source,
           sourceInputs: entry.sourceInputs,
           virtualSource: hook.virtualSource
+            .replace(eventProviderRegistryToken, providerRegistrySource(options.providers ?? []).join('\n'))
+            .replace(eventProviderFieldsToken, providersFieldSource(options.providers ?? [], { indent: '    ', invocation: '{ kind: "event", props: { event: canonicalEvent, payload: native } }' }).join('\n'))
             .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
             .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
           // The layer module the wrapper imports first; a shared-runtime
           // event-route wrapper runs no plugin code and imports none.
-          ...(hookWrapperAppliesOperatorEnv(hook) ? { virtualModules: [operatorEnvLayerVirtualModule()] } : {}),
+          virtualModules: [
+            ...(hookWrapperAppliesOperatorEnv(hook) ? [operatorEnvLayerVirtualModule()] : []),
+            ...(hook.hook.eventRoute?.preflight?.virtualSource === undefined ? [] : [{ name: 'agent-bundle/event-gate', source: hook.hook.eventRoute.preflight.virtualSource }]),
+          ],
         };
         if (hook.executeVirtualSource === undefined) return [wrapperEntry];
         const executorRelativePath = hook.relativePath.replace(/\.mjs$/u, '.execute.mjs');

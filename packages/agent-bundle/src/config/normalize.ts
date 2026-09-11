@@ -565,11 +565,11 @@ const normalizeHooks = (
           ? {}
           : {
             preflight: {
+              ...route.preflight,
               provenance: { ...route.preflight.provenance },
               source: route.preflight.source,
             },
           }),
-        ...(execution.providers === undefined ? {} : { providers: execution.providers }),
         runtime: execution.runtime,
       }),
       id: `hook:event-route:${eventName}`,

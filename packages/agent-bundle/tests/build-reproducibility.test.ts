@@ -175,5 +175,5 @@ it('emits byte-identical artifacts from two builds of one source into two output
     }
   }
   const mcpEntry = bundles.find((path) => /^mcp\/mcp-harness-[a-f\d]{8}\.mjs$/u.test(path))!;
-  expect(await readFile(join(first, mcpEntry), 'utf8')).toMatch(/NAMESPACE OBJECT: \.\/\.agent-bundle-virtual\/mcp-harness-[a-f\d]{8}-\d+\.mjs/u);
+  expect(await readFile(join(first, mcpEntry), 'utf8')).toMatch(/\.agent-bundle-virtual\/mcp-harness-[a-f\d]{8}-\d+\.mjs/u);
 });

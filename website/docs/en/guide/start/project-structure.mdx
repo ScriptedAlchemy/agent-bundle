@@ -34,7 +34,6 @@ my-plugin/
 │   │   └── layout.tsx               # optional shared agent-facing presentation
 │   ├── events/tool/
 │   │   ├── before.tsx               # semantic tool/before event route
-│   │   └── before.preflight.ts      # only a gate explicitly re-exported by the route
 │   ├── hooks/session-start.ts       # optional plain hook referenced from config
 │   ├── skills/review/SKILL.md
 │   ├── commands/review.md           # optional native prompt/command document
@@ -79,10 +78,9 @@ non-TypeScript assets or native executables; do not assume an arbitrary source d
 | `assets/` | Conventional static assets. | Copied under the artifact's `assets/`; explicit configuration can narrow the selection. |
 
 Private path segments beginning with `_` or `.` and declaration files are excluded from route
-discovery. A `before.preflight.ts` file is not special merely because of its name: the event
-route must re-export its gate through the supported preflight contract. Do not register a plain
-hook and a semantic route for the same event as two accidental implementations. See
-[hooks](../authoring/hooks.mdx) for runtime, target, provider, and preflight choices.
+discovery. Event files use `.ts` for lightweight results and `.tsx` for JSX; export `before()`
+from a `.tsx` file when it needs a cheap gate before rendering. See
+[hooks](../authoring/hooks.mdx) for execution and provider access.
 
 Route-specific `config` exports use a bounded static grammar. Keep runtime work in the handler
 or domain module; do not execute it to populate metadata. Keep schemas authoritative rather

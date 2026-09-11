@@ -86,7 +86,7 @@
       "import": "./dist/mcp-entry.js"
     },
     "./routes": {
-      "types": "./dist/routes/public.d.ts",
+      "types": "./dist/routes/authoring.d.ts",
       "import": "./dist/routes.js"
     },
     "./rstest": {

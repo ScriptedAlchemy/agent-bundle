@@ -38,12 +38,9 @@ import {
   validateRouteModuleContract,
 } from './contract.ts';
 import { validateRouteFrameworkImports } from './framework-imports.ts';
+import { eventHandlerEntry } from './event-handler.ts';
 import { extractInputSchema, type ExtractedInputSchema, type ResolvedSchemaOrigin } from './input-schema.ts';
 import { isLayoutRouteKind, layoutChainFor } from './layouts.ts';
-import {
-  requiredProviderKeyProblemMessage,
-  validateRequiredProviderKeys,
-} from './provider-execution.ts';
 import { providerKeyFromName } from './providers.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
@@ -126,34 +123,6 @@ const routeError = (code: string, message: string, recovery: string, sourcePath?
   severity: 'error',
   ...(sourcePath === undefined ? {} : { sourcePath }),
 });
-
-const eventProviderDeclarationDiagnostics = (
-  route: CompiledAgentRoute,
-  providerKeys: Iterable<string>,
-): readonly Diagnostic[] => {
-  const declared = route.config['providers'];
-  if (declared === undefined) return [];
-  const recovery =
-    'Declare config.providers as a distinct array of conventional provider keys, omit it to resolve every provider, or use [] to resolve none.';
-  if (!Array.isArray(declared) || declared.some((key) => typeof key !== 'string')) {
-    return [routeError(
-      'AB4841',
-      `Event route ${route.provenance.relativePath} config.providers must be an array of provider-key strings.`,
-      recovery,
-      route.source,
-    )];
-  }
-  const problems = validateRequiredProviderKeys(declared, providerKeys);
-  if (problems.length === 0) return [];
-  return [routeError(
-    'AB4841',
-    `Event route ${route.provenance.relativePath} has invalid config.providers: ${problems
-      .map(requiredProviderKeyProblemMessage)
-      .join(' ')}`,
-    recovery,
-    route.source,
-  )];
-};
 
 const configValue = (
   config: Readonly<AgentBundleConfig>,
@@ -639,7 +608,7 @@ const extractedModuleMetadata = (
   const discovery = module.kind === 'event-route'
     ? preflightDiscovery ?? discoverEventRoutePreflight(moduleText, module.relativePath, module.source)
     : undefined;
-  const preflight = discovery?.source === undefined
+  let preflight: CompiledEventPreflight | undefined = discovery?.source === undefined
     ? undefined
     : {
         provenance: {
@@ -648,11 +617,19 @@ const extractedModuleMetadata = (
         },
         source: discovery.source,
       };
+  const handlerDiagnostics: Diagnostic[] = [];
+  if (module.kind === 'event-route' && preflight === undefined && (discovery?.diagnostics.length ?? 0) === 0) {
+    try {
+      preflight = eventHandlerEntry(moduleText, module.relativePath, module.source) ?? preflight;
+    } catch (error) {
+      handlerDiagnostics.push({ code: 'AB4840', severity: 'error', sourcePath: module.source, message: String(error), recovery: 'Keep before() self-contained or import its dependencies from separate modules.' });
+    }
+  }
   return {
     extracted,
     ...(inputSchema === undefined ? {} : { inputSchema }),
     ...(preflight === undefined ? {} : { preflight }),
-    preflightDiagnostics: discovery?.diagnostics ?? [],
+    preflightDiagnostics: [...(discovery?.diagnostics ?? []), ...handlerDiagnostics],
     resultSchemaState: scanRouteModuleExports(moduleText, module.relativePath, { source: module.source }).named.has('resultSchema')
       ? 'unprojectable'
       : 'absent',
@@ -693,7 +670,7 @@ const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unkno
   id: route.id,
   ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
   kind: route.kind,
-  ...(route.preflight === undefined ? {} : { preflight: route.preflight.provenance.relativePath }),
+  ...(route.preflight === undefined ? {} : { preflight: route.preflight.provenance.relativePath, ...(route.preflight.mode === undefined ? {} : { eventExecution: route.preflight.mode }) }),
   relativePath: route.provenance.relativePath,
   ...(route.serverId === undefined ? {} : { serverId: route.serverId }),
 });
@@ -1049,7 +1026,6 @@ export const compileRouteGraph = async (
         break;
       }
       case 'event-route':
-        diagnostics.push(...eventProviderDeclarationDiagnostics(route, providerModulesByKey.keys()));
         events.push(route);
         // Every event route ships as a hook wrapper of its own, so it is
         // judged here; MCP and CLI routes are judged once their server or

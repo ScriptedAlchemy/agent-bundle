@@ -28,6 +28,7 @@ export interface EventPreflightContext<E extends CanonicalAgentEvent = Canonical
   readonly host: Readonly<{ readonly name: string; readonly nativeEvent: string }>;
   readonly signal: AbortSignal;
   readonly terminal: AgentTerminal;
+  readonly native?: Readonly<Record<string, unknown>>;
 }
 
 export type EventPreflight<
@@ -36,6 +37,23 @@ export type EventPreflight<
 > = (
   context: EventPreflightContext<E>,
 ) => EventPreflightResult<Data> | Promise<EventPreflightResult<Data>>;
+
+/** Adapt the function-first event result to the internal deferred-render kernel. */
+export const eventHandlerPreflight = (
+  handler: (context: EventPreflightContext) => unknown,
+  mode: 'handler' | 'gate',
+): EventPreflight => async (context) => {
+  const result = await handler(context);
+  if (result === undefined) return { outcome: 'continue' };
+  if (isRecord(result) && result.outcome === 'render' && mode === 'gate') {
+    unexpectedFields(result, new Set(['outcome']));
+    return 'execute';
+  }
+  if (result === 'execute' || (isRecord(result) && result.outcome === 'execute')) {
+    throw new TypeError('Event handlers return continue or deny; before() may also return render.');
+  }
+  return validateEventPreflightResult(result, context.canonical.event);
+};
 
 type PreflightObjectOutcome = 'continue' | 'deny' | 'execute';
 
@@ -154,6 +172,7 @@ export const executeEventPreflight = async <
       host: Object.freeze({ ...context.host }),
       signal: context.signal,
       terminal: context.terminal,
+      ...(context.native === undefined ? {} : { native: context.native }),
     });
     const value = await settleBeforeAbort(Promise.resolve().then(() => preflight(frozenContext)), context.signal);
     context.signal.throwIfAborted();

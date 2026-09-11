@@ -90,11 +90,8 @@ no read of its own. Event routes still use the mounted `(await agent()).state`
 and `.notices` handles through `withIntent`/`withNotices`, because they
 dispatch and publish.
 
-`worktree()` in `src/api.ts` is the issue-mandated custom Promise API over the
-provider value. `useWorktree()` is the hook-shaped variant for Server
-Components and synchronous helpers: it reads the same request handle through
-the runtime's `useAgent()`, so it follows the identical lease rules and throws
-the runtime's `outside-invocation` error outside a request.
+`worktree()` in `src/api.ts` resolves the request's `gitWorktree` provider on demand.
+Provider values and failures are cached within that request.
 
 ## Actor identity and provenance
 

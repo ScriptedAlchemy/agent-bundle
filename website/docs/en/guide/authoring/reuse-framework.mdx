@@ -1,5 +1,5 @@
 ---
-description: 'Practical recipes for one tool with CLI and App surfaces, shared contracts, event preflight, request context, writable state, payloads, and supported installation without handwritten framework glue.'
+description: 'Practical recipes for one tool with CLI and App surfaces, shared contracts, event gates, request context, writable state, payloads, and supported installation without handwritten framework glue.'
 ---
 
 # Reuse the framework
@@ -126,14 +126,13 @@ An `Agent.*` tree is agent-facing output, not browser DOM. The browser App can u
 React code; sharing domain contracts does not mean importing server modules into the browser
 at runtime. Generated type-only imports must remain type-only.
 
-## Choose semantic events or a plain hook deliberately
+## Use canonical event files
 
-Use `src/events/**` for a canonical event route with Agent output, request context, and optional
-preflight. Use a config-declared plain handler with the public `HookHandler`/`HookEvent` types
-when simple execution and a small result are enough. Do not duplicate native stdin/stdout
-wrappers in either case.
+Use `src/events/**` for every framework lifecycle handler. `.ts` returns a cheap decision,
+`.tsx` renders JSX, and an optional `before()` gates rendering. Native hook documents remain
+an adapter escape hatch.
 
-A preflight gate belongs before expensive or side-effecting work. Native payload fields are
+Native payload fields are
 not uniform across hosts; consume the canonical fields where available and preserve unknown or
 absent evidence honestly. A stop, deny, continue, or rewritten input must retain the host's
 actual decision semantics. An unrelated logging failure must not silently turn an already
@@ -141,7 +140,7 @@ established protective decision into permission to continue.
 
 Capability-based `requires` and explicit target scoping serve different purposes. Consult the
 [hook guide](./hooks.mdx) and [event matrix](../../reference/events.md) before selecting an event,
-matcher, provider subset, or native-only behavior. Native hook documents are an explicit
+matcher, provider, or native-only behavior. Native hook documents are an explicit
 advanced escape hatch, not the default way to recreate semantic events.
 
 ## Use observed context and keep code separate from data

@@ -75,7 +75,7 @@ transform 的值；schema 拒绝的输入会在任何 provider 或组件运行�
 `@agent-bundle/runtime`）是调用方一侧，`RegisteredRouteParsedInput<Id>` 是组件一侧，也就是
 `loadRouteModule(id).inputSchema.parse(...)` 的返回类型。
 
-事件路由注册的是测试工具实际接受与返回的内容：`input` 是 `{ canonical, native, preflight? }` 载荷（`signal` 由测试
+渲染事件路由注册的是测试工具实际接受与返回的内容：`input` 是 `{ canonical, native }` 载荷（`signal` 由测试
 工具自行提供），而 `result` 为 `undefined`，因为事件模块不导出 `resultSchema`。请用
 `createEventRouteInput('tool/after', envelope, { host: 'claude' })` 从宿主信封构造这个输入，而不要手写：它按
 宿主与事件校验信封，并通过与制品包装器相同的表投影出 `canonical.payload`；标注为

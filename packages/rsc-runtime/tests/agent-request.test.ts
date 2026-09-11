@@ -1,18 +1,11 @@
-import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import { afterAll, describe, expect, it } from '@rstest/core';
-import { createElement } from 'react';
-import { z } from 'zod';
+import { describe, expect, it } from '@rstest/core';
 
 import {
   AGENT_REQUEST_STORE_VERSION,
   AgentRequestError,
   agent,
   available,
-  createRscMcpServer,
-  defineOperation,
-  defineRscApplication,
   runAgentRequest,
-  runRscCli,
   unavailable,
   useAgent,
 } from '../src/index.js';
@@ -447,99 +440,5 @@ describe('agent request store', () => {
     expect(pluginRunAgentRequest).toBe(runAgentRequest);
     expect(PluginAgentRequestError).toBe(AgentRequestError);
     expect(pluginStoreVersion).toBe(AGENT_REQUEST_STORE_VERSION);
-  });
-});
-
-describe('entrypoint bindings', () => {
-  const status = defineOperation({
-    cli: {
-      name: 'status',
-      parse: () => ({}),
-      summary: 'Read status.',
-      usage: 'status',
-    },
-    execute: async () => {
-      const context = await agent();
-      return {
-        kind: context.invocation.kind,
-        operationId: context.invocation.operationId,
-        surface: context.invocation.surface,
-        terminal: context.terminal.state === 'available'
-          ? `${context.terminal.source} ${context.terminal.value.hostSurface}/${context.terminal.value.stdout.kind}/${context.terminal.value.stderr.kind}`
-          : `unavailable:${context.terminal.reason}`,
-      };
-    },
-    id: 'status',
-    inputSchema: z.object({}).strict(),
-    mcp: {
-      description: 'Read status.',
-      name: 'runtime_status',
-      readOnly: true,
-      server: 'runtime',
-    },
-    render: (result) => createElement(
-      'mcp-result',
-      { structuredContent: result },
-      createElement('mcp-text', null, result.kind),
-    ),
-    resultSchema: z.object({
-      kind: z.enum(['tool', 'event', 'cli', 'script', 'workbench']),
-      operationId: z.string().optional(),
-      surface: z.string().optional(),
-      terminal: z.string(),
-    }).strict(),
-  });
-  const application = defineRscApplication({
-    name: 'runtime',
-    operations: [status],
-    version: '1.0.0',
-  });
-  const openClients: Client[] = [];
-
-  afterAll(async () => {
-    await Promise.allSettled(openClients.map((client) => client.close()));
-  });
-
-  it('installs a cli invocation for runRscCli', async () => {
-    const output: string[] = [];
-    await expect(runRscCli(application, ['status'], { write: (value) => output.push(value) })).resolves.toBe(0);
-    expect(JSON.parse(output.join(''))).toEqual({
-      kind: 'cli',
-      operationId: 'status',
-      surface: 'status',
-      // The adapter owns no probe: without a caller-supplied terminal the axis is honestly absent (#511).
-      terminal: 'unavailable:not-provided',
-    });
-    await expect(agent()).rejects.toMatchObject({ code: 'outside-invocation' });
-
-    const probed: string[] = [];
-    await runRscCli(application, ['status'], {
-      terminal: {
-        hostSurface: 'cli',
-        sharesTarget: true,
-        stderr: { color: 'basic', columns: 80, kind: 'tty', rows: 24 },
-        stdout: { color: 'basic', columns: 80, kind: 'tty', rows: 24 },
-      },
-      write: (value) => probed.push(value),
-    });
-    expect(JSON.parse(probed.join(''))).toMatchObject({ terminal: 'native cli/tty/tty' });
-  });
-
-  it('installs a tool invocation for createRscMcpServer', async () => {
-    const server = createRscMcpServer(application, 'runtime');
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: 'agent-request-test', version: '0.0.0' });
-    openClients.push(client);
-    await server.connect(serverTransport);
-    await client.connect(clientTransport);
-    const result = await client.callTool({ arguments: {}, name: 'runtime_status' });
-    expect(result.structuredContent).toEqual({
-      kind: 'tool',
-      operationId: 'status',
-      surface: 'runtime_status',
-      // An MCP server has no terminal, whatever its descriptors are (#511).
-      terminal: 'derived mcp/none/none',
-    });
-    await expect(agent()).rejects.toMatchObject({ code: 'outside-invocation' });
   });
 });

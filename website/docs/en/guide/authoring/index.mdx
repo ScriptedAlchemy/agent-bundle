@@ -152,11 +152,13 @@ manifest.
 
 ## JSX means rendering
 
-Structure lives in config and conventions; JSX appears only where something is rendered. An
-executable route is one async default Server Component that does the work and returns `Agent.*`
+Structure lives in config and conventions; JSX appears only where something is rendered. A
+rendered route is one async default Server Component that does the work and returns `Agent.*`
 nodes, and it calls `await agent()` only when it needs host, session, actor, workspace,
 capability, or state context. There is no public `execute`/`render` split, and a plain `.ts`
-route is never wrapped in React behavior.
+route is never wrapped in React behavior. Events use the same canonical file paths for both
+forms: `.ts` returns a lightweight decision, `.tsx` renders JSX, and an optional exported
+`before()` gates rendering. Use `defineTool` for an inferred tool handler.
 
 ## Route contracts (Application IR)
 

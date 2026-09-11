@@ -22,7 +22,12 @@ export const resultSchema = z.object({
 }).strict();
 
 export default async function Tooling() {
-  const { providers } = await agent();
+  const context = await agent();
+  const providers = {
+    ...context.providers,
+    libraryTooling: await context.provider('libraryTooling'),
+    requestView: await context.provider('requestView'),
+  };
   const { processLifetime } = providers;
   const value = {
     keys: Object.keys(providers).sort(),

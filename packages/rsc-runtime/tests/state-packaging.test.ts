@@ -76,6 +76,7 @@ describe.sequential('state kernel packaging boundaries', () => {
     };
     expect(packageJson.sideEffects).toBe(false);
     expect(Object.keys(packageJson.exports)).toEqual([
+      './request',
       '.',
       './plugin',
       './flight/server',

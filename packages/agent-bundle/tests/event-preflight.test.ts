@@ -4,22 +4,10 @@ import {
   executeEventPreflight,
   eventFamilyAllowsPreflightDeny,
   validateEventPreflightResult,
-  type EventPreflight,
   type EventPreflightContext,
 } from '../src/events/preflight.ts';
 import { projectEventPreflightResult } from '../src/events/projection.ts';
-import {
-  canonicalAgentEvents,
-  eventFamilyAllowsPreflightDeny as publicEventFamilyAllowsPreflightDeny,
-  validateEventPreflightResult as publicValidateEventPreflightResult,
-  type CanonicalAgentEvent,
-  type EventPreflightContext as PublicEventPreflightContext,
-  type EventPreflightResult as PublicEventPreflightResult,
-} from '../src/routes/public.ts';
-import {
-  eventFamilyAllowsPreflightDeny as rootEventFamilyAllowsPreflightDeny,
-  validateEventPreflightResult as rootValidateEventPreflightResult,
-} from '../src/index.ts';
+import { canonicalAgentEvents, type CanonicalAgentEvent } from '../src/routes/public.ts';
 
 /** Families whose existing projection emits a blocking deny on at least one host. */
 const familiesThatAllowDeny = [
@@ -176,19 +164,4 @@ it('projects a gate decision through the rendered event outcome rules', () => {
       permissionDecisionReason: 'blocked',
     },
   });
-});
-
-it('re-exports the preflight contract through the public production path', () => {
-  expect(publicValidateEventPreflightResult).toBe(validateEventPreflightResult);
-  expect(publicEventFamilyAllowsPreflightDeny).toBe(eventFamilyAllowsPreflightDeny);
-  expect(rootValidateEventPreflightResult).toBe(validateEventPreflightResult);
-  expect(rootEventFamilyAllowsPreflightDeny).toBe(eventFamilyAllowsPreflightDeny);
-  const result: PublicEventPreflightResult = publicValidateEventPreflightResult('execute', 'tool/before');
-  const context: PublicEventPreflightContext<'tool/before'> = {} as EventPreflightContext<'tool/before'>;
-  const authoring: EventPreflight<'tool/before', { readonly ticket: string }> = () => ({
-    data: { ticket: 'cc-7' },
-    outcome: 'execute',
-  });
-  expect(result).toBe('execute');
-  expect(authoring(context)).toEqual({ data: { ticket: 'cc-7' }, outcome: 'execute' });
 });

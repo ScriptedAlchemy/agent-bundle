@@ -3,6 +3,7 @@
 import ts from 'typescript-5';
 
 import { deepFreeze } from '../core/freeze.ts';
+import { routeDefinitionSchema } from './definition-syntax.ts';
 import {
   createModuleScopeResolver,
   describeExpression,
@@ -584,7 +585,8 @@ export const parseInputSchema = (
 ): ParsedInputSchema => {
   const resolver = createModuleScopeResolver(options);
   const root = resolver.scopeOf(moduleText, relativePath, options.source);
-  const site = findInputSchemaExport(compilerSourceFile(root.sourceFile));
+  const definitionSchema = routeDefinitionSchema(moduleText, relativePath);
+  const site = definitionSchema === undefined ? findInputSchemaExport(compilerSourceFile(root.sourceFile)) : { initializer: compilerExpression(definitionSchema) };
   if (site === undefined) return { found: false, issues: [] };
   if (site.initializer === undefined) {
     return {
@@ -597,7 +599,7 @@ export const parseInputSchema = (
 
   const parser: Parser = { relativePath, resolver, root };
   // The declaration site is the end of the alias chain from the export.
-  const declared = dereference({ node: site.initializer, path: rootReferencePath(root, 'inputSchema') }, parser);
+  const declared = dereference({ node: site.initializer, path: rootReferencePath(root, definitionSchema === undefined ? 'inputSchema' : 'default') }, parser);
   if (declared.kind === 'failure') return { found: true, issues: [], resolution: declared.failure };
   const origin: ResolvedSchemaOrigin = {
     binding: declared.located.path.binding,

@@ -139,7 +139,7 @@ A **context provider** contributes one request-scoped value without touching
 the compiler. Each `src/providers/<name>.{ts,tsx}` module default-exports a
 factory receiving the public `AgentProviderContext` (`{ invocation, signal }`
 from `agent-bundle`) and its value mounts at
-`(await agent()).providers.<camelCaseName>`:
+`await (await agent()).provider("<camelCaseName>")`:
 
 ```ts
 // src/providers/library.ts
@@ -152,37 +152,23 @@ export default async function library({ invocation }: AgentProviderContext): Pro
 }
 ```
 
-Providers run once per request in deterministic key order as the request's own
-resolver: after `runAgentRequest` freezes the identity axes and opens the
-notice lease, before the route runs, so the factory context carries `host`,
-`session`, `workspace`, `lineage`, and `plugin` as the route will read them plus
-the read-only `state` (`read`) and `notices` (`inbox`) handles (#459; see
-`entry-conventions.md`). A thrown factory fails that request closed, so return
-an honest unavailable-shaped value for expected degradation. The compiler validates the
-default export (`AB4940`), unique keys (`AB4941`), and the reserved
-framework-owned `processLifetime` key (`AB4942`).
+Providers load only when requested through `context.provider(key)`. Concurrent calls share
+one promise per key per request, including failures. Factories receive the frozen request
+identity and read-only state and notice handles outside the route's async context.
+The compiler validates the default export (`AB4940`), unique keys (`AB4941`), and the
+reserved framework-owned `processLifetime` key (`AB4942`).
 
 The generated `.agent-bundle/routes.d.ts` declares `AgentBundleProviders`
 (`ProviderKey`, `ProviderValue<Key>`) from each factory's resolved return type
 and augments `@agent-bundle/runtime`'s `AgentProviderValues`, so
-`(await agent()).providers.library` is a `LibraryContext` with no cast once
+`await (await agent()).provider("library")` is a `LibraryContext` with no cast once
 the file is part of the project's TypeScript program. `create-agent-bundle`
 templates include it by default (`".agent-bundle/routes.d.ts"` in
 `tsconfig.json` `include`; the file stays gitignored), and `agent-bundle
 validate` warns with `AB4834` when a project that compiles routes or
-providers leaves it out. Undeclared keys stay `unknown`. The `agent-bundle/test` harness (`renderRoute`, `invokeCli`,
-the in-memory MCP helpers) mounts the project's providers automatically, in the
-same order and with the same fail-closed semantics as the generated request
-scopes, so a route-unit test observes what the artifact would mount — including
-a provider that reaches the network or the file system. To stub one, inject
-fixture values through `renderRoute(id, { context: { providers: { library } } })`:
-an explicit map is mounted verbatim and no provider module executes. Because
-the augmentation makes declared keys required, an explicit `context.providers`
-must carry every declared key, and a direct `runAgentRequest` (where nothing
-else supplies providers) requires `providers` outright: a handler typed against
-`providers.library` can never observe an unchecked `undefined`. See the
-[harness section](../packages/agent-bundle/README.md#testing-routes) for the
-module-evaluation caveat that applies to provider-level state.
+providers leaves it out. The `agent-bundle/test` harness uses the same lazy access. To stub providers, pass explicit
+values through `renderRoute(id, { context: { providers: { library } } })`; include each key
+the route requests. Missing keys fail instead of loading a real provider.
 
 The same file registers the route contracts themselves. One generated
 `AgentBundleRouteContracts` — `{ input, result }` per route id, inferred from
@@ -249,7 +235,7 @@ by `tests/route-unit/thrown-route-error.test.ts`, `tests/projection/mcp-in-memor
 | MCP `prompts/get`, `resources/read` | A JSON-RPC error response carrying the message; the client call rejects. These surfaces have no `isError` channel. | The same represented document; the generated server returns the route's `resultSchema`-parsed value, so the prompt or resource result is whatever the route's value said. |
 | Rendered CLI command / rendered script | The message on stderr, exit 1. Nothing on stdout: no Markdown, no `--json` value. | The `error` render event is written to stderr as `[boundary] message` as it happens; the final document then prints as usual — Markdown (TTY or piped) with `**[boundary]** message` beside the content that had rendered, or under `--json` the route's value alone, with the boundary message **not** in the JSON. `--ndjson` carries the `error` event itself. Exit 1, because any non-`success` document status exits 1 regardless of the command's `exitCode` policy. |
 | Plain CLI command / plain script | Routed command: the message on stderr, exit 1 (only usage and input errors exit 2). Plain script: the rejection escapes through Node's top-level failure path — stack on stderr, exit 1. | n/a (no renderer). |
-| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits 1. What stderr says depends on the runtime mode: a `runtime: 'standalone'` route and a config-declared handler write the thrown message; a route in the default **shared** runtime writes `Event route rendering failed.` — the shared runtime answers the wrapper with the generic `runtime-failed` error (`events/ipc.ts`) and the original message never leaves the runtime process. Every supported host documents exit 1 as a **non-blocking** error (Claude Code and Codex show the stderr; Cursor treats it as fail-open), so the pending action proceeds exactly as a pass-through would — a thrown `tool/before` does **not** deny. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing, so the host receives the surviving context and decision as a normal response. |
+| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits 1. What stderr says depends on the runtime mode: a `runtime: 'standalone'` route and a config-declared handler write the thrown message; a route in the **shared** runtime writes `Event route rendering failed.` — the shared runtime answers the wrapper with the generic `runtime-failed` error (`events/ipc.ts`) and the original message never leaves the runtime process. Every supported host documents exit 1 as a **non-blocking** error (Claude Code and Codex show the stderr; Cursor treats it as fail-open), so the pending action proceeds exactly as a pass-through would — a thrown `tool/before` does **not** deny. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing, so the host receives the surviving context and decision as a normal response. |
 | `renderRoute` / `renderRouteEvents` (route-unit) | `AgentTestError('render-failed')` naming the route and the cause; no document, no events. | Resolves: `document.status === 'represented-error'`, an `error` node with code `boundary`, events `shell → error(boundaryId) → complete`. |
 
 Why the projector does not wrap a root throw into the `Agent.Error` shape: the
@@ -265,10 +251,9 @@ code, a shell, or structured content renders `Agent.Error`.
 Everything else is power-tier reference: custom/remote server modes and
 collision recovery are in [Entry conventions](entry-conventions.md); accepted
 static metadata, generated `.agent-bundle/routes.d.ts`, and diagnostics are in
-[Diagnostics](diagnostics.md). Handwritten `src/mcp/<server>.ts`,
-`defineOperation`, and `createRscMcpServer` remain supported escape hatches;
-the handwritten `runRscCli` compatibility path still serializes validated
-results and never renders JSX. Routed `src/cli/**` commands and
+[Diagnostics](diagnostics.md). Handwritten `src/mcp/<server>.ts` SDK factories remain
+an advanced escape hatch. Tools use `defineTool` with one inferred handler and schemas;
+no operation/application registry is needed. Routed `src/cli/**` commands and
 `src/scripts/**` scripts follow one sentence: `.tsx` renders through the
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
 is plain. The routed CLI compiles once as `bin/<name>.mjs` in the plugin root;

@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import ts from 'typescript-5';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { routeDefinitionSource } from './definition-syntax.ts';
 import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from './module-candidates.ts';
 
 const modifier = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
@@ -110,7 +111,7 @@ export const scanRouteModuleExports = (
   moduleText: string,
   relativePath: string,
   options: ScanRouteModuleOptions = {},
-): RouteModuleExports => Object.freeze(scanModuleExports(moduleText, relativePath, options, new Set()));
+): RouteModuleExports => Object.freeze(scanModuleExports(routeDefinitionSource(moduleText, relativePath), relativePath, options, new Set()));
 
 /** What one binding of a scanned module is known to be. */
 interface BindingShape {
@@ -518,7 +519,7 @@ export const validateEventRouteModuleContract = (
   const exports = scanRouteModuleExports(moduleText, relativePath, { source: sourcePath });
   const { splitExport } = exports;
   const diagnostics: Diagnostic[] = [];
-  if (!acceptsAsyncDefault(exports)) {
+  if (!(relativePath.endsWith('.ts') ? acceptsDefaultFunction(exports) : acceptsAsyncDefault(exports))) {
     diagnostics.push(diagnostic(
       'AB4810',
       `Event route module ${relativePath} does not satisfy the public route contract: ${defaultExportDetail(exports, 'an async function component')}.`,

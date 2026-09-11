@@ -31,7 +31,6 @@ my-plugin/
 │   │   └── layout.tsx               # 可选的共享智能体文档布局
 │   ├── events/tool/
 │   │   ├── before.tsx               # tool/before 语义事件路由
-│   │   └── before.preflight.ts      # 必须由路由显式重导出的预检 gate
 │   ├── hooks/session-start.ts       # 由配置引用的可选普通钩子
 │   ├── skills/review/SKILL.md
 │   ├── commands/review.md           # 可选原生提示或命令文档
@@ -75,9 +74,8 @@ my-plugin/
 | `assets/` | 约定式静态资源。 | 复制到产物的 `assets/` 下；显式配置可以收窄选择。 |
 
 以 `_` 或 `.` 开头的私有路径段和声明文件不参与路由发现。
-`before.preflight.ts` 不会仅因为文件名而成为特殊入口，事件路由必须通过支持的 preflight 契约重导出它。
-不要为同一事件同时注册普通钩子和语义路由，形成两份意外实现。
-运行模式、target、provider 与 preflight 的选择见[钩子](../authoring/hooks.mdx)。
+事件文件使用 `.ts` 返回轻量结果，使用 `.tsx` 渲染 JSX；需要渲染前门控时，在 `.tsx` 文件中导出 `before()`。
+执行方式与 provider 访问见[钩子](../authoring/hooks.mdx)。
 
 路由 `config` 导出使用有界静态语法。运行时工作保留在处理器或领域模块中，不要为了获取元数据而执行它。
 Schema 保持唯一权威定义，不要在 CLI 和浏览器里分别重建协议类型。

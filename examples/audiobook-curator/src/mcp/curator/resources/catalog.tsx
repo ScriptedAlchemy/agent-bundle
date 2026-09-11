@@ -35,8 +35,9 @@ const isLibraryContext = (value: unknown): value is LibraryContext => {
 
 export default async function Catalog({ input }: ToolRouteProps<typeof inputSchema>) {
   const request = await agent();
-  const library = isLibraryContext(request.providers.library)
-    ? request.providers.library
+  const provided = await request.provider('library');
+  const library = isLibraryContext(provided)
+    ? provided
     : undefined;
   const stages = library?.stages ?? workflowStages;
   const tooling = library?.tooling ?? {

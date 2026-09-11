@@ -34,12 +34,13 @@ export default async function Submit({ input }: { readonly input: z.infer<typeof
     ...(input.regions === undefined ? {} : { regions: input.regions }),
     ...(input.tags === undefined ? {} : { tags: input.tags }),
   };
-  const { invocation, providers } = context;
+  const { invocation } = context;
+  const libraryTooling = await context.provider('libraryTooling');
   return (
     <Agent.Result value={value}>
       <Agent.Text>{`submit: ${input.argv.join(' ')}`}</Agent.Text>
       <Agent.Text>{`invocation: ${invocation.kind} ${invocation.operationId ?? '(no operation)'} ${invocation.surface ?? '(no surface)'}`}</Agent.Text>
-      <Agent.Text>{`provider: ${JSON.stringify(providers['libraryTooling'])}`}</Agent.Text>
+      <Agent.Text>{`provider: ${JSON.stringify(libraryTooling)}`}</Agent.Text>
     </Agent.Result>
   );
 }

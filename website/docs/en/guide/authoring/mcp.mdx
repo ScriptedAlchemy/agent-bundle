@@ -9,6 +9,35 @@ An MCP server is the executable half of a plugin. agent-bundle offers two ways t
 entries**, where you construct the server yourself and the framework owns only its process
 lifecycle.
 
+## Inferred tool definitions
+
+Use `defineTool` from `agent-bundle/routes` to define metadata, schemas, and one handler together.
+The file determines the route identity. Callers supply schema input; the handler receives parsed
+schema output, including defaults and transformations. The existing renderer validates
+`Agent.Result` values against `resultSchema` across MCP, CLI, and browser projections.
+
+```tsx
+// src/mcp/runtime/tools/status.tsx
+import { defineTool } from 'agent-bundle/routes';
+import { Agent } from '@agent-bundle/runtime';
+import { z } from 'zod';
+
+export default defineTool({
+  description: 'Report status.',
+  annotations: { readOnlyHint: true },
+  inputSchema: z.object({ verbose: z.boolean().default(false) }),
+  resultSchema: z.object({ status: z.literal('ready') }),
+}, async (input, context) => (
+  <Agent.Result value={{ status: 'ready' }}>
+    <Agent.Text>{input.verbose ? 'Runtime is ready.' : 'Ready.'}</Agent.Text>
+  </Agent.Result>
+));
+```
+
+Metadata remains statically extractable: import the helper directly, pass an object literal,
+and keep schemas at their explicit schema properties. Inspection never imports the handler.
+Ordinary imported handler functions are supported; the compiler does not inspect their bodies.
+
 ## Generated route servers
 
 Put one module per route under `src/mcp/<server>/`:
@@ -218,7 +247,6 @@ advertise while a pipe renders none. `COLUMNS`/`LINES` override the reported siz
 | Generated MCP server | `mcp` | `none` on both — stdout is the protocol wire, stderr the host's log. Never probed, never guessed. |
 | Event route (shared runtime or standalone hook) | `hook` | `none` on both — stdout is the host's hook envelope. |
 | Workbench lifecycle replay | `workbench` | `none` on both. |
-| `defineRscApplication` adapters | `mcp` / `cli` | `createRscMcpServer` mounts `none` on both; `runRscCli` owns no probe and mounts the `terminal` its caller passes in the options, else `unavailable` (`not-provided`). |
 | A custom host that mounts none | — | `unavailable` (`not-provided`). |
 
 A plain `main`-exporting script or bin has no request scope; its envelope passes the same value
@@ -229,7 +257,7 @@ and `context.terminal` injects any other one through the same seam as every iden
 ### Request context providers
 
 A conventional `src/providers/<name>.ts` module default-exports a factory whose value is
-mounted at `(await agent()).providers.<camelCaseName>` on every generated surface. Beyond the
+resolved through `await (await agent()).provider('<camelCaseName>')` on every generated surface. Beyond the
 surface-specific `invocation` and the request `signal`, the factory receives the request as the
 route will read it — `host`, `session`, `workspace`, `plugin`, and `lineage` (tree included), the
 same `Observed` values with the same provenance — plus read-only views of the mounted handles:
@@ -251,13 +279,10 @@ export default async function agentTopology({ lineage, state }: AgentProviderCon
 }
 ```
 
-Providers run once per request as the request's own resolver: after `runAgentRequest` has
-frozen the identity axes and opened the notice lease, before the route, in deterministic key
-order, outside the request's async context (`agent()` inside a factory throws
-`outside-invocation`). A factory that throws fails the request closed; expected degradation
-should return an honest unavailable-shaped value instead. The `agent-bundle/test` harness hands
-its providers the same view, so a route-unit test that injects `context.lineage` or mounts state
-sees them reflected in `providers.<key>`; an explicit `context.providers` map is mounted verbatim.
+Providers load and resolve on first access. Concurrent readers share the request's promise,
+including a failure; unused modules are not evaluated. Factories run outside the request's async
+context (`agent()` throws `outside-invocation` there) and receive the read-only view above. The
+source harness uses the same semantics; explicit `context.providers` values override discovery.
 
 ## Rich Markdown blocks as JSX
 
@@ -553,7 +578,7 @@ project — and each surface's own default applies. The layout shell never wraps
 | MCP `prompts/get`, `resources/read` | A JSON-RPC error response carrying the message; the client call rejects. These surfaces have no `isError` channel. | The generated server returns the route's `resultSchema`-parsed value from the same represented document. |
 | Rendered CLI command / rendered script | The message on stderr, exit `1`; nothing on stdout. | `[boundary] message` on stderr as the event happens; then the document prints as usual — Markdown with `**[boundary]** message`, or under `--json` the route's value alone (the boundary message is not in the JSON; `--ndjson` carries the `error` event). Exit `1`, as for any non-`success` document. |
 | Plain CLI command / plain script | Routed command: message on stderr, exit `1` (usage and input errors exit `2`). Plain script: Node's top-level failure path — stack on stderr, exit `1`. | n/a |
-| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits `1`. A `runtime: 'standalone'` route or a config-declared handler writes the thrown message; a route in the default **shared** runtime writes `Event route rendering failed.` — the runtime answers with the generic `runtime-failed` error and the original message stays inside the runtime process. Every supported host documents exit `1` as a **non-blocking** error, so the pending action proceeds exactly as a pass-through would — a thrown `tool/before` does **not** deny. Return `outcome: 'deny'` to block. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing. |
+| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits `1`. A `runtime: 'standalone'` route or a config-declared handler writes the thrown message; a route in the **shared** runtime writes `Event route rendering failed.` — the runtime answers with the generic `runtime-failed` error and the original message stays inside the runtime process. Every supported host documents exit `1` as a **non-blocking** error, so the pending action proceeds exactly as a pass-through would — a thrown `tool/before` does **not** deny. Return `outcome: 'deny'` to block. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing. |
 | `renderRoute` / `renderRouteEvents` | `AgentTestError('render-failed')` naming the route and the cause; no document, no events. | Resolves with `document.status === 'represented-error'`, an `error` node with code `boundary`, and events `shell → error → complete`. |
 
 The projector deliberately does not wrap a root throw into the `Agent.Error` shape: the layout
@@ -569,11 +594,9 @@ A server declared in config with no `entry`, `command`, or `url` picks up the co
 
 ```ts
 // src/mcp/curator.ts — the whole stdio entry a consumer writes
-import { createRscMcpServer } from '@agent-bundle/runtime/plugin';
+import { McpServer } from '@modelcontextprotocol/server';
 
-import { application } from '../application.js';
-
-export default () => createRscMcpServer(application, 'curator');
+export default () => new McpServer({ name: 'curator', version: '1.0.0' });
 ```
 
 The generated shell provides, in order: console-to-stderr redirection *before* the consumer

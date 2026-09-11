@@ -297,7 +297,6 @@ describe('preflight artifact graph (#595)', () => {
       execution: {
         fallback: 'none',
         preflight: 'src/events/tool/before.preflight.ts',
-        providers: ['daemonProbe'],
         runtime: 'standalone',
       },
       id: 'event:tool/before',

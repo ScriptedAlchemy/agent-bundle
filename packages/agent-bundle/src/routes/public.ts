@@ -19,16 +19,6 @@ export type {
   AgentEventPayloadNativeKey,
   CanonicalAgentEvent,
 } from './events.ts';
-export {
-  eventFamilyAllowsPreflightDeny,
-  validateEventPreflightResult,
-} from '../events/preflight.ts';
-export type {
-  EventPreflight,
-  EventPreflightContext,
-  EventPreflightResult,
-} from '../events/preflight.ts';
-
 /** The structural schema surface route props infer without coupling to one schema library. */
 export interface RouteSchema<Output = unknown> {
   readonly _output: Output;
@@ -356,13 +346,9 @@ export type AgentEventFallbackMode = 'none' | 'standalone';
 export interface AgentEventRouteConfig {
   readonly delivery?: readonly AgentEventDelivery[];
   readonly fallback?: AgentEventFallbackMode;
-  /**
-   * Conventional provider keys this route resolves. Omit to preserve the
-   * compatibility behavior of resolving all providers; use `[]` for none.
-   */
-  readonly providers?: readonly string[];
   /** Capability rows every projected host must support; mutually exclusive with `targets`. */
   readonly requires?: readonly string[];
+  /** Standalone by default; shared explicitly reuses a generated MCP server. */
   readonly runtime?: AgentEventRuntimeMode;
   readonly targets?: readonly string[];
   /** Route budget within the adapter's stricter native-host deadline. */

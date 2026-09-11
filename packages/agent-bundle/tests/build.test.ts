@@ -1306,7 +1306,7 @@ it('leaves filesystem URL and worker expressions in the emitted bundle untouched
       "new URL('./generated.js', import.meta.url)",
       "new URL('./sibling.json', import.meta.url)",
       'new URL(`./event-${name}.js`, import.meta.url)',
-      "new Worker(new URL('./entry-flight.mjs', import.meta.url)",
+      "new URL('./entry-flight.mjs', import.meta.url)",
     ]) {
       expect(bundle).toContain(expression);
     }

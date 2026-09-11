@@ -35,6 +35,7 @@ import type {
 } from '../cli-entry.ts';
 import { settleBeforeAbort } from '../core/abort.ts';
 import { parseMcpRouteProtocolId } from '../routes/protocol-name.ts';
+import { normalizeRouteModule } from '../routes/definitions.ts';
 import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { routeRenderLimits, type RouteRenderBudget } from '../routes/render-budget.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
@@ -77,17 +78,10 @@ import type {
 export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress' | 'providers' | 'signal'> & {
   readonly invocation?: Omit<AgentInvocationInput, 'kind'>;
   readonly progress?: AgentProgressReporter;
-  readonly providers?: AgentProviderValues;
+  readonly providers?: Partial<AgentProviderValues>;
 };
 
-/**
- * The `context` member of every harness call. Unlike a direct
- * `runAgentRequest`, where `providers` becomes mandatory once the augmentation
- * declares keys because nothing else would supply them, a harness call
- * mounts the project's conventional providers itself, so `context` is always
- * optional: omitting it observes what the artifact mounts, and passing
- * `context.providers` substitutes a complete fixture map.
- */
+/** Optional request context; explicit provider values replace conventional discovery. */
 export type RenderRouteContextInit = { readonly context?: RenderRouteContext };
 
 /** What `renderRoute` accepts: a route module rendered directly, or a route id. */
@@ -461,6 +455,7 @@ const resolveTarget = async (
   options: RenderRouteOptions,
 ): Promise<ResolvedTarget> => {
   if (typeof target !== 'string') {
+    target = normalizeRouteModule(target);
     const kind = options.kind ?? 'tool';
     const provenance: RenderedRouteProvenance = Object.freeze({
       kind,
@@ -557,7 +552,7 @@ const loadManifestRouteModule = async (
       },
     );
   }
-  const module = await loader();
+  const module = normalizeRouteModule(await loader());
   return { descriptor, kind, module, provenance: { ...provenance, kind } };
 };
 
@@ -1220,7 +1215,7 @@ export const prepareCliRenderHost = async (
             workspace: renderer.available({ root }, 'derived'),
             ...context,
             ...mounted.context,
-            providers,
+            ...providers,
             invocation: {
               kind: 'cli',
               operationId: command.routeId,
@@ -1395,7 +1390,7 @@ export const prepareScriptRenderHost = async (
               workspace: renderer.available({ root }, 'derived'),
               ...context,
               ...state.context,
-              providers,
+              ...providers,
               invocation: {
                 kind: 'script',
                 operationId: options.provenance.routeId,
@@ -1506,7 +1501,7 @@ const prepareRender = async (
       ...mounted.context,
       // The render invocation is exactly what the generated Flight worker
       // receives as `message.invocation`, so providers see the same shape.
-      providers: mountProviders({
+      ...mountProviders({
         explicit: context.providers,
         invocation: request.invocation,
         manifest: resolved.manifest,

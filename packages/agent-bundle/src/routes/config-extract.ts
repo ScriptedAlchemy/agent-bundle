@@ -19,6 +19,7 @@ import {
 } from './module-scope.ts';
 import { hasExportModifier, positionOf, unwrapExpression, type SyntaxNode } from './syntax.ts';
 import { emptyRouteConfig } from './types.ts';
+import { routeDefinitionSource } from './definition-syntax.ts';
 
 // The scope model hands out structural node slices so its shipped declaration
 // never names typescript-5 (see module-scope.ts); every slice is a compiler
@@ -369,7 +370,7 @@ export const extractRouteConfig = (
   options: RouteConfigExtractionOptions = {},
 ): ExtractedRouteConfig => {
   const resolver = createModuleScopeResolver(options);
-  const scope = resolver.scopeOf(moduleText, relativePath, sourcePath);
+  const scope = resolver.scopeOf(routeDefinitionSource(moduleText, relativePath), relativePath, sourcePath);
   const sourceFile = compilerSourceFile(scope.sourceFile);
   const site = findConfigExport(sourceFile);
   if (site === undefined) return emptyExtraction;

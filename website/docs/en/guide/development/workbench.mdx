@@ -102,7 +102,7 @@ An event leaf has fixture choices **Canonical**, **Claude**, **Codex**, and **Cu
 host fixture decodes the native envelope exactly as that host wrapper would, then shows canonical
 input, request context, providers, the returned decision or document, and projected host results.
 Canonical-to-host mapping and native input/output are secondary projection details.
-When the route has compiled preflight, Canonical is disabled and the selector defaults to the
+For a `.ts` event handler or a `.tsx` event with `before()`, Canonical is disabled and the selector defaults to the
 project's first generated host target; submitting that route without a concrete host is `AB8255`.
 
 Observed event receipts appear in the leaf's **Replay** tab and in Trace. Select a receipt there
@@ -359,7 +359,7 @@ routes use their compiled command with empty argv. `unit-render` is never select
 
 Production surfaces execute the selected route from the last published compiler epoch, so
 compiler aliases and defines, generated-entry request scope, providers, persistent state, CLI
-`mapInput` and confirmation, event preflight, and render semantics match the installed artifact.
+`mapInput` and confirmation, event gates, and render semantics match the installed artifact.
 The explicit `unit-render` surface is a component-preview fallback: it loads live source with the
 route-unit harness and mounts disposable state. It is not an artifact-parity receipt. A projected
 CLI command keeps the canonical `tool:` route id; a mismatched command is `AB8253`, while using
@@ -373,7 +373,7 @@ and rendered scripts use their manifest worker; MCP routes use their owning comp
 owns the shared runtime for that host. The binding fails closed: an unavailable published
 artifact is `AB8250`; an ineligible host or
 surface, missing executable, or missing preparation row is `AB8251`; and a preparation module
-that cannot be imported or does not export its contract is `AB8252`. A preflight route submitted
+that cannot be imported or does not export its contract is `AB8252`. A gated or lightweight event route submitted
 without a host is refused as `AB8255`. These failures never reach the handler, and an import,
 preflight, or handler failure never causes another executable to run.
 Production state lives at `<project>/.agent-bundle/state`, outside the published epochs that

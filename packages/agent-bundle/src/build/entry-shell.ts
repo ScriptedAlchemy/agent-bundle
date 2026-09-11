@@ -9,8 +9,6 @@ import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedNoticeRetentionPolicy, NormalizedStateDefinition } from '../core/types.ts';
 import {
   orderedProviders,
-  requiredProviderKeyProblemMessage,
-  selectRequiredProviders,
 } from '../routes/provider-execution.ts';
 import { layoutChainFor, layoutRouteName } from '../routes/layouts.ts';
 import { mcpRouteProtocolName } from '../routes/protocol-name.ts';
@@ -430,7 +428,6 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     ...routeImports(commandRoutes),
     ...projectionSources.map((source, index) =>
       `import * as projection${String(index)} from ${JSON.stringify(source)};`),
-    ...providerImports(providers),
     '',
     ...(runtimeBacked ? [pluginRootDeclaration(stateFallback, options.web?.pluginRootRelativeUrl)] : []),
     // Launch from the artifact carrying the manifest, not an environment override.
@@ -670,7 +667,6 @@ export const generatedRenderedRouteWorkerSource = (
     ...pluginRootImports(stateFallback),
     ...generatedStateImports(options.state),
     ...routeImports(options.routes),
-    ...providerImports(providers),
     ...layoutImports(layouts),
     '',
     pluginRootDeclaration(stateFallback),
@@ -855,7 +851,10 @@ const executableMcpRoutes = (routes: readonly CompiledAgentRoute[]): readonly Co
   routes.filter((route) => route.kind !== 'app');
 
 const routeImports = (routes: readonly CompiledAgentRoute[]): readonly string[] =>
-  routes.map((route, index) => `import * as route${String(index)} from ${JSON.stringify(route.source)};`);
+  routes.flatMap((route, index) => [
+    `import * as routeModule${String(index)} from ${JSON.stringify(route.source)};`,
+    `const route${String(index)} = Object.assign({}, Reflect.get(routeModule${String(index)}, 'default'), routeModule${String(index)});`,
+  ]);
 
 /**
  * The compiled route table. The entry-side table registers routes; the
@@ -955,27 +954,15 @@ const eventRouteImports = (
 const eventRouteRecords = (
   routes: readonly NormalizedHook[],
   offset: number,
-  providers: readonly CompiledProvider[],
-  selections: ReadonlyMap<string, readonly CompiledProvider[]>,
 ): readonly string[] => routes.map((route, index) =>
-  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(`event:${route.eventRoute!.event}`)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)}${
-    route.eventRoute!.providers === undefined
-      ? ''
-      : `, providers: Object.freeze([${
-        (selections.get(route.id) ?? []).map((provider) => `providers[${String(providers.indexOf(provider))}]`).join(', ')
-      }])`
-  } }),`);
-
-const providerImports = (providers: readonly CompiledProvider[]): readonly string[] =>
-  providers.map((provider, index) =>
-    `import * as provider${String(index)} from ${JSON.stringify(provider.source)};`);
+  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(`event:${route.eventRoute!.event}`)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
 
 const providerRecords = (providers: readonly CompiledProvider[]): readonly string[] =>
-  providers.map((provider, index) =>
-    `  Object.freeze({ key: ${JSON.stringify(providerKeyFromName(provider.name))}, module: provider${String(index)}, source: ${JSON.stringify(provider.provenance.relativePath)} }),`);
+  providers.map((provider) =>
+    `  Object.freeze({ key: ${JSON.stringify(providerKeyFromName(provider.name))}, load: () => import(${JSON.stringify(provider.source)}), source: ${JSON.stringify(provider.provenance.relativePath)} }),`);
 
 /** The frozen provider registry a generated request scope iterates; empty when the project declares none. */
-const providerRegistrySource = (providers: readonly CompiledProvider[]): readonly string[] =>
+export const providerRegistrySource = (providers: readonly CompiledProvider[]): readonly string[] =>
   providers.length === 0
     ? []
     : ['const providers = Object.freeze([', ...providerRecords(providers), ']);'];
@@ -993,23 +980,8 @@ const processHitSource = (indent: string): readonly string[] => [
 
 const processLifetimeValueSource = 'processHit';
 
-/**
- * The `providers` field of every generated `runAgentRequest` init (shared
- * Flight worker, rendered CLI/script worker, plain routed CLI): only the
- * framework-owned process identity for a project without providers, otherwise
- * the request's provider resolver (#459) — run by the runtime once per
- * request, after the identity axes are frozen and the notice lease is open,
- * before the route; sequentially in deterministic key order; fail-closed on a
- * missing factory or a thrown/rejected factory; `processLifetime` seeded
- * first. Each factory receives the runtime's read-only request view (`host`,
- * `session`, `workspace`, `plugin`, `lineage`, `signal`, the `read`-only
- * `state` handle, and the `inbox`/`published`-only `notices` handle) spread
- * beside the surface-specific `invocation`.
- * The emitted loop mirrors `executeProviders` in
- * `../routes/provider-execution.ts`, which the in-process test harness runs;
- * `entry-shell.test.ts` pins the two together.
- */
-const providersFieldSource = (
+/** Seed process identity and resolve each requested provider lazily within its request. */
+export const providersFieldSource = (
   providers: readonly CompiledProvider[],
   expressions: {
     readonly indent: string;
@@ -1019,76 +991,45 @@ const providersFieldSource = (
   },
 ): readonly string[] => {
   const { indent, invocation, observe, providers: providerExpression = 'providers' } = expressions;
-  if (providers.length === 0) {
-    if (observe === undefined) return [`${indent}providers: { processLifetime: ${processLifetimeValueSource} },`];
-    return [
-      `${indent}providers: async () => {`,
-      `${indent}  const providersStartedAt = performance.now();`,
-      `${indent}  if (${observe}) parentPort.postMessage({ id: message.id, type: 'observed-providers-start' });`,
-      `${indent}  if (${observe}) parentPort.postMessage({ count: 0, durationMs: performance.now() - providersStartedAt, id: message.id, type: 'observed-providers-finish' });`,
-      `${indent}  return { processLifetime: ${processLifetimeValueSource} };`,
-      `${indent}},`,
-    ];
-  }
   return [
-    `${indent}providers: async (request) => {`,
-    `${indent}  const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
-    ...(observe === undefined
-      ? []
-      : [
-          `${indent}  const providersStartedAt = performance.now();`,
-          `${indent}  if (${observe}) parentPort.postMessage({ id: message.id, type: 'observed-providers-start' });`,
-        ]),
-    `${indent}  for (const provider of ${providerExpression}) {`,
-    ...(observe === undefined ? [] : [`${indent}    const providerStartedAt = performance.now();`]),
-    `${indent}    if (typeof provider.module.default !== 'function') {`,
-    `${indent}      throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
-    `${indent}    }`,
-    `${indent}    try {`,
-    `${indent}      providerValues[provider.key] = await provider.module.default({ ...request, invocation: ${invocation} });`,
-    ...(observe === undefined
-      ? []
-      : [`${indent}      if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, source: provider.source, status: 'mounted', type: 'observed-provider' });`]),
-    `${indent}    } catch (error) {`,
-    ...(observe === undefined
-      ? []
-      : [`${indent}      if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, message: error instanceof Error ? error.message : String(error), source: provider.source, status: 'failed', type: 'observed-provider' });`]),
-    `${indent}      throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
-    `${indent}    }`,
-    `${indent}  }`,
-    ...(observe === undefined
-      ? []
-      : [`${indent}  if (${observe}) parentPort.postMessage({ count: Object.keys(providerValues).length - 1, durationMs: performance.now() - providersStartedAt, id: message.id, type: 'observed-providers-finish' });`]),
-    `${indent}  return providerValues;`,
-    `${indent}},`,
+    `${indent}providers: { processLifetime: ${processLifetimeValueSource} },`,
+    ...(providers.length === 0 ? [] : [
+      `${indent}resolveProvider: async (key, request) => {`,
+      `${indent}  const provider = ${providerExpression}.find((candidate) => candidate.key === key);`,
+      `${indent}  if (provider === undefined) throw new TypeError('Unknown provider ' + JSON.stringify(key));`,
+      ...(observe === undefined ? [] : [
+        `${indent}  const providerStartedAt = performance.now();`,
+        `${indent}  if (${observe}) parentPort.postMessage({ id: message.id, type: 'observed-providers-start' });`,
+      ]),
+      `${indent}  try {`,
+      `${indent}    const module = await provider.load();`,
+      `${indent}    if (typeof module.default !== 'function') throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
+      `${indent}    const value = await module.default({ ...request, invocation: ${invocation} });`,
+      ...(observe === undefined ? [] : [
+        `${indent}    if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, source: provider.source, status: 'mounted', type: 'observed-provider' });`,
+      ]),
+      `${indent}    return value;`,
+      `${indent}  } catch (error) {`,
+      ...(observe === undefined ? [] : [
+        `${indent}    if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, message: error instanceof Error ? error.message : String(error), source: provider.source, status: 'failed', type: 'observed-provider' });`,
+      ]),
+      `${indent}    throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
+      ...(observe === undefined ? [] : [
+        `${indent}  } finally {`,
+        `${indent}    if (${observe}) parentPort.postMessage({ count: 1, durationMs: performance.now() - providerStartedAt, id: message.id, type: 'observed-providers-finish' });`,
+      ]),
+      `${indent}  }`,
+      `${indent}},`,
+    ]),
   ];
 };
 
 /** The long-lived react-server worker used by one generated MCP process. */
 export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWorkerOptions): string => {
   const routes = executableMcpRoutes(options.routes);
-  const eventRoutes = options.eventRoutes ?? [];
+  const eventRoutes = (options.eventRoutes ?? []).filter((route) => route.eventRoute?.preflight?.mode !== 'handler');
   const wiresInbox = wiresInboxRoute(options);
-  const allProviders = orderedProviders(options.providers ?? []);
-  const providerSelections = new Map<string, readonly CompiledProvider[]>();
-  let importsAllProviders = routes.length > 0 || wiresInbox;
-  for (const route of eventRoutes) {
-    const required = route.eventRoute?.providers;
-    const selection = selectRequiredProviders(allProviders, required);
-    if (!selection.ok) {
-      throw new Error(
-        `Event route ${JSON.stringify(route.id)} has an invalid provider selection: ${
-          selection.problems.map(requiredProviderKeyProblemMessage).join(' ')
-        }`,
-      );
-    }
-    if (required === undefined) importsAllProviders = true;
-    else providerSelections.set(route.id, selection.providers);
-  }
-  const providers = importsAllProviders
-    ? allProviders
-    : orderedProviders([...new Set([...providerSelections.values()].flat())]);
-  const hasProviderSelections = providerSelections.size > 0;
+  const providers = orderedProviders(options.providers ?? []);
   const layouts = workerLayouts(options.layouts ?? [], routes);
   return [
     "import { parentPort } from 'node:worker_threads';",
@@ -1100,7 +1041,6 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
     ...eventRouteImports(eventRoutes, routes.length),
-    ...providerImports(providers),
     ...layoutImports(layouts),
     '',
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
@@ -1119,7 +1059,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'const routes = Object.freeze({',
     ...routeRecords(routes, { layouts }),
     ...noticeInboxRecord(wiresInbox),
-    ...eventRouteRecords(eventRoutes, routes.length, providers, providerSelections),
+    ...eventRouteRecords(eventRoutes, routes.length),
     '});',
     'const requests = new Map();',
     '',
@@ -1155,7 +1095,6 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
       indent: '      ',
       invocation: 'message.invocation',
       observe: 'message.observe === true',
-      ...(hasProviderSelections ? { providers: 'route.providers ?? providers' } : {}),
     }),
     '      ...(message.session === undefined ? {} : { session: message.session }),',
     '      signal: controller.signal,',

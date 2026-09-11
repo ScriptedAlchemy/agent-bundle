@@ -35,6 +35,9 @@ export interface TargetHookEntry extends TargetHookWrapper {
   readonly virtualSource: string;
 }
 
+export const eventProviderRegistryToken = '/* agent-bundle:event-provider-registry */';
+export const eventProviderFieldsToken = '/* agent-bundle:event-provider-fields */';
+
 export interface TargetNativeHookCommand {
   readonly command: string;
 }
@@ -916,6 +919,7 @@ const eventRoutePreflightWrapperSource = (
   const preflight = route.preflight!;
   const executorFile = entry.relativePath.split('/').at(-1)!.replace(/\.mjs$/u, '.execute.mjs');
   const projectBindings = [
+    'eventHandlerPreflight',
     'createCanonicalEventProps',
     'createEventTracer',
     'eventTraceExecution',
@@ -929,7 +933,13 @@ const eventRoutePreflightWrapperSource = (
     "import { spawn } from 'node:child_process';",
     "import { fileURLToPath } from 'node:url';",
     `import { ${projectBindings.join(', ')} } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
-    `import preflight from ${JSON.stringify(preflight.source)};`,
+    `import gateHandler from ${JSON.stringify(preflight.virtualSource === undefined ? preflight.source : 'agent-bundle/event-gate')};`,
+    ...(preflight.mode === undefined ? [] : [
+      "import { available, resolvePluginRoot, runAgentRequest, useAgent } from '@agent-bundle/runtime/request';",
+      eventProviderRegistryToken,
+      'const processHit = { hits: 1, instanceId: crypto.randomUUID(), pid: process.pid };',
+    ]),
+    `const preflight = ${preflight.mode === undefined ? 'gateHandler' : `eventHandlerPreflight((context) => gateHandler({ ...context, provider: useAgent().provider }), ${JSON.stringify(preflight.mode)})`};`,
     '',
     `const canonicalEvent = ${JSON.stringify(route.event)};`,
     `const capabilityRevision = ${JSON.stringify(hostContractRevision)};`,
@@ -943,12 +953,24 @@ const eventRoutePreflightWrapperSource = (
     '  const native = validateNativeEventEnvelope(nativeInput, { canonicalEvent, nativeEvent, target });',
     '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
     '  const trace = createEventTracer({ execution: eventTraceExecution({ event: canonicalEvent, host: target, nativeEvent }), ...(observer === undefined ? {} : { observer }) });',
-    '  const gate = await executeEventPreflight(preflight, {',
+    ...(preflight.mode === undefined ? [] : [
+      '  if (gateHandler.event !== undefined && gateHandler.event !== canonicalEvent) throw new TypeError("Event definition disagrees with its conventional path.");',
+    ]),
+    ...(preflight.mode === undefined ? ['  const gate = await executeEventPreflight(preflight, {'] : [
+      '  const gate = await runAgentRequest({',
+      '    invocation: { kind: "event", operationId: `event:${canonicalEvent}` },',
+      '    host: available({ name: target }, "native"),',
+      '    plugin: resolvePluginRoot({ fallback: fileURLToPath(new URL("..", import.meta.url)) }).identity,',
+      '    signal,',
+      eventProviderFieldsToken,
+      '  }, () => executeEventPreflight(preflight, {',
+    ]),
+    '    native,',
     '    canonical: props.canonical,',
     '    host: { name: target, nativeEvent },',
     '    signal,',
     '    terminal: { hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } },',
-    '  }, trace);',
+    preflight.mode === undefined ? '  }, trace);' : '  }, trace));',
     '  const projected = gate === "execute" || gate.outcome === "execute" ? undefined : projectEventPreflightResult(gate, canonicalEvent, target, nativeEvent, native);',
     '  return Object.freeze({ gate, native, projected, props, runtime: runtimeMode, trace });',
     '};',
@@ -1391,7 +1413,7 @@ export const planHooks = (
       : eventRouteHookWrapperSource(wrapper, hostRevision, durableLineage, preflight !== undefined);
     hookEntries.push({
       ...wrapper,
-      ...(preflight === undefined ? {} : { executeVirtualSource: renderedSource }),
+      ...(preflight === undefined || preflight.mode === 'handler' ? {} : { executeVirtualSource: renderedSource }),
       virtualSource: preflight === undefined
         ? renderedSource
         : eventRoutePreflightWrapperSource(wrapper, hostRevision),

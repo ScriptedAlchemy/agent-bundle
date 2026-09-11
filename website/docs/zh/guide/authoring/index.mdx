@@ -136,10 +136,11 @@ export default defineConfig({
 
 ## JSX 意味着渲染
 
-结构存在于配置与约定中；JSX 只出现在真正需要渲染的地方。一个可执行路由就是一个 async 默认导出的
+结构存在于配置与约定中；JSX 只出现在真正需要渲染的地方。一个渲染路由就是一个 async 默认导出的
 Server Component：它完成工作并返回 `Agent.*` 节点，并且只有在需要 host、session、actor、workspace、
 capability 或 state 上下文时才调用 `await agent()`。不存在公开的 `execute`/`render` 分裂，普通 `.ts`
-路由也绝不会被包进 React 行为里。
+路由也绝不会被包进 React 行为里。两种事件形式使用相同的规范文件路径：`.ts` 返回轻量决定，
+`.tsx` 渲染 JSX，可选导出的 `before()` 在渲染前执行门控。工具处理器可以使用 `defineTool` 获得类型推断。
 
 ## 路由契约（Application IR）
 

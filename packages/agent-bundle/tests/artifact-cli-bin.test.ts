@@ -135,7 +135,7 @@ const createFixture = async (options: {
       'export const resultSchema = z.object({ atImport: z.string(), atRun: z.string(), providerAtImport: z.string() }).strict();',
       'export default async function envProbe() {',
       '  const context = await agent();',
-      "  return { atImport, atRun: process.env.CLI_OPERATOR_TOKEN ?? 'unset', providerAtImport: context.providers.operatorToken };",
+      "  return { atImport, atRun: process.env.CLI_OPERATOR_TOKEN ?? 'unset', providerAtImport: (await context.provider('operatorToken')) };",
       '}',
       '',
     ].join('\n')),
