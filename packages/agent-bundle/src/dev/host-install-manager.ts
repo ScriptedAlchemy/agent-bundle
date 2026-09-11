@@ -3,10 +3,12 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readFile,
   readdir,
   rename,
   rm,
   symlink,
+  writeFile,
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
@@ -16,6 +18,8 @@ import { Effect, FileSystem } from 'effect';
 import { readArtifactManifest } from '../build/manifest-file.ts';
 import { reindexArtifactManifest } from '../build/manifest-reindex.ts';
 import { stableJson } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
+import { isPortablePathSegment } from '../core/paths.ts';
 import { isPlatformErrno, readFileString, type PlatformRun } from '../effect/platform.ts';
 import { platformRunOf } from './platform-run.ts';
 import type { DevPlatformRuntime } from './platform-runtime.ts';
@@ -43,6 +47,7 @@ import type { EpochReference, EpochStore } from './epoch-store.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 
 export const DEV_INSTALL_MARKER = '.agent-bundle-dev.json';
+const DEV_INSTALL_STATE = '.agent-bundle-dev';
 
 interface EpochReferenceSource {
   acquireEpochReference(epochId: string): Promise<Pick<EpochReference, 'close' | 'epoch' | 'root'>>;
@@ -73,6 +78,12 @@ interface DevInstallMarker {
   readonly epochId: string;
   readonly host: DevInstallHost;
   readonly projectRoot: string;
+  readonly schemaVersion: 1;
+}
+
+interface PublishedEntriesManifest {
+  readonly entries: readonly string[];
+  readonly epochId: string;
   readonly schemaVersion: 1;
 }
 
@@ -222,7 +233,75 @@ const pathExists = async (path: string): Promise<boolean> => {
 };
 
 const generationRoot = (destination: string, epochId: string): string =>
-  join(destination, '.agent-bundle-dev', 'generations', epochId);
+  join(destination, DEV_INSTALL_STATE, 'generations', epochId);
+
+const publishedEntriesPath = (destination: string): string =>
+  join(destination, DEV_INSTALL_STATE, 'published.json');
+
+const entryNames = async (root: string): Promise<readonly string[]> => {
+  const names: string[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() && !entry.isFile()) {
+      throw new TypeError(`Development bundle entry ${JSON.stringify(entry.name)} is not a regular file or directory.`);
+    }
+    if (entry.name === DEV_INSTALL_STATE) {
+      throw new TypeError(`Development bundle entry ${JSON.stringify(entry.name)} is reserved for manager state.`);
+    }
+    names.push(entry.name);
+  }
+  return names.sort((left, right) => left.localeCompare(right));
+};
+
+const readPublishedEntries = async (destination: string): Promise<PublishedEntriesManifest | undefined> => {
+  const path = publishedEntriesPath(destination);
+  let document: unknown;
+  try {
+    if (!(await lstat(path)).isFile()) {
+      throw new TypeError(`Development published-entries manifest ${JSON.stringify(path)} is not a regular file.`);
+    }
+    document = JSON.parse(await readFile(path, 'utf8')) as unknown;
+  } catch (error) {
+    if (isErrno(error, 'ENOENT') || error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+  if (
+    !isRecord(document) ||
+    document.schemaVersion !== 1 ||
+    typeof document.epochId !== 'string' ||
+    !isPortablePathSegment(document.epochId) ||
+    !Array.isArray(document.entries) ||
+    !document.entries.every(
+      (entry) => typeof entry === 'string' && entry !== DEV_INSTALL_STATE && isPortablePathSegment(entry),
+    ) ||
+    new Set(document.entries).size !== document.entries.length
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    entries: Object.freeze([...document.entries]),
+    epochId: document.epochId,
+    schemaVersion: 1,
+  });
+};
+
+const writePublishedEntries = async (
+  destination: string,
+  epochId: string,
+  entries: readonly string[],
+): Promise<void> => {
+  const path = publishedEntriesPath(destination);
+  const temporary = `${path}.${process.pid}-${crypto.randomUUID()}.tmp`;
+  await mkdir(join(destination, DEV_INSTALL_STATE), { recursive: true });
+  try {
+    await writeFile(temporary, `${stableJson({ entries, epochId, schemaVersion: 1 })}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+};
 
 const installGeneration = async (
   destination: string,
@@ -294,6 +373,7 @@ const publishFile = async (
 const publishInstalledGeneration = async (
   destination: string,
   epochId: string,
+  published: string[] = [],
 ): Promise<void> => {
   const generation = generationRoot(destination, epochId);
   const entries = await readdir(generation, { withFileTypes: true });
@@ -305,23 +385,89 @@ const publishInstalledGeneration = async (
     } else {
       throw new TypeError(`Development bundle entry ${JSON.stringify(entry.name)} is not a regular file or directory.`);
     }
+    published.push(entry.name);
   }
 };
 
-const publishDevGeneration = async (
+const reconcilePublishedEntries = async (
   destination: string,
-  bundleRoot: string,
+  previous: PublishedEntriesManifest | undefined,
   epochId: string,
+  nextEntries: readonly string[],
+  publish: ((published: string[]) => Promise<void>) | undefined,
+  afterManifest?: () => Promise<void>,
 ): Promise<void> => {
-  await installGeneration(destination, bundleRoot, epochId);
-  await publishInstalledGeneration(destination, epochId);
+  const previousEntries = new Set(previous?.entries ?? []);
+  const stale = [...previousEntries].filter((entry) => !nextEntries.includes(entry));
+  const previousGeneration = previous === undefined ? undefined : generationRoot(destination, previous.epochId);
+  const canRepublishPrevious = previousGeneration !== undefined && await pathExists(previousGeneration);
+  const needsBackup = !canRepublishPrevious && (
+    publish === undefined ? stale.length > 0 : previousEntries.size > 0
+  );
+  const backup = needsBackup
+    ? join(destination, DEV_INSTALL_STATE, `rollback-${process.pid}-${crypto.randomUUID()}`)
+    : undefined;
+  const backupEntries = backup === undefined
+    ? []
+    : publish === undefined ? stale : [...previousEntries];
+  if (backup !== undefined) await mkdir(backup, { recursive: true });
+  const published: string[] = [];
+  let manifestPublished = false;
+  try {
+    for (const entry of canRepublishPrevious ? stale : backupEntries) {
+      const path = join(destination, entry);
+      if (backup === undefined) {
+        await rm(path, { force: true, recursive: true });
+      } else {
+        try {
+          await rename(path, join(backup, entry));
+        } catch (error) {
+          if (!isErrno(error, 'ENOENT')) throw error;
+        }
+      }
+    }
+    await publish?.(published);
+    await writePublishedEntries(destination, epochId, nextEntries);
+    manifestPublished = true;
+    await afterManifest?.();
+  } catch (error) {
+    try {
+      for (const entry of published) {
+        if (backup !== undefined || !previousEntries.has(entry)) {
+          await rm(join(destination, entry), { force: true, recursive: true });
+        }
+      }
+      if (canRepublishPrevious && previous !== undefined) {
+        await publishInstalledGeneration(destination, previous.epochId);
+      } else if (backup !== undefined) {
+        for (const entry of backupEntries) {
+          const path = join(backup, entry);
+          if (await pathExists(path)) await rename(path, join(destination, entry));
+        }
+      }
+      if (manifestPublished) {
+        if (previous === undefined) {
+          await rm(publishedEntriesPath(destination), { force: true });
+        } else {
+          await writePublishedEntries(destination, previous.epochId, previous.entries);
+        }
+      }
+      if (backup !== undefined) await rm(backup, { force: true, recursive: true });
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], 'Failed to roll back development host publication.', {
+        cause: rollbackError,
+      });
+    }
+    throw error;
+  }
+  if (backup !== undefined) await rm(backup, { force: true, recursive: true }).catch(() => undefined);
 };
 
 const pruneGenerations = async (
   destination: string,
   retainedEpochIds: readonly string[],
 ): Promise<void> => {
-  const root = join(destination, '.agent-bundle-dev', 'generations');
+  const root = join(destination, DEV_INSTALL_STATE, 'generations');
   const retained = new Set(retainedEpochIds);
   for (const entry of await readdir(root, { withFileTypes: true })) {
     if (entry.isDirectory() && !retained.has(entry.name)) {
@@ -507,6 +653,8 @@ export class DevHostInstallManager {
         this.#installed.set(host, installed);
       }
       const previousEpochId = installed.epochId;
+      const previousPublished = await readPublishedEntries(installed.destination);
+      const nextEntries = await entryNames(prepared.root);
       let generationPublished = false;
       try {
         let refreshedByAppServer = false;
@@ -519,16 +667,32 @@ export class DevHostInstallManager {
               if (plugin === undefined || marketplaceDocument === undefined) {
                 throw new TypeError('Cannot refresh a Codex development install with no plugin marketplace identity.');
               }
-              await request('plugin/install', {
-                marketplacePath: join(source, marketplaceDocument),
-                pluginName: plugin,
-              });
+              await reconcilePublishedEntries(
+                installed.destination,
+                previousPublished,
+                epochId,
+                nextEntries,
+                undefined,
+                async () => {
+                  await request('plugin/install', {
+                    marketplacePath: join(source, marketplaceDocument),
+                    pluginName: plugin,
+                  });
+                },
+              );
               return true;
             },
           ) === true;
         }
         if (!refreshedByAppServer) {
-          await publishDevGeneration(installed.destination, prepared.root, epochId);
+          await installGeneration(installed.destination, prepared.root, epochId);
+          await reconcilePublishedEntries(
+            installed.destination,
+            previousPublished,
+            epochId,
+            nextEntries,
+            (published) => publishInstalledGeneration(installed.destination, epochId, published),
+          );
           generationPublished = true;
         }
       } catch (error) {
