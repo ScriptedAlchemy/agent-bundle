@@ -275,16 +275,16 @@ describe('RouteWorkspace dispatch', () => {
     expect(markup).toContain('data-testid="result-tab-replay"');
   });
 
-  it('disables canonical submission and defaults preflight routes to the first project target', () => {
-    const preflightLeaf = Object.freeze({
+  it('disables canonical submission and defaults handler routes to the first project target', () => {
+    const handlerLeaf = Object.freeze({
       ...eventLeaf,
-      preflight: 'src/events/tool/before.preflight.ts',
+      handler: 'src/events/tool/before.handler.ts',
     });
-    expect(defaultEventHostSelection(preflightLeaf, {
+    expect(defaultEventHostSelection(handlerLeaf, {
       diagnostics: [],
       event: 'tool/before',
-      routeId: preflightLeaf.routeId!,
-      routePath: preflightLeaf.source!,
+      routeId: handlerLeaf.routeId!,
+      routePath: handlerLeaf.source!,
       targets: [{
         hostContractRevision: 'codex-hooks-v1',
         nativeEvent: 'PreToolUse',
@@ -295,7 +295,7 @@ describe('RouteWorkspace dispatch', () => {
     const markup = renderToStaticMarkup(createElement(RouteWorkspace, {
       backends: [fakeBackend()],
       clients: clients(),
-      leaf: preflightLeaf,
+      leaf: handlerLeaf,
       onNavigate: noop,
       status,
       tree,

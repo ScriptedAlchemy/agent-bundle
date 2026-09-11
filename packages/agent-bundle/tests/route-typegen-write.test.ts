@@ -89,7 +89,7 @@ describe('writeRouteTypes', () => {
     await expect(writeRouteTypes(root, promptOnly)).resolves.toBe(routeTypesRelativePath);
     const withoutTool = await readFile(join(root, routeTypesRelativePath), 'utf8');
     expect(withoutTool).toBe(generateRouteTypes(promptOnly));
-    expect(withoutTool).toContain('"prompt:curator/brief": RouteContract<typeof route0.inputSchema, typeof route0.resultSchema>;');
+    expect(withoutTool).toContain('"prompt:curator/brief": ModuleContract<typeof route0>;');
     expect(withoutTool).toContain("declare module '@agent-bundle/runtime'");
     expect(withoutTool).not.toContain('agent-bundle/app');
     expect(withoutTool).not.toContain('AgentBundleAppRouteContracts');

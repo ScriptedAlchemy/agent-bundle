@@ -26,7 +26,7 @@ const writeProjectFile = async (root: string, path: string, contents: string): P
 const lookupRoute = [
   "import { Agent, agent } from '@agent-bundle/runtime';",
   "import { z } from 'zod';",
-  "export const config = { annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
+  "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"default\":\"ready\"}},\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
   'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
   "export const resultSchema = z.object({ invocation: z.enum(['cli', 'tool']), message: z.string() }).strict();",
   'export default async function Lookup({ input }) {',
@@ -39,7 +39,7 @@ const lookupRoute = [
 
 const explodeRoute = [
   "import { z } from 'zod';",
-  "export const config = { annotations: { readOnlyHint: true }, description: 'Throws before rendering.' };",
+  "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{},\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Throws before rendering.' };",
   'export const inputSchema = z.object({}).strict();',
   'export const resultSchema = z.object({ ok: z.boolean() }).strict();',
   'export default async function Explode() {',
@@ -79,7 +79,7 @@ const writeLayoutProject = async (root: string, layouts: Readonly<Record<string,
     writeProjectFile(root, 'src/cli/report.tsx', [
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
-      "export const config = { description: 'Render a library report.', positionals: ['root'] };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"root\":{\"type\":\"string\"}},\"required\":[\"root\"],\"type\":\"object\"}, description: 'Render a library report.', positionals: ['root'] };",
       'export const inputSchema = z.object({ root: z.string().min(1) }).strict();',
       'export const resultSchema = z.object({ books: z.number(), root: z.string() }).strict();',
       'export default async function Report({ input }) {',
@@ -264,8 +264,8 @@ it('ships byte-identical surfaces when no layout exists and refuses an invalid l
   const scriptMarkdown = await execFile(process.execPath, [join(output, 'scripts', 'summarize.mjs'), 'alpha']);
   expect(scriptMarkdown.stdout).toBe('Summarized 1 arguments.\n');
 
-  // An invalid layout module is a compile-time error (AB4830), never a runtime surprise.
-  await writeProjectFile(root, 'src/layout.tsx', 'export default { children: undefined };\n');
+  // Missing layout exports are rejected before compilation.
+  await writeProjectFile(root, 'src/layout.tsx', 'export const unrelated = true;\n');
   await expect(build({ output, packageOutputs: true, root })).rejects.toMatchObject({
     diagnostics: [expect.objectContaining({ code: 'AB4830', severity: 'error' })],
     name: 'DiagnosticError',

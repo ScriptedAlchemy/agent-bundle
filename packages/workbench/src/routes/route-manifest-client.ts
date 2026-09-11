@@ -102,8 +102,7 @@ const contractSchema: z.ZodType<RouteManifestContract> = z.strictObject({
 
 const eventExecutionSchema = z.strictObject({
   fallback: z.enum(['none', 'standalone']),
-  preflight: z.string().optional(),
-  providers: z.array(z.string()).optional(),
+  handler: z.string().optional(),
   runtime: z.enum(['shared', 'standalone']),
 });
 
@@ -151,6 +150,7 @@ const cliProjectionSchema: z.ZodType<RouteManifestCliProjection> = z.strictObjec
 });
 
 const cliCommandSchema: z.ZodType<RouteManifestCliCommand> = z.strictObject({
+  input: z.literal('json').optional(),
   aliases: z.array(z.string()),
   description: z.string().optional(),
   exitCode: z.enum(['result', 'zero']),

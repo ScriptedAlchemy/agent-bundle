@@ -249,7 +249,7 @@ export const invokeCli = async (
             recovery: 'Export both zod schemas from the command module; the routed CLI validates argv through them.',
           });
         }
-        const parsed = mapGeneratedCliInput(command, module.inputSchema, await loadCliProjectionModule(manifest, command), input);
+        const parsed = await mapGeneratedCliInput(command, module.inputSchema, await loadCliProjectionModule(manifest, command), input);
         const root = process.cwd();
         const plugin = harnessPluginRoot({ context, manifest, resolvePluginRoot: runtime.resolvePluginRoot });
         // Same provider invocation the generated plain-command path builds (#366).
@@ -257,7 +257,7 @@ export const invokeCli = async (
           explicit: context.providers,
           invocation: { kind: 'cli', props: { args: execution.args, command: commandPath(command) } },
           manifest,
-          processHit: claimProcessHit(processLifetime),
+          processHit: context.process ?? claimProcessHit(processLifetime),
           provenance: { ...provenance, kind: 'cli', routeId: command.routeId, source: 'manifest', targets: [] },
         });
         const result = await runtime.runAgentRequest({
@@ -272,7 +272,7 @@ export const invokeCli = async (
           terminal: runtime.available(execution.terminal, 'native'),
           workspace: runtime.available({ root }, 'derived'),
           ...context,
-          providers,
+          ...providers,
           invocation: {
             kind: 'cli',
             operationId: command.routeId,

@@ -28,6 +28,7 @@ export default defineConfig({
           notices: './src/notices/index.ts',
           'notices/inbox-route': './src/notices/inbox-route.ts',
           plugin: './src/plugin.ts',
+          request: './src/request.ts',
           state: './src/state/index.ts',
           'state/sqlite': './src/state/sqlite.ts',
         },

@@ -87,7 +87,7 @@ MCP 模板中由编译器拥有的本地服务器会被 Amp 的 Skill 级 MCP �
 | 面向智能体的结构化与可读输出 | 可执行路由返回 `Agent.*` 元素 | 组合 Agent Document 及各表面的输出；领域计算仍属于插件。 |
 | 工具的浏览器视图 | `src/mcp/<server>/apps/*`，加显式工具关联 | 编译 MCP App，通过 `agent-bundle/app` 连接；[MCP Apps 示例](../../examples/mcp-app.mdx)。 |
 | 不通过智能体界面打开 App | `serve-app` 或声明的 `web` 暴露 | 复用本地浏览器宿主和同意边界；[CLI](../../reference/cli.mdx)。它不是新的部署 target。 |
-| 跨宿主事件行为 | `src/events/**`，可选 preflight | 规范化事件并投影受支持的决定/上下文；[hooks](../authoring/hooks.mdx)。 |
+| 跨宿主事件行为 | `src/events/**`：`.ts` 结果，或 `.tsx` 渲染，可由 `.ts` 处理器通过 `ctx.render()` 请求 | 规范化事件并投影受支持的决定/上下文；[hooks](../authoring/hooks.mdx)。 |
 | 轻量普通 hook | 使用公开 hook 类型的配置声明处理器 | 管理原生 stdin/stdout 与结果编码，不要求 Agent renderer；[hooks 与脚本示例](../../examples/hooks-and-scripts.mdx)。 |
 | 共享渲染与请求依赖 | `src/layout.tsx`、服务器布局、`src/providers/*` | 组合受支持的路由并挂载观测到的请求上下文；[项目结构](./project-structure.mdx)。浏览器 App 和事件不会自动成为文档布局的子节点。 |
 | 框架 state 与 notices | `src/state.ts` 和公开请求句柄 | 提供声明的生命周期、journal/notice 机制与真实可用性；[运行环境](../../reference/runtime-environment.mdx)和[notices](../../reference/notices.md)。 |

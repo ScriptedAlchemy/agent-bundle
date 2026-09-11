@@ -6,6 +6,18 @@ import { z } from 'zod';
 import { Callout, DataList } from '../../../components/primitives.tsx';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "root": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "root"
+    ],
+    "type": "object"
+  },
   description: 'Start an evidence-first audiobook curation review.',
 } satisfies PromptConfig;
 export const inputSchema = z.object({ root: z.string().min(1) }).strict();

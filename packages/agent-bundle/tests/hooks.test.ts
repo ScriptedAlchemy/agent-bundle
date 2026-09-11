@@ -13,7 +13,7 @@ import { cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { hookWrapperPath } from '../src/adapters/composite-layout.ts';
 import { nativeHookWrapperSource, planHooks, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
-import type { CompiledEventPreflight } from '../src/routes/types.ts';
+import type { CompiledEventHandler } from '../src/routes/types.ts';
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { planHooksSurface } from '../src/build/entries.ts';
@@ -116,7 +116,7 @@ const fixtureHookManifest = (
     distribution: { channels: ['local'], payloads: [] },
     executables: { bins: [], hooks, mcpServers: [], scripts: [] },
     files,
-    manifestVersion: 5,
+    manifestVersion: 6,
     projections,
     routes: {
       digest: emptyCompiledRouteGraph.digest,
@@ -259,15 +259,16 @@ it('keeps the Claude and Codex native wrapper codecs byte-identical apart from i
   expect(claudeSource).not.toContain('AGENT_BUNDLE_HOOK_HOST');
 });
 
-it('wires Compiled event preflight into each per-host wrapper and keeps built-in host identity baked', () => {
+it('wires Compiled event handler into each per-host wrapper and keeps built-in host identity baked', () => {
   const selected = ['claude', 'codex', 'cursor'] as const;
-  const preflight: CompiledEventPreflight = Object.freeze({
-    provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/before.preflight.ts' }),
-    source: '/project/src/events/tool/before.preflight.ts',
+  const handler: CompiledEventHandler = Object.freeze({
+    provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/before.handler.ts' }),
+    source: '/project/src/events/tool/before.handler.ts',
+  view: '/project/src/events/tool/before.view.tsx',
   });
   const hook: NormalizedPlugin['hooks'][number] = {
     event: 'beforeTool',
-    eventRoute: { event: 'tool/before', fallback: 'none', preflight, runtime: 'shared' },
+    eventRoute: { event: 'tool/before', fallback: 'none', handler, runtime: 'shared' },
     id: 'hook:event-route:tool-before',
     name: 'event-route-tool-before',
     provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/before.tsx' },
@@ -280,8 +281,8 @@ it('wires Compiled event preflight into each per-host wrapper and keeps built-in
     hooks: [hook],
     mcpServers: [],
     metadata: {
-      id: 'plugin:preflight-hosts',
-      name: 'preflight-hosts',
+      id: 'plugin:handler-hosts',
+      name: 'handler-hosts',
       provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
       version: '1.0.0',
     },
@@ -308,9 +309,9 @@ it('wires Compiled event preflight into each per-host wrapper and keeps built-in
     expect(entry.relativePath).toBe(`hooks/event-route-tool-before.${host}.mjs`);
     expect(entry.target).toBe(host);
     expect(entry.virtualSource).toContain(`const target = ${JSON.stringify(host)};`);
-    expect(entry.virtualSource).toContain('executeEventPreflight');
-    expect(entry.virtualSource).toContain(`from ${JSON.stringify(preflight.source)}`);
-    expect(entry.virtualSource).toContain('projectEventPreflightResult');
+    expect(entry.virtualSource).toContain('executeEventHandler');
+    expect(entry.virtualSource).toContain(`from ${JSON.stringify(handler.source)}`);
+    expect(entry.virtualSource).toContain('projectEventHandlerResult');
     expect(entry.virtualSource).toContain(`./event-route-tool-before.${host}.execute.mjs`);
     expect(entry.executeVirtualSource).toContain('requestEventRuntime');
     expect(entry.virtualSource).not.toContain('AGENT_BUNDLE_HOOK_HOST');

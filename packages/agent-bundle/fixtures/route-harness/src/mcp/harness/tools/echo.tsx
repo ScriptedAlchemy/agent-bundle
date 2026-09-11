@@ -2,6 +2,15 @@ import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "message": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description: 'Echoes one message back with the observed workspace root.',
   title: 'Echo',

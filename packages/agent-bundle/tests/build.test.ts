@@ -390,7 +390,7 @@ it('low-level build writes and returns the exact canonical manifest for a config
           source: { status: 'passed' },
         },
       },
-      manifestVersion: 5,
+      manifestVersion: 6,
       projections: [expect.objectContaining({ host: 'portable' })],
       runtime: { node: '22.12.0' },
     });
@@ -1306,7 +1306,7 @@ it('leaves filesystem URL and worker expressions in the emitted bundle untouched
       "new URL('./generated.js', import.meta.url)",
       "new URL('./sibling.json', import.meta.url)",
       'new URL(`./event-${name}.js`, import.meta.url)',
-      "new Worker(new URL('./entry-flight.mjs', import.meta.url)",
+      "new URL('./entry-flight.mjs', import.meta.url)",
     ]) {
       expect(bundle).toContain(expression);
     }

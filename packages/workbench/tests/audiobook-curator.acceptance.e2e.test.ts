@@ -176,16 +176,15 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
         timings: readonly { durationMs: number; phase: string }[];
       } }>;
     }, invocationId);
-    expect(finalEnvelope.invocation.providers.length).toBeGreaterThan(0);
+    expect(finalEnvelope.invocation.providers).toEqual([]);
     expect(finalEnvelope.invocation.timings.length).toBeGreaterThan(0);
     expect(finalEnvelope.invocation.outcome).toBeDefined();
     const finalOutcome = finalEnvelope.invocation.outcome!;
     await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(new RegExp(`route-status--${finalEnvelope.invocation.status}`, 'u'));
     await expect(workbenchTestId(page, 'routeOutcome')).toContainText(new RegExp(finalOutcome.kind, 'iu'));
-    const finalProvider = finalEnvelope.invocation.providers[0]!;
     await workbenchTestId(page, 'inspectorToggle').click();
     await page.getByRole('tab', { name: 'Providers' }).click();
-    await expect(page.getByRole('row').filter({ hasText: finalProvider.name })).toContainText(finalProvider.status);
+    await expect(page.getByText('This invocation mounted no context providers.')).toBeVisible();
     const finalTiming = finalEnvelope.invocation.timings[0]!;
     await page.getByRole('tab', { name: 'Timings' }).click();
     const timingRow = page.locator('.inspector-timings li').filter({ hasText: finalTiming.phase });

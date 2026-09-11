@@ -72,8 +72,8 @@ const invocation = (id: string, completedAt: string): RouteInvocation => ({
       host: 'claude',
       nativeEvent: 'PostToolUse',
     },
-    kind: 'preflight.start',
-    phase: 'preflight',
+    kind: 'handler.start',
+    phase: 'handler',
     sequence: 0,
   }],
 });
@@ -1088,12 +1088,12 @@ it('does not lease or execute an invocation aborted while queued', async () => {
   expect(leases).toBe(1);
 });
 
-it('rejects a canonical event surface when the compiled route has preflight', async () => {
+it('rejects a canonical event surface when the compiled route has handler', async () => {
   const route = {
     config: [],
     event: 'tool/before',
     id: 'event:tool/before',
-    execution: { fallback: 'standalone', preflight: 'src/events/tool/before.preflight.ts', runtime: 'standalone' },
+    execution: { fallback: 'standalone', handler: 'src/events/tool/before.handler.ts', runtime: 'standalone' },
     kind: 'event-route',
     provenance: { kind: 'conventional' },
     source: 'src/events/tool/before.tsx',
@@ -1113,7 +1113,7 @@ it('rejects a canonical event surface when the compiled route has preflight', as
     },
     prepared: async () => {
       leases += 1;
-      throw new Error('canonical preflight submission must fail before leasing');
+      throw new Error('canonical handler submission must fail before leasing');
     },
   });
 
@@ -1133,7 +1133,7 @@ it('rejects a globally supported host absent from the route executable bindings'
     config: [],
     event: 'tool/before',
     id: 'event:tool/before',
-    execution: { fallback: 'standalone', preflight: 'src/events/tool/before.preflight.ts', runtime: 'standalone' },
+    execution: { fallback: 'standalone', handler: 'src/events/tool/before.handler.ts', runtime: 'standalone' },
     kind: 'event-route',
     provenance: { kind: 'conventional' },
     source: 'src/events/tool/before.tsx',
@@ -1167,7 +1167,7 @@ it('rejects a globally supported host absent from the route executable bindings'
             routes: {
               digest: 'digest',
               events: [{
-                execution: { fallback: 'standalone', preflight: route.execution.preflight, runtime: 'standalone' },
+                execution: { fallback: 'standalone', handler: route.execution.handler, runtime: 'standalone' },
                 id: route.id,
               }],
             },

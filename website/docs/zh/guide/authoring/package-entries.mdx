@@ -86,6 +86,12 @@ import { z } from 'zod';
 export const config = {
   description: 'Inspect a bounded source tree without changing it.',
   positionals: ['root'],
+  inputJsonSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { maxFiles: { type: 'number' }, root: { type: 'string' } },
+    required: ['root'],
+  },
 } satisfies CliRouteConfig;
 
 export const inputSchema = z.object({
@@ -103,7 +109,7 @@ export default async function inspect(
 }
 ```
 
-编译器把 `inputSchema` 静态投影到 argv 上，生成分层帮助（每一层都有 `--help`，根层有 `--version`），
+编译器把 `config.inputJsonSchema` 静态投影到 argv 上，生成分层帮助（每一层都有 `--help`，根层有 `--version`），
 并在组合产物中输出 `bin/<plugin-name>.mjs`。运行时，外壳解析命令路径、
 解析并强制转换 argv、用模块自身的 schema 校验、在带类型的 Agent 请求上下文中执行默认函数、向 stdout
 写出一行规范 JSON，并确定性地映射退出码：
@@ -129,7 +135,7 @@ Run 'curator doctor --help' for usage.
 `{"error":{"code":"CLI_INPUT_INVALID","issues":[...],"usage":"..."}}`；在 `--ndjson` 下，事件流中只包含一个
 携带相同 `error` 对象的 `type: "error"` 事件。
 
-`.tsx` 命令路由把默认函数换成一个具有相同 props 的 async 默认 Server Component，并通过运行时分发器
+`.tsx` 命令路由把默认函数换成一个具有相同 props 的 默认 Server Component，并通过运行时分发器
 针对同级的 `bin/<plugin-name>-flight.mjs` worker 渲染。它由此获得
 [脚本与资源](./scripts-assets.mdx)中描述的四种输出模式。路由式 CLI 项目需要把 `@agent-bundle/runtime`
 作为依赖，因为生成的可执行文件通过它装配请求上下文。
@@ -143,73 +149,37 @@ Run 'curator doctor --help' for usage.
 
 ### 在 MCP 与 CLI 之间共享同一份 schema
 
-无论 `inputSchema` 声明在哪里，argv 语法都会从中投影。暴露同一操作的 CLI 命令与 MCP 工具会绑定
-同一个 schema 模块，而不是各自携带一份副本：
+运行时的 `inputSchema` 和 `resultSchema` 可以导入，也可以由工厂创建。编译器检查导出是否存在，
+生成的可执行文件加载真实 schema。TypeScript 从这些导出推导输入和输出类型，包括默认值和转换。
+
+若需要不执行模块的检查、Workbench 表单或命名 CLI flag，请声明字面量 `config.inputJsonSchema`。
+它接受 `additionalProperties: false` 的对象、字符串/数字/布尔标量、字符串枚举、标量数组，
+以及可选的 `required`、`description` 和 `default` 元数据。
+运行时 schema 仍负责校验、默认值和转换，元数据不会替代它。
 
 ```ts
-// src/lib/protocol-schemas.ts
-import { z } from 'zod';
-
-// `export const requestStatuses = ['queued', …] as const` in ../daemon/protocol.ts
-import { requestStatuses } from '../daemon/protocol.js';
-
-const requestStatusSchema = z.enum(requestStatuses);
-
-export const statusInputSchema = z.object({
-  laneKey: z.string().min(1).optional(),
-  limit: z.number().int().min(1).max(500).optional(),
-  statuses: z.array(requestStatusSchema).max(8).optional(),
-  tickets: z.array(z.string().min(1)).max(100).optional(),
-}).strict();
-export const statusResultSchema = z.object({ /* ... */ }).strict();
+export const config = {
+  inputJsonSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      laneKey: { type: 'string' },
+      limit: { type: 'number' },
+    },
+  },
+};
 ```
 
-```ts
-// src/cli/status.tsx
-import { statusInputSchema, statusResultSchema } from '../lib/protocol-schemas.js';
-
-export const inputSchema = statusInputSchema;
-export const resultSchema = statusResultSchema;
-```
-
-工具路由（`src/mcp/hauler/tools/hauler_status.tsx`）从
-`'../../../lib/protocol-schemas.js'` 导入，并导出同样两行。编译器不会执行任何模块，而是在声明该
-schema 的模块中解析 zod 表达式，所用的有界语法与内联 schema 相同：
-
-- 引用可以是整个 `inputSchema` initializer、属性 initializer、方法链的根
-  （`requestStatusSchema.optional()`），也可以是 `z.array(...)`、`z.enum(...)`（由字符串字面量组成的
-  `as const` 数组）、`z.object(...)` / `z.strictObject(...)`（对象字面量）或 `.default(...)`
-  （静态字面量）的参数。
-- 它可以解析到同一模块顶层的 `const`（无论是否导出），也可以解析到通过**相对** specifier 导入且位于
-  项目内部的模块所导出的 `export const`（`.js` specifier 会映射到对应的 `.ts`/`.tsx` 源码）。
-  别名链（`export const a = b`）会被跟随到任意深度，并记录每个访问过的 binding，因此循环会被检测出来，
-  而不会重复遍历。
-- 裸包 specifier、项目外部或缺失的模块、没有对应名称 `export const` 的目标模块、`let`/`var`、
-  解构、函数、类、默认导入与命名空间导入 binding，以及动态 initializer（裸调用、函数、带替换项的
-  template），都是解析器不会越过的边界。
-- 已解析 schema 内部的语法违规仍是 `AB4814`，其位置会带上声明模块。无法跟随的引用是 `AB4838`，
-  消息会打印引用链（`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) ->
-  requestStatusSchema -> requestStatuses`）以及阻止解析器继续的边界；循环链是 `AB4839`，消息会打印该循环。
-- 只有 CLI 路由，或带 CLI 投影的工具路由，会触发 `AB4838`/`AB4839`，因为只有这里静态语法不可或缺。
-  schema 无法被解析器跟随、且没有投影的 MCP 路由仍会像 schema 不符合内联语法时一样正常工作：
-  生成的服务器会从真实的 zod 对象派生其 JSON Schema。在带 CLI 投影的工具路由上，消息前缀是
-  `Tool route <path> (CLI projection <module>)`，而不是 `CLI route <path>`。
-- `resultSchema` 可以用同样方式导入。框架会静态检查它是否存在，其类型经由 TypeScript 流转，运行时则
-  使用真实的 zod 对象进行校验。
-
-随后，两条路由都会绑定同一个规范的
-[路由契约](./index.mdx#路由契约application-ir)；argv 语法、静态 MCP `inputSchema`、生成的路由类型、
-Workbench 与 `agent-bundle inspect --routes` 读取的正是它。
+没有这些元数据的独立 CLI 路由或工具投影默认接受 `--input` JSON。
+显式声明 `input: 'json'` 可在已有元数据时选择 JSON 模式。
+flag 和位置参数映射需要元数据；工具缺少元数据时报告 `AB4845`。
+元数据或独立 argv 规则无效时报告 `AB4814`。编译器不解释 Zod 表达式，也不跟随 schema 别名链；
+`AB4838` 和 `AB4839` 已退役。
 
 ### 将一个工具投影为惯用命令
 
-当 CLI 语法不能由 schema 自动进行 kebab 投影时，共享一个 `RouteContract` 仍会留下两条*路由*。
-cargo-hauler 把 `src/cli/status.tsx` 放在 `src/mcp/hauler/tools/hauler_status.tsx` 旁边，让
-`--lane` 可以表示 `laneKey`；又把 `src/cli/request.tsx` 放在 `hauler_request.tsx` 旁边，让
-`hauler request -- cargo check` 可以传入 `argv`，并让 `mapInput` 派生 `cwd`。第二个模块是第二个
-操作（`cli:status`），拥有自己的 `operationId` 与 typegen 条目。同位置的 `<tool>.cli.ts` 投影模块
-则是同一操作的 CLI *表面*投影——身份仍为 `tool:<server>/<tool>`——绝不是一条路由。宿主投影
-（`targets`）保持不变，并且与此正交。
+同级 `<tool>.cli.ts` 是同一工具的 CLI 表面投影，不是新路由。它可以声明命令路径、位置参数和 flag 名称，
+操作身份仍为 `tool:<server>/<tool>`。
 
 该模块位于工具旁边，绝不放在 `src/cli/**` 下。Status 只需重命名；解析器已经发出规范键，因此不需要
 `mapInput`：
@@ -242,7 +212,7 @@ export const config = {
 } satisfies CliProjectionConfig<typeof inputSchema>;
 ```
 
-Request 需要位置参数，以及一个同步的 `mapInput`：它会用 `process.cwd()` 填充规范必填的 `cwd`，并拆分
+Request 需要位置参数，以及一个同步或异步的 `mapInput`：它会用 `process.cwd()` 填充规范必填的 `cwd`，并拆分
 逗号分隔的 `--after` 列表：
 
 ```ts
@@ -309,7 +279,7 @@ mapper——而枚举之外的值仍以 2 退出，并以 CLI 拼写报告为
 | `positionals` | 按顺序作为裸参数使用的规范键（规则与 `src/cli` 路由相同）。 |
 | `flags.<key>.name` | CLI 拼写（kebab-case，不带前导短横线）；默认为 `kebab(key)`。 |
 | `flags.<key>.aliases` | 额外的长格式 `--spellings`，使用 kebab-case，不带前导短横线。 |
-| `flags.<key>.description` | 覆盖 schema 的 `.describe()`。 |
+| `flags.<key>.description` | 覆盖输入元数据的描述。 |
 | `flags.<key>.default` | shell 在 `mapInput` 之前应用的 CLI 专用默认值（记录在 `projection.defaults` 中；schema 的 `.default()` 由 zod 在 `mapInput` 之后应用）。 |
 | `flags.<key>.required` | `false` 会放宽一个规范必填键；仅当导出了 `mapInput` 时合法。 |
 | `aliases` | 命令别名（规则与 `src/cli` 路由的 `config.aliases` 相同）。 |
@@ -319,9 +289,8 @@ mapper——而枚举之外的值仍以 2 退出，并以 CLI 拼写报告为
 
 ### flag 无法拼写的 schema：JSON 输入
 
-有界 argv 语法覆盖标量、枚举以及它们的数组。`inputSchema` 中嵌套对象、联合或 transform 的工具仍是
-合法的工具——MCP 表面照原样接收它——但它没有忠实的 flag 形式，所以基于 flag 的投影会以 `AB4814`
-失败（其恢复提示会指向这一模式）。声明 `input: 'json'`，投影出的命令便一次接收完整输入：
+命名 flag 使用显式输入元数据。嵌套输入可以直接使用 JSON；没有元数据时默认采用该模式，
+也可以声明 `input: 'json'`：
 
 ```ts title="src/mcp/curator/tools/select.cli.ts"
 import type { CliProjectionConfig } from 'agent-bundle/routes';
@@ -347,16 +316,15 @@ my-plugin select --input '{"selection":{"by":"query","query":"dune"}}' --yes --j
 `flags` 以工具的 `RouteContract.input` 的规范键为键。发现阶段会在派生身份之前排除 `.cli.{ts,tsx}`，
 并将该文件与同级的 `.{ts,tsx}` 配对。这个后缀在 `src/mcp/**` 下保留；加 `_` 前缀可以停用它。
 孤立文件，或位于 `resources/`、`prompts/` 或 `apps/` 下的 `.cli.*`，会触发 `AB4843`。缺失或动态的
-`config`、封闭集合之外的键、形状错误的字段、静态上不是函数的 `mapInput`，或在没有 `mapInput` 时对
+`config`、封闭集合之外的键、形状错误的字段、或在没有 `mapInput` 时对
 规范必填键使用 `required: false` / CLI `default`，会触发 `AB4844`。契约中不存在的
 `flags`/`positionals` 键、不符合 kebab-case、为保留名（`help`、`json`、`ndjson`、`version`，以及
 启用确认时的 `yes`）或相互冲突的 `name`/别名、位置参数键上的 `name` 或 `aliases`（裸参数没有
 `--spelling`）、启用确认的命令所投影的契约含有键 `yes`（无论如何拼写，shell 都会把 `yes` 当作确认
 剥离），以及不是安全身份段的 `command` 段，会触发 `AB4845`。
 每条消息都是 `CLI projection <module> for tool:<server>/<tool>: <detail>.`（位置错误的模块没有可指名的
-工具：`CLI projection <module>: <detail>.`）。工具一旦有了投影，原本没有
-静态契约的 schema 就成为不可或缺的语法：`AB4814`/`AB4838`/`AB4839` 会在工具模块上触发，前缀为
-`Tool route <path> (CLI projection <module>)`。
+工具：`CLI projection <module>: <detail>.`）。缺少工具 `config.inputJsonSchema` 的 flag 映射报告 `AB4845`。
+运行时检查 `mapInput` 是否可调用并等待其结果。
 
 `agent-bundle inspect --routes` 会转储编译后的路由图，因此无需额外的 renderer 即可看到
 `cli.commands[].projection`（`module`、`mapInput`、`input?`、`defaults?`、`relaxed?`）与
@@ -367,9 +335,9 @@ id。只要路由从生成的 CLI 可执行文件运行，无论命令由哪种�
 
 没有投影模块，就不会通过这条路径生成命令；批量选择加入的
 [`routes.mcpCommands`](#把-mcp-工具投影进-cli) 对其他所有工具仍照常工作。任何投影字段都不会改变 MCP
-`inputSchema`、`tools/list`、annotations 或 `_meta`；`ToolConfig` 不会增加任何字段。
+`inputSchema`、`tools/list`、annotations 或 `_meta`；`ToolConfig.inputJsonSchema` 提供可选 flag 元数据。
 
-短格式 `-x` 别名（shell 目前会拒绝单短横线 token）与异步 `mapInput` 暂不支持。
+短格式 `-x` 别名仍不受支持。`mapInput` 可以是同步或异步函数；shell 会等待它完成，然后执行 schema 验证。
 
 ### 每种分发中的同一个路由式 CLI
 

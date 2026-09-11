@@ -40,7 +40,7 @@ const typecheck = (root: string, entry: string): readonly string[] => {
  * `(await agent()).providers.<key>` observes the provider factory's resolved
  * return type against the real published runtime declarations.
  */
-it('types (await agent()).providers.<key> from the generated provider declarations', { timeout: 60_000 }, async () => {
+it('types await context.provider(key) from the generated provider declarations', { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-provider-typegen-'));
   roots.push(root);
   // The audiobook example's installed tree supplies the built @agent-bundle/runtime and zod.
@@ -111,11 +111,11 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
       'export const stages = async (): Promise<readonly string[]> => {',
       '  const context = await agent();',
       '  // Augmented: no cast, no runtime guard needed for declared providers.',
-      '  const library: LibraryContext = context.providers.library;',
-      '  const build: number = context.providers.buildNumber;',
-      '  const lifetime: number | undefined = context.providers.processLifetime?.hits;',
+      '  const library: LibraryContext = await context.provider("library");',
+      '  const build: number = await context.provider("buildNumber");',
+      '  const lifetime: number | undefined = context.process?.hits;',
       '  // Undeclared keys stay unknown.',
-      '  const unknownValue: unknown = context.providers.somethingElse;',
+      '  const unknownValue: unknown = await context.provider("somethingElse");',
       '  void build; void lifetime; void unknownValue;',
       '  return library.stages;',
       '};',
@@ -123,14 +123,10 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
     ].join('\n')),
     writeProjectFile(root, 'mismatch.ts', [
       "import { agent } from '@agent-bundle/runtime';",
-      'export const wrong = async (): Promise<number> => (await agent()).providers.library;',
+      'export const wrong = async (): Promise<number> => await (await agent()).provider("library");',
       '',
     ].join('\n')),
-    // A custom runAgentRequest host runs no src/providers/*, so it must supply
-    // the declared keys, or the handler's typed `providers.library` would
-    // dereference undefined at runtime. The harness mounts the project's
-    // providers itself, so a call without `context` is legal and observes the
-    // real values; an explicit `context.providers` fixture must be complete.
+    // Explicit values can cover just the keys a request consumes.
     writeProjectFile(root, 'custom-scope.ts', [
       "import { runAgentRequest } from '@agent-bundle/runtime';",
       "import { renderRoute } from 'agent-bundle/test';",
@@ -193,15 +189,9 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
   expect(mismatch[0]).toContain("Type 'LibraryContext' is not assignable to type 'number'");
 
   expect(typecheck(root, 'custom-scope.ts')).toEqual([]);
-  const missingProviders = typecheck(root, 'missing-providers.ts');
-  expect(missingProviders).toHaveLength(1);
-  expect(missingProviders[0]).toContain("Property 'providers' is missing");
-  const missingFixture = typecheck(root, 'missing-fixture.ts');
-  expect(missingFixture).toHaveLength(1);
-  expect(missingFixture[0]).toContain("Property '\"buildNumber\"' is missing");
-  const missingResolver = typecheck(root, 'missing-resolver.ts');
-  expect(missingResolver).toHaveLength(1);
-  expect(missingResolver[0]).toContain("Property '\"buildNumber\"' is missing");
+  expect(typecheck(root, 'missing-providers.ts')).toEqual([]);
+  expect(typecheck(root, 'missing-fixture.ts')).toEqual([]);
+  expect(typecheck(root, 'missing-resolver.ts')).toEqual([]);
   const writing = typecheck(root, 'writing-provider.ts');
   expect(writing).toHaveLength(3);
   expect(writing[0]).toContain("Property 'dispatch' does not exist on type 'AgentProviderStateHandle<unknown>'");

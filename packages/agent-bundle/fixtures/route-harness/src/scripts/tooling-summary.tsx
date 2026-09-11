@@ -13,7 +13,12 @@ export default async function ToolingSummary({ argv, signal }: {
   readonly signal: AbortSignal;
 }) {
   if (signal.aborted) throw new DOMException('aborted', 'AbortError');
-  const { providers } = await agent();
+  const context = await agent();
+  const providers = {
+    processLifetime: context.process,
+    libraryTooling: await context.provider('libraryTooling'),
+    requestView: await context.provider('requestView'),
+  };
   const value = {
     arguments: argv.length,
     keys: Object.keys(providers).sort(),

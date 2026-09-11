@@ -7,6 +7,11 @@ import { clearLog, resolveLog } from '../../../log.js';
 import type { CaptureEvents, CapturesState } from '../../../state.js';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Clear the host-test capture log and the durable capture summary so the next probe starts empty.',
 } satisfies ToolConfig;

@@ -3,6 +3,30 @@ import type { AgentNoticePublishInput } from '@agent-bundle/runtime/notices';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "message": {
+        "type": "string"
+      },
+      "recipientSession": {
+        "type": "string"
+      },
+      "sensitivity": {
+        "enum": [
+          "public",
+          "internal",
+          "secret"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "message",
+      "recipientSession"
+    ],
+    "type": "object"
+  },
   description: 'Publishes a durable notice for a later session event.',
   title: 'Publish notice',
 };

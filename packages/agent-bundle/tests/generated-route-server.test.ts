@@ -488,14 +488,14 @@ it('augments a generated server from config and projects result _meta and text-o
   }
 });
 
-it('compiles appResourceUri() and imported-const references to the App route resourceUri and a route-relative template (#388)', { retry: 2, timeout: 60_000 }, async () => {
+it('compiles appResourceUri() and local literal references to the App route resourceUri and a route-relative template (#388)', { retry: 2, timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-app-refs-'));
   roots.push(root);
   await writeGeneratedProject(root, {
     // The one literal: the App route's own resourceUri, itself an imported const.
     'src/mcp/curator/constants.ts': "export const DASHBOARD_URI = 'ui://generated-routes-fixture/dashboard.html';\n",
     'src/mcp/curator/apps/dashboard.ts': [
-      "import { DASHBOARD_URI } from '../constants.ts';",
+      "const DASHBOARD_URI = 'ui://generated-routes-fixture/dashboard.html';",
       "export const config = { resourceUri: DASHBOARD_URI, template: './dashboard.html' };",
       "document.getElementById('shell').textContent = 'Curator dashboard';",
       '',
@@ -522,7 +522,7 @@ it('compiles appResourceUri() and imported-const references to the App route res
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
       "import { z } from 'zod';",
-      "import { DASHBOARD_URI } from '../constants';",
+      "const DASHBOARD_URI = 'ui://generated-routes-fixture/dashboard.html';",
       "export const config = { _meta: { ui: { resourceUri: DASHBOARD_URI } }, description: 'Read the catalog.', mimeType: 'application/json', uri: 'catalog://books' };",
       'export const inputSchema = z.object({ uri: z.string() }).strict();',
       'export const resultSchema = z.object({ contents: z.array(z.object({ mimeType: z.string(), text: z.string(), uri: z.string() })) }).strict();',
@@ -690,7 +690,7 @@ it('observes one process-lifetime provider across consecutive generated tool cal
       'export const resultSchema = z.object({ hits: z.number(), instanceId: z.string(), pid: z.number() }).strict();',
       'export default async function Warmth() {',
       '  const context = await agent();',
-      '  const processLifetime = context.providers.processLifetime;',
+      '  const processLifetime = context.process;',
       "  if (processLifetime === undefined || typeof processLifetime !== 'object' || processLifetime === null) {",
       "    throw new Error('process-lifetime provider was not installed');",
       '  }',
@@ -1048,7 +1048,7 @@ it('fails closed when the generated runtime worker restarts', { retry: 2, timeou
       'export const resultSchema = z.object({ hits: z.number(), instanceId: z.string(), pid: z.number() }).strict();',
       'export default async function Warmth() {',
       '  const context = await agent();',
-      '  const value = context.providers.processLifetime as { hits: number; instanceId: string; pid: number };',
+      '  const value = context.process as { hits: number; instanceId: string; pid: number };',
       "  return createElement(Agent.Result, { value }, createElement(Agent.Text, null, `hit ${String(value.hits)}`));",
       '}',
       '',
@@ -1190,22 +1190,23 @@ it('renders one tool/after event route through two native thin clients', { retry
       "import { createElement } from 'react';",
       "import { z } from 'zod';",
       'export const inputSchema = z.object({}).strict();',
-      "export const resultSchema = z.object({ providerKind: z.literal('tool'), providersFrozen: z.literal(true) }).strict();",
+      "export const resultSchema = z.object({ providerKind: z.literal('tool'), contextFrozen: z.literal(true) }).strict();",
       'export default async function Status() {',
       '  const context = await agent();',
-      '  const requestValue = context.providers.requestValue as { kind: string };',
-      '  const value = { providerKind: requestValue.kind, providersFrozen: Object.isFrozen(context.providers) };',
+      '  const requestValue = (await context.provider("requestValue")) as { kind: string };',
+      '  const value = { providerKind: requestValue.kind, contextFrozen: Object.isFrozen(context) };',
       "  return createElement(Agent.Result, { value }, createElement(Agent.Text, null, `provider:${requestValue.kind}`));",
       '}',
       '',
     ].join('\n')),
     writeProjectFile(root, 'src/mcp/runtime/tools/explode.tsx', [
-      "import { Agent } from '@agent-bundle/runtime';",
+      "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
       "import { z } from 'zod';",
       'export const inputSchema = z.object({}).strict();',
       'export const resultSchema = z.object({ ok: z.literal(true) }).strict();',
       'export default async function Explode() {',
+      "  await (await agent()).provider('throwing');",
       "  return createElement(Agent.Result, { value: { ok: true } }, createElement(Agent.Text, null, 'unreachable'));",
       '}',
       '',
@@ -1233,7 +1234,7 @@ it('renders one tool/after event route through two native thin clients', { retry
       "export const config = { targets: ['claude', 'cursor'], tools: ['file.write'], timeoutMs: 5000 };",
       'export default async function AfterTool({ canonical, native }) {',
       '  const context = await agent();',
-      '  const requestValue = context.providers.requestValue as { kind: string };',
+      '  const requestValue = (await context.provider("requestValue")) as { kind: string };',
       '  // The canonical payload names the tool through the host key it came from and, on Cursor, the',
       '  // parsed tool_output; `native` keeps the raw string (#466).',
       '  const payloadTool = canonical.payload.toolName;',
@@ -1245,7 +1246,7 @@ it('renders one tool/after event route through two native thin clients', { retry
       "  const host = context.host.state === 'unavailable' ? `unavailable:${context.host.reason}` : `available:${context.host.source}:${context.host.value.name}`;",
       "  const session = context.session.state === 'unavailable' ? `unavailable:${context.session.reason}` : `available:${context.session.source}:${context.session.value.sessionId}`;",
       "  const workspace = context.workspace.state === 'unavailable' ? `unavailable:${context.workspace.reason}` : `available:${context.workspace.source}:${context.workspace.value.root}`;",
-      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${canonical.provenance.host}:${tool}:${requestValue.kind}:${String(Object.isFrozen(context.providers))}:host:${host}:session:${session}:workspace:${workspace}:actor:${actor}`));',
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${canonical.provenance.host}:${tool}:${requestValue.kind}:${String(Object.isFrozen(context))}:host:${host}:session:${session}:workspace:${workspace}:actor:${actor}`));',
       '}',
       '',
     ].join('\n')),
@@ -1279,7 +1280,7 @@ it('renders one tool/after event route through two native thin clients', { retry
   try {
     await expect(client.callTool({ arguments: {}, name: 'status' }, { signal: AbortSignal.timeout(10_000) })).resolves.toMatchObject({
       content: [{ text: 'provider:tool', type: 'text' }],
-      structuredContent: { providerKind: 'tool', providersFrozen: true },
+      structuredContent: { providerKind: 'tool', contextFrozen: true },
     });
     const exploded = await callGeneratedTool(client, 'explode');
     expectFailClosed(exploded, /throwing.*src[/\\]providers[/\\]throwing\.ts.*provider exploded/iu);
@@ -1385,10 +1386,10 @@ it('renders composite root events through each selected host in one warm runtime
     writeProjectFile(root, 'src/events/tool/after.tsx', [
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
-      "export const config = { targets: ['claude', 'codex', 'cursor'], tools: ['file.write'] };",
+      "export const config = { runtime: 'shared', targets: ['claude', 'codex', 'cursor'], tools: ['file.write'] };",
       'export default async function AfterTool() {',
       '  const context = await agent();',
-      '  const processLifetime = context.providers.processLifetime as { hits: number; instanceId: string };',
+      '  const processLifetime = context.process as { hits: number; instanceId: string };',
       '  const host = context.host.state === "available" ? context.host.value.name : "unavailable";',
       '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${host}:${context.invocation.operationId}|${context.invocation.surface}:${String(processLifetime.hits)}:${processLifetime.instanceId}`));',
       '}',
@@ -1397,10 +1398,10 @@ it('renders composite root events through each selected host in one warm runtime
     writeProjectFile(root, 'src/events/session/start.tsx', [
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
-      "export const config = { targets: ['claude', 'codex', 'cursor'] };",
+      "export const config = { runtime: 'shared', targets: ['claude', 'codex', 'cursor'] };",
       'export default async function SessionStart() {',
       '  const context = await agent();',
-      '  const processLifetime = context.providers.processLifetime as { hits: number; instanceId: string };',
+      '  const processLifetime = context.process as { hits: number; instanceId: string };',
       '  const host = context.host.state === "available" ? context.host.value.name : "unavailable";',
       '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${host}:session/start:${String(processLifetime.hits)}:${processLifetime.instanceId}`));',
       '}',

@@ -58,13 +58,15 @@ of its own.
 
 ### Typed route ids, inputs, and results
 
+Existing projects must include `.agent-bundle/routes.d.ts` in every consuming tsconfig and run
+their own TypeScript checks. Framework validation generates the file but does not analyze
+project references or issue `AB4834`.
+
 The compiler's generated `.agent-bundle/routes.d.ts` registers the project's route contracts on
 `@agent-bundle/runtime`'s `Register` interface, the way it already declares provider keys. Once
 that file is part of the project's TypeScript program — `create-agent-bundle` templates list
 `".agent-bundle/routes.d.ts"` in `tsconfig.json` `include` by default, the file itself stays
-gitignored, and `agent-bundle validate` warns with `AB4834` for each TypeScript program that
-imports `agent-bundle/test`, `agent-bundle/app`, `agent-bundle/eval`, or `@agent-bundle/runtime`
-and leaves it out — a `renderRoute` call written with a string literal is checked against
+gitignored — a `renderRoute` call written with a string literal is checked against
 the compiled route ids — the editor completes them, and a typo is rejected naming the registered
 alternatives — while `input` and `result` come from that route's own `inputSchema` and
 `resultSchema`:
@@ -86,8 +88,8 @@ an `invalid-input` harness error before any provider or component runs. `result`
 `@agent-bundle/runtime`) is the caller's side and `RegisteredRouteParsedInput<Id>` the component's,
 which is what `loadRouteModule(id).inputSchema.parse(...)` returns.
 
-An event route registers what the harness actually takes and gives back: `input` is the
-`{ canonical, native, preflight? }` payload (the harness supplies `signal` itself), and `result` is
+A rendered event route registers what the harness actually takes and gives back: `input` is the
+`{ canonical, native }` payload (the harness supplies `signal` itself), and `result` is
 `undefined`, since event modules export no `resultSchema`. Build that input from a host envelope
 with `createEventRouteInput('tool/after', envelope, { host: 'claude' })` rather than by hand: it
 validates the envelope per host and event and projects `canonical.payload` through the same table

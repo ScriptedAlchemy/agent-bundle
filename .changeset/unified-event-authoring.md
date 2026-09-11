@@ -1,0 +1,6 @@
+---
+"agent-bundle": minor
+"@agent-bundle/runtime": minor
+---
+
+Use `defineTool` and canonical `events` definitions with inferred handlers; reject computed definitions with `AB4810`. Run `.ts` events cheaply and request separate `.view.tsx` modules with `ctx.render()`; remove `before` and preflight exports with `AB4840`. Resolve providers lazily with `context.provider()` and expose process identity as `context.process`; remove `context.providers`, `config.providers`, and `AB4841`. Remove `defineOperation`, `defineRscApplication`, `runRscCli`, and `createRscMcpServer`; expose `@agent-bundle/runtime/request` for rendering-free context access. Accept sync and async handlers and `mapInput` without tracing re-exports. Enforce compiler imports during compilation with `AB4837`; retire routine `AB4834` TypeScript-program analysis and the reserved-provider `AB4942` rule. Declare `config.inputJsonSchema` for execution-free forms and CLI flags; default metadata-free commands to `--input` JSON. Preserve runtime schema defaults and transforms, retire schema-reference diagnostics `AB4838`/`AB4839`, and limit config string references to local literals. Emit manifest version 6 for event execution and CLI input metadata. (#782)

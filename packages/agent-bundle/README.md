@@ -649,11 +649,11 @@ only for object-valued documents) deliberately stay untyped.
 
 Conventional request context providers (`src/providers/*`, see
 [entry conventions](../../docs/entry-conventions.md#request-context-providers-power-tier))
-are mounted automatically for every manifest-backed helper — `renderRoute`,
+are resolved on demand for every manifest-backed helper — `renderRoute`,
 `renderRouteEvents`, `invokeCli`, `runScript` (rendered scripts), and the
 in-memory MCP helpers — exactly as the
 generated request scopes mount them: discovered from the compiled manifest,
-executed once per request in the same deterministic key order, handed the same
+loaded once per requested key per request, handed the same
 surface-specific `invocation` (`tool`, `event`, `cli`, `script`), and failing the
 request closed when a factory throws. `providers.processLifetime` is scoped the
 way the artifact scopes it: each `invokeCli` call, each `runScript` run, and
@@ -674,12 +674,9 @@ const stubbed = await invokeCli(['library', 'audit', './books'], {
 });
 ```
 
-`context` (and `context.providers`) stays optional even once the generated
-`.agent-bundle/routes.d.ts` augmentation declares provider keys: omitting it
-runs the real providers, which is what the artifact does, while an explicit map
-must carry every declared key, so a fixture cannot leave a promised value
-`undefined`. Only a direct `runAgentRequest` requires `providers` in that case,
-because nothing else would supply them.
+`context` and `context.providers` are optional. Without an explicit map, `context.provider(key)`
+uses the real lazy resolver. An explicit fixture map needs to contain the requested keys;
+requesting a missing key rejects instead of executing a real provider.
 
 The harness simulates the process identity per executable, not module
 evaluation: one Rstest worker evaluates each provider module once, so

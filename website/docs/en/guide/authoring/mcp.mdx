@@ -9,6 +9,38 @@ An MCP server is the executable half of a plugin. agent-bundle offers two ways t
 entries**, where you construct the server yourself and the framework owns only its process
 lifecycle.
 
+## Inferred tool definitions
+
+`defineTool` is the canonical tool authoring API. Use it from `agent-bundle/routes` to define metadata, schemas, and one handler together.
+The file determines the route identity. Callers supply schema input; the handler receives parsed
+schema output, including defaults and transformations. The existing renderer validates
+`Agent.Result` values against `resultSchema` across MCP, CLI, and browser projections.
+
+```tsx
+// src/mcp/runtime/tools/status.tsx
+import { defineTool } from 'agent-bundle/routes';
+import { Agent } from '@agent-bundle/runtime';
+import { z } from 'zod';
+
+export default defineTool({
+  description: 'Report status.',
+  annotations: { readOnlyHint: true },
+  inputSchema: z.object({ verbose: z.boolean().default(false) }),
+  resultSchema: z.object({ status: z.literal('ready') }),
+}, async (input, context) => (
+  <Agent.Result value={{ status: 'ready' }}>
+    <Agent.Text>{input.verbose ? 'Runtime is ready.' : 'Ready.'}</Agent.Text>
+  </Agent.Result>
+));
+```
+
+Metadata remains statically extractable: import the helper directly, pass an object literal,
+and keep schemas at their explicit schema properties. Inspection never imports the handler.
+Ordinary imported handler functions are supported; the compiler does not inspect their bodies.
+The default export must be the direct helper call with an inline object literal. Aliasing a
+constructed definition, passing computed options, or wrapping the call is rejected with
+`AB4810`; the compiler does not evaluate composition. Named import aliases are supported.
+
 ## Generated route servers
 
 Put one module per route under `src/mcp/<server>/`:
@@ -24,8 +56,11 @@ src/mcp/curator/
 The path supplies identity: `src/mcp/curator/tools/status.tsx` is the `status` tool of the
 `curator` server. No declaration is needed for the server to exist.
 
-Each executable module exports static `config`, its schemas, and one async default Server
-Component:
+### Compatibility: split tool exports
+
+Existing tools can still export `config`, schemas, and an default Server Component
+separately. This is a compatibility format; use `defineTool` for new tools. Resources, prompts,
+and apps retain their existing contracts. A legacy tool looks like this:
 
 ```tsx
 // src/mcp/curator/tools/status.tsx
@@ -84,13 +119,9 @@ same way under both, `$defs` is reached through JSON-pointer `$ref`s under eithe
 2020-12-only keyword such as `unevaluatedProperties` or `dependentRequired` is ignored by a lax
 draft-07 validator rather than misapplied.
 
-Neither schema has to be written in the route module: `inputSchema` and `resultSchema` may both be
-bound to schemas imported from a relative module inside the project
-(`export const inputSchema = statusInputSchema`), and every route that binds the same declared
-`inputSchema` — a tool here, a `src/cli/**` command elsewhere — shares one
-[route contract](./index.mdx#route-contracts-application-ir) in the compiled graph; the
-resolution rules and the `AB4838`/`AB4839` diagnostics are under
-[Share one schema between MCP and CLI](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
+Runtime schemas may be imported or built by factories. Optional literal `config.inputJsonSchema`
+provides execution-free forms and CLI flag metadata; `tools/list` and runtime validation use the
+actual schema. See [input metadata](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
 A generated tool can also expose an idiomatic CLI command without a second route: a colocated
 `<tool>.cli.ts` projection module is a CLI surface projection of the same operation
 (`tool:<server>/<tool>`), never a route. A route observes `kind: 'cli'` whenever it runs from
@@ -115,10 +146,9 @@ export const config = {
 export { default, inputSchema, resultSchema } from '../../curator/tools/status.tsx';
 ```
 
-The route contract check (`AB4810`) follows relative re-exports (`export { default } from`,
-`export { Page as default } from`) and judges the default export in the module that declares it,
-so a sync component behind the re-export is still reported here. A default re-exported from a
-package the check cannot read is accepted and verified when the route loads.
+The route contract check (`AB4810`) checks that the required exports are declared.
+The bundler resolves re-exports, and the runtime checks the loaded component is callable.
+Both sync and async components are accepted.
 
 `ToolConfig` and `ToolRouteProps` are public types:
 
@@ -218,7 +248,6 @@ advertise while a pipe renders none. `COLUMNS`/`LINES` override the reported siz
 | Generated MCP server | `mcp` | `none` on both — stdout is the protocol wire, stderr the host's log. Never probed, never guessed. |
 | Event route (shared runtime or standalone hook) | `hook` | `none` on both — stdout is the host's hook envelope. |
 | Workbench lifecycle replay | `workbench` | `none` on both. |
-| `defineRscApplication` adapters | `mcp` / `cli` | `createRscMcpServer` mounts `none` on both; `runRscCli` owns no probe and mounts the `terminal` its caller passes in the options, else `unavailable` (`not-provided`). |
 | A custom host that mounts none | — | `unavailable` (`not-provided`). |
 
 A plain `main`-exporting script or bin has no request scope; its envelope passes the same value
@@ -229,7 +258,7 @@ and `context.terminal` injects any other one through the same seam as every iden
 ### Request context providers
 
 A conventional `src/providers/<name>.ts` module default-exports a factory whose value is
-mounted at `(await agent()).providers.<camelCaseName>` on every generated surface. Beyond the
+resolved through `await (await agent()).provider('<camelCaseName>')` on every generated surface. Beyond the
 surface-specific `invocation` and the request `signal`, the factory receives the request as the
 route will read it — `host`, `session`, `workspace`, `plugin`, and `lineage` (tree included), the
 same `Observed` values with the same provenance — plus read-only views of the mounted handles:
@@ -251,13 +280,10 @@ export default async function agentTopology({ lineage, state }: AgentProviderCon
 }
 ```
 
-Providers run once per request as the request's own resolver: after `runAgentRequest` has
-frozen the identity axes and opened the notice lease, before the route, in deterministic key
-order, outside the request's async context (`agent()` inside a factory throws
-`outside-invocation`). A factory that throws fails the request closed; expected degradation
-should return an honest unavailable-shaped value instead. The `agent-bundle/test` harness hands
-its providers the same view, so a route-unit test that injects `context.lineage` or mounts state
-sees them reflected in `providers.<key>`; an explicit `context.providers` map is mounted verbatim.
+Providers load and resolve on first access. Concurrent readers share the request's promise,
+including a failure; unused modules are not evaluated. Factories run outside the request's async
+context (`agent()` throws `outside-invocation` there) and receive the read-only view above. The
+source harness uses the same semantics; explicit test initialization `providers` values override discovery. The public request context exposes `provider(key)`.
 
 ## Rich Markdown blocks as JSX
 
@@ -553,7 +579,7 @@ project — and each surface's own default applies. The layout shell never wraps
 | MCP `prompts/get`, `resources/read` | A JSON-RPC error response carrying the message; the client call rejects. These surfaces have no `isError` channel. | The generated server returns the route's `resultSchema`-parsed value from the same represented document. |
 | Rendered CLI command / rendered script | The message on stderr, exit `1`; nothing on stdout. | `[boundary] message` on stderr as the event happens; then the document prints as usual — Markdown with `**[boundary]** message`, or under `--json` the route's value alone (the boundary message is not in the JSON; `--ndjson` carries the `error` event). Exit `1`, as for any non-`success` document. |
 | Plain CLI command / plain script | Routed command: message on stderr, exit `1` (usage and input errors exit `2`). Plain script: Node's top-level failure path — stack on stderr, exit `1`. | n/a |
-| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits `1`. A `runtime: 'standalone'` route or a config-declared handler writes the thrown message; a route in the default **shared** runtime writes `Event route rendering failed.` — the runtime answers with the generic `runtime-failed` error and the original message stays inside the runtime process. Every supported host documents exit `1` as a **non-blocking** error, so the pending action proceeds exactly as a pass-through would — a thrown `tool/before` does **not** deny. Return `outcome: 'deny'` to block. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing. |
+| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits `1`. A `runtime: 'standalone'` route or a config-declared handler writes the thrown message; a route in the **shared** runtime writes `Event route rendering failed.` — the runtime answers with the generic `runtime-failed` error and the original message stays inside the runtime process. Every supported host documents exit `1` as a **non-blocking** error, so the pending action proceeds exactly as a pass-through would — a thrown `tool/before` does **not** deny. Return `outcome: 'deny'` to block. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing. |
 | `renderRoute` / `renderRouteEvents` | `AgentTestError('render-failed')` naming the route and the cause; no document, no events. | Resolves with `document.status === 'represented-error'`, an `error` node with code `boundary`, and events `shell → error → complete`. |
 
 The projector deliberately does not wrap a root throw into the `Agent.Error` shape: the layout
@@ -569,11 +595,9 @@ A server declared in config with no `entry`, `command`, or `url` picks up the co
 
 ```ts
 // src/mcp/curator.ts — the whole stdio entry a consumer writes
-import { createRscMcpServer } from '@agent-bundle/runtime/plugin';
+import { McpServer } from '@modelcontextprotocol/server';
 
-import { application } from '../application.js';
-
-export default () => createRscMcpServer(application, 'curator');
+export default () => new McpServer({ name: 'curator', version: '1.0.0' });
 ```
 
 The generated shell provides, in order: console-to-stderr redirection *before* the consumer
@@ -853,8 +877,7 @@ file) — `input` inferred from each route's `inputSchema` **input** type (what 
 `.default()`ed field is optional, a `.transform()`ed field is spelled as the wire carries it; the
 route component receives the parsed output), `result` from its `resultSchema` output. Once
 that file is in the App's TypeScript program (the templates list `".agent-bundle/routes.d.ts"`
-in `tsconfig.json` `include`; `AB4834` names each program that imports `agent-bundle/app` and
-leaves it out), a literal route id is checked against the compiled tools, `input` is typed from
+in `tsconfig.json` `include`; existing projects must include it and run their own TypeScript check), a literal route id is checked against the compiled tools, `input` is typed from
 that route, and the result is that route's structured object. `onToolInput` delivers the host's
 opening payload with the same input type: it is the message before the server parses it, so a
 default the schema would fill is not promised to be present. The declaration imports the route modules type-only, so no route

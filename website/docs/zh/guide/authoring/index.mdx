@@ -136,39 +136,23 @@ export default defineConfig({
 
 ## JSX 意味着渲染
 
-结构存在于配置与约定中；JSX 只出现在真正需要渲染的地方。一个可执行路由就是一个 async 默认导出的
+结构存在于配置与约定中；JSX 只出现在真正需要渲染的地方。一个渲染路由就是一个同步或异步默认导出的
 Server Component：它完成工作并返回 `Agent.*` 节点，并且只有在需要 host、session、actor、workspace、
 capability 或 state 上下文时才调用 `await agent()`。不存在公开的 `execute`/`render` 分裂，普通 `.ts`
-路由也绝不会被包进 React 行为里。
+路由也绝不会被包进 React 行为里。两种事件形式使用相同的规范文件路径：`.ts` 返回轻量决定，
+`.tsx` 渲染 JSX，`.ts` 处理器可通过 `ctx.render()` 请求独立的 `.view.tsx` 视图。工具处理器可以使用 `defineTool` 获得类型推断。
 
 ## 路由契约（Application IR）
 
-编译后的路由图是应用中与宿主无关的模型——即
-[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) 所述的 Application IR——每个表面
-都是它的一份投影：生成的 MCP 服务器、路由式 CLI 的 argv 语法、生成的路由类型、Workbench，以及
-`agent-bundle inspect --routes`。路由的输入 schema 是该图中的一个节点，路由引用它而不是各自携带它。
-当编译器能够静态读取 `inputSchema` 时——无论它是内联编写的，还是绑定到路由通过相对路径导入的模块中
-声明的 schema——都会把它规范化一次，成为一个 `RouteContract`：
+编译后的图记录与宿主无关的路由身份和声明的元数据。
+字面量 `config.inputJsonSchema` 创建冻结的 `RouteContract`，id 为
+`contract:<route-module>#inputJsonSchema`，包含
+`origin: { module, binding: 'inputJsonSchema' }`、`input`，以及 `routes` 中的路由 id。
+路由通过 `route.contract` 引用它。没有输入元数据时，`graph.contracts` 字段缺席。
 
-| 字段 | 含义 |
-| --- | --- |
-| `id` | `contract:<module>#<binding>`，即别名链末端的声明位置：导入的 schema 为 `contract:src/lib/protocol-schemas.ts#statusInputSchema`，内联 schema 为 `contract:src/cli/status.tsx#inputSchema`。 |
-| `input` | 有界的 JSON Schema 投影，经过深度冻结。每条绑定路由的 `inputSchema` 都是同一个对象。 |
-| `origin` | `{ module, binding }`：声明该 schema 的项目相对模块，以及其 initializer 为 zod 表达式的 binding。 |
-| `routes` | 绑定到该契约的每条路由 id，经过排序。 |
-
-身份取决于声明位置，而不是内容。两条路由导入同一个 binding 时，共享一个带两条 `routes` 的契约；两份
-分别声明、文本相同的 schema 仍是两个契约，因为它们是两个独立编写、将来可能分化的事物。每条路由以
-`route.contract` 指明自己的契约，路由图则把它们列在 `contracts` 中，按 id 排序；没有任何路由带契约时
-该字段缺席（`RouteContract` 与 `RouteContractOrigin` 从 `agent-bundle/api` 导出，与 `CompiledRouteGraph`
-并列）。`agent-bundle inspect --routes` 会随路由图打印这些契约，Workbench 的路由检查器则显示
-所选叶子的契约来源以及共享它的其他路由。在路由自身模块之外声明的契约会参与该路由的 digest identity；
-schema 全部内联的路由图保持其已有的 digest。
-
-契约承载输入侧。`resultSchema` 可以用同样方式导入，但不存在静态的结果投影：框架会静态检查它是否存在，
-其类型经由 TypeScript 流转，运行时则使用真实的 zod 对象进行校验。引用的解析方式以及
-`AB4814`/`AB4838`/`AB4839` 诊断见
-[在 MCP 与 CLI 之间共享同一份 schema](./package-entries.mdx#在-mcp-与-cli-之间共享同一份-schema)。
+检查和 Workbench 读取这些数据而不执行 schema 代码。导入运行时 schema 不会创建共享静态契约。
+生成的 TypeScript 类型和运行时校验使用真实 schema 导出。参见
+[输入元数据](./package-entries.mdx#在-mcp-与-cli-之间共享同一份-schema)。
 
 ## 可编写的表面
 
@@ -180,3 +164,5 @@ schema 全部内联的路由图保持其已有的 digest。
 
 一条路由如何同时变成 MCP、CLI 与钩子——以及编译器今天仍在哪些地方重复——见
 [编译器架构](../concepts/architecture.mdx)。
+
+处理函数和组件可以直接返回结果，也可以返回 Promise。编译器检查导出声明；生成的运行时检查值是否可调用并等待结果。运行时也会等待 `mapInput`，然后由原始输入 schema 执行一次验证。

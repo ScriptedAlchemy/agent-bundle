@@ -1,4 +1,4 @@
-import { agent, useAgent } from '@agent-bundle/runtime';
+import { agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const WorktreeProviderValueSchema = z.discriminatedUnion('state', [
@@ -36,13 +36,4 @@ const parseWorktree = (candidate: unknown): WorktreeProviderValue => {
 
 /** The Promise-shaped accessor over the mounted `git-worktree` provider value. */
 export const worktree = async (): Promise<WorktreeProviderValue> =>
-  parseWorktree((await agent()).providers.gitWorktree);
-
-/**
- * The hook-shaped variant, for Server Components and synchronous helpers
- * that cannot `await`. It reads the identical request handle through the
- * runtime's `useAgent()`, so every lease rule holds unchanged: outside a
- * request it throws the runtime's `outside-invocation` error.
- */
-export const useWorktree = (): WorktreeProviderValue =>
-  parseWorktree(useAgent().providers.gitWorktree);
+  parseWorktree(await (await agent()).provider('gitWorktree'));

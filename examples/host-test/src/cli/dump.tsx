@@ -10,6 +10,24 @@ import { dumpCaptures, dumpResultSchema, renderDumpMarkdown } from '../dump.js';
 import { resolveLog } from '../log.js';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "conversation": {
+        "type": "string"
+      },
+      "full": {
+        "type": "boolean"
+      },
+      "limit": {
+        "type": "number"
+      },
+      "log": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
   description: 'Print the host-test capture log: every hook payload and MCP call the probe recorded, with the request context each one saw.',
 } satisfies CliRouteConfig;
 

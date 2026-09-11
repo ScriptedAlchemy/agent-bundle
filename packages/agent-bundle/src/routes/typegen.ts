@@ -172,6 +172,7 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     'type SchemaInput<Schema> = Schema extends { readonly _input: infer Input } ? Input : SchemaOutput<Schema>;',
     '// `input` is what a caller sends — the schema\'s own input type, so a defaulted or transformed field is',
     '// spelled the way the wire carries it; the route component receives the parsed output instead.',
+    'type ModuleContract<Module> = Module extends { readonly default: { readonly inputSchema: infer Input; readonly resultSchema: infer Result } } ? RouteContract<Input, Result> : Module extends { readonly inputSchema: infer Input; readonly resultSchema: infer Result } ? RouteContract<Input, Result> : never;',
     'export type RouteContract<InputSchema, ResultSchema> = Readonly<{',
     '  input: SchemaInput<InputSchema>;',
     '  parsedInput: SchemaOutput<InputSchema>;',
@@ -211,7 +212,7 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     ...routes.map((route, index) =>
       route.kind === 'event-route'
         ? `  ${JSON.stringify(route.id)}: EventRouteContract<typeof route${String(index)}.default, ${JSON.stringify(route.event)}>;`
-        : `  ${JSON.stringify(route.id)}: RouteContract<typeof route${String(index)}.inputSchema, typeof route${String(index)}.resultSchema>;`),
+        : `  ${JSON.stringify(route.id)}: ModuleContract<typeof route${String(index)}>;`),
     '}',
     '',
     'export type RouteId = keyof AgentBundleRoutes;',

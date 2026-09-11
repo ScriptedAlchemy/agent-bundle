@@ -59,9 +59,9 @@ const collect = () => {
 /** Compile-time proof the union stays exhaustive: adding a kind fails here until handled. */
 const phaseOf = (event: EventTraceEvent): EventTracePhase => {
   switch (event.kind) {
-    case 'preflight.start':
-    case 'preflight.outcome':
-      return 'preflight';
+    case 'handler.start':
+    case 'handler.outcome':
+      return 'handler';
     case 'execute.start':
       return 'execute';
     case 'providers.start':
@@ -81,7 +81,7 @@ const phaseOf = (event: EventTraceEvent): EventTracePhase => {
 
 const describePhase = (phase: EventTracePhase): string => {
   switch (phase) {
-    case 'preflight':
+    case 'handler':
       return 'gate';
     case 'execute':
       return 'deferred route load';
@@ -121,14 +121,14 @@ it('enumerates every kind and phase the union carries', () => {
   expect([...kinds].sort()).toEqual([
     'execute.start',
     'failure',
-    'preflight.outcome',
-    'preflight.start',
+    'handler.outcome',
+    'handler.start',
     'providers.finish',
     'providers.start',
     'render.finish',
     'render.start',
   ]);
-  expect([...eventTracePhases]).toEqual(['preflight', 'execute', 'providers', 'render']);
+  expect([...eventTracePhases]).toEqual(['handler', 'execute', 'providers', 'render']);
   for (const phase of eventTracePhases) {
     expect(describePhase(phase)).toEqual(expect.any(String));
   }
@@ -142,8 +142,8 @@ it('emits a complete executing trace with monotonic sequence, timestamps, and ph
   expect(tracer.enabled).toBe(true);
   expect(tracer.execution).toBe(execution);
 
-  tracer.preflightStart();
-  tracer.preflightOutcome('execute');
+  tracer.handlerStart();
+  tracer.handlerOutcome({ outcome: 'render', module: './before.view.js', data: null });
   tracer.executeStart('standalone');
   tracer.providersStart();
   tracer.providersFinish(2);
@@ -151,8 +151,8 @@ it('emits a complete executing trace with monotonic sequence, timestamps, and ph
   tracer.renderFinish();
 
   expect(events.map((event) => event.kind)).toEqual([
-    'preflight.start',
-    'preflight.outcome',
+    'handler.start',
+    'handler.outcome',
     'execute.start',
     'providers.start',
     'providers.finish',
@@ -162,8 +162,8 @@ it('emits a complete executing trace with monotonic sequence, timestamps, and ph
   expect(events.map((event) => event.sequence)).toEqual([0, 1, 2, 3, 4, 5, 6]);
   expect(events.map((event) => event.at)).toEqual([10, 20, 30, 40, 50, 60, 70]);
   expect(events.map(phaseOf)).toEqual([
-    'preflight',
-    'preflight',
+    'handler',
+    'handler',
     'execute',
     'providers',
     'providers',
@@ -179,14 +179,33 @@ it('emits a complete executing trace with monotonic sequence, timestamps, and ph
     at: 20,
     durationMs: 10,
     execution,
-    kind: 'preflight.outcome',
-    outcome: 'execute',
-    phase: 'preflight',
+    kind: 'handler.outcome',
+    outcome: 'render',
+    phase: 'handler',
     sequence: 1,
   });
   expect(events[2]).toMatchObject({ kind: 'execute.start', runtime: 'standalone' });
   expect(events[4]).toMatchObject({ count: 2, durationMs: 10, kind: 'providers.finish' });
   expect(events[6]).toMatchObject({ durationMs: 10, kind: 'render.finish' });
+});
+
+it('measures overlapping providers as one aggregate phase', () => {
+  const { events, observer } = collect();
+  let now = 0;
+  const tracer = createEventTracer({ execution, now: () => now, observer });
+
+  tracer.providersStart();
+  now = 10;
+  tracer.providersStart();
+  now = 20;
+  tracer.providersFinish(1);
+  now = 30;
+  tracer.providersFinish(1);
+
+  expect(events).toEqual([
+    { at: 0, execution, kind: 'providers.start', phase: 'providers', sequence: 0 },
+    { at: 30, count: 2, durationMs: 30, execution, kind: 'providers.finish', phase: 'providers', sequence: 1 },
+  ]);
 });
 
 it('uses the process observer for framework-created tracers and restores it safely', () => {
@@ -195,7 +214,7 @@ it('uses the process observer for framework-created tracers and restores it safe
   expect(eventTraceObserver()).toBe(observer);
   const tracer = createEventTracer({ execution, now: ticking() });
   expect(tracer.enabled).toBe(true);
-  tracer.preflightStart();
+  tracer.handlerStart();
   expect(events).toHaveLength(1);
   dispose();
   expect(eventTraceObserver()).toBeUndefined();
@@ -209,26 +228,26 @@ it('observes framework-created tracers when the process observer is installed af
 
   const dispose = installEventTraceObserver(observer);
   expect(tracer.enabled).toBe(true);
-  tracer.preflightStart();
+  tracer.handlerStart();
   dispose();
   expect(tracer.enabled).toBe(false);
-  tracer.preflightOutcome('execute');
+  tracer.handlerOutcome({ outcome: 'render', module: './before.view.js', data: null });
 
-  expect(events.map((event) => event.kind)).toEqual(['preflight.start']);
+  expect(events.map((event) => event.kind)).toEqual(['handler.start']);
 });
 
 it('summarizes gate results without carrying the reason text', () => {
   const { events, observer } = collect();
   const tracer = createEventTracer({ execution, now: ticking(), observer });
-  tracer.preflightStart();
-  tracer.preflightOutcome({ outcome: 'deny', reason: 'blocked command' });
-  expect(events[1]).toMatchObject({ kind: 'preflight.outcome', outcome: 'deny' });
+  tracer.handlerStart();
+  tracer.handlerOutcome({ outcome: 'deny', reason: 'blocked command' });
+  expect(events[1]).toMatchObject({ kind: 'handler.outcome', outcome: 'deny' });
   expect(JSON.stringify(events[1])).not.toContain('blocked command');
 
   const second = collect();
   const other = createEventTracer({ execution, now: ticking(), observer: second.observer });
-  other.preflightOutcome({ outcome: 'continue' });
-  expect(second.events[0]).toMatchObject({ kind: 'preflight.outcome', outcome: 'continue', sequence: 0 });
+  other.handlerOutcome({ outcome: 'continue' });
+  expect(second.events[0]).toMatchObject({ kind: 'handler.outcome', outcome: 'continue', sequence: 0 });
   expect(second.events[0]).not.toHaveProperty('durationMs');
 });
 
@@ -251,7 +270,7 @@ it('omits a duration when the matching start was never observed', () => {
 it('records a terminal failure with an error-safe summary and then goes quiet', () => {
   const { events, observer } = collect();
   const tracer = createEventTracer({ execution, now: ticking(), observer });
-  tracer.preflightStart();
+  tracer.handlerStart();
   tracer.executeStart('shared');
   tracer.renderStart();
   const error = Object.assign(new Error('worker exited'), { code: 'E_WORKER', stack: 'secret stack' });
@@ -271,7 +290,7 @@ it('records a terminal failure with an error-safe summary and then goes quiet', 
   const length = events.length;
   tracer.renderFinish();
   tracer.failure('render', new Error('again'));
-  tracer.preflightStart();
+  tracer.handlerStart();
   expect(events).toHaveLength(length);
 });
 
@@ -294,13 +313,13 @@ it('closes before delivering a terminal failure to a reentrant observer', () => 
 it('measures a failure from the trace start when it has one and omits it otherwise', () => {
   const { events, observer } = collect();
   const tracer = createEventTracer({ execution, now: ticking(), observer });
-  tracer.failure('preflight', new TypeError('gate threw'));
+  tracer.failure('handler', new TypeError('gate threw'));
   expect(events[0]).toEqual({
     at: 10,
     error: { message: 'gate threw', name: 'TypeError' },
     execution,
     kind: 'failure',
-    phase: 'preflight',
+    phase: 'handler',
     sequence: 0,
   });
 });
@@ -348,8 +367,8 @@ it('is a no-op when no observer is present', () => {
   });
   expect(tracer.enabled).toBe(false);
   expect(tracer.closed).toBe(false);
-  tracer.preflightStart();
-  tracer.preflightOutcome('execute');
+  tracer.handlerStart();
+  tracer.handlerOutcome({ outcome: 'render', module: './before.view.js', data: null });
   tracer.executeStart('shared');
   tracer.providersStart();
   tracer.providersFinish(1);
@@ -364,8 +383,8 @@ it('never lets an observer exception, mutation, or re-entry reach the caller', (
   const seen: EventTraceEvent[] = [];
   let tracer = createEventTracer({ execution, now: ticking(), observer: () => { throw new Error('observer bug'); } });
   expect(() => {
-    tracer.preflightStart();
-    tracer.preflightOutcome('execute');
+    tracer.handlerStart();
+    tracer.handlerOutcome({ outcome: 'render', module: './before.view.js', data: null });
     tracer.executeStart('shared');
     tracer.providersStart();
     tracer.providersFinish(0);
@@ -382,22 +401,22 @@ it('never lets an observer exception, mutation, or re-entry reach the caller', (
       expect(() => { (event as { sequence: number }).sequence = 99; }).toThrow(TypeError);
       expect(() => { (event.execution as { host: string }).host = 'other'; }).toThrow(TypeError);
       // Re-entering the tracer from inside the observer must not corrupt ordering.
-      if (event.kind === 'preflight.start') tracer.renderStart();
+      if (event.kind === 'handler.start') tracer.renderStart();
     },
   });
-  tracer.preflightStart();
-  tracer.preflightOutcome({ outcome: 'continue' });
+  tracer.handlerStart();
+  tracer.handlerOutcome({ outcome: 'continue' });
   expect(seen.map((event) => [event.kind, event.sequence])).toEqual([
-    ['preflight.start', 0],
+    ['handler.start', 0],
     ['render.start', 1],
-    ['preflight.outcome', 2],
+    ['handler.outcome', 2],
   ]);
 });
 
 it('never lets a broken clock reach the caller', () => {
   const { events, observer } = collect();
   const tracer = createEventTracer({ execution, now: () => { throw new Error('clock'); }, observer });
-  expect(() => { tracer.preflightStart(); }).not.toThrow();
+  expect(() => { tracer.handlerStart(); }).not.toThrow();
   expect(events).toHaveLength(0);
   expect(tracer.enabled).toBe(true);
 });

@@ -3,6 +3,11 @@ import type { CliRouteConfig } from 'agent-bundle';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
   description: 'Lists the journal entries the MCP record tool has written.',
 } satisfies CliRouteConfig;
 

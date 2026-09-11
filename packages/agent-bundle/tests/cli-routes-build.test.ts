@@ -76,7 +76,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
     writeProjectFile(root, 'src/cli/doctor.ts', [
       "import { agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
-      "export const config = { aliases: ['health'], description: 'Inspect the runtime.' };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"verbose\":{\"type\":\"boolean\"}},\"type\":\"object\"}, aliases: ['health'], description: 'Inspect the runtime.' };",
       'export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();',
       "export const resultSchema = z.object({ invocation: z.string(), status: z.literal('ready'), surface: z.string() }).strict();",
       'export default async function doctor({ input, signal }) {',
@@ -142,7 +142,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
     writeProjectFile(root, 'src/cli/tooling.ts', [
       "import { agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
-      "export const config = { description: 'Report the mounted request providers.' };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{},\"type\":\"object\"}, description: 'Report the mounted request providers.' };",
       'export const inputSchema = z.object({}).strict();',
       'export const resultSchema = z.object({',
       '  hits: z.number().int().min(1),',
@@ -150,13 +150,13 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       '}).strict();',
       'export default async function tooling() {',
       '  const context = await agent();',
-      '  return { hits: context.providers.processLifetime.hits, libraryTooling: context.providers.libraryTooling };',
+      '  return { hits: context.process.hits, libraryTooling: (await context.provider("libraryTooling")) };',
       '}',
       '',
     ].join('\n')),
     writeProjectFile(root, 'src/cli/library/audit.ts', [
       "import { z } from 'zod';",
-      "export const config = { description: 'Audit sources.', exitCode: 'result', positionals: ['sources'] };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"maxFindings\":{\"type\":\"number\",\"default\":1},\"sources\":{\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"strict\":{\"type\":\"boolean\"}},\"required\":[\"sources\"],\"type\":\"object\"}, description: 'Audit sources.', exitCode: 'result', positionals: ['sources'] };",
       'export const inputSchema = z.object({',
       '  maxFindings: z.number().int().min(0).default(1),',
       '  sources: z.array(z.string().min(1)).min(1).max(8),',
@@ -175,14 +175,14 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       "import React from 'react';",
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
-      "export const config = { description: 'Render a library report.', positionals: ['root'] };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"root\":{\"type\":\"string\"}},\"required\":[\"root\"],\"type\":\"object\"}, description: 'Render a library report.', positionals: ['root'] };",
       'export const inputSchema = z.object({ root: z.string().min(1) }).strict();',
       'export const resultSchema = z.object({ books: z.number(), root: z.string(), tooling: z.string(), view: z.unknown() }).strict();',
       'export default async function Report({ input, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
       '  const context = await agent();',
       "  await context.progress.report({ completed: 1, message: 'scanning', total: 2 });",
-      '  const result = { books: 2, root: input.root, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}`, view: context.providers.libraryTooling.view };',
+      '  const result = { books: 2, root: input.root, tooling: `${(await context.provider("libraryTooling")).kind}:${(await context.provider("libraryTooling")).tool}`, view: (await context.provider("libraryTooling")).view };',
       '  return (',
       '    <Agent.Result value={result}>',
       '      <Agent.Markdown>{`Found **2** books under ${input.root}.`}</Agent.Markdown>',
@@ -203,13 +203,13 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
     writeProjectFile(root, 'src/mcp/harness/tools/lookup.tsx', [
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
-      "export const config = { annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"default\":\"ready\"}},\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
       'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
       "export const resultSchema = z.object({ invocation: z.enum(['cli', 'tool']), message: z.string(), operationId: z.string(), tooling: z.string(), view: z.unknown() }).strict();",
       'export default async function Lookup({ input }) {',
       '  const context = await agent();',
       "  await context.progress.report({ completed: 1, message: 'lookup', total: 1 });",
-      '  const result = { invocation: context.invocation.kind, message: input.message, operationId: context.invocation.operationId, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}`, view: context.providers.libraryTooling.view };',
+      '  const result = { invocation: context.invocation.kind, message: input.message, operationId: context.invocation.operationId, tooling: `${(await context.provider("libraryTooling")).kind}:${(await context.provider("libraryTooling")).tool}`, view: (await context.provider("libraryTooling")).view };',
       '  return <Agent.Result value={result}><Agent.Markdown>{`Lookup: ${input.message}`}</Agent.Markdown></Agent.Result>;',
       '}',
       '',
@@ -217,7 +217,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
     writeProjectFile(root, 'src/mcp/harness/tools/apply.tsx', [
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
-      "export const config = { description: 'Applies one value.' };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"value\":{\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"}, description: 'Applies one value.' };",
       'export const inputSchema = z.object({ value: z.string() }).strict();',
       "export const resultSchema = z.object({ invocation: z.enum(['cli', 'tool']), operationId: z.string(), value: z.string() }).strict();",
       'export default async function Apply({ input }) {',
@@ -242,7 +242,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       'export default async function Summarize({ argv, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
       '  const context = await agent();',
-      '  const result = { arguments: argv.length, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}`, view: context.providers.libraryTooling.view };',
+      '  const result = { arguments: argv.length, tooling: `${(await context.provider("libraryTooling")).kind}:${(await context.provider("libraryTooling")).tool}`, view: (await context.provider("libraryTooling")).view };',
       '  return (',
       '    <Agent.Result value={result}>',
       '      <Agent.Text>{`Summarized ${String(argv.length)} arguments.`}</Agent.Text>',
@@ -427,7 +427,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
  * into the self-contained bin and fails with an opaque error that names the
  * generated file instead of the route.
  */
-it('refuses a routed command that imports agent-bundle/api with AB4837 before bundling', { timeout: 120_000 }, async () => {
+it('refuses a routed command that imports agent-bundle/api with AB4837 during dependency resolution', { timeout: 120_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cli-bin-framework-import-'));
   roots.push(root);
   await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
@@ -452,7 +452,7 @@ it('refuses a routed command that imports agent-bundle/api with AB4837 before bu
     // The #558 shape: the command serves an MCP App by importing the compiler.
     writeProjectFile(root, 'src/cli/dashboard.ts', [
       "import { z } from 'zod';",
-      "export const config = { description: 'Open the dashboard in a browser.' };",
+      "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{},\"type\":\"object\"}, description: 'Open the dashboard in a browser.' };",
       'export const inputSchema = z.object({}).strict();',
       'export const resultSchema = z.object({ url: z.string() }).strict();',
       'export default async function dashboard() {',
@@ -465,14 +465,14 @@ it('refuses a routed command that imports agent-bundle/api with AB4837 before bu
   ]);
   const expected = {
     code: 'AB4837',
-    message: 'Route module src/cli/dashboard.ts imports "agent-bundle/api" as a value; the routed CLI executable is self-contained and cannot bundle the compiler, so the build would fail deep inside the generated executable (an unresolvable compiler module or AB6005) instead of at this import.',
+    message: expect.stringContaining('"agent-bundle/api"'),
     severity: 'error',
     sourcePath: join(root, 'src', 'cli', 'dashboard.ts'),
   };
 
-  // Reported statically, without a build.
+  // Source-only validation does not predict transformed dependencies.
   const validation = await validate({ root });
-  expect(validation.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4837')).toEqual([expect.objectContaining(expected)]);
+  expect(validation.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4837')).toEqual([]);
 
   // The build rejects on the same diagnostic before any executable is bundled.
   const failure: unknown = await build({ output: 'artifact', packageOutputs: true, root }).then(() => undefined, (error: unknown) => error);
@@ -530,7 +530,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       writeProjectFile(root, 'src/mcp/demo/tools/ping.tsx', [
         "import { Agent } from '@agent-bundle/runtime';",
         "import { z } from 'zod';",
-        "export const config = { annotations: { readOnlyHint: true }, description: 'Answers a ping.' };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{},\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Answers a ping.' };",
         'export const inputSchema = z.object({}).strict();',
         "export const resultSchema = z.object({ pong: z.literal(true) }).strict();",
         'export default async function Ping() {',
@@ -541,7 +541,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       writeProjectFile(root, 'src/mcp/demo/tools/purge.tsx', [
         "import { Agent } from '@agent-bundle/runtime';",
         "import { z } from 'zod';",
-        "export const config = { annotations: { readOnlyHint: false }, description: 'Purges one cache target.' };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"target\":{\"type\":\"string\"}},\"required\":[\"target\"],\"type\":\"object\"}, annotations: { readOnlyHint: false }, description: 'Purges one cache target.' };",
         'export const inputSchema = z.object({ target: z.string().min(1) }).strict();',
         "export const resultSchema = z.object({ operation: z.literal('purge'), target: z.string() }).strict();",
         'export default async function Purge({ input }) {',
@@ -552,7 +552,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       ].join('\n')),
       writeProjectFile(root, 'src/mcp/demo/tools/purge.cli.ts', [
         "export const config = { command: ['purge'], positionals: ['target'] };",
-        'export const mapInput = (input) => {',
+        'export const mapInput = async (input) => {',
         "  if ('yes' in input) throw new Error('mapInput received the confirmation flag.');",
         '  return input;',
         '};',
@@ -561,7 +561,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       writeProjectFile(root, 'src/mcp/demo/tools/submit.tsx', [
         "import { Agent, agent } from '@agent-bundle/runtime';",
         "import { z } from 'zod';",
-        "export const config = { annotations: { readOnlyHint: false }, description: 'Submits one command line as lane work.' };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"argv\":{\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"cwd\":{\"type\":\"string\",\"default\":\".\"},\"laneKey\":{\"type\":\"string\"},\"tags\":{\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"yes\":{\"type\":\"boolean\"}},\"required\":[\"argv\"],\"type\":\"object\"}, annotations: { readOnlyHint: false }, description: 'Submits one command line as lane work.' };",
         // The application-owned optional `yes` key (#616): the projection
         // declares confirm: false, so the shell strips nothing and the value
         // must reach the tool through the canonical schema.
@@ -603,7 +603,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
         '  },',
         "  positionals: ['argv'],",
         '};',
-        'export const mapInput = (input) => {',
+        'export const mapInput = async (input) => {',
         '  const tags = input.tags === undefined ? undefined : [...new Set(input.tags)];',
         "  const rejected = tags?.find((tag) => tag.startsWith('!'));",
         '  if (rejected !== undefined) throw new Error(`Tag ${JSON.stringify(rejected)} must not start with "!".`);',

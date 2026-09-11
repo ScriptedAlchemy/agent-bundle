@@ -11,7 +11,7 @@ import {
   isMisplacedCliProjectionModule,
 } from '../src/routes/cli-projection.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
-import type { CompiledAgentRoute } from '../src/routes/types.ts';
+import type { CompiledAgentRoute, RouteInputSchema } from '../src/routes/types.ts';
 
 const roots: string[] = [];
 
@@ -44,8 +44,9 @@ const codesOf = (diagnostics: readonly { readonly code: string }[]): string[] =>
 const toolModule = (options: {
   readonly config?: string;
   readonly schema?: string;
+  readonly inputJsonSchema?: RouteInputSchema | null;
 } = {}): string => [
-  `export const config = ${options.config ?? "{ description: 'Submit work.' }"};`,
+  `export const config = ${options.inputJsonSchema === null ? options.config ?? '{}' : (options.config ?? "{ description: 'Submit work.' }").replace('{', '{ inputJsonSchema: ' + JSON.stringify(options.inputJsonSchema ?? { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' } }, required: ['laneKey'] }) + ',')};`,
   `export const inputSchema = ${options.schema ?? 'z.object({ laneKey: z.string() }).strict()'};`,
   'export const resultSchema = z.object({ ok: z.boolean() });',
   'export default async function Tool() { return undefined; }',
@@ -166,7 +167,7 @@ describe('MCP tool CLI surface projections', () => {
       '  },',
       '}',
     ].join('\n'), 'export const mapInput = (input) => input;');
-    const { graph } = await compileProjection(projection, { tool: toolModule({ schema }) });
+    const { graph } = await compileProjection(projection, { tool: toolModule({ schema, inputJsonSchema: { type: 'object', additionalProperties: false, properties: { argv: { type: 'array', items: { type: 'string' } }, cwd: { type: 'string' }, laneKey: { type: 'string' }, limit: { type: 'number' }, tickets: { type: 'array', items: { type: 'string' } }, verbose: { type: 'boolean', default: false } }, required: ['argv', 'cwd', 'laneKey', 'limit'] } }) });
 
     expect(graph.diagnostics).toEqual([]);
     expect(graph.cli?.commands).toEqual([{
@@ -253,7 +254,7 @@ describe('MCP tool CLI surface projections', () => {
     ].join('\n');
     const projected = await compileProjection(
       cliModule("{ flags: { mode: { default: 'full' }, tags: { default: ['a', 'b'] } } }"),
-      { tool: toolModule({ schema }) },
+      { tool: toolModule({ schema, inputJsonSchema: { type: 'object', additionalProperties: false, properties: { mode: { type: 'string', enum: ['fast', 'full'], default: 'fast' }, retries: { type: 'number' }, tags: { type: 'array', items: { type: 'string' } } } } }) },
     );
     expect(projected.graph.diagnostics).toEqual([]);
     const command = projected.graph.cli!.commands![0]!;
@@ -266,7 +267,7 @@ describe('MCP tool CLI surface projections', () => {
     expect(command.options.find((option) => option.key === 'mode')).toMatchObject({ defaultValue: 'full', required: false });
     expect(command.options.find((option) => option.key === 'retries')).not.toHaveProperty('defaultValue');
 
-    const schemaOnly = await compileProjection(cliModule('{}'), { tool: toolModule({ schema }) });
+    const schemaOnly = await compileProjection(cliModule('{}'), { tool: toolModule({ schema, inputJsonSchema: { type: 'object', additionalProperties: false, properties: { mode: { type: 'string', enum: ['fast', 'full'], default: 'fast' }, retries: { type: 'number' }, tags: { type: 'array', items: { type: 'string' } } } } }) });
     expect(schemaOnly.graph.diagnostics).toEqual([]);
     expect(schemaOnly.graph.cli?.commands?.[0]?.projection).toEqual({ mapInput: false, module: projectionPath });
     expect(schemaOnly.graph.cli?.commands?.[0]?.options.find((option) => option.key === 'mode'))
@@ -386,7 +387,6 @@ describe('MCP tool CLI surface projections', () => {
       source,
       undefined,
       tool,
-      { projectRoot: '/project' },
     );
     expect(codesOf(extracted.diagnostics)).toEqual(['AB4844']);
     expect(extracted.diagnostics[0]).toMatchObject({ severity: 'error', sourcePath: source });
@@ -413,116 +413,14 @@ describe('MCP tool CLI surface projections', () => {
     }
   });
 
-  describe('mapInput must be a synchronous, non-generator function with a runtime binding', () => {
-    const subject = `CLI projection ${projectionPath} for tool:demo/submit: mapInput`;
-
-    const expectRejectedMapInput = async (mapInput: string, fragments: readonly string[]): Promise<void> => {
-      const { graph, root } = await compileProjection(cliModule('{}', mapInput));
-      expectOnlyDiagnostic(graph, 'AB4844', root, [subject, ...fragments]);
-      expect(graph.diagnostics[0]!.recovery).toContain('synchronous, non-generator function');
-      expect(graph.cli?.commands).toEqual([]);
-      expect(graph.cli?.projectionSources).toBeUndefined();
-    };
-
-    it('rejects an ambient function declaration, which emits no runtime binding', async () => {
-      await expectRejectedMapInput(
-        'export declare function mapInput(input: { laneKey?: string }): { laneKey: string };',
-        ['ambient declaration', 'declare function', 'no runtime binding'],
-      );
-    });
-
-    it('rejects an ambient const declaration', async () => {
-      await expectRejectedMapInput(
-        'export declare const mapInput: (input: { laneKey?: string }) => { laneKey: string };',
-        ['ambient declaration', 'declare const', 'no runtime binding'],
-      );
-    });
-
-    it('rejects a locally declared ambient function exported by name', async () => {
-      await expectRejectedMapInput(
-        'declare function mapInput(input: { laneKey?: string }): { laneKey: string };\nexport { mapInput };',
-        ['ambient declaration'],
-      );
-    });
-
-    it('rejects a generator function', async () => {
-      await expectRejectedMapInput(
-        'export function* mapInput(input) { yield input; }',
-        ['is a generator function', 'iterator instead of returning the mapped input'],
-      );
-    });
-
-    it('rejects an async generator function', async () => {
-      await expectRejectedMapInput(
-        'export async function* mapInput(input) { yield input; }',
-        ['is an async generator function', 'async iterator'],
-      );
-    });
-
-    it('rejects a generator function expression', async () => {
-      await expectRejectedMapInput(
-        'export const mapInput = function* (input) { yield input; };',
-        ['is a generator function'],
-      );
-    });
-
-    it('rejects an async arrow function', async () => {
-      await expectRejectedMapInput(
-        'export const mapInput = async (input) => input;',
-        ['is an async function', 'Promise', 'synchronously'],
-      );
-    });
-
-    it('rejects an async function declaration', async () => {
-      await expectRejectedMapInput(
-        'export async function mapInput(input) { return input; }',
-        ['is an async function', 'synchronously'],
-      );
-    });
-
-    it('rejects a const that is not statically a function', async () => {
-      await expectRejectedMapInput(
-        'export const mapInput = pipe(identity);',
-        ['is exported but is not statically a function'],
-      );
-    });
-
-    it('rejects an overload signature with no implementation, which emits no runtime binding', async () => {
-      await expectRejectedMapInput(
-        'export function mapInput(input: { laneKey?: string }): { laneKey: string };',
-        ['is exported but is not statically a function'],
-      );
-    });
-
-    it('rejects a re-export the scan cannot follow, and follows one it can', async () => {
-      await expectRejectedMapInput(
-        "export { mapInput } from 'mapper-package';",
-        ['is re-exported from "mapper-package"', 'cannot be followed statically'],
-      );
-      await expectRejectedMapInput(
-        "export { mapInput } from './missing-mapper.ts';",
-        ['is re-exported from "./missing-mapper.ts"'],
-      );
-
-      // The shared module sits outside src/mcp so discovery never reads it as a route.
-      const reExport = "export { mapInput } from '../../../shared/mapper.ts';";
-      const declaredAmbient = await compileProjection(cliModule('{}', reExport), {
-        extraFiles: { 'src/shared/mapper.ts': 'export declare function mapInput(input: unknown): unknown;\n' },
-      });
-      expectOnlyDiagnostic(declaredAmbient.graph, 'AB4844', declaredAmbient.root, [subject, 'ambient declaration']);
-      expect(declaredAmbient.graph.cli?.commands).toEqual([]);
-
-      const followed = await compileProjection(cliModule('{}', reExport), {
-        extraFiles: { 'src/shared/mapper.ts': 'export const mapInput = (input) => input;\n' },
-      });
-      expect(followed.graph.diagnostics).toEqual([]);
-      expect(followed.graph.cli?.commands?.[0]?.projection).toEqual({ mapInput: true, module: projectionPath });
-    });
-
+  describe('mapInput declaration', () => {
     it('accepts a function declaration, an arrow, a function expression, an exported alias, and an overloaded declaration', async () => {
       const accepted: readonly [form: string, mapInput: string][] = [
         ['function declaration', 'export function mapInput(input) { return input; }'],
         ['arrow', 'export const mapInput = (input) => input;'],
+        ['async function', 'export async function mapInput(input) { return input; }'],
+        ['re-export', "export { mapInput } from './mapper.js';"],
+        ['factory result', 'export const mapInput = createMapper();'],
         ['function expression', 'export const mapInput = function (input) { return input; };'],
         ['parenthesized arrow with a satisfies clause', 'export const mapInput = ((input) => input) satisfies (input: unknown) => unknown;'],
         ['local function exported by name', 'function mapInput(input) { return input; }\nexport { mapInput };'],
@@ -546,7 +444,8 @@ describe('MCP tool CLI surface projections', () => {
 
   it('reports AB4845 for unknown keys, invalid spellings, collisions, unsafe paths, and reserved yes', async () => {
     const twoKeys = toolModule({
-      schema: 'z.object({ first: z.string().optional(), second: z.string().optional() }).strict()',
+      inputJsonSchema: {"additionalProperties":false,"properties":{"first":{"type":"string"},"second":{"type":"string"}},"type":"object"},
+        schema: 'z.object({ first: z.string().optional(), second: z.string().optional() }).strict()',
     });
     const cases: readonly [projection: string, tool: string, fragments: readonly string[]][] = [
       [cliModule("{ flags: { nope: {} } }"), toolModule(), ['flags.nope', 'input']],
@@ -575,7 +474,8 @@ describe('MCP tool CLI surface projections', () => {
   it('reports AB4845 when a confirming command projects a tool whose contract has a key yes, whatever its spelling', async () => {
     const confirming = toolModule({
       config: "{ annotations: { readOnlyHint: false }, description: 'Submit work.' }",
-      schema: 'z.object({ laneKey: z.string(), yes: z.string() }).strict()',
+      inputJsonSchema: {"additionalProperties":false,"properties":{"laneKey":{"type":"string"},"yes":{"type":"string"}},"required":["laneKey","yes"],"type":"object"},
+        schema: 'z.object({ laneKey: z.string(), yes: z.string() }).strict()',
     });
     for (const projection of [cliModule('{}'), cliModule("{ flags: { yes: { name: 'assent' } } }")]) {
       const result = await compileProjection(projection, { tool: confirming });
@@ -617,7 +517,7 @@ describe('MCP tool CLI surface projections', () => {
       ],
     ];
     for (const [projection, fragments] of rejected) {
-      const result = await compileProjection(projection, { tool: toolModule({ schema }) });
+      const result = await compileProjection(projection, { tool: toolModule({ schema, inputJsonSchema: { type: 'object', additionalProperties: false, properties: { argv: { type: 'array', items: { type: 'string' } }, cwd: { type: 'string' } }, required: ['argv'] } }) });
       expectOnlyDiagnostic(result.graph, 'AB4845', result.root, fragments);
       expect(result.graph.diagnostics[0]!.recovery).toContain('config.positionals');
     }
@@ -627,7 +527,7 @@ describe('MCP tool CLI surface projections', () => {
         "{ positionals: ['argv'], flags: { argv: { default: ['ls'], description: 'The command line.', required: false } } }",
         'export const mapInput = (input) => input;',
       ),
-      { tool: toolModule({ schema }) },
+      { tool: toolModule({ schema, inputJsonSchema: { type: 'object', additionalProperties: false, properties: { argv: { type: 'array', items: { type: 'string' } }, cwd: { type: 'string' } }, required: ['argv'] } }) },
     );
     expect(legal.graph.diagnostics).toEqual([]);
     expect(legal.graph.cli?.commands?.[0]?.options.find((option) => option.key === 'argv')).toEqual({
@@ -696,44 +596,14 @@ describe('MCP tool CLI surface projections', () => {
     expect(graph.diagnostics[0]!.recovery).toContain('command');
   });
 
-  it('relabels AB4814 and AB4838 for projected tools without a static contract', async () => {
-    const nested = await compileProjection(cliModule('{}'), {
-      tool: toolModule({
-        schema: 'z.object({ nested: z.object({ a: z.string() }) }).strict()',
-      }),
-    });
-    expectOnlyDiagnostic(
-      nested.graph,
-      'AB4814',
-      nested.root,
-      [`Tool route ${toolPath} (CLI projection ${projectionPath})`, 'z.object'],
-      toolPath,
-    );
-    // A projected tool has a way out a CLI route lacks: JSON mode (#746).
-    expect(nested.graph.diagnostics[0]?.recovery).toContain("Declare input: 'json' in the projection config");
-
-    const external = await compileProjection(cliModule('{}'), {
-      tool: [
-        "import { external } from 'schema-package';",
-        "export const config = { description: 'Submit work.' };",
-        'export const inputSchema = external;',
-        'export const resultSchema = z.object({ ok: z.boolean() });',
-        'export default async function Tool() { return undefined; }',
-        '',
-      ].join('\n'),
-    });
-    expectOnlyDiagnostic(
-      external.graph,
-      'AB4838',
-      external.root,
-      [
-        `Tool route ${toolPath} (CLI projection ${projectionPath})`,
-        'inputSchema -> external',
-        // The reason is input-schema.ts's existing AB4838 wording, relabelled.
-        'imported from "schema-package", which is not a relative module path',
-      ],
-      toolPath,
-    );
+  it('defaults to JSON without metadata and rejects flag mappings that lack metadata', async () => {
+    const tool = toolModule({ inputJsonSchema: null, schema: 'makeSchema()' });
+    const json = await compileProjection(cliModule('{}'), { tool });
+    expect(json.graph.diagnostics).toEqual([]);
+    expect(json.graph.cli?.commands?.[0]?.projection?.input).toBe('json');
+    const flags = await compileProjection(cliModule("{ flags: { laneKey: { name: 'lane' } } }"), { tool });
+    expect(codesOf(flags.graph.diagnostics)).toEqual(['AB4845']);
+    expect(flags.graph.diagnostics[0]?.message).toContain('inputJsonSchema');
   });
 
   it('compiles input: "json" into one --input command over a schema the flag grammar cannot spell (#746)', async () => {
@@ -779,20 +649,15 @@ describe('MCP tool CLI surface projections', () => {
     }
   });
 
-  it('reports AB4837 when a projection value-imports the compiler-bearing API entry', async () => {
-    const { graph, root } = await compileProjection([
+  it('defers compiler import enforcement to the build', async () => {
+    const { graph } = await compileProjection([
       "import { defineConfig } from 'agent-bundle/api';",
       'void defineConfig;',
       'export const config = {};',
       '',
     ].join('\n'));
 
-    expectOnlyDiagnostic(
-      graph,
-      'AB4837',
-      root,
-      ['CLI projection module', projectionPath, 'agent-bundle/api'],
-    );
+    expect(graph.diagnostics).toEqual([]);
   });
 
   it('keeps absolute projection sources out of the digest and includes relative option policy', async () => {

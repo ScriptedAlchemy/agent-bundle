@@ -14,6 +14,11 @@ const emptyShelf: CurationShelfState = {
 };
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description: 'Review the persisted curation shelf of selected Audible editions and media mutations.',
 };

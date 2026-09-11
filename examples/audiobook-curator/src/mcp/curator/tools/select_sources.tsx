@@ -11,6 +11,21 @@ import { discoveryOperations } from '../../../operations/discovery.js';
 const operation = discoveryOperations.select;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "inventory": {
+        "type": "string"
+      },
+      "report": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "inventory"
+    ],
+    "type": "object"
+  },
   annotations: { readOnlyHint: false },
   description: 'Select strongest source encodings while retaining alternates and duration review evidence.',
 };

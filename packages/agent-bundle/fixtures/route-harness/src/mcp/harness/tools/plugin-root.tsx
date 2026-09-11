@@ -2,6 +2,11 @@ import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description: 'Reports the plugin root and durable-state anchor this route observes.',
   title: 'Plugin root',

@@ -11,6 +11,54 @@ import { audibleOperations } from '../../../operations/audible.js';
 const operation = audibleOperations.audibleSearch;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "attempts": {
+        "type": "number"
+      },
+      "author": {
+        "type": "string"
+      },
+      "durationSeconds": {
+        "type": "number"
+      },
+      "limit": {
+        "type": "number"
+      },
+      "narrator": {
+        "type": "string"
+      },
+      "regions": {
+        "items": {
+          "enum": [
+            "au",
+            "ca",
+            "de",
+            "es",
+            "fr",
+            "in",
+            "it",
+            "jp",
+            "uk",
+            "us"
+          ],
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "report": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ],
+    "type": "object"
+  },
   annotations: { openWorldHint: true, readOnlyHint: false },
   description: 'Search Audible regions and return ranked identity evidence requiring human review.',
   exitCode: 'result',

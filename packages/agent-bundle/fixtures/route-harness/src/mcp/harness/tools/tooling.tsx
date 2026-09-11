@@ -2,6 +2,18 @@ import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "failProvider": {
+        "type": "boolean"
+      },
+      "inbox": {
+        "type": "boolean"
+      }
+    },
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description: 'Reports the request providers an MCP tool observes.',
   title: 'Tooling',
@@ -22,7 +34,12 @@ export const resultSchema = z.object({
 }).strict();
 
 export default async function Tooling() {
-  const { providers } = await agent();
+  const context = await agent();
+  const providers = {
+    processLifetime: context.process,
+    libraryTooling: await context.provider('libraryTooling'),
+    requestView: await context.provider('requestView'),
+  };
   const { processLifetime } = providers;
   const value = {
     keys: Object.keys(providers).sort(),

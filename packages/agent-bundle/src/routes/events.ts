@@ -29,6 +29,36 @@ export const canonicalAgentEvents = Object.freeze([
 
 export type CanonicalAgentEvent = (typeof canonicalAgentEvents)[number];
 
+/** Family-level deny admission; individual host projection may be more restrictive. */
+export const eventContracts = {
+  'session/start': { deny: false },
+  'tool/before': { deny: true },
+  'tool/after': { deny: false },
+  'stop': { deny: true },
+  'agent/start': { deny: true },
+  'agent/stop': { deny: true },
+  'workspace/open': { deny: false },
+  'session/end': { deny: false },
+  'prompt/submit': { deny: true },
+  'tool/failure': { deny: false },
+  'compact/before': { deny: true },
+  'compact/after': { deny: false },
+  'permission/request': { deny: true },
+  'permission/denied': { deny: false },
+  'stop/failure': { deny: false },
+  'file/change': { deny: false },
+  'config/change': { deny: true },
+  'task/create': { deny: true },
+  'task/complete': { deny: false },
+  'agent/idle': { deny: true },
+  'model-switch/before': { deny: true },
+  'model-switch/after': { deny: false },
+} as const satisfies Record<CanonicalAgentEvent, { readonly deny: boolean }>;
+
+export type DenyingEvent = {
+  [Event in CanonicalAgentEvent]: typeof eventContracts[Event]['deny'] extends true ? Event : never;
+}[CanonicalAgentEvent];
+
 /**
  * The canonical payload vocabulary of event routes (#466): every field a
  * route may read from `canonical.payload`, with the JSON shape it carries on

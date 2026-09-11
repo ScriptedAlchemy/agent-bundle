@@ -66,3 +66,40 @@ export const positionOf = (sourceFile: SyntaxSourceFile, node: SyntaxNode): stri
 /** Whether a top-level statement carries the `export` modifier. */
 export const hasExportModifier = (statement: SyntaxStatement): boolean =>
   (statement.modifiers ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+
+/** The module fields used by declaration readers, without exposing bundled TypeScript types. */
+export interface ModuleSourceFile extends SyntaxNode, SyntaxSourceFile {
+  readonly fileName: string;
+  readonly statements: readonly SyntaxStatement[];
+  readonly text: string;
+}
+
+export const parseModule = (path: string, text: string): ModuleSourceFile =>
+  ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+
+/** Names one rejected construct for a diagnostic (AB4806). */
+export const describeExpression = (node: SyntaxNode): string => {
+  const expression = node as ts.Node;
+  if (ts.isIdentifier(expression)) {
+    return expression.text === 'undefined'
+      ? 'the non-JSON value `undefined`'
+      : `a reference to the identifier ${JSON.stringify(expression.text)}`;
+  }
+  if (ts.isCallExpression(expression)) return 'a call expression';
+  if (ts.isTemplateExpression(expression)) return 'a template literal with substitutions';
+  if (ts.isArrowFunction(expression) || ts.isFunctionExpression(expression)) return 'a function expression';
+  if (ts.isSpreadAssignment(expression) || ts.isSpreadElement(expression)) return 'a spread';
+  if (ts.isShorthandPropertyAssignment(expression)) return 'a shorthand property reference';
+  if (
+    ts.isMethodDeclaration(expression) ||
+    ts.isGetAccessorDeclaration(expression) ||
+    ts.isSetAccessorDeclaration(expression)
+  ) {
+    return 'a method or accessor';
+  }
+  if (ts.isComputedPropertyName(expression)) return 'a computed property name';
+  if (ts.isOmittedExpression(expression)) return 'an array hole';
+  if (expression.kind === ts.SyntaxKind.BigIntLiteral) return 'a bigint literal';
+  if (expression.kind === ts.SyntaxKind.RegularExpressionLiteral) return 'a regular expression literal';
+  return `a ${ts.SyntaxKind[expression.kind] ?? 'dynamic'} expression`;
+};

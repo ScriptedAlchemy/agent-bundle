@@ -53,12 +53,10 @@ export const summarizes = async (): Promise<void> => {
 
 编译器生成的 `.agent-bundle/routes.d.ts` 会把项目的路由契约注册到 `@agent-bundle/runtime` 的
 `Register` 接口上——与它已经声明 provider 键的方式相同。一旦该文件成为项目 TypeScript 程序的一部分
-（`create-agent-bundle` 模板默认就把 `".agent-bundle/routes.d.ts"` 列在 `tsconfig.json` 的 `include`
-中，文件本身仍被 gitignore；每一个导入了 `agent-bundle/test`、`agent-bundle/app`、`agent-bundle/eval`
-或 `@agent-bundle/runtime` 却漏掉该文件的 TypeScript 程序，`agent-bundle validate` 都会以 `AB4834`
-逐一警告），用字符串字面量写出的
-`renderRoute` 调用就会针对编译后的 route id 做检查——编辑器会补全它们，写错时会被拒绝并列出已注册的
-备选项——而 `input` 与 `result` 来自该路由自己的 `inputSchema` 与 `resultSchema`：
+（`create-agent-bundle` 模板默认就把 `".agent-bundle/routes.d.ts"` 加入 `tsconfig.json` 的 `include`，该文件本身保持 gitignored。
+现有项目也必须在每个使用这些类型的 tsconfig 中包含此文件，并运行自己的 TypeScript 检查。
+框架验证只生成声明，不分析项目引用，也不再发出 `AB4834`。包含声明后，字符串字面量路由 id、
+输入和结果都会根据该路由的 schema 检查，编辑器也会补全有效 id。
 
 ```ts
 const { result } = await renderRoute('tool:library/summarize', {
@@ -75,7 +73,7 @@ transform 的值；schema 拒绝的输入会在任何 provider 或组件运行�
 `@agent-bundle/runtime`）是调用方一侧，`RegisteredRouteParsedInput<Id>` 是组件一侧，也就是
 `loadRouteModule(id).inputSchema.parse(...)` 的返回类型。
 
-事件路由注册的是测试工具实际接受与返回的内容：`input` 是 `{ canonical, native, preflight? }` 载荷（`signal` 由测试
+渲染事件路由注册的是测试工具实际接受与返回的内容：`input` 是 `{ canonical, native }` 载荷（`signal` 由测试
 工具自行提供），而 `result` 为 `undefined`，因为事件模块不导出 `resultSchema`。请用
 `createEventRouteInput('tool/after', envelope, { host: 'claude' })` 从宿主信封构造这个输入，而不要手写：它按
 宿主与事件校验信封，并通过与制品包装器相同的表投影出 `canonical.payload`；标注为

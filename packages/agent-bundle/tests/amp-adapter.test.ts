@@ -639,7 +639,7 @@ it('builds a relocatable self-contained Amp artifact with manifest and evidence 
       routeGraph: emptyCompiledRouteGraph,
     });
     const entryPath = '.amp/plugins/amp-review/index.js';
-    expect(result.manifest.manifestVersion).toBe(5);
+    expect(result.manifest.manifestVersion).toBe(6);
     expect(result.manifest.projections).toEqual([{
       builtInHost: 'amp',
       documents: { entry: entryPath },

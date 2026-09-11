@@ -152,44 +152,24 @@ manifest.
 
 ## JSX means rendering
 
-Structure lives in config and conventions; JSX appears only where something is rendered. An
-executable route is one async default Server Component that does the work and returns `Agent.*`
+Structure lives in config and conventions; JSX appears only where something is rendered. A
+rendered route is one default Server Component that does the work and returns `Agent.*`
 nodes, and it calls `await agent()` only when it needs host, session, actor, workspace,
 capability, or state context. There is no public `execute`/`render` split, and a plain `.ts`
-route is never wrapped in React behavior.
+route is never wrapped in React behavior. Events use the same canonical file paths for both
+forms: `.ts` returns a lightweight decision, `.tsx` renders JSX, and `ctx.render()` requests a separate `.view.tsx` module. Use `defineTool` for an inferred tool handler.
 
 ## Route contracts (Application IR)
 
-The compiled route graph is the application's host-independent model — the Application IR of
-[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) — and every surface is a
-projection of it: the generated MCP server, the routed CLI's argv grammar, the generated route
-types, the Workbench, and `agent-bundle inspect --routes`. A route's input schema is a node of
-that graph which routes reference rather than carry. When the compiler can read an `inputSchema`
-statically — written inline, or bound to a schema declared in a relative module the route imports
-— it normalizes it once into a `RouteContract`:
+The compiled graph records host-independent route identity and declared metadata.
+Literal `config.inputJsonSchema` creates a frozen `RouteContract` with id
+`contract:<route-module>#inputJsonSchema`, `origin: { module, binding: 'inputJsonSchema' }`,
+`input`, and the route id in `routes`. The route references it through `route.contract`.
+`graph.contracts` is absent when no route declares input metadata.
 
-| Field | Meaning |
-| --- | --- |
-| `id` | `contract:<module>#<binding>`, the declaration site at the end of the alias chain: `contract:src/lib/protocol-schemas.ts#statusInputSchema` for an imported schema, `contract:src/cli/status.tsx#inputSchema` for an inline one. |
-| `input` | The bounded JSON Schema projection, deep-frozen. Each bound route's `inputSchema` is this same object. |
-| `origin` | `{ module, binding }`: the project-relative module that declares the schema and the binding whose initializer is the zod expression. |
-| `routes` | The sorted ids of every route bound to the contract. |
-
-Identity is the declaration site, not the content. Two routes that import one binding share one
-contract with two `routes`; two textually equal schemas declared separately stay two contracts,
-because they are two authored things that may diverge. Each route names its contract as
-`route.contract`, and the graph lists them as `contracts`, sorted by id and absent when no route
-has one (`RouteContract` and `RouteContractOrigin` are exported from `agent-bundle/api` beside
-`CompiledRouteGraph`). `agent-bundle inspect --routes` prints them with the graph, and the
-Workbench route inspector shows a selected leaf's contract origin and the other routes sharing
-it. A contract declared outside the route's own module joins the route's digest identity; graphs
-whose schemas are all inline keep their recorded digests.
-
-The contract carries the input side. `resultSchema` may be imported the same way, but no static
-result projection exists: its presence is checked statically, its type flows through TypeScript,
-and the runtime validates with the real zod object. How a reference is resolved, and the
-`AB4814`/`AB4838`/`AB4839` diagnostics, are described under
-[Share one schema between MCP and CLI](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
+Inspection and Workbench read this data without executing schema code. Imported runtime schemas
+do not create shared static contracts. Generated TypeScript types and runtime validation use the
+actual schema exports. See [input metadata](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
 
 ## Authorable surfaces
 
@@ -202,3 +182,5 @@ and the runtime validates with the real zod object. How a reference is resolved,
 How one route becomes MCP, CLI, and hooks — and what the compiler still
 duplicates today — is in
 [Compiler architecture](../concepts/architecture.mdx).
+
+Handlers and components may return directly or return a Promise. The compiler checks declared exports; the generated runtime checks callability and awaits results. `mapInput` is also awaited before the original input schema validates once.

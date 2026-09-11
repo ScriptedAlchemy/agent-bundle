@@ -10,6 +10,49 @@ import { evidenceOperations } from '../../../operations/evidence.js';
 const operation = evidenceOperations.whisperVerify;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "author": {
+        "type": "string"
+      },
+      "file": {
+        "type": "string"
+      },
+      "language": {
+        "type": "string"
+      },
+      "maxWindows": {
+        "type": "number"
+      },
+      "minimumChars": {
+        "type": "number"
+      },
+      "model": {
+        "type": "string"
+      },
+      "receipt": {
+        "type": "string"
+      },
+      "threads": {
+        "type": "number"
+      },
+      "title": {
+        "type": "string"
+      },
+      "whisperCli": {
+        "type": "string"
+      },
+      "windowSeconds": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "file",
+      "model"
+    ],
+    "type": "object"
+  },
   annotations: { readOnlyHint: false },
   description: 'Extract and transcribe distributed PCM windows for human language, story, and narrator review.',
   exitCode: 'result',

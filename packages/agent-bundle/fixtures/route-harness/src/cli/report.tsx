@@ -3,6 +3,28 @@ import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "enum": [
+          "success",
+          "render-error",
+          "invalid-result",
+          "wait-for-abort"
+        ],
+        "type": "string",
+        "default": "success"
+      },
+      "topic": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "topic"
+    ],
+    "type": "object"
+  },
   description: 'Renders a harness report.',
   positionals: ['topic'],
 } satisfies CliRouteConfig;

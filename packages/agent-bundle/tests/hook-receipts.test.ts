@@ -251,8 +251,8 @@ it('lowers a failure to hook.failed with the kernel error summary, and a gate ou
   });
   const denied = receipt({
     events: [
-      { at: 0, kind: 'preflight.start', phase: 'preflight', sequence: 0 },
-      { at: 3, durationMs: 3, kind: 'preflight.outcome', outcome: 'deny', phase: 'preflight', sequence: 1 },
+      { at: 0, kind: 'handler.start', phase: 'handler', sequence: 0 },
+      { at: 3, durationMs: 3, kind: 'handler.outcome', outcome: 'deny', phase: 'handler', sequence: 1 },
     ],
   });
   const gated = lowerHookReceipt(denied);
@@ -260,7 +260,7 @@ it('lowers a failure to hook.failed with the kernel error summary, and a gate ou
     details: { gate: 'deny' },
     kind: 'hook.completed',
     status: 'ok',
-    summary: 'claude PreToolUse → tool/before denied by preflight',
+    summary: 'claude PreToolUse → tool/before denied by handler',
   });
   expect(gated[1]!.details).not.toHaveProperty('runtime');
 });
@@ -484,6 +484,41 @@ it('records kernel events through the tracer and posts one bounded receipt that 
 
   const silent = await openEventTraceReceipt({ anchor: 'file:///nowhere/hooks/x.mjs', env: {}, execution: traced, fetch: fetchStub });
   expect(silent).toBeUndefined();
+});
+
+it('compacts sequential provider observations below the receipt event limit', async () => {
+  let posted: EventTraceReceipt | undefined;
+  const traced = eventTraceExecution({ event: 'tool/before', host: 'claude', nativeEvent: 'PreToolUse' });
+  const recorder = await openEventTraceReceipt({
+    anchor: 'file:///nowhere/hooks/x.mjs',
+    env: { [EVENT_TRACE_RECEIPT_TOKEN_ENV]: 't', [EVENT_TRACE_RECEIPT_URL_ENV]: 'http://127.0.0.1:6000' },
+    execution: traced,
+    fetch: async (_input, init) => {
+      posted = JSON.parse(init!.body as string) as EventTraceReceipt;
+      return new Response(null, { status: 204 });
+    },
+  });
+  let clock = 0;
+  const tracer = createEventTracer({ execution: traced, now: () => clock, observer: recorder!.observer });
+  tracer.handlerStart();
+  for (let index = 0; index < 16; index += 1) {
+    clock += 1;
+    tracer.providersStart();
+    clock += 1;
+    tracer.providersFinish(1);
+  }
+  clock += 1;
+  tracer.handlerOutcome({ outcome: 'deny', reason: 'private reason' });
+  await recorder!.send();
+
+  expect(posted).toBeDefined();
+  expect(posted!.events).toEqual([
+    { at: 0, kind: 'handler.start', phase: 'handler', sequence: 0 },
+    { at: 1, kind: 'providers.start', phase: 'providers', sequence: 1 },
+    { at: 32, count: 16, durationMs: 31, kind: 'providers.finish', phase: 'providers', sequence: 32 },
+    { at: 33, durationMs: 33, kind: 'handler.outcome', outcome: 'deny', phase: 'handler', sequence: 33 },
+  ]);
+  expect(decodeHookReceipt(posted)).toEqual(posted);
 });
 
 it('posts a top-level devSession when AGENT_BUNDLE_DEV_SESSION is set and keeps the host identity', async () => {

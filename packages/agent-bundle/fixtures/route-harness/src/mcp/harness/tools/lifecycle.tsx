@@ -13,6 +13,42 @@ const lifecyclePhaseSchema = z.enum([
 ]);
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "enum": [
+          "exceed-budget",
+          "observe",
+          "transition"
+        ],
+        "type": "string"
+      },
+      "emitProgress": {
+        "type": "boolean"
+      },
+      "idempotencyKey": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "string"
+      },
+      "phase": {
+        "enum": [
+          "queued",
+          "running",
+          "first-progress",
+          "repeated-progress",
+          "terminal"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "type": "object"
+  },
   description: 'Replays a deterministic durable lifecycle through mounted state.',
   title: 'Lifecycle',
 };

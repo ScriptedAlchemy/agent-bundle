@@ -14,6 +14,28 @@ import { CurationShelfStateSchema } from '../../../state.js';
 const operation = mediaMutationOperations.applyChapters;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "apply": {
+        "type": "boolean"
+      },
+      "chapters": {
+        "type": "string"
+      },
+      "file": {
+        "type": "string"
+      },
+      "receipt": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "chapters",
+      "file"
+    ],
+    "type": "object"
+  },
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan or explicitly apply verified chapter rows while preserving all non-chapter media state.',
 };

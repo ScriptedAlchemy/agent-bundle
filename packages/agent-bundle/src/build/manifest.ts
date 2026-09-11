@@ -7,7 +7,7 @@ import {
 import { isRelocatablePosixPath } from '../core/paths.ts';
 import { isValidPackageName, isValidPackageVersion } from '../core/project-context.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
-import { providerKeyFromName } from '../routes/providers.ts';
+import { parseInputSchema } from '../routes/input-schema.ts';
 import type { CliProjectionFlagDefault } from '../routes/public.ts';
 import type {
   CompiledCliMode,
@@ -15,7 +15,6 @@ import type {
   CompiledLayoutScope,
   CompiledRouteKind,
   CompiledServerMode,
-  RouteInputPropertySchema,
   RouteInputSchema,
   RouteInputSchemaLiteral,
 } from '../routes/types.ts';
@@ -197,10 +196,8 @@ export interface ArtifactManifestRouteProvenance {
 
 export interface ArtifactManifestEventExecution {
   readonly fallback: 'none' | 'standalone';
-  /** Project-relative POSIX path of the event route's preflight module. */
-  readonly preflight?: string;
-  /** Sorted, unique conventional provider keys required by the event route. */
-  readonly providers?: readonly string[];
+  /** Project-relative POSIX path of the event route's handler module. */
+  readonly handler?: string;
   readonly runtime: 'shared' | 'standalone';
 }
 
@@ -271,6 +268,7 @@ export interface ArtifactManifestCliProjection {
 
 /** One executable command compiled from a custom CLI route or projected MCP tool. */
 export interface ArtifactManifestCliCommand {
+  readonly input?: 'json';
   readonly aliases: readonly string[];
   readonly description?: string;
   readonly exitCode: 'result' | 'zero';
@@ -308,18 +306,13 @@ export interface ArtifactManifestLayout {
 }
 
 /** The compiled route graph the artifact was built from (gap 1 of #592 step 3). */
-/** Where a contract's schema is declared: the project-relative module and the binding at the end of any alias chain. */
+/** Location of literal inputJsonSchema metadata in the route module. */
 export interface ArtifactManifestRouteContractOrigin {
   readonly binding: string;
   readonly module: string;
 }
 
-/**
- * One canonical input contract (#593): a route `inputSchema` declaration
- * normalized once and shared by every route binding the same declaration.
- * `id` is `contract:<origin.module>#<origin.binding>`; `routes` are the sorted
- * ids of the graph routes bound to it.
- */
+/** Frozen input metadata identified by contract:<module>#inputJsonSchema. */
 export interface ArtifactManifestRouteContract {
   readonly id: string;
   readonly input: RouteInputSchema;
@@ -762,85 +755,12 @@ const parseSchemaLiteral = (value: unknown, location: string): RouteInputSchemaL
   return fail(`${location} must be a boolean, number, string, or an array of those.`);
 };
 
-const parseInputSchemaProperty = (value: unknown, location: string): RouteInputPropertySchema => {
-  const property = requireRecord(value, location);
-  const type = requireOneOf(property.type, `${location}.type`, ['array', 'boolean', 'number', 'string'] as const);
-  const description = property.description === undefined
-    ? {}
-    : { description: requireString(property.description, `${location}.description`) };
-  const defaultValue = property.default === undefined
-    ? {}
-    : { default: parseSchemaLiteral(property.default, `${location}.default`) };
-  switch (type) {
-    case 'boolean':
-    case 'number':
-      requireExactKeys(property, location, ['type'], ['default', 'description']);
-      return { ...defaultValue, ...description, type };
-    case 'string':
-      requireExactKeys(property, location, ['type'], ['default', 'description', 'enum']);
-      return {
-        ...defaultValue,
-        ...description,
-        ...(property.enum === undefined ? {} : { enum: parseStringList(property.enum, `${location}.enum`, false) }),
-        type,
-      };
-    case 'array': {
-      requireExactKeys(property, location, ['items', 'type'], ['default', 'description']);
-      const items = requireRecord(property.items, `${location}.items`);
-      const itemType = requireOneOf(items.type, `${location}.items.type`, ['boolean', 'number', 'string'] as const);
-      if (itemType === 'string') {
-        requireExactKeys(items, `${location}.items`, ['type'], ['enum']);
-        return {
-          ...defaultValue,
-          ...description,
-          items: {
-            ...(items.enum === undefined ? {} : { enum: parseStringList(items.enum, `${location}.items.enum`, false) }),
-            type: itemType,
-          },
-          type,
-        };
-      }
-      requireExactKeys(items, `${location}.items`, ['type']);
-      return { ...defaultValue, ...description, items: { type: itemType }, type };
-    }
-    default: {
-      const exhaustive: never = type;
-      return fail(`${location}.type ${String(exhaustive)} is unknown.`);
-    }
-  }
-};
-
-const parseInputSchema = (value: unknown, location: string): RouteInputSchema => {
-  const schema = requireRecord(value, location);
-  requireExactKeys(schema, location, ['additionalProperties', 'properties', 'type'], ['required']);
-  if (schema.additionalProperties !== false) fail(`${location}.additionalProperties must be false.`);
-  if (schema.type !== 'object') fail(`${location}.type must be "object".`);
-  const propertiesRecord = requireRecord(schema.properties, `${location}.properties`);
-  const properties: Record<string, RouteInputPropertySchema> = {};
-  for (const key of Object.keys(propertiesRecord)) {
-    properties[key] = parseInputSchemaProperty(propertiesRecord[key], `${location}.properties.${key}`);
-  }
-  const required = schema.required === undefined
-    ? undefined
-    : parseStringList(schema.required, `${location}.required`, false);
-  if (required?.some((key) => !Object.hasOwn(properties, key)) === true) {
-    fail(`${location}.required names an undeclared property.`);
-  }
-  return {
-    additionalProperties: false,
-    properties,
-    ...(required === undefined ? {} : { required }),
-    type: 'object',
-  };
-};
-
 const parseEventExecution = (value: unknown, location: string): ArtifactManifestEventExecution => {
   const execution = requireRecord(value, location);
-  requireExactKeys(execution, location, ['fallback', 'runtime'], ['preflight', 'providers']);
+  requireExactKeys(execution, location, ['fallback', 'runtime'], ['handler']);
   return {
     fallback: requireOneOf(execution.fallback, `${location}.fallback`, ['none', 'standalone'] as const),
-    ...(execution.preflight === undefined ? {} : { preflight: requirePath(execution.preflight, `${location}.preflight`) }),
-    ...(execution.providers === undefined ? {} : { providers: parseStringList(execution.providers, `${location}.providers`) }),
+    ...(execution.handler === undefined ? {} : { handler: requirePath(execution.handler, `${location}.handler`) }),
     runtime: requireOneOf(execution.runtime, `${location}.runtime`, ['shared', 'standalone'] as const),
   };
 };
@@ -972,7 +892,7 @@ const parseCliCommands = (value: unknown, location: string): readonly ArtifactMa
       command,
       commandLocation,
       ['aliases', 'exitCode', 'options', 'path', 'routeId'],
-      ['description', 'mcp', 'projection'],
+      ['description', 'input', 'mcp', 'projection'],
     );
     let mcp: ArtifactManifestCliCommandMcp | undefined;
     if (command.mcp !== undefined) {
@@ -989,6 +909,7 @@ const parseCliCommands = (value: unknown, location: string): readonly ArtifactMa
     return {
       aliases: parseStringList(command.aliases, `${commandLocation}.aliases`),
       ...(command.description === undefined ? {} : { description: requireString(command.description, `${commandLocation}.description`) }),
+      ...(command.input === undefined ? {} : { input: requireOneOf(command.input, `${commandLocation}.input`, ['json'] as const) }),
       exitCode: requireOneOf(command.exitCode, `${commandLocation}.exitCode`, ['result', 'zero'] as const),
       ...(mcp === undefined ? {} : { mcp }),
       options: parseCliOptions(command.options, `${commandLocation}.options`),
@@ -1094,14 +1015,6 @@ const parseRoutes = (value: unknown): ArtifactManifestRoutes => {
   const servers = parseServers(routes.servers);
   const layouts = parseLayouts(routes.layouts);
   const providers = parseProviders(routes.providers);
-  const providerKeys = new Set(providers.map((provider) => providerKeyFromName(provider.name)));
-  for (const route of events) {
-    for (const provider of route.execution?.providers ?? []) {
-      if (!providerKeys.has(provider)) {
-        fail(`routes.events[${route.id}].execution.providers names undeclared provider key ${JSON.stringify(provider)}.`);
-      }
-    }
-  }
   const serverIds = new Set(servers.map((server) => server.id));
   if (layouts.some((layout) => layout.serverId !== undefined && !serverIds.has(layout.serverId))) {
     fail('routes.layouts names an undeclared server.');

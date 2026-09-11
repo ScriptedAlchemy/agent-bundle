@@ -1,5 +1,5 @@
 import { extractRouteConfig, routeConfigGrammar } from './config-extract.ts';
-import { scanRouteModuleExports, type RouteModuleExports } from './contract.ts';
+import { scanRouteModuleExports } from './contract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
@@ -65,13 +65,8 @@ export interface ExtractedCliProjection {
   readonly config: CliProjectionConfigRecord;
   /** AB4844 (module contract) and AB4845 (grammar binding) in that order. */
   readonly diagnostics: readonly Diagnostic[];
-  /** True when the module exports `mapInput` as a synchronous, non-generator function with a runtime binding. */
+  /** True when the module exports `mapInput` as a runtime binding. */
   readonly mapInput: boolean;
-}
-
-export interface CliProjectionExtractionOptions {
-  /** Absolute project root; const string references inside `config` resolve inside it only. */
-  readonly projectRoot?: string;
 }
 
 const projectionConfigKeys: readonly string[] = ['aliases', 'command', 'confirm', 'description', 'exitCode', 'flags', 'input', 'positionals'];
@@ -84,9 +79,9 @@ const projectionSubject = (module: string, toolId: string): string => `CLI proje
 
 const contractRecovery = 'Declare only command, aliases, confirm, description, exitCode, flags, input, and positionals, each in the shape CliProjectionConfig documents; then inspect again.';
 /** Recovery for a tool whose inputSchema the argv grammar cannot express: take the canonical input as JSON instead of per-field flags. */
-export const jsonInputRecovery = "Declare input: 'json' in the projection config so the command takes the tool's canonical input as one JSON object through --input, or restrict the tool's inputSchema initializer to the bounded argv grammar; then inspect again.";
+export const jsonInputRecovery = "Declare input: 'json' in the projection config so the command takes the tool's canonical input as one JSON object through --input, or declare config.inputJsonSchema on the tool for per-field flags; then inspect again.";
 const grammarRecovery = `Export the projection config as a single top-level \`export const config = { ... }\` object literal inside the static route-config grammar (${routeConfigGrammar}), then inspect again.`;
-const mapInputRecovery = 'Export mapInput as one synchronous, non-generator function with a runtime binding — a function declaration (`export function mapInput(input) { ... }`), an arrow (`export const mapInput = (input) => ({ ... })`), or a function expression — or remove the export; then inspect again.';
+
 const spellingRecovery = 'Use kebab-case option spellings without leading dashes that are neither reserved (help, json, ndjson, version, and yes when the command confirms) nor claimed by another option or alias; then inspect again.';
 
 /** AB4844: the projection module's own contract — `config` shape and `mapInput` — is not met. */
@@ -321,8 +316,6 @@ const bindProjectionConfig = (
       positionalSpellingRecovery(key),
     ));
   }
-  // Without a static contract the tool's own argv parse reports why
-  // (AB4814/AB4838/AB4839, relabelled); nothing here can be judged.
   if (contract === undefined) return diagnostics;
   const keys = Object.keys(contract.properties);
   const keyRecovery = inputKeysRecovery(keys);
@@ -366,45 +359,10 @@ export const relaxationRecovery = (key: string): string =>
   `Export a mapInput function that fills ${JSON.stringify(key)} before the canonical inputSchema validates, or keep the key required on the CLI; then inspect again.`;
 
 /**
- * The AB4844 detail when an exported `mapInput` is not what the shell can
- * call: it must carry a runtime binding (no ambient `declare`), return the
- * mapped input directly (no generator), and return it synchronously (no
- * `async`), because the shell applies it inline before `inputSchema.parse`
- * and a Promise or iterator would reach the schema instead of the input.
- * A `mapInput` re-exported from another module is judged where it is
- * declared (`export { mapInput } from './shared.ts'` is followed like a
- * default re-export); one the scan cannot follow — a bare specifier, an
- * unreadable file, or a re-export cycle — is rejected rather than trusted,
- * since a projection has no run-time fallback judgment. Undefined when the
- * module exports no `mapInput` or exports an accepted one.
- */
-const judgeMapInput = (exports: RouteModuleExports): string | undefined => {
-  if (!exports.named.has('mapInput')) return undefined;
-  if (exports.namedAmbient.has('mapInput')) {
-    return 'mapInput is an ambient declaration (declare function or declare const), which emits no runtime binding for the shell to call';
-  }
-  const unresolved = exports.namedUnresolved.get('mapInput');
-  if (unresolved !== undefined) {
-    return `mapInput is re-exported from ${JSON.stringify(unresolved)}, which cannot be followed statically to a function`;
-  }
-  if (exports.namedGeneratorFunctions.has('mapInput')) {
-    return exports.namedAsyncFunctions.has('mapInput')
-      ? 'mapInput is an async generator function, which yields an async iterator instead of returning the mapped input'
-      : 'mapInput is a generator function, which yields an iterator instead of returning the mapped input';
-  }
-  if (exports.namedAsyncFunctions.has('mapInput')) {
-    return 'mapInput is an async function, which returns a Promise, but the shell applies mapInput synchronously before the canonical inputSchema validates';
-  }
-  if (!exports.namedFunctions.has('mapInput')) return 'mapInput is exported but is not statically a function';
-  return undefined;
-};
-
-/**
  * Statically extracts one projection module: its `config` through the
  * unchanged route-config grammar (`extractRouteConfig`), validated against
  * the closed `CliProjectionConfig` key set and bound to the tool's contract,
- * and whether it exports a `mapInput` the shell can call (`judgeMapInput`
- * over `scanRouteModuleExports`). The module is parsed, never executed. Every
+ * and whether it declares `mapInput`. The shell validates and awaits it. The module is parsed, never executed. Every
  * failure is `AB4844` (the module's own contract) or `AB4845` (binding to
  * the tool's argv grammar), addressed as
  * `CLI projection <module> for tool:<server>/<tool>: <detail>.` on the
@@ -416,7 +374,6 @@ export const extractCliProjection = (
   sourcePath: string,
   contract: RouteInputSchema | undefined,
   tool: CompiledAgentRoute,
-  options: CliProjectionExtractionOptions = {},
 ): ExtractedCliProjection => {
   const report = {
     binding: (detail: string, recovery?: string): Diagnostic =>
@@ -425,18 +382,14 @@ export const extractCliProjection = (
       cliProjectionContractError(relativePath, tool.id, detail, sourcePath, recovery),
   };
   const diagnostics: Diagnostic[] = [];
-  const exports = scanRouteModuleExports(moduleText, relativePath, { source: sourcePath });
-  const mapInputDetail = judgeMapInput(exports);
-  if (mapInputDetail !== undefined) diagnostics.push(report.contract(mapInputDetail, mapInputRecovery));
-  const mapInput = exports.named.has('mapInput') && mapInputDetail === undefined;
+  const exports = scanRouteModuleExports(moduleText, relativePath);
+  const mapInput = exports.named.has('mapInput');
 
   if (!exports.named.has('config')) {
     diagnostics.push(report.contract('the module exports no config', grammarRecovery));
     return deepFreeze({ config: emptyProjectionConfig, diagnostics, mapInput });
   }
-  const extracted = extractRouteConfig(moduleText, relativePath, sourcePath, {
-    ...(options.projectRoot === undefined ? {} : { projectRoot: options.projectRoot }),
-  });
+  const extracted = extractRouteConfig(moduleText, relativePath, sourcePath);
   if (extracted.diagnostics.length > 0) {
     for (const diagnostic of extracted.diagnostics) {
       diagnostics.push(report.contract(configReason(diagnostic, relativePath), grammarRecovery));

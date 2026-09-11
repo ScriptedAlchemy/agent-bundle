@@ -6,8 +6,8 @@ import { createJiti, type JitiOptions, type TransformOptions } from 'jiti';
 import * as React from 'react';
 import ts from 'typescript-5';
 
-import { isRelativeSpecifier } from '../../routes/module-candidates.ts';
-import { parseModule } from '../../routes/module-scope.ts';
+import { isRelativeSpecifier } from '../../core/paths.ts';
+import { parseModule } from '../../routes/syntax.ts';
 
 export interface RouteModuleLoader {
   readonly load: <Module>(source: string) => () => Promise<Module>;

@@ -11,6 +11,22 @@ import { capture } from '../../../capture.js';
 export const MAX_SLOW_HOLD_MS = 30_000;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "holdMs": {
+        "type": "number",
+        "default": 3000,
+        "description": "How long the call stays open, in milliseconds (1–30000)."
+      },
+      "tickMs": {
+        "type": "number",
+        "default": 500,
+        "description": "Report progress every tickMs milliseconds."
+      }
+    },
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description:
     'Hold a tool call open for holdMs (at most 30 s), reporting progress every tickMs, to probe how the host drives a long-running tool: whether it runs it as an MCP task (tools/call answered by a task, result through tasks/result), whether it forwards progress, and when it gives up. Records the call like every other probe.',

@@ -100,33 +100,76 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
       "export default defineConfig({ plugin: { name: 'hook-receipt-fixture', version: '1.0.0' }, targets: ['claude'] });",
       '',
     ].join('\n')),
-    writeProjectFile(root, 'src/events/tool/before.tsx', [
+    writeProjectFile(root, 'src/events/tool/before.ts', [
+      "export const config = { runtime: 'standalone', targets: ['claude'] };",
+      'export default async function BeforeTool({ provider, render }) {',
+      `  await Promise.all([${Array.from({ length: 16 }, (_, index) => `provider('private${String(index)}')`).join(', ')}]);`,
+      "  return render('./before.view.js', {});",
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/before.view.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
-      "export const config = { runtime: 'standalone', targets: ['claude'] };",
       'export default async function BeforeTool({ native }) {',
       "  return createElement(Agent.Result, null, createElement(Agent.Context, null, `receipt:${native.tool_name}`));",
       '}',
       '',
     ].join('\n')),
-    writeProjectFile(root, 'src/events/tool/after.tsx', [
+    writeProjectFile(root, 'src/events/session/start.ts', [
+      "export const config = { runtime: 'standalone', targets: ['claude'] };",
+      "export default async function SessionStart({ render }) { return render('./start.view.js', {}); }",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/session/start.view.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "export default async function SessionStart() { return <Agent.Result><Agent.Context>session receipt</Agent.Context></Agent.Result>; }",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/after.ts', [
       "export const config = { runtime: 'standalone', targets: ['claude'] };",
       'export default async function AfterTool() {',
       "  throw new Error('after-tool exploded');",
       '}',
       '',
     ].join('\n')),
+    ...Array.from({ length: 16 }, (_, index) =>
+      writeProjectFile(root, `src/providers/private${String(index)}.ts`, [
+        'export default async function PrivateProvider() {',
+        '  await new Promise((resolve) => setTimeout(resolve, 25));',
+        `  return ${JSON.stringify(`secret-provider-value-${String(index)}`)};`,
+        '}',
+        '',
+      ].join('\n'))),
   ]);
   const output = join(root, 'artifact');
   const compiled = await build({ output, root, targets: ['claude'] });
   const before = compiled.build.compiledHooks.find((hook) => hook.event === 'beforeTool');
   const after = compiled.build.compiledHooks.find((hook) => hook.event === 'afterTool');
+  const sessionStart = compiled.build.compiledHooks.find((hook) => hook.event === 'sessionStart');
   expect(before).toBeDefined();
   expect(after).toBeDefined();
+  expect(sessionStart).toBeDefined();
 
   const projectRoot = join(root, 'dev-project');
   const hub = new TraceHub({ projectRoot });
   const { attachment, url } = await listen(hub, projectRoot);
+
+  const session = await runHook(sessionStart!.output, {
+    cwd: root,
+    hook_event_name: 'SessionStart',
+    session_id: 'session-lineage',
+    source: 'startup',
+    transcript_path: join(root, 'transcript.jsonl'),
+  }, attachment.environment(url));
+  expect(session.code, session.stderr).toBe(0);
+  const sessionEntries = hub.replay().entries;
+  expect.soft(sessionEntries.at(-1)).toMatchObject({
+    details: {
+      lineage: { source: 'native', state: 'available', value: { conversation: 'session-lineage', depth: 0, root: 'session-lineage' } },
+    },
+    kind: 'hook.completed',
+  });
 
   // (1) A dev-server-spawned simulation: the endpoint travels in the environment.
   const simulated = await runHook(before!.output, nativePreToolUse(root, 'toolu_env'), attachment.environment(url));
@@ -134,7 +177,7 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
   expect(JSON.parse(simulated.stdout)).toMatchObject({
     hookSpecificOutput: { additionalContext: 'receipt:Bash', hookEventName: 'PreToolUse' },
   });
-  const afterEnv = hub.replay().entries;
+  const afterEnv = hub.replay().entries.slice(sessionEntries.length);
   expect(afterEnv.map((entry) => entry.kind)).toEqual(['hook.received', 'hook.completed']);
   const [received, completed] = afterEnv as [TraceEntry, TraceEntry];
   expect(received).toMatchObject({
@@ -154,11 +197,10 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
   expect(completed.correlation).toEqual(received.correlation);
   expect(completed).toMatchObject({
     details: {
-      events: [
-        { kind: 'execute.start', phase: 'execute', runtime: 'standalone' },
-        { kind: 'render.start', phase: 'render' },
-        { kind: 'render.finish', phase: 'render' },
-      ],
+      events: expect.arrayContaining([
+        expect.objectContaining({ kind: 'handler.outcome', outcome: 'render', phase: 'handler' }),
+        expect.objectContaining({ count: 16, kind: 'providers.finish', phase: 'providers' }),
+      ]),
       lineage: { source: 'native', state: 'available', value: { conversation: 'session-receipt', depth: 0, root: 'session-receipt' } },
       runtime: 'standalone',
     },
@@ -172,6 +214,8 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
   expect(serialized).not.toContain('tool_input');
   expect(serialized).not.toContain(root);
   expect(serialized).not.toContain(attachment.token);
+  expect(serialized).not.toContain('secret-provider-value');
+  expect(serialized).not.toContain('private0.ts');
 
   // (2) A host's own invocation: no environment, the dev install marker beside
   //     the wrapper names the project whose dev server published its endpoint.
@@ -182,7 +226,7 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
   );
   const hosted = await runHook(before!.output, nativePreToolUse(root, 'toolu_marker'), {});
   expect(hosted.code, hosted.stderr).toBe(0);
-  const afterMarker = hub.replay().entries.slice(afterEnv.length);
+  const afterMarker = hub.replay().entries.slice(sessionEntries.length + afterEnv.length);
   expect(afterMarker.map((entry) => entry.kind)).toEqual(['hook.received', 'hook.completed']);
   expect(afterMarker[0]!.correlation).toMatchObject({ requestId: 'toolu_marker' });
   expect(afterMarker[0]!.correlation.executionId).not.toBe(received.correlation.executionId);
@@ -202,11 +246,15 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
   expect(thrown.code).toBe(1);
   expect(thrown.stdout).toBe('');
   expect(thrown.stderr).toContain('after-tool exploded');
-  const afterThrown = hub.replay().entries.slice(afterEnv.length + afterMarker.length);
+  const afterThrown = hub.replay().entries.slice(sessionEntries.length + afterEnv.length + afterMarker.length);
   expect(afterThrown.map((entry) => entry.kind)).toEqual(['hook.received', 'hook.failed']);
   expect(afterThrown[1]).toMatchObject({
     correlation: { requestId: 'toolu_thrown', routeId: 'event:tool/after' },
-    details: { error: { message: 'after-tool exploded', name: 'Error' }, failedPhase: 'render' },
+    details: {
+      error: { message: 'after-tool exploded', name: 'Error' },
+      failedPhase: 'handler',
+      lineage: { source: 'native', state: 'available', value: { conversation: 'session-receipt', depth: 0, root: 'session-receipt' } },
+    },
     href: '/routes/events/tool/after',
     status: 'error',
   });
@@ -216,5 +264,5 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
   const alone = await runHook(before!.output, nativePreToolUse(root, 'toolu_alone'), {});
   expect(alone.code, alone.stderr).toBe(0);
   expect(JSON.parse(alone.stdout)).toMatchObject({ hookSpecificOutput: { additionalContext: 'receipt:Bash' } });
-  expect(hub.latestSequence).toBe(afterEnv.length + afterMarker.length + afterThrown.length);
+  expect(hub.latestSequence).toBe(sessionEntries.length + afterEnv.length + afterMarker.length + afterThrown.length);
 });

@@ -131,7 +131,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
         '',
-        "export const config = { description: 'Greets one name.', positionals: ['name'] };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"}, description: 'Greets one name.', positionals: ['name'] };",
         "export const inputSchema = z.object({ name: z.string().min(1) }).strict();",
         "export const resultSchema = z.object({ message: z.string() }).strict();",
         '',
@@ -146,7 +146,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
         '',
-        "export const config = { description: 'Exits with the requested code.', exitCode: 'result', positionals: ['code'] };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"code\":{\"type\":\"number\"}},\"required\":[\"code\"],\"type\":\"object\"}, description: 'Exits with the requested code.', exitCode: 'result', positionals: ['code'] };",
         'export const inputSchema = z.object({ code: z.number().int().min(0).max(255) }).strict();',
         'export const resultSchema = z.object({ exitCode: z.number() }).strict();',
         '',
@@ -169,49 +169,45 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
-      'src/events/tool/after.preflight.ts': [
+      'src/events/tool/after.ts': [
         "import { appendFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
         '',
-        'export default () => {',
+        'export default ({ render }) => {',
         "  appendFileSync(join(process.cwd(), '.agent-bundle', 'defer-gate.marker'), 'gate\\n');",
-        "  return { outcome: 'execute', data: { ticket: 'cc-7' } };",
+        "  return render('./after.view.js', { ticket: 'cc-7' });",
         '};',
         '',
       ].join('\n'),
-      'src/events/tool/after.tsx': [
+      'src/events/tool/after.view.tsx': [
         "import { appendFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
         "import { Agent, agent } from '@agent-bundle/runtime';",
         "import { createElement, Suspense } from 'react';",
         "import { awaitGate } from '../../gate.js';",
-        "export { default as preflight } from './after.preflight.js';",
         '',
-        "export const config = { providers: ['clock'], runtime: 'standalone' };",
         '',
         'const Observed = async ({ gate, signal, toolName }) => {',
         '  if (gate !== undefined) await awaitGate(gate, signal);',
         '  return createElement(Agent.Context, null, `Observed ${toolName}.`);',
         '};',
         '',
-        'export default async function AfterTool({ canonical, preflight, signal }) {',
+        'export default async function AfterTool({ canonical, renderInput, signal }) {',
         '  const context = await agent();',
         "  appendFileSync(join(process.cwd(), '.agent-bundle', 'defer-handler.marker'), 'run\\n');",
-        "  const value = { outcome: 'defer', providers: Object.keys(context.providers).sort(), ticket: preflight.ticket };",
+        "  const value = { outcome: 'defer', providers: Object.keys({ clock: await context.provider('clock'), processLifetime: context.process }).sort(), ticket: renderInput.ticket };",
         "  return createElement(Agent.Result, { value }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'event streaming', total: 1 }) }, createElement(Observed, { gate: canonical.payload.toolInput?.value?.gate, signal, toolName: canonical.payload.toolName?.value })));",
         '}',
         '',
       ].join('\n'),
       ...gatedRouteFiles,
-      'src/events/prompt/submit.preflight.ts': "export default () => ({ outcome: 'continue' });\n",
-      'src/events/prompt/submit.tsx': [
+      'src/events/prompt/submit.ts': "export default () => ({ outcome: 'continue' });\n",
+      'src/events/prompt/submit.view.tsx': [
         "import { writeFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
-        "export { default as preflight } from './submit.preflight.js';",
-        "export const config = { runtime: 'standalone' };",
         "export default async function PromptSubmit() {",
         "  writeFileSync(join(process.cwd(), '.agent-bundle', 'continue-handler.marker'), 'ran');",
-        "  throw new Error('continue preflight reached handler');",
+        "  throw new Error('continue handler reached handler');",
         '}',
         '',
       ].join('\n'),
@@ -221,41 +217,36 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
         "writeFileSync(join(process.cwd(), '.agent-bundle', 'session-worker.marker'), 'load\\n');",
-        "export const config = { runtime: 'standalone' };",
         'export default async function SessionEnd() {',
         "  return createElement(Agent.Result, { value: { canonical: true } });",
         '}',
         '',
       ].join('\n'),
-      'src/events/tool/before.preflight.ts': "export default () => ({ outcome: 'deny', reason: 'blocked by preflight' });\n",
-      'src/events/tool/before.tsx': [
+      'src/events/tool/before.ts': "export default () => ({ outcome: 'deny', reason: 'blocked by handler' });\n",
+      'src/events/tool/before.view.tsx': [
         "import { writeFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
-        "export { default as preflight } from './before.preflight.js';",
-        "export const config = { runtime: 'standalone' };",
         "export default async function BeforeTool() {",
         "  writeFileSync(join(process.cwd(), '.agent-bundle', 'deny-handler.marker'), 'ran');",
-        "  throw new Error('deny preflight reached handler');",
+        "  throw new Error('deny handler reached handler');",
         '}',
         '',
       ].join('\n'),
-      'src/events/tool/failure.preflight.ts': [
+      'src/events/tool/failure.ts': [
         "import { appendFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
         "export default () => {",
         "  appendFileSync(join(process.cwd(), '.agent-bundle', 'failure-gate.marker'), 'gate\\n');",
-        "  throw new Error('Generated route must default-export from preflight.');",
+        "  throw new Error('Generated route must default-export from handler.');",
         '};',
         '',
       ].join('\n'),
-      'src/events/tool/failure.tsx': [
+      'src/events/tool/failure.view.tsx': [
         "import { writeFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
-        "export { default as preflight } from './failure.preflight.js';",
-        "export const config = { runtime: 'standalone' };",
         'export default async function ToolFailure() {',
         "  writeFileSync(join(process.cwd(), '.agent-bundle', 'failure-handler.marker'), 'ran');",
-        "  throw new Error('preflight failure reached handler');",
+        "  throw new Error('handler failure reached handler');",
         '}',
         '',
       ].join('\n'),
@@ -334,12 +325,13 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "import { Panel } from './panel.js';",
         'declare const __ROUTE_INVOCATION_DEFINE__: string;',
         '',
-        "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"},\"source\":{\"type\":\"string\"}},\"required\":[\"service\",\"source\"],\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
         "export const inputSchema = z.object({ service: z.string().min(1), source: z.string() }).strict();",
         'export const resultSchema = z.object({ alias: z.string(), define: z.string(), pluginRoot: z.string(), service: z.string(), source: z.string(), stateRoot: z.string() }).strict();',
         '',
         'export default async function Report({ input }) {',
         '  const context = await agent();',
+        '  await context.provider("clock");',
         "  if (context.plugin.state !== 'available') throw new Error('plugin unavailable');",
         '  const value = { alias: ALIAS_VALUE, define: __ROUTE_INVOCATION_DEFINE__, pluginRoot: context.plugin.value.root, service: input.service, source: input.source, stateRoot: context.plugin.value.stateRoot };',
         "  return createElement(Agent.Result, { value }, createElement(Panel), createElement(Agent.Text, null, './panel.js'), createElement(Agent.Text, null, `Service ${input.service}`));",
@@ -843,7 +835,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(await readFile(join(project.root, '.agent-bundle', 'defer-handler.marker'), 'utf8')).toBe('run\n');
     expect(event.invocation.projection.hosts?.[0]).toMatchObject({ host: 'claude' });
     // The same compiled event route, streamed: the manifest-selected host's
-    // preflight runs, the authored fallback arrives while the child is gated,
+    // handler runs, the authored fallback arrives while the child is gated,
     // and the released render matches the completed run's document (#686).
     const gatedEvent = await startStreaming({
       input: {
@@ -913,27 +905,27 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(new Set(kernelEntries.map((entry) => entry.correlation.executionId)).size).toBe(1);
     expect(kernelEntries[0]?.correlation.executionId).toBeDefined();
     expect(event.invocation.trace?.map((trace) => trace.kind)).toEqual([
-      'preflight.start',
-      'preflight.outcome',
+      'handler.start',
+      'handler.outcome',
       'execute.start',
+      'render.start',
       'providers.start',
       'providers.finish',
-      'render.start',
       'render.finish',
     ]);
 
     const failureHandlerMarker = join(project.root, '.agent-bundle', 'failure-handler.marker');
     await Promise.all([...candidateMarkers, failureHandlerMarker].map((path) => rm(path, { force: true })));
-    const preflightFailureResponse = await fetch(`${server.url}/api/routes/invocations`, {
+    const gateFailureResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({
         input: {
           cwd: project.root,
           error: 'Exit code 9',
           hook_event_name: 'PostToolUseFailure',
-          session_id: 'session-preflight-failure',
+          session_id: 'session-handler-failure',
           tool_input: {},
           tool_name: 'Write',
-          tool_use_id: 'use-preflight-failure',
+          tool_use_id: 'use-handler-failure',
           transcript_path: join(project.root, 'transcript.json'),
         },
         routeId: 'event:tool/failure',
@@ -942,29 +934,29 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       headers,
       method: 'POST',
     });
-    expect(preflightFailureResponse.status).toBe(200);
-    const preflightFailure = await preflightFailureResponse.json() as RouteInvocationResponse;
-    expect(preflightFailure.invocation).toMatchObject({
+    expect(gateFailureResponse.status).toBe(200);
+    const gateFailure = await gateFailureResponse.json() as RouteInvocationResponse;
+    expect(gateFailure.invocation).toMatchObject({
       diagnostics: [{ code: 'AB8252' }],
       status: 'failed',
     });
     expect(existsSync(failureHandlerMarker)).toBe(false);
     expect(candidateMarkers.every((path) => !existsSync(path))).toBe(true);
 
-    const preflightCases = [
+    const handlerCases = [
       [
         'event:tool/before',
         {
           cwd: project.root,
           hook_event_name: 'PreToolUse',
           permission_mode: 'default',
-          session_id: 'session-preflight-deny',
+          session_id: 'session-handler-deny',
           tool_input: { file_path: 'blocked.txt' },
           tool_name: 'Write',
           tool_use_id: 'use-deny',
           transcript_path: join(project.root, 'transcript.json'),
         },
-        { outcome: 'deny', reason: 'blocked by preflight' },
+        { outcome: 'deny', reason: 'blocked by handler' },
       ],
       [
         'event:prompt/submit',
@@ -973,13 +965,13 @@ it('invokes compiled tool and event routes through the foreground server', { tim
           hook_event_name: 'UserPromptSubmit',
           permission_mode: 'default',
           prompt: 'continue',
-          session_id: 'session-preflight-continue',
+          session_id: 'session-handler-continue',
           transcript_path: join(project.root, 'transcript.json'),
         },
         { outcome: 'continue' },
       ],
     ] as const;
-    for (const [routeId, input, expected] of preflightCases) {
+    for (const [routeId, input, expected] of handlerCases) {
       const response = await fetch(`${server.url}/api/routes/invocations`, {
         body: JSON.stringify({ input, routeId, surface: { host: 'claude', kind: 'event' } }),
         headers,
@@ -991,13 +983,13 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       expect(invoked.invocation.result).toEqual(expected);
       expect(invoked.invocation.outcome).toEqual(
         expected.outcome === 'deny'
-          ? { kind: 'represented-error', summary: 'deny: blocked by preflight' }
+          ? { kind: 'represented-error', summary: 'deny: blocked by handler' }
           : { kind: 'success' },
       );
       expect(invoked.invocation.events).toEqual([]);
       expect(invoked.invocation.trace?.map((trace) => trace.kind)).toEqual([
-        'preflight.start',
-        'preflight.outcome',
+        'handler.start',
+        'handler.outcome',
       ]);
       expect(existsSync(join(
         project.root,
@@ -1009,7 +1001,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: 'deny',
-            permissionDecisionReason: 'blocked by preflight',
+            permissionDecisionReason: 'blocked by handler',
           },
         });
       } else {
@@ -1030,8 +1022,8 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       await Promise.all([...candidateMarkers, denyHandlerMarker].map((path) => rm(path, { force: true })));
       const response = await fetch(`${server.url}/api/routes/invocations`, {
         body: JSON.stringify({
-          input: preflightCases[0][1],
-          routeId: preflightCases[0][0],
+          input: handlerCases[0][1],
+          routeId: handlerCases[0][0],
           surface: { host: 'claude', kind: 'event' },
         }),
         headers,
@@ -1087,7 +1079,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       expect(existsSync(importerWorkerMarker)).toBe(false);
       expect(existsSync(omegaWorkerMarker)).toBe(false);
 
-      for (const [routeId, input] of preflightCases) {
+      for (const [routeId, input] of handlerCases) {
         const response = await fetch(`${server.url}/api/routes/invocations`, {
           body: JSON.stringify({ input, routeId, surface: { host: 'claude', kind: 'event' } }),
           headers,
@@ -1377,7 +1369,8 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "import { z } from 'zod';",
         "import './missing.js';",
         '',
-        "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"}},\"required\":[\"service\"],\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
+        "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { service: { type: 'string' } }, required: ['service'] } };",
         "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
         'export const resultSchema = z.object({ service: z.string() }).strict();',
         '',
@@ -1420,7 +1413,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
         '',
-        "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"},\"source\":{\"type\":\"string\"}},\"required\":[\"service\"],\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
         "export const inputSchema = z.object({ service: z.string().min(1), source: z.string().optional() }).strict();",
         'export const resultSchema = z.object({ service: z.string() }).strict();',
         '',
@@ -1468,13 +1461,11 @@ it('fails closed when a valid host is ineligible for the compiled event route', 
     config: "export default { plugin: { name: 'route-invocation-host-binding', version: '1.0.0' }, targets: ['claude', 'codex'] };\n",
     files: {
       'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*"},"type":"module"}\n',
-      'src/events/tool/before.preflight.ts': "export default () => ({ outcome: 'deny', reason: 'blocked' });\n",
-      'src/events/tool/before.tsx': [
+      'src/events/tool/before.ts': "export const config = { runtime: 'standalone', targets: ['claude'] }; export default () => ({ outcome: 'deny', reason: 'blocked' });\n",
+      'src/events/tool/before.view.tsx': [
         "import { writeFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
-        "export { default as preflight } from './before.preflight.js';",
         "writeFileSync(join(process.cwd(), '.agent-bundle', 'ineligible-import.marker'), 'loaded');",
-        "export const config = { runtime: 'standalone', targets: ['claude'] };",
         'export default async function BeforeTool() {',
         "  writeFileSync(join(process.cwd(), '.agent-bundle', 'ineligible-handler.marker'), 'ran');",
         "  throw new Error('ineligible event handler ran');",
@@ -1567,16 +1558,14 @@ it('fails closed when a valid host is ineligible for the compiled event route', 
   }
 });
 
-it('enforces compiled preflight, MCP schemas, and operator env across production surfaces', { timeout: 180_000 }, async () => {
+it('enforces compiled handler, MCP schemas, and operator env across production surfaces', { timeout: 180_000 }, async () => {
   const project = await createProjectFixture({
     config: "export default { plugin: { name: 'route-parity', version: '1.0.0' }, targets: ['claude'] };\n",
     files: {
       'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
-      'src/events/tool/before.preflight.ts': "export default () => ({ outcome: 'deny', reason: 'blocked' });\n",
-      'src/events/tool/before.tsx': [
-        "export { default as preflight } from './before.preflight.js';",
-        "export const config = { runtime: 'standalone' };",
-        "export default async function BeforeTool() { throw new Error('preflight handler ran'); }",
+      'src/events/tool/before.ts': "export default () => ({ outcome: 'deny', reason: 'blocked' });\n",
+      'src/events/tool/before.view.tsx': [
+        "export default async function BeforeTool() { throw new Error('handler handler ran'); }",
         '',
       ].join('\n'),
       'src/mcp/status/tools/report.cli.ts': [
@@ -1589,6 +1578,7 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
         '',
+        "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { service: { type: 'string' } }, required: ['service'] } };",
         "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
         "export const resultSchema = z.object({ operator: z.string(), service: z.string() }).strict();",
         '',
@@ -1885,7 +1875,7 @@ it('bounds the render history a compiled child produces by count and bytes acros
         "import { createElement, Suspense } from 'react';",
         "import { z } from 'zod';",
         '',
-        "export const config = { description: 'Streams many boundaries.', positionals: ['boundaries', 'bytes', 'gate'] };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"boundaries\":{\"type\":\"number\"},\"bytes\":{\"type\":\"number\"},\"gate\":{\"type\":\"string\"}},\"required\":[\"boundaries\",\"bytes\",\"gate\"],\"type\":\"object\"}, description: 'Streams many boundaries.', positionals: ['boundaries', 'bytes', 'gate'] };",
         'export const inputSchema = z.object({ boundaries: z.number().int().min(1).max(900), bytes: z.number().int().min(1).max(4096), gate: z.string() }).strict();',
         'export const resultSchema = z.object({ boundaries: z.number() }).strict();',
         '',

@@ -1270,8 +1270,8 @@ it('ships a bin-claimed plain conventional script as both surfaces and refuses a
   expect(gate).toEqual([
     {
       code: 'AB4737',
-      message: 'Rendered script src/scripts/render-notes.tsx is also the entry of bin "notes", "notes-again" but exports neither an async default Server Component nor a named main; the artifact script renders the default component and the bin envelope calls main(argv).',
-      recovery: 'Export both an async default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+      message: 'Rendered script src/scripts/render-notes.tsx is also the entry of bin "notes", "notes-again" but exports neither a default Server Component nor a named main; the artifact script renders the default component and the bin envelope calls main(argv).',
+      recovery: 'Export both a default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
       severity: 'error',
       sourcePath: `${root}/src/scripts/render-notes.tsx`,
     },
@@ -1335,16 +1335,17 @@ const routeGraphWithGeneratedServer = (root: string): CompiledRouteGraph => {
   };
 };
 
-it('carries event-route preflight provenance and provider selection into normalized hooks', async () => {
+it('carries event-route handler provenance and provider selection into normalized hooks', async () => {
   const root = '/workspace/project';
   const selected: CompiledAgentRoute = {
     config: { providers: ['zeta', 'alphaValue'] },
     event: 'tool/after',
     id: 'event:tool/after',
     kind: 'event-route',
-    preflight: {
-      provenance: { kind: 'conventional', relativePath: 'src/events/tool/after.preflight.ts' },
-      source: `${root}/src/events/tool/after.preflight.ts`,
+    handler: {
+      provenance: { kind: 'conventional', relativePath: 'src/events/tool/after.handler.ts' },
+      source: `${root}/src/events/tool/after.handler.ts`,
+  view: `${root}/src/events/tool/after.view.tsx`,
     },
     provenance: { kind: 'conventional', relativePath: 'src/events/tool/after.tsx' },
     source: `${root}/src/events/tool/after.tsx`,
@@ -1378,18 +1379,15 @@ it('carries event-route preflight provenance and provider selection into normali
   expect(model.hooks.find(({ id }) => id === 'hook:event-route:tool-after')?.eventRoute).toEqual({
     event: 'tool/after',
     fallback: 'none',
-    preflight: selected.preflight,
-    providers: ['zeta', 'alphaValue'],
-    runtime: 'shared',
+    handler: selected.handler,
+    runtime: 'standalone',
   });
   expect(model.hooks.find(({ id }) => id === 'hook:event-route:session-start')?.eventRoute).toEqual({
     event: 'session/start',
     fallback: 'none',
-    runtime: 'shared',
+    runtime: 'standalone',
   });
-  expect(Object.isFrozen(
-    model.hooks.find(({ id }) => id === 'hook:event-route:tool-after')?.eventRoute?.providers,
-  )).toBe(true);
+
 });
 
 it('normalizes generated MCP route servers without a handwritten server declaration', async () => {

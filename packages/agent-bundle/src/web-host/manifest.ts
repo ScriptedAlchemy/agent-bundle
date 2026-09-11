@@ -14,7 +14,7 @@ import { pathTokens } from '../core/types.ts';
  * declared here so the lean web reader bundled into generated bins and the
  * full parser in `build/manifest.ts` refuse the same set of documents.
  */
-export const artifactManifestVersion = 5;
+export const artifactManifestVersion = 6;
 
 export const artifactManifestName = 'agent-bundle.manifest.json';
 

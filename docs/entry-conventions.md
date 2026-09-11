@@ -71,14 +71,14 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/cli.ts` | Package bin named after `plugin.name` (skipped when the name is not a safe output name). | `bin: false` |
 | `src/index.ts` | Library output with declarations. | `lib: false` |
 | `src/mcp/<server-id>.ts` | Stdio entry for the declared MCP server `<server-id>` that names no `entry`, `command`, or `url`. | Declare `entry` explicitly |
-| `src/mcp/<server>/{tools,resources,prompts}/*.{ts,tsx}` | Generated MCP server routes; path supplies identity and each executable module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote` |
+| `src/mcp/<server>/{tools,resources,prompts}/*.{ts,tsx}` | Generated MCP server routes; path supplies identity and each executable module supplies static `config`, schemas, and one default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote` |
 | `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required (`AB4812`), and two App routes of one server sharing a URI are `AB4829` (the same URI on different servers is not a collision). An optional `config.template` HTML shell resolves relative to the route module like its imports (`'./dashboard.html'`); the legacy project-root-relative form is accepted only while unambiguous (`AB4827` otherwise). Tools, resources, and prompts reference the App from their own static `config` with `appResourceUri('<app>')` from `agent-bundle/routes` or a shared `const` string literal instead of repeating the `ui://` literal. The view talks to its host through `createAppClient()` from the browser-safe `agent-bundle/app` (see [`agent-bundle/app`](#agent-bundleapp--the-app-side-bridge-client)), typed by the generated `AppRegister` augmentation. | Use a custom server or prefix the file with `_` |
 | `src/scripts/<name>.ts` | Plain script compiled once to `scripts/<name>.mjs` in the plugin root, shared by every selected host — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). A `bin` entry that references the file does **not** claim it: the module ships as both the npm bin and the artifact script (see [Which config keys claim a conventional module](#which-config-keys-claim-a-conventional-module)); export `main` or make the module self-executing, because a `default`-only module would run as the bin but ship as an inert script (`AB4738`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
-| `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. A `bin` entry that references a rendered script is `AB4737` unless the module exports both the default component (for the script) and a named `main` (for the bin envelope); with both, the module serves both surfaces. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
+| `src/scripts/<name>.tsx` | Rendered script: the default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. A `bin` entry that references a rendered script is `AB4737` unless the module exports both the default component (for the script) and a named `main` (for the bin envelope); with both, the module serves both surfaces. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project), plus the same executable as `bin/<plugin-name>.mjs` in the plugin root whenever a selected host publishes the `cli` capability (all built-in hosts do). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
-| `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; the async default Server Component receives `AgentEventRouteProps<E>` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. `canonical.payload` is the family's cross-host reading of the envelope (#466) — the fields at least two hosts report (`toolName`, `toolInput`, `toolResponse`, `sessionId`, `transcriptPath`, `cwd`, `prompt`, `agentId`/`agentType`, `reentry`, …), each as `{ value, nativeKey }` naming the host key it came from and absent when the host did not send it; `E` narrows it to the route's family. The per-family field table is `agentEventPayloadFields` and the per-host key table `agentEventPayloadNativeKeys` (`routes/events.ts`), mirrored under `hooks.eventRoutes.<event>.payload` in each pinned capability table so the generated events reference documents the mapping per host. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
+| `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; `.ts` handlers return lightweight results; `.tsx` handlers render JSX; `.ts` handlers can return `ctx.render('./name.view.js', data)` to load a separate `.view.tsx` sibling. Rendering defaults to standalone. The default Server Component receives `AgentEventRouteProps<E>` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. `canonical.payload` is the family's cross-host reading of the envelope (#466) — the fields at least two hosts report (`toolName`, `toolInput`, `toolResponse`, `sessionId`, `transcriptPath`, `cwd`, `prompt`, `agentId`/`agentType`, `reentry`, …), each as `{ value, nativeKey }` naming the host key it came from and absent when the host did not send it; `E` narrows it to the route's family. The per-family field table is `agentEventPayloadFields` and the per-host key table `agentEventPayloadNativeKeys` (`routes/events.ts`), mirrored under `hooks.eventRoutes.<event>.payload` in each pinned capability table so the generated events reference documents the mapping per host. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
-| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal, host, session, workspace, plugin, lineage, state?, notices? }` — the request's observed identity (plugin root included) and lineage plus read-only views of the mounted state (`read`) and notice (`inbox`, `published`) handles; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
+| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal, host, session, workspace, plugin, lineage, state?, notices? }` — the request's observed identity (plugin root included) and lineage plus read-only views of the mounted state (`read`) and notice (`inbox`, `published`) handles; its value is mounted at `await (await agent()).provider("<camelCaseName>")` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
 | `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route — generated MCP tools, resources, and prompts, rendered routed CLI commands, projected MCP commands, and rendered scripts. Event routes are never wrapped. | Rename to `_layout.tsx` |
 | `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode |
 
@@ -267,7 +267,7 @@ an otherwise valid migration.
 
 Each direct child of `src/providers/` derives its key by camel-casing the file
 stem: for example, `src/providers/project-auth.ts` mounts at
-`(await agent()).providers.projectAuth`. Every module default-exports a factory
+`await (await agent()).provider("projectAuth")`. Every module default-exports a factory
 with the contract `(context: AgentProviderContext) => value | Promise<value>`:
 
 ```ts
@@ -300,42 +300,22 @@ than handing it the full handle. The types ship from `agent-bundle`
 `AgentProviderNoticesHandle`, `AgentProviderLineage`, …) without a runtime
 import; at run time the handles are the runtime's own.
 
-Every generated request scope — the shared Flight worker behind generated MCP
-and event routes, the react-server worker behind rendered routed CLI commands
-and rendered scripts, and the routed-CLI executable itself for plain `.ts`
-commands — executes providers once per request as the request's own provider
-resolver: `runAgentRequest` freezes the identity axes, opens the notice lease
-(so `notices.inbox()` is real), then runs the factories sequentially in
-deterministic key order, and only then runs the route. That ordering — state
-and notices mounted before providers, rather than a lazy handle that resolves
-later — is what keeps the generated loop and the harness's `executeProviders`
-one simple function: a provider awaits real handles, and a factory that reads
-`inbox()` eagerly cannot deadlock on a lease that has not opened yet. The
-returned values join the request's provider map. A thrown or rejected factory
-fails the request closed, exactly as a route that throws after admission does;
-expected degradation should return an honest unavailable-shaped value instead
-of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
-`script`), so a provider can branch on the entry surface deliberately.
-`processLifetime` is reserved for the framework-owned process identity and hit
-counter, so provider filenames must not derive that key. A custom host calling
-`runAgentRequest` directly may pass `providers` as the resolved record or as
-the same resolver function `(request: AgentProviderRequest) => values`.
+Generated request scopes and the `agent-bundle/test` harness load a provider only when
+`context.provider(key)` requests it. Each request caches the promise, so concurrent callers
+share one factory execution and the same result or failure. State and notice handles are
+already mounted when the factory starts. Expected degradation should return an honest
+unavailable-shaped value; thrown failures reject the requesting route.
+`invocation.kind` remains surface-specific (`tool`, `event`, `cli`, `script`).
+`processLifetime` is reserved for the framework-owned process identity and hit counter.
+A custom host can supply resolved `providers` or a `resolveProvider` function.
 
-The `agent-bundle/test` harness mounts the same providers, in the same order
-and with the same fail-closed semantics, for every manifest-backed helper
-(`renderRoute`, `renderRouteEvents`, `invokeCli`, and the in-memory MCP
-helpers), so a route test observes what the artifact would mount. A test that
+A test that
 wants to choose the values instead injects them through the same `context`
 seam as identity axes (`renderRoute(id, { context: { providers: { library:
 fixture } } })`): an explicit map is mounted verbatim and no conventional
 provider module executes. A module rendered directly (no compiled manifest)
-has no project to discover, so it observes only `processLifetime`. Once the
-generated `.agent-bundle/routes.d.ts` augmentation declares provider keys, an
-explicit `context.providers` map must carry every declared key (as must
-`providers` on a direct `runAgentRequest`), so a fixture that omits a value the
-route's types promise is a compile error rather than a runtime `undefined`;
-omitting `context.providers` altogether stays legal and mounts the real
-providers. The harness reproduces the per-executable process identity, not
+has no project to discover, so it observes only `processLifetime`. Explicit maps need only supply requested keys; requesting a missing key rejects with an error.
+Omitting `context.providers` uses the real lazy resolver. The harness reproduces the per-executable process identity, not
 per-executable module evaluation: provider modules are evaluated once per test
 worker, so module-level provider state is shared across the simulated
 executables of that worker and is only proven cold by the proof levels that
@@ -446,24 +426,9 @@ through inside `native` untouched and unread. Who the *conversation* is —
 its parent, its root, whether it is a subagent — is the
 [`lineage` axis](#conversation-lineage-requestlineage).
 
-Handlers authored with `defineOperation` receive the same handle as optional
-`context.request` in the second `execute` argument:
-
-```ts
-const status = defineOperation({
-  // ...
-  execute: async (input, context) => {
-    const request = context.request;
-    // request is the identical handle returned by await agent() in this invocation.
-    return inspect(input, request);
-  },
-});
-```
-
-The runtime supplies `context.request` inside `runAgentRequest`; direct
-operation calls outside a request scope leave it absent. Transport context is
-separate from validated business input, so fields named `host`, `session`, or
-similar inside `input` cannot override request identity.
+Handlers authored with `defineTool` receive parsed schema output and the request context as
+their two arguments. Use `await context.provider('key')` for a lazy, request-cached provider.
+Transport identity stays separate from validated business input.
 
 Route-unit tests inject identity through the harness context seam:
 
@@ -728,8 +693,6 @@ Per surface, the value the generated request scope mounts:
 | Generated MCP server (any transport) | `mcp` | `none` on both, `color: 'none'`, `sharesTarget: false` — stdout is the protocol wire and stderr the host's log. Never probed, whatever the descriptors are. | `derived` |
 | Event route (shared runtime or standalone hook process) | `hook` | `none` on both — stdout is the host's hook envelope. Never probed. | `derived` |
 | Workbench lifecycle replay | `workbench` | `none` on both — the document renders into a panel. | `derived` |
-| `createRscMcpServer` (the `defineRscApplication` MCP adapter) | `mcp` | `none` on both, as above. | `derived` |
-| `runRscCli` (the `defineRscApplication` CLI adapter) | `cli` when the caller passes `terminal` in its options | The adapter owns no probe — the generated routed-CLI shell does — so the caller's value is mounted `native`; omitted, the axis is `unavailable` (`not-provided`). | `native` / — |
 | Custom host calling `runAgentRequest` without `terminal` | — | `unavailable` (`not-provided`) | — |
 
 Plain `main`-exporting scripts and bins have no request scope, so the
@@ -814,6 +777,12 @@ import { z } from 'zod';
 export const config = {
   description: 'Inspect a bounded source tree without changing it.',
   positionals: ['root'],
+  inputJsonSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { maxFiles: { type: 'number' }, root: { type: 'string' } },
+    required: ['root'],
+  },
 } satisfies CliRouteConfig;
 export const inputSchema = z.object({
   maxFiles: z.number().int().min(1).max(256).optional(),
@@ -827,7 +796,7 @@ export default async function inspect({ input, signal }: CliRouteProps<typeof in
 }
 ```
 
-The compiler statically projects `inputSchema` onto argv (the bounded grammar
+The compiler statically projects `config.inputJsonSchema` onto argv (the bounded grammar
 and every policy rule are documented in
 [Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4842-ab4940ab4942)), generates nested
 help (`--help` at every level, `--version` at the root), and emits
@@ -844,17 +813,11 @@ already emit the canonical JSON document. Routed CLI projects need
 `@agent-bundle/runtime` as a dependency — the generated executable installs
 the request context through it.
 
-The schema need not be written inline: an `inputSchema` bound to a schema
-`export const`-ed by a relative module inside the project
-(`export const inputSchema = statusInputSchema`, through any number of alias
-hops, the `.js` specifier mapping onto its `.ts`/`.tsx` source) is resolved
-statically, parsed in the declaring module's scope under the same grammar,
-and normalized once into a `RouteContract` shared by every route — CLI
-command or MCP tool — that binds it; a reference the resolver cannot follow
-is `AB4838` and a cyclic one `AB4839` (CLI routes, or a tool route with a
-CLI projection), both documented in the same
-[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4842-ab4940ab4942)
-section.
+Runtime schemas may be imported or constructed by factories. Inspection reads literal
+`config.inputJsonSchema` metadata instead of interpreting schema code. It supports scalar
+properties, string enums, and scalar arrays. Without metadata a command accepts `--input`
+JSON; `input: 'json'` explicitly selects that mode. Runtime schemas remain authoritative
+for validation, defaults, and transforms. `AB4838` and `AB4839` are retired.
 
 When the module's `inputSchema` rejects the parsed argv, the shell reports
 each issue in CLI terms rather than the raw schema issue JSON (#465): one
@@ -877,7 +840,7 @@ line, `{"error":{"code":"CLI_INPUT_INVALID","issues":[{"expected":...,
 `error` object (plus the joined `message`) at `sequence: 0`. The exit code
 is 2 in every mode.
 
-A `.tsx` command route swaps the default function for an async default
+A `.tsx` command route swaps the default function for an default
 Server Component with the same `{ input, signal }` props and renders through
 the runtime dispatcher's public `stream()` against a sibling
 `bin/<plugin-name>-flight.mjs` react-server worker (one warm worker per
@@ -1027,7 +990,7 @@ or a `.cli.*` under `resources/`, `prompts/`, or `apps/` is `AB4843`.
 
 The module exports a static `config` that satisfies `CliProjectionConfig`
 from `agent-bundle/routes` (the same extract grammar as a route `config`)
-and, optionally, a synchronous `mapInput`:
+and, optionally, a sync or async `mapInput`:
 
 - `command` — path segments; default `[tool]`; each must pass
   `safeIdentitySegment`.
@@ -1093,10 +1056,9 @@ the framework lifecycle:
 
 ```ts
 // src/mcp/curator.ts — the whole stdio entry a consumer writes
-import { createRscMcpServer } from '@agent-bundle/runtime/plugin';
-import { application } from '../application.js';
+import { McpServer } from '@modelcontextprotocol/server';
 
-export default () => createRscMcpServer(application, 'curator');
+export default () => new McpServer({ name: 'curator', version: '1.0.0' });
 ```
 
 The generated shell provides, in order: console-to-stderr redirection before
@@ -1121,10 +1083,7 @@ inlined from this package rather than resolved through the plugin's own
 
 Every served tool call is one ordinary `tools/call`: optional
 `notifications/progress` while the caller's progress token is live, then one
-final `CallToolResult`. The operation-based `createRscMcpServer` shell above
-advertises no `tasks` capability and processes a task-augmented request as an
-ordinary one, as the `2025-11-25` Tasks utility requires of a receiver without
-the capability. Generated route servers (`src/mcp/<server>/tools/*.tsx`) serve
+final `CallToolResult`. Generated route servers (`src/mcp/<server>/tools/*.tsx`) serve
 the utility for tool routes that declare `config.execution.taskSupport`: a
 `tools/call` carrying `params.task` answers with a `CreateTaskResult`, the
 Flight render continues behind the task, `tasks/get` reports status and the

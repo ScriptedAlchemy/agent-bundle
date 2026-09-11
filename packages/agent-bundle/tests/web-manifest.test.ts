@@ -101,7 +101,7 @@ const document = (overrides: Readonly<Record<string, unknown>> = {}): Readonly<R
   application: { id: 'application:fixture', name: 'fixture', version: '1.0.0' },
   executables: { mcpServers: [catalogRow()] },
   files: fileRows(validLaunch().entry, validLaunch().worker!, 'payload/config.json'),
-  manifestVersion: 5,
+  manifestVersion: 6,
   projections: [{ host: 'claude' }],
   web: validWeb(),
   ...overrides,
@@ -131,9 +131,9 @@ it('reads the optional section and returns undefined when absent', () => withDoc
 }));
 
 it('refuses every manifestVersion but the one it was built for, before reading any section', () => withDocument(async (path, write) => {
-  for (const manifestVersion of [undefined, 1, 2, 3, 4, '5']) {
+  for (const manifestVersion of [undefined, 1, 2, 3, 4, 5, '6']) {
     await write(document({ manifestVersion }));
-    await expect(readWebManifestDocument(path)).rejects.toThrow(/manifestVersion must be 5\./u);
+    await expect(readWebManifestDocument(path)).rejects.toThrow(/manifestVersion must be 6\./u);
   }
 }));
 

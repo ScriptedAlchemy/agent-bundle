@@ -30,7 +30,7 @@ export interface ApplicationLeaf {
   readonly inputSchema?: RouteInputSchema;
   readonly key: string;
   readonly label: string;
-  readonly preflight?: string;
+  readonly handler?: string;
   readonly ref: ApplicationNodeRef;
   readonly resultSchemaState?: RouteManifestResultSchemaState;
   readonly routeId?: string;
@@ -177,7 +177,7 @@ const leafForRoute = (
     ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
     key: applicationNodeKey(ref),
     label: routeLabel(ref),
-    ...(route.execution?.preflight === undefined ? {} : { preflight: route.execution.preflight }),
+    ...(route.execution?.handler === undefined ? {} : { handler: route.execution.handler }),
     ref,
     ...(route.resultSchemaState === undefined ? {} : { resultSchemaState: route.resultSchemaState }),
     routeId: route.id,

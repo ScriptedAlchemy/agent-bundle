@@ -75,6 +75,7 @@ const publicApiEntryPoints = [
   'meta.d.ts',
   'mcp-entry.d.ts',
   'routes/public.d.ts',
+  'routes/authoring.d.ts',
   'rstest/index.d.ts',
   'test/index.d.ts',
   'test/browser.d.ts',

@@ -31,7 +31,7 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
       'src/cli/greet.ts': [
         "import { z } from 'zod';",
         '',
-        "export const config = { description: 'Greets one name.', positionals: ['name'] };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"loud\":{\"type\":\"boolean\"},\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"}, description: 'Greets one name.', positionals: ['name'] };",
         "export const inputSchema = z.object({ loud: z.boolean().optional(), name: z.string().min(1) }).strict();",
         'export const resultSchema = z.object({ message: z.string() }).strict();',
         '',
@@ -56,7 +56,7 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
         '',
-        "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
+        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"}},\"required\":[\"service\"],\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
         "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
         'export const resultSchema = z.object({ service: z.string() }).strict();',
         '',

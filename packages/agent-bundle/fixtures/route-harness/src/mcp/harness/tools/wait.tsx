@@ -4,6 +4,18 @@ import { z } from 'zod';
 const maxHoldMs = 5000;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "holdMs": {
+        "type": "number"
+      },
+      "tickMs": {
+        "type": "number"
+      }
+    },
+    "type": "object"
+  },
   description: 'Waits until aborted or holdMs elapses, for cancellation contract proof.',
   // A long wait a task-aware client may run behind a task (#369) and poll.
   execution: { taskSupport: 'optional' },

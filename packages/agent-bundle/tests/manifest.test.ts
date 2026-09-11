@@ -113,8 +113,7 @@ const validManifest = (): ArtifactManifest => ({
       event: 'tool/before',
       execution: {
         fallback: 'standalone',
-        preflight: 'src/events/tool/before.preflight.ts',
-        providers: ['daemonProbe'],
+        handler: 'src/events/tool/before.handler.ts',
         runtime: 'standalone',
       },
       id: 'event:tool/before',
@@ -169,8 +168,7 @@ it('round-trips event route execution metadata', () => {
 
   expect(manifest.routes.events[0]?.execution).toEqual({
     fallback: 'standalone',
-    preflight: 'src/events/tool/before.preflight.ts',
-    providers: ['daemonProbe'],
+    handler: 'src/events/tool/before.handler.ts',
     runtime: 'standalone',
   });
 });

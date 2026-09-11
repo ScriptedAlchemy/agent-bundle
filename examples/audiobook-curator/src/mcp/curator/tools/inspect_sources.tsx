@@ -10,6 +10,21 @@ import { discoveryOperations } from '../../../operations/discovery.js';
 const operation = discoveryOperations.inspect;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "maxFiles": {
+        "type": "number"
+      },
+      "root": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "root"
+    ],
+    "type": "object"
+  },
   annotations: { readOnlyHint: true },
   description: 'Inspect a bounded directory tree and report supported audiobook media without changing it.',
 };

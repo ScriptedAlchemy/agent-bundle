@@ -483,7 +483,7 @@ export const openInMemoryMcpServer = async <
             explicit: context.providers,
             invocation: request.invocation,
             manifest,
-            processHit,
+            processHit: context.process ?? processHit,
             ...(descriptor === undefined ? {} : { provenance: routeProvenance(descriptor, manifest) }),
           });
           return streamOf(await dependencies.runAgentRequest({
@@ -497,7 +497,7 @@ export const openInMemoryMcpServer = async <
             terminal: transport.terminal,
             workspace: transport.workspace,
             ...context,
-            providers,
+            ...providers,
             invocation: {
               kind: 'tool' as const,
               operationId: route.id,

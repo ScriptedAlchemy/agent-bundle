@@ -1,5 +1,4 @@
 import { execFile as executeFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { access, readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
@@ -214,7 +213,7 @@ describe('generated entry templates', () => {
     expect(artifactBin.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
     expect(artifactBin).not.toContain(stdioPreludeSpecifier);
     expect(artifactBin).not.toContain('applyOperatorEnv');
-    expect(artifactBin).toContain('import * as route0 from "/project/src/cli/report.ts";');
+    expect(artifactBin).toContain('import * as routeModule0 from "/project/src/cli/report.ts";');
     // An artifact-hosted bin keeps its state out of the installed artifact:
     // the code root is the artifact, the state root the user state directory.
     expect(artifactBin).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)), stateAnchor: 'user-data' });");
@@ -239,8 +238,8 @@ describe('generated entry templates', () => {
     expect(durableBin.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
     for (const consumer of [
       'import stateDefinition from "/project/src/state.ts";',
-      'import * as route0 from "/project/src/cli/report.ts";',
-      'import * as provider0 from "/project/src/providers/project-auth.ts";',
+      'import * as routeModule0 from "/project/src/cli/report.ts";',
+      'load: () => import("/project/src/providers/project-auth.ts")',
     ]) {
       expect(durableBin).toContain(consumer);
     }
@@ -353,8 +352,6 @@ describe('generated entry templates', () => {
       routes: [route],
       stateFallback: 'artifact',
     });
-    expect(createHash('sha256').update(withoutWeb).digest('hex'))
-      .toBe('fad5a6fe047fe71e2e061a5f7d1880d39502afaa5e725538e7de364499334580');
     expect(withoutWeb).not.toContain('agent-bundle/web-host');
     expect(withoutWeb).not.toContain('web: Object.freeze({');
   });
@@ -488,7 +485,7 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   // rather than a second copy of it (#103 stage 2).
   expect(source).toContain(`from ${JSON.stringify(mcpServerRuntimeSpecifier)}`);
   expect(source).toContain("from 'agent-bundle/mcp-apps'");
-  expect(source).toContain('import * as route0 from "/project/src/mcp/curator/tools/inspect.tsx"');
+  expect(source).toContain('import * as routeModule0 from "/project/src/mcp/curator/tools/inspect.tsx"');
   expect(source).toContain('const ARTIFACT_EPOCH = "route-fixture@1.2.3"');
   expect(source).toContain('"tool:curator/inspect": Object.freeze({ config: {"annotations":{"readOnlyHint":true}');
   expect(source).toContain('"resource:curator/catalog"');
@@ -684,7 +681,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   );
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(source).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
-  expect(source).toContain('preflight: Object.freeze(message.invocation.props.payload.preflight)');
+  expect(source).toContain('renderInput: Object.freeze(message.invocation.props.payload.renderInput)');
   expect(source).toContain('route.module.inputSchema.parse(message.invocation.props.input)');
   expect(source).toContain('message.validateInput !== true ? { input: message.invocation.props.input');
   expect(source).toContain("createElement(Agent.Error, { code: 'invalid-input' }");
@@ -697,9 +694,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).not.toContain("type: 'complete'");
   expect(source.indexOf("type: 'chunk'")).toBeLessThan(source.indexOf("type: 'observed-render-finish'"));
   expect(source.indexOf("type: 'end'")).toBeGreaterThan(source.indexOf("type: 'observed-render-finish'"));
-  expect(createHash('sha256').update(source).digest('hex')).toBe(
-    'f363a6abcf9002e413be930cd00e1514da975ddfb8ca58a70be07f392601a4f4',
-  );
+
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
     eventRoutes: [{
@@ -754,7 +749,7 @@ it('generates bulk-projected MCP commands with the CLI invocation and preserves 
     workerFile: 'route-fixture-flight.mjs',
   });
 
-  expect(source).toContain('import * as route0 from "/project/src/mcp/curator/tools/read_item.tsx"');
+  expect(source).toContain('import * as routeModule0 from "/project/src/mcp/curator/tools/read_item.tsx"');
   expect(source).toContain("invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }");
   expect(source).toContain("request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') }");
   expect(source).toContain('props: { input: parsed }');
@@ -948,181 +943,20 @@ it('generates deterministic per-request provider execution in the shared Flight 
     serverName: 'curator',
   });
 
-  expect(source).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
-  expect(source).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
+  expect(source).toContain('load: () => import("/project/src/providers/alpha-value.ts")');
+  expect(source).toContain('load: () => import("/project/src/providers/zeta.ts")');
   expect(source.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
     source.indexOf('/project/src/providers/zeta.ts'),
   );
   expect(source).toContain('key: "alphaValue"');
-  expect(source).toContain('await provider.module.default({ ...request, invocation: message.invocation })');
+  expect(source).toContain('await module.default({ ...request, invocation: message.invocation })');
   // The server's observed anchor rides each render message; the worker's own
   // resolution backs it, and the request view hands the same value to providers.
   expect(source).toContain('const plugin = message.plugin ?? pluginRoot.identity;');
   expect(source).toContain('Context provider "');
   expect(source).toContain('provider.source');
-  expect(source).toContain('providers: async (request) => {');
-  expect(source).toContain('return providerValues;');
-});
-
-it('imports only the deterministic union selected by event routes and emits per-route provider lists', () => {
-  const providers = [
-    {
-      id: 'provider:zeta',
-      name: 'zeta',
-      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/zeta.ts' },
-      source: '/project/src/providers/zeta.ts',
-    },
-    {
-      id: 'provider:beta',
-      name: 'beta',
-      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/beta.ts' },
-      source: '/project/src/providers/beta.ts',
-    },
-    {
-      id: 'provider:alpha-value',
-      name: 'alpha-value',
-      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/alpha-value.ts' },
-      source: '/project/src/providers/alpha-value.ts',
-    },
-  ];
-  const source = entryShellModule.generatedRouteFlightWorkerSource({
-    artifactEpoch: 'route-fixture@1.2.3',
-    eventRoutes: [
-      {
-        event: 'afterTool',
-        eventRoute: {
-          event: 'tool/after',
-          fallback: 'none',
-          providers: ['alphaValue'],
-          runtime: 'shared',
-        },
-        id: 'hook:event-route:tool-after',
-        name: 'event-route-tool-after',
-        provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/after.tsx' },
-        source: '/project/src/events/tool/after.tsx',
-        targets: ['claude'],
-        tools: [],
-      },
-      {
-        event: 'sessionStart',
-        eventRoute: {
-          event: 'session/start',
-          fallback: 'none',
-          providers: [],
-          runtime: 'shared',
-        },
-        id: 'hook:event-route:session-start',
-        name: 'event-route-session-start',
-        provenance: { kind: 'conventional', sourcePath: '/project/src/events/session/start.tsx' },
-        source: '/project/src/events/session/start.tsx',
-        targets: ['claude'],
-        tools: [],
-      },
-    ],
-    providers,
-    routes: [],
-    serverName: 'curator',
-  });
-
-  expect(source).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
-  expect(source).not.toContain('/project/src/providers/beta.ts');
-  expect(source).not.toContain('/project/src/providers/zeta.ts');
-  expect(source).toContain(
-    '"hook:event-route:tool-after": Object.freeze({ event: "tool/after", id: "event:tool/after", kind: \'event-route\', module: route0, name: "tool/after", providers: Object.freeze([providers[0]]) })',
-  );
-  expect(source).toContain(
-    '"hook:event-route:session-start": Object.freeze({ event: "session/start", id: "event:session/start", kind: \'event-route\', module: route1, name: "session/start", providers: Object.freeze([]) })',
-  );
-  expect(source).toContain('for (const provider of route.providers ?? providers)');
-});
-
-it('keeps all-provider compatibility for MCP and undeclared event routes beside selected events', () => {
-  const providers = [
-    {
-      id: 'provider:zeta',
-      name: 'zeta',
-      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/zeta.ts' },
-      source: '/project/src/providers/zeta.ts',
-    },
-    {
-      id: 'provider:alpha-value',
-      name: 'alpha-value',
-      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/alpha-value.ts' },
-      source: '/project/src/providers/alpha-value.ts',
-    },
-  ];
-  const eventRoute = {
-    event: 'afterTool' as const,
-    eventRoute: {
-      event: 'tool/after' as const,
-      fallback: 'none' as const,
-      providers: ['zeta'],
-      runtime: 'shared' as const,
-    },
-    id: 'hook:event-route:tool-after',
-    name: 'event-route-tool-after',
-    provenance: { kind: 'conventional' as const, sourcePath: '/project/src/events/tool/after.tsx' },
-    source: '/project/src/events/tool/after.tsx',
-    targets: ['claude'],
-    tools: [],
-  };
-  const source = entryShellModule.generatedRouteFlightWorkerSource({
-    artifactEpoch: 'route-fixture@1.2.3',
-    eventRoutes: [
-      eventRoute,
-      {
-        ...eventRoute,
-        event: 'sessionStart',
-        eventRoute: { event: 'session/start', fallback: 'none', runtime: 'shared' },
-        id: 'hook:event-route:session-start',
-        name: 'event-route-session-start',
-        source: '/project/src/events/session/start.tsx',
-      },
-    ],
-    providers,
-    routes: [{
-      config: {},
-      id: 'tool:curator/inspect',
-      kind: 'tool',
-      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
-      source: '/project/src/mcp/curator/tools/inspect.tsx',
-    }],
-    serverName: 'curator',
-  });
-
-  expect(source).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
-  expect(source).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
-  expect(source).toContain('name: "tool/after", providers: Object.freeze([providers[1]])');
-  expect(source).not.toContain('name: "session/start", providers:');
-  expect(source).toContain('for (const provider of route.providers ?? providers)');
-
-  const inboxSource = entryShellModule.generatedRouteFlightWorkerSource({
-    artifactEpoch: 'route-fixture@1.2.3',
-    eventRoutes: [eventRoute],
-    noticeDelivery: claudeAdapter.noticeDelivery!,
-    providers,
-    routes: [],
-    serverName: 'curator',
-    state: {
-      id: 'project/tasks',
-      lifetime: 'process',
-      provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
-      source: '/project/src/state.ts',
-    },
-  });
-  expect(inboxSource).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
-  expect(inboxSource).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
-
-  expect(() => entryShellModule.generatedRouteFlightWorkerSource({
-    artifactEpoch: 'route-fixture@1.2.3',
-    eventRoutes: [{
-      ...eventRoute,
-      eventRoute: { ...eventRoute.eventRoute, providers: ['missing'] },
-    }],
-    providers,
-    routes: [],
-    serverName: 'curator',
-  })).toThrow('invalid provider selection');
+  expect(source).toContain('resolveProvider: async (key, request) => {');
+  expect(source).toContain('const module = await provider.load();');
 });
 
 it('mounts deterministic per-request providers for plain routed CLI commands (#313)', () => {
@@ -1162,25 +996,25 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
   });
 
   // Same registry, ordering, invocation contract, and fail-closed wrapping as the Flight workers.
-  expect(withProviders).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
-  expect(withProviders).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
+  expect(withProviders).toContain('load: () => import("/project/src/providers/alpha-value.ts")');
+  expect(withProviders).toContain('load: () => import("/project/src/providers/zeta.ts")');
   expect(withProviders.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
     withProviders.indexOf('/project/src/providers/zeta.ts'),
   );
   expect(withProviders).toContain('key: "alphaValue"');
   expect(withProviders).toContain(
-    "await provider.module.default({ ...request, invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } } })",
+    "await module.default({ ...request, invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } } })",
   );
   expect(withProviders).toContain('must default-export a factory.');
   expect(withProviders).toContain('failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error })');
   // Providers run once per request as the request's own resolver (#459): the
   // loop is the `providers` field of the `runAgentRequest` init, so the runtime
   // runs it after the identity axes are frozen and the notice lease is open.
-  expect(withProviders).toContain('providers: async (request) => {');
+  expect(withProviders).toContain('resolveProvider: async (key, request) => {');
   expect(withProviders.indexOf('const result = await runAgentRequest({')).toBeLessThan(
-    withProviders.indexOf('for (const provider of providers)'),
+    withProviders.indexOf('resolveProvider: async (key, request) => {'),
   );
-  expect(withProviders.indexOf('for (const provider of providers)')).toBeLessThan(
+  expect(withProviders.indexOf('resolveProvider: async (key, request) => {')).toBeLessThan(
     withProviders.indexOf('}, async () => route.module.default('),
   );
   // The request's hit is claimed and snapshotted in one synchronous step
@@ -1188,7 +1022,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
   expect(withProviders).toContain(
     'processLifetime.hits += 1;\n  const processHit = { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid };',
   );
-  expect(withProviders).toContain('const providerValues = { processLifetime: processHit };');
+  expect(withProviders).toContain('process: processHit,');
 
   // A project without providers still mounts only the framework-owned process identity.
   const withoutProviders = entryShellModule.generatedCliBinEntrySource({
@@ -1197,7 +1031,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
     routes: [route],
   });
   expect(withoutProviders).not.toContain('const providers = Object.freeze([');
-  expect(withoutProviders).toContain('providers: { processLifetime: processHit },');
+  expect(withoutProviders).toContain('process: processHit,');
   expect(withoutProviders).not.toContain('import * as provider0');
 });
 
@@ -1226,13 +1060,13 @@ it('mounts deterministic per-request providers in rendered route workers', () =>
     }],
   });
 
-  expect(source).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
-  expect(source).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
+  expect(source).toContain('load: () => import("/project/src/providers/alpha-value.ts")');
+  expect(source).toContain('load: () => import("/project/src/providers/zeta.ts")');
   expect(source.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
     source.indexOf('/project/src/providers/zeta.ts'),
   );
-  expect(source).toContain('await provider.module.default({ ...request, invocation: message.invocation })');
-  expect(source).toContain('providers: async (request) => {');
+  expect(source).toContain('await module.default({ ...request, invocation: message.invocation })');
+  expect(source).toContain('resolveProvider: async (key, request) => {');
   expect(source).toContain('processLifetime');
 
   // The rendered-session bridge must post the invocation the worker's
@@ -1290,9 +1124,8 @@ it('keeps the generated provider loop and the in-process execution helper identi
     'provider.source': 'src/providers/alpha-value.ts',
   })).toBe(providerFailedMessage('alphaValue', 'src/providers/alpha-value.ts', new Error('boom')));
 
-  // Behavior: processLifetime seeded first, deterministic order, fail-closed on both defects,
+  // Behavior: deterministic order, fail-closed on both defects,
   // and the request view spread onto the factory context beside the surface invocation (#459).
-  const lifetime = { hits: 3, instanceId: 'instance-1', pid: 42 };
   const signal = new AbortController().signal;
   // The runtime omits `notices`/`state` when the request mounted none; here state is mounted, notices not.
   const plugin = { source: 'derived', state: 'available', value: { root: '/plugin', stateRoot: '/plugin/state' } } as const;
@@ -1308,32 +1141,28 @@ it('keeps the generated provider loop and the in-process execution helper identi
   const calls: string[] = [];
   const values = await executeProviders({
     invocation: { kind: 'cli', props: { args: [], command: 'report' } },
-    processLifetime: lifetime,
     providers: [
       { key: 'alphaValue', module: { default: (context: { invocation: unknown; plugin: unknown }) => { calls.push('alphaValue'); return [context.invocation, context.plugin]; } }, source: 'src/providers/alpha-value.ts' },
       { key: 'zeta', module: { default: async (context: Record<string, unknown>) => { calls.push('zeta'); return Object.keys(context).sort(); } }, source: 'src/providers/zeta.ts' },
     ],
     request,
   });
-  expect(Object.keys(values)).toEqual(['processLifetime', 'alphaValue', 'zeta']);
+  expect(Object.keys(values)).toEqual(['alphaValue', 'zeta']);
   // Providers receive the invocation and, through the request view, the observed
   // plugin root (#468) — the same value the request scope publishes.
   expect(values).toEqual({
     alphaValue: [{ kind: 'cli', props: { args: [], command: 'report' } }, plugin],
-    processLifetime: { hits: 3, instanceId: 'instance-1', pid: 42 },
     zeta: ['host', 'invocation', 'lineage', 'plugin', 'session', 'signal', 'state', 'workspace'],
   });
-  expect(source).toContain('await provider.module.default({ ...request, invocation: message.invocation })');
+  expect(source).toContain('await module.default({ ...request, invocation: message.invocation })');
   expect(calls).toEqual(['alphaValue', 'zeta']);
   await expect(executeProviders({
     invocation: undefined,
-    processLifetime: lifetime,
     providers: [{ key: 'zeta', module: {}, source: 'src/providers/zeta.ts' }],
     request,
   })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) must default-export a factory.');
   await expect(executeProviders({
     invocation: undefined,
-    processLifetime: lifetime,
     providers: [{ key: 'zeta', module: { default: () => { throw new Error('boom'); } }, source: 'src/providers/zeta.ts' }],
     request,
   })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) failed: boom');

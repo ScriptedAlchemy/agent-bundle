@@ -16,7 +16,7 @@ import {
 } from '@agent-bundle/runtime';
 
 import { renderedDocumentExitCode } from '../../cli-entry.ts';
-import type { EventPreflightResult } from '../../events/preflight.ts';
+import type { EventHandlerResult } from '../../events/handler.ts';
 import type { EventTraceEvent, EventTraceObserver, EventTracer } from '../../events/trace.ts';
 import type { JsonObject, JsonValue } from '../../core/strict-json.ts';
 import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../../core/types.ts';
@@ -39,8 +39,9 @@ interface CompiledCliInvocationModule {
   routeInvocationExitCode(routeId: string, document: AgentDocument): number;
 }
 
-interface CompiledEventPreflight {
-  readonly gate: EventPreflightResult;
+interface CompiledEventHandler {
+  readonly gate?: EventHandlerResult;
+  readonly providerObservations?: readonly Omit<WorkerMessage, 'id'>[];
   readonly native: JsonObject;
   readonly projected?: JsonObject;
   readonly props: Readonly<{ readonly canonical: JsonObject }>;
@@ -53,7 +54,7 @@ interface CompiledEventWrapperModule {
     native: JsonObject,
     signal: AbortSignal,
     observer: EventTraceObserver,
-  ): Promise<CompiledEventPreflight>;
+  ): Promise<CompiledEventHandler>;
 }
 
 interface WorkerMessage {
@@ -86,6 +87,33 @@ type ProductionRequest = RouteInvocationChildRequest & Readonly<{
   readonly production: NonNullable<RouteInvocationChildRequest['production']>;
 }>;
 
+const recordProviderObservation = (
+  request: ProductionRequest,
+  message: Omit<WorkerMessage, 'id'>,
+  providers: RouteInvocationProvider[],
+  timings: RouteInvocationTiming[],
+): void => {
+  if (message.key === undefined || message.status === undefined) return;
+  const provider = request.manifest.providers?.find((candidate) =>
+    candidate.key === message.key || candidate.relativePath === message.source);
+  if (provider !== undefined) {
+    providers.push(Object.freeze({
+      ...(message.durationMs === undefined ? {} : { durationMs: message.durationMs }),
+      id: provider.id,
+      ...(message.message === undefined ? {} : { message: message.message }),
+      name: provider.name,
+      status: message.status,
+    }));
+    if (message.durationMs !== undefined) {
+      timings.push(Object.freeze({
+        durationMs: message.durationMs,
+        phase: `provider:${provider.name}`,
+        startedAt: new Date(Date.now() - message.durationMs).toISOString(),
+      }));
+    }
+  }
+};
+
 const preparationFailure = (error: unknown): ProductionRouteInvocationError =>
   error instanceof ProductionRouteInvocationError
     ? error
@@ -116,7 +144,7 @@ interface PreparedInput {
   /** The generated bin that prepared a CLI-surface input; it also decides the run's exit code. */
   readonly cli?: CompiledCliInvocationModule;
   readonly input: JsonValue;
-  readonly preflight?: CompiledEventPreflight;
+  readonly handler?: CompiledEventHandler;
 }
 
 const prepareInput = async (
@@ -145,7 +173,7 @@ const prepareInput = async (
       }
       return {
         cli: module,
-        input: module.prepareRouteInvocation(request.routeId, request.surface.args) as JsonValue,
+        input: await module.prepareRouteInvocation(request.routeId, request.surface.args) as JsonValue,
       };
     }
     case 'event': {
@@ -159,16 +187,16 @@ const prepareInput = async (
         );
       }
       const native = (request.input as { readonly native?: JsonObject }).native ?? {};
-      const preflight = await wrapper.prepareRouteInvocation(native, signal, observeTrace);
+      const handler = await wrapper.prepareRouteInvocation(native, signal, observeTrace);
       return {
         input: {
-          canonical: preflight.props.canonical,
-          native: preflight.native,
-          ...(preflight.gate !== 'execute' && preflight.gate.outcome === 'execute'
-            ? { preflight: preflight.gate.data }
+          canonical: handler.props.canonical,
+          native: handler.native,
+          ...(handler.gate?.outcome === 'render'
+            ? { renderInput: handler.gate.data }
             : {}),
         },
-        preflight,
+        handler,
       };
     }
     default: {
@@ -298,25 +326,8 @@ const streamFromWorker = (
       trace?.renderStart();
       return;
     }
-    if (message.type === 'observed-provider' && message.key !== undefined && message.status !== undefined) {
-      const provider = request.manifest.providers?.find((candidate) =>
-        candidate.key === message.key || candidate.relativePath === message.source);
-      if (provider !== undefined) {
-        providers.push(Object.freeze({
-          ...(message.durationMs === undefined ? {} : { durationMs: message.durationMs }),
-          id: provider.id,
-          ...(message.message === undefined ? {} : { message: message.message }),
-          name: provider.name,
-          status: message.status,
-        }));
-        if (message.durationMs !== undefined) {
-          timings.push(Object.freeze({
-            durationMs: message.durationMs,
-            phase: `provider:${provider.name}`,
-            startedAt: new Date(Date.now() - message.durationMs).toISOString(),
-          }));
-        }
-      }
+    if (message.type === 'observed-provider') {
+      recordProviderObservation(request, message, providers, timings);
       return;
     }
     if (
@@ -407,9 +418,9 @@ const routeProps = (request: ProductionRequest, input: JsonValue): Readonly<Reco
     ? {
         canonical: (input as { readonly canonical?: unknown }).canonical,
         native: (input as { readonly native?: unknown }).native,
-        ...((input as { readonly preflight?: unknown }).preflight === undefined
+        ...((input as { readonly renderInput?: unknown }).renderInput === undefined
           ? {}
-          : { preflight: (input as { readonly preflight: unknown }).preflight }),
+          : { renderInput: (input as { readonly renderInput: unknown }).renderInput }),
       }
     : { input };
 };
@@ -502,21 +513,26 @@ export const renderProductionRoute = async (
   } catch (error) {
     throw preparationFailure(error);
   }
+  const handlerProviders: RouteInvocationProvider[] = [];
+  const handlerTimings: RouteInvocationTiming[] = [];
+  for (const observation of prepared.handler?.providerObservations ?? []) {
+    recordProviderObservation(productionRequest, observation, handlerProviders, handlerTimings);
+  }
   if (
-    prepared.preflight !== undefined
-    && prepared.preflight.gate !== 'execute'
-    && prepared.preflight.gate.outcome !== 'execute'
+    prepared.handler?.gate !== undefined
+    && prepared.handler.gate.outcome !== 'render'
   ) {
-    const value = prepared.preflight.gate as JsonValue;
+    const value = prepared.handler.gate as JsonValue;
     return Object.freeze({
       document: completeDocument(value),
+      observed: { providers: handlerProviders, timings: handlerTimings },
       input: prepared.input,
       result: value,
       trace: Object.freeze(traceEvents),
     });
   }
-  if (prepared.preflight !== undefined) {
-    prepared.preflight.trace?.executeStart(prepared.preflight.runtime);
+  if (prepared.handler !== undefined) {
+    prepared.handler.trace?.executeStart(prepared.handler.runtime);
   }
   try {
     const rendered = await renderCompiled(
@@ -524,7 +540,7 @@ export const renderProductionRoute = async (
       prepared.input,
       controller.signal,
       env,
-      prepared.preflight?.trace,
+      prepared.handler?.trace,
       publishRender,
     );
     const result = rendered.document.value;
@@ -545,15 +561,15 @@ export const renderProductionRoute = async (
         ? { mcp: documentToCallToolResult(rendered.document, { structuredContent: result }) as JsonObject }
         : {}),
       observed: {
-        providers: rendered.observed.providers,
-        timings: rendered.observed.timings,
+        providers: [...handlerProviders, ...rendered.observed.providers],
+        timings: [...handlerTimings, ...rendered.observed.timings],
       },
       renderDurationMs: rendered.durationMs,
       ...(result === undefined ? {} : { result }),
       trace: Object.freeze(traceEvents),
     });
   } catch (error) {
-    prepared.preflight?.trace?.failure('render', error);
+    prepared.handler?.trace?.failure('render', error);
     throw error;
   }
 };

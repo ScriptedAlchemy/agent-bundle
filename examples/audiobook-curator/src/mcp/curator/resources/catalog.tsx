@@ -7,6 +7,18 @@ import { Callout, DataList } from '../../../components/primitives.tsx';
 import type { LibraryContext } from '../../../providers/library.ts';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "uri": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "uri"
+    ],
+    "type": "object"
+  },
   description: 'Read the audiobook curator workflow catalog.',
   mimeType: 'application/json',
   uri: 'audiobook-curator://catalog',
@@ -35,8 +47,9 @@ const isLibraryContext = (value: unknown): value is LibraryContext => {
 
 export default async function Catalog({ input }: ToolRouteProps<typeof inputSchema>) {
   const request = await agent();
-  const library = isLibraryContext(request.providers.library)
-    ? request.providers.library
+  const provided = await request.provider('library');
+  const library = isLibraryContext(provided)
+    ? provided
     : undefined;
   const stages = library?.stages ?? workflowStages;
   const tooling = library?.tooling ?? {

@@ -34,7 +34,7 @@ import { isRenderedCliRoute } from '../../routes/cli-commands.ts';
 import {
   eventTraceEventKinds,
   type EventTraceEvent,
-  type EventTracePreflightOutcome,
+  type EventTraceHandlerOutcome,
 } from '../../events/trace.ts';
 import {
   canonicalAgentEvents,
@@ -453,10 +453,10 @@ const resolvedSurface = (
       return surface;
     case 'event':
       if (route.kind !== 'event-route') return malformed();
-      if (route.execution?.preflight !== undefined && surface.host === undefined) {
+      if (route.execution?.handler !== undefined && surface.host === undefined) {
         throw new RouteInvocationRequestError(
           ROUTE_INVOCATION_EVENT_HOST_REQUIRED_CODE,
-          `Event route ${JSON.stringify(route.id)} has compiled preflight; select an event host surface with a concrete host.`,
+          `Event route ${JSON.stringify(route.id)} has compiled handler; select an event host surface with a concrete host.`,
           400,
         );
       }
@@ -679,7 +679,7 @@ const runPlainScript = async (
   });
 };
 
-const eventTracePhases = new Set(['preflight', 'execute', 'providers', 'render']);
+const eventTracePhases = new Set(['handler', 'execute', 'providers', 'render']);
 const canonicalEvents = new Set<string>(canonicalAgentEvents);
 const finiteNonnegative = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -704,13 +704,13 @@ const isEventTraceEvent = (value: unknown): value is EventTraceEvent => {
   ) return false;
   const durationValid = value.durationMs === undefined || finiteNonnegative(value.durationMs);
   switch (value.kind) {
-    case 'preflight.start':
-      return value.phase === 'preflight'
+    case 'handler.start':
+      return value.phase === 'handler'
         && hasOnlyOwnKeys(value, ['at', 'execution', 'kind', 'phase', 'sequence']);
-    case 'preflight.outcome':
-      return value.phase === 'preflight'
+    case 'handler.outcome':
+      return value.phase === 'handler'
         && durationValid
-        && (value.outcome === 'continue' || value.outcome === 'deny' || value.outcome === 'execute')
+        && (value.outcome === 'continue' || value.outcome === 'deny' || value.outcome === 'render')
         && hasOnlyOwnKeys(value, ['at', 'durationMs', 'execution', 'kind', 'outcome', 'phase', 'sequence']);
     case 'execute.start':
       return value.phase === 'execute'
@@ -973,11 +973,11 @@ const kernelStatus = (event: EventTraceEvent): TraceStatus => {
   switch (event.kind) {
     case 'failure':
       return 'error';
-    case 'preflight.outcome':
+    case 'handler.outcome':
     case 'providers.finish':
     case 'render.finish':
       return 'ok';
-    case 'preflight.start':
+    case 'handler.start':
     case 'execute.start':
     case 'providers.start':
     case 'render.start':
@@ -992,9 +992,9 @@ const kernelStatus = (event: EventTraceEvent): TraceStatus => {
 const kernelSummary = (event: EventTraceEvent): string => {
   const label = `event ${event.execution.event} (${event.execution.host})`;
   switch (event.kind) {
-    case 'preflight.start':
-      return `${label} · preflight started`;
-    case 'preflight.outcome':
+    case 'handler.start':
+      return `${label} · handler started`;
+    case 'handler.outcome':
       return `${label} · ${event.outcome}`;
     case 'execute.start':
       return `${label} · ${event.runtime} execution`;
@@ -1023,11 +1023,11 @@ const kernelDetails = (event: EventTraceEvent): JsonObject => {
     sequence: event.sequence,
   };
   switch (event.kind) {
-    case 'preflight.start':
+    case 'handler.start':
     case 'providers.start':
     case 'render.start':
       return base;
-    case 'preflight.outcome':
+    case 'handler.outcome':
       return { ...base, outcome: event.outcome };
     case 'execute.start':
       return { ...base, runtime: event.runtime };
@@ -1542,7 +1542,7 @@ export class RouteInvocationService {
     this.#controllers.add(operationController);
     let traceMeta: Readonly<{
       readonly correlation: TraceCorrelation;
-      readonly eventOutcome: () => EventTracePreflightOutcome | undefined;
+      readonly eventOutcome: () => EventTraceHandlerOutcome | undefined;
       readonly href?: string;
       readonly label: string;
     }> | undefined;
@@ -1607,7 +1607,7 @@ export class RouteInvocationService {
           route.event,
           surface.kind === 'event' ? surface.host : undefined,
         );
-        let eventOutcome: EventTracePreflightOutcome | undefined;
+        let eventOutcome: EventTraceHandlerOutcome | undefined;
         traceMeta = {
           correlation,
           eventOutcome: () => eventOutcome,
@@ -1626,7 +1626,7 @@ export class RouteInvocationService {
           summary: `${label} · running`,
         });
         const publishKernelEvent = (event: EventTraceEvent): void => {
-          if (event.kind === 'preflight.outcome') eventOutcome = event.outcome;
+          if (event.kind === 'handler.outcome') eventOutcome = event.outcome;
           this.#publishStream(streamRecord, { event, type: 'trace' });
           this.#trace?.publish({
             correlation: {

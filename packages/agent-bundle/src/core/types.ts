@@ -8,7 +8,7 @@ import type {
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
-  CompiledEventPreflight,
+  CompiledEventHandler,
   CompiledLayout,
   CompiledProvider,
 } from '../routes/types.ts';
@@ -620,7 +620,7 @@ export interface NormalizedHook {
   readonly eventRoute?: Readonly<{
     readonly event: CanonicalAgentEvent;
     readonly fallback: AgentEventFallbackMode;
-    readonly preflight?: CompiledEventPreflight;
+    readonly handler?: CompiledEventHandler;
     readonly providers?: readonly string[];
     readonly runtime: AgentEventRuntimeMode;
   }>;

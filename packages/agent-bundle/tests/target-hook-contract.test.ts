@@ -17,13 +17,14 @@ import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { normalizeProject, type NormalizationTargetRegistry } from '../src/config/index.ts';
 import type { AgentBundleConfig, NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
-import type { CompiledEventPreflight } from '../src/routes/types.ts';
+import type { CompiledEventHandler } from '../src/routes/types.ts';
 import { build } from './support/build.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 
-const eventPreflight: CompiledEventPreflight = Object.freeze({
-  provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/before.preflight.ts' }),
-  source: '/project/src/events/tool/before.preflight.ts',
+const eventHandler: CompiledEventHandler = Object.freeze({
+  provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/before.handler.ts' }),
+  source: '/project/src/events/tool/before.handler.ts',
+  view: '/project/src/events/tool/before.view.tsx',
 });
 
 const metadata = Object.freeze({
@@ -372,8 +373,8 @@ it('plans a thin epoch-bound event-route client and keeps standalone execution e
   expect(degradedSource).toContain('await resolveStandaloneLineage(target, native)');
   expect(degradedSource).not.toContain('import * as routeModule');
   expect(degradedSource).not.toContain('renderStandaloneEventRoute');
-  expect(sharedSource).not.toContain('executeEventPreflight');
-  expect(degradedSource).not.toContain('executeEventPreflight');
+  expect(sharedSource).not.toContain('executeEventHandler');
+  expect(degradedSource).not.toContain('executeEventHandler');
 });
 
 const firstIndex = (source: string, snippet: string): number => {
@@ -387,10 +388,10 @@ const staticImportSpecifiers = (source: string): readonly string[] => Object.fre
   ...source.matchAll(/\bfrom\s+["']([^"']+)["']/gu),
 ].map((match) => match[1]!));
 
-it('runs event-route preflight in the per-host wrapper before shared IPC', () => {
+it('runs event-route handler in the per-host wrapper before shared IPC', () => {
   const hook: NormalizedHook = {
     ...planningHook('beforeTool', []),
-    eventRoute: { event: 'tool/before', fallback: 'none', preflight: eventPreflight, runtime: 'shared' },
+    eventRoute: { event: 'tool/before', fallback: 'none', handler: eventHandler, runtime: 'shared' },
     timeoutMs: 1_250,
   };
   const contract: TargetHookContract = {
@@ -410,19 +411,19 @@ it('runs event-route preflight in the per-host wrapper before shared IPC', () =>
 
   expect(entry.relativePath).toBe('hooks/beforeTool.synthetic.mjs');
   expect(entry.target).toBe('synthetic');
-  expect(source).toContain(`from ${JSON.stringify(eventPreflight.source)}`);
+  expect(source).toContain(`from ${JSON.stringify(eventHandler.source)}`);
   expect(source).toContain('validateNativeEventEnvelope');
   expect(source).toContain('createCanonicalEventProps');
-  expect(source).toContain('executeEventPreflight');
-  expect(source).toContain('projectEventPreflightResult');
+  expect(source).toContain('executeEventHandler');
+  expect(source).toContain('projectEventHandlerResult');
   expect(entry.executeVirtualSource).toContain('requestEventRuntime');
   expect(source).toContain('const timeoutMs = 1250;');
   expect(source).toContain('AbortSignal.timeout(timeoutMs)');
   expect(source).toContain('process.once(terminationSignal, terminate)');
   expect(source).toContain('process.off(terminationSignal, terminate)');
-  expect(source).toContain('...(gate === "execute" ? {} : { preflight: gate.data })');
+  expect(source).toContain('renderInput: gate.data');
   expect(entry.executeVirtualSource).toContain('const observation = { observedAt, sequence };');
-  expect(entry.executeVirtualSource).toContain('observedAt: observation?.observedAt, preflight, sequence: observation?.sequence');
+  expect(entry.executeVirtualSource).toContain('observedAt: observation?.observedAt, renderInput, sequence: observation?.sequence');
   expect(source).not.toContain('AGENT_BUNDLE_HOOK_HOST');
   expect(source).not.toContain('createAgentRenderDispatcher');
   expect(source).not.toContain('import * as routeModule');
@@ -437,17 +438,17 @@ it('runs event-route preflight in the per-host wrapper before shared IPC', () =>
     firstIndex(source, 'const runExecutor'),
   );
   expect(firstIndex(prepareBody, 'validateNativeEventEnvelope')).toBeLessThan(firstIndex(prepareBody, 'createCanonicalEventProps'));
-  expect(firstIndex(prepareBody, 'createCanonicalEventProps')).toBeLessThan(firstIndex(prepareBody, 'executeEventPreflight'));
-  expect(firstIndex(prepareBody, 'executeEventPreflight')).toBeLessThan(firstIndex(prepareBody, 'projectEventPreflightResult'));
+  expect(firstIndex(prepareBody, 'createCanonicalEventProps')).toBeLessThan(firstIndex(prepareBody, 'executeEventHandler'));
+  expect(firstIndex(prepareBody, 'executeEventHandler')).toBeLessThan(firstIndex(prepareBody, 'projectEventHandlerResult'));
   const runBody = source.slice(firstIndex(source, 'const run = async () => {'));
-  expect(firstIndex(runBody, 'await prepareRouteInvocation')).toBeLessThan(runBody.search(/['"]execute['"]/u));
-  expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
+  expect(firstIndex(runBody, 'await prepareRouteInvocation')).toBeLessThan(runBody.search(/['"]render['"]/u));
+  expect(runBody.search(/['"]render['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
 });
 
-it('crosses the standalone Worker boundary only after preflight returns execute', () => {
+it('crosses the standalone Worker boundary only after handler requests rendering', () => {
   const hook: NormalizedHook = {
     ...planningHook('beforeTool', []),
-    eventRoute: { event: 'tool/before', fallback: 'none', preflight: eventPreflight, runtime: 'standalone' },
+    eventRoute: { event: 'tool/before', fallback: 'none', handler: eventHandler, runtime: 'standalone' },
   };
   const contract: TargetHookContract = {
     hostContractRevision: 'synthetic-1',
@@ -463,8 +464,8 @@ it('crosses the standalone Worker boundary only after preflight returns execute'
   const entry = planHooks(planningModel([hook]), 'synthetic', contract).hookEntries[0]!;
   const source = entry.virtualSource;
 
-  expect(source).toContain('executeEventPreflight');
-  expect(source).toContain('projectEventPreflightResult');
+  expect(source).toContain('executeEventHandler');
+  expect(source).toContain('projectEventHandlerResult');
   expect(source).toContain('new URL(/* webpackIgnore: true */ "./beforeTool.synthetic.execute.mjs", import.meta.url)');
   expect(entry.executeVirtualSource).toContain('new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url)');
   expect(entry.executeVirtualSource).toContain('createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal, observation)');
@@ -474,11 +475,11 @@ it('crosses the standalone Worker boundary only after preflight returns execute'
     firstIndex(source, 'const runExecutor'),
   );
   expect(firstIndex(prepareBody, 'validateNativeEventEnvelope')).toBeLessThan(firstIndex(prepareBody, 'createCanonicalEventProps'));
-  expect(firstIndex(prepareBody, 'createCanonicalEventProps')).toBeLessThan(firstIndex(prepareBody, 'executeEventPreflight'));
-  expect(firstIndex(prepareBody, 'executeEventPreflight')).toBeLessThan(firstIndex(prepareBody, 'projectEventPreflightResult'));
+  expect(firstIndex(prepareBody, 'createCanonicalEventProps')).toBeLessThan(firstIndex(prepareBody, 'executeEventHandler'));
+  expect(firstIndex(prepareBody, 'executeEventHandler')).toBeLessThan(firstIndex(prepareBody, 'projectEventHandlerResult'));
   const runBody = source.slice(firstIndex(source, 'const run = async () => {'));
-  expect(firstIndex(runBody, 'await prepareRouteInvocation')).toBeLessThan(runBody.search(/['"]execute['"]/u));
-  expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
+  expect(firstIndex(runBody, 'await prepareRouteInvocation')).toBeLessThan(runBody.search(/['"]render['"]/u));
+  expect(runBody.search(/['"]render['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
 });
 
 it('continues planning valid hooks after a prior hook mapping error', () => {

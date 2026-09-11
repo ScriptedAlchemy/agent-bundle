@@ -123,7 +123,7 @@ const manifest = (): ArtifactManifest => ({
     },
   },
   files: [],
-  manifestVersion: 5,
+  manifestVersion: 6,
   projections: [
     {
       documents: { mcp: 'codex/mcp.json', plugin: 'codex/plugin.json' },
@@ -154,8 +154,7 @@ const manifest = (): ArtifactManifest => ({
       event: 'tool/after',
       execution: {
         fallback: 'none',
-        preflight: 'src/events/tool/after.preflight.ts',
-        providers: ['daemonProbe'],
+        handler: 'src/events/tool/after.handler.ts',
         runtime: 'shared',
       },
       id: 'event:tool/after',
@@ -259,8 +258,7 @@ it('projects one stable application tree by joining routes and executable rows',
       { host: 'codex', kind: 'event-route', path: 'hooks/after-codex.mjs' },
     ],
     id: 'event:tool/after',
-    preflight: 'src/events/tool/after.preflight.ts',
-    providers: ['daemonProbe'],
+    handler: 'src/events/tool/after.handler.ts',
   }]);
   expect(explorer.hooks).toEqual([
     {

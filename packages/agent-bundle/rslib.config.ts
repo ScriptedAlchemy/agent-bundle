@@ -84,7 +84,7 @@ const runtimeEntries = {
     ? './tests/fixtures/runtime-rebundle/mcp-server-runtime.ts'
     : './src/mcp-server-runtime.ts',
   meta: './src/meta.ts',
-  routes: './src/routes/public.ts',
+  routes: './src/routes/authoring.ts',
   'terminal-capability': './src/terminal-capability.ts',
   'web-host': './src/web-host.ts',
 };

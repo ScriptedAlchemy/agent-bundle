@@ -10,6 +10,28 @@ import { outputOperations } from '../../../operations/output.js';
 const operation = outputOperations.prepare;
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "apply": {
+        "type": "boolean"
+      },
+      "outputName": {
+        "type": "string"
+      },
+      "outputRoot": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "outputRoot",
+      "source"
+    ],
+    "type": "object"
+  },
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan an M4B output, or apply the plan only when apply is explicitly true.',
 };

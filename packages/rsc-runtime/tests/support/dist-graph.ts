@@ -17,6 +17,7 @@ export const runtimeEntryFiles = Object.freeze({
   './notices': 'notices.js',
   './notices/inbox-route': 'notices/inbox-route.js',
   './plugin': 'plugin.js',
+  './request': 'request.js',
   './state': 'state.js',
   './state/sqlite': 'state/sqlite.js',
 } as const);

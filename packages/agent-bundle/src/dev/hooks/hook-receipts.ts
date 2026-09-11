@@ -179,19 +179,19 @@ const decodeEvent = (value: unknown, index: number): EventTraceReceiptEvent => {
     if (phase !== expected) fail(`${path}.phase`);
   };
   switch (kind) {
-    case 'preflight.start':
-      expectPhase('preflight');
+    case 'handler.start':
+      expectPhase('handler');
       onlyKeys(input, ['at', 'kind', 'phase', 'sequence'], path);
-      return Object.freeze({ ...base, kind, phase: 'preflight' });
-    case 'preflight.outcome':
-      expectPhase('preflight');
+      return Object.freeze({ ...base, kind, phase: 'handler' });
+    case 'handler.outcome':
+      expectPhase('handler');
       onlyKeys(input, ['at', 'durationMs', 'kind', 'outcome', 'phase', 'sequence'], path);
       return Object.freeze({
         ...base,
         ...withDuration,
         kind,
-        outcome: oneOf(input.outcome, ['execute', 'continue', 'deny'] as const, `${path}.outcome`),
-        phase: 'preflight',
+        outcome: oneOf(input.outcome, ['render', 'continue', 'deny'] as const, `${path}.outcome`),
+        phase: 'handler',
       });
     case 'execute.start':
       expectPhase('execute');
@@ -276,7 +276,7 @@ const hookReceiptOutcome = (receipt: EventTraceReceipt): HookReceiptOutcome => {
   let gate: 'continue' | 'deny' | undefined;
   for (const event of receipt.events) {
     if (event.kind === 'failure') return Object.freeze({ error: event.error, kind: 'failed', phase: event.phase });
-    if (event.kind === 'preflight.outcome' && event.outcome !== 'execute') gate = event.outcome;
+    if (event.kind === 'handler.outcome' && event.outcome !== 'render') gate = event.outcome;
   }
   return Object.freeze({ kind: 'completed', ...(gate === undefined ? {} : { gate }) });
 };
@@ -307,7 +307,7 @@ const eventsDetail = (receipt: EventTraceReceipt): readonly JsonObject[] => {
     kind: event.kind,
     phase: event.phase,
     ...('durationMs' in event && event.durationMs !== undefined ? { durationMs: Math.round(event.durationMs * 1000) / 1000 } : {}),
-    ...(event.kind === 'preflight.outcome' ? { outcome: event.outcome } : {}),
+    ...(event.kind === 'handler.outcome' ? { outcome: event.outcome } : {}),
     ...(event.kind === 'execute.start' ? { runtime: event.runtime } : {}),
     ...(event.kind === 'providers.finish' ? { count: event.count } : {}),
   }));
@@ -390,7 +390,7 @@ export const lowerHookReceipt = (receipt: EventTraceReceipt): readonly TraceEntr
         status: 'ok',
         summary: outcome.gate === undefined
           ? `${label} completed`
-          : `${label} ${outcome.gate === 'deny' ? 'denied' : 'continued'} by preflight`,
+          : `${label} ${outcome.gate === 'deny' ? 'denied' : 'continued'} by handler`,
       });
       break;
     case 'failed':

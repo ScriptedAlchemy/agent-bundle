@@ -9,6 +9,310 @@ or from Amp's generated PluginAPI factory.
 You declare it once, keyed by a canonical event, and the adapters translate the event name, the
 matcher, and the result shape into whatever the selected host expects.
 
+## Event routes
+
+Use one canonical event file under `src/events/`: `.ts` handlers return a lightweight event
+result, while `.tsx` handlers render JSX. A `.ts` handler can request its separate `.view.tsx`
+sibling with `ctx.render('./name.view.js', data)`. Both shapes use the same event paths,
+host adapters, and result validation. The rendered form can include static configuration:
+
+```tsx
+// src/events/tool/after.tsx
+import { Agent } from '@agent-bundle/runtime';
+import type { AgentEventRouteConfig, AgentEventRouteProps } from 'agent-bundle';
+
+export const config = {
+  runtime: 'standalone', // 'shared' renders inside the generated MCP server process
+  requires: ['events.toolAfter.context'],
+  timeoutMs: 30_000, // budget inside the host's own native deadline
+  tools: ['file.write'], // canonical selector -> per-host native matcher
+} satisfies AgentEventRouteConfig;
+
+export default async function AfterFileEdit(
+  { canonical, native, signal }: AgentEventRouteProps<'tool/after'>,
+) {
+  // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
+  // canonical.payload.toolName = { value: 'Write', nativeKey: 'tool_name' } on every host
+  const tool = canonical.payload.toolName?.value ?? 'a tool';
+  return (
+    <Agent.Result>
+      <Agent.Context>
+        {`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}
+      </Agent.Context>
+    </Agent.Result>
+  );
+}
+```
+
+`canonical` is the cross-host identity the framework derives — `event`, an `idempotencyKey`
+hashed from the event, target, and native payload, `observedAt`, a `sequence`, the
+`provenance` naming the host and the native event that fired, and the family's canonical
+`payload`. `native` is a frozen snapshot of the validated host envelope. Nothing in
+`canonical` is fabricated: a host that does not report a field leaves it absent.
+
+`requires` selects every configured host whose capability table supports every listed row. The
+event-route rows are `events.sessionStart.context`, `events.stop.deny`,
+`events.toolAfter.context`, and `events.toolBefore.deny`; the generated
+[Event and hook matrix](../../reference/events.md) shows the underlying host support. Use
+`requires` when the route needs a semantic capability rather than a particular host. `targets`
+remains the host-specific escape hatch; an event route cannot declare both. If none of the
+configured hosts satisfies a requirement, validation names the capability row and every host
+that was considered.
+
+### Function and rendered events
+
+Both forms use the same canonical event and host projection. A `.ts` handler returns
+`{ outcome: 'deny', reason }`, `{ outcome: 'continue' }`, or nothing. Continuing never grants
+permission. A `.tsx` default handler returns `Agent.*` JSX as before.
+
+```ts
+// src/events/tool/before.ts
+import { events } from 'agent-bundle/routes';
+
+export default events.tool.before({}, async ({ canonical, provider }) => {
+  if (canonical.payload.toolName?.value === 'Write') {
+    return { outcome: 'deny', reason: await provider('writePolicy') };
+  }
+});
+```
+
+The helper infers the canonical payload and family-specific outcomes; its event must agree with
+the file path. A plain default function with the same context and result is also supported.
+Use `EventHandler<'tool/before'>` when annotating that function.
+
+For a cheap gate followed by JSX, put the view in a separate sibling module:
+
+```ts
+// src/events/tool/before.ts
+import { events } from 'agent-bundle/routes';
+
+export default events.tool.before({}, async (ctx) => {
+  if (ctx.canonical.payload.toolName?.value !== 'Write') return;
+  return ctx.render('./before.view.js', { message: 'A write is about to run.' });
+});
+```
+
+```tsx
+// src/events/tool/before.view.tsx
+import { Agent } from '@agent-bundle/runtime';
+import type { AgentEventRouteProps } from 'agent-bundle';
+
+export default async function BeforeWrite(
+  { renderInput }: AgentEventRouteProps<'tool/before', { message: string }>,
+) {
+  return <Agent.Result><Agent.Context>{renderInput?.message}</Agent.Context></Agent.Result>;
+}
+```
+
+The handler and view are separate compiler entries. The hook loads the view only when the
+handler returns `ctx.render()`; ordinary imports, local constants, and helper functions in the
+handler work normally. The module argument must name the sibling `.view.js` file shown above.
+Data must be strict JSON and reaches the view as `renderInput`; arbitrary paths and non-JSON
+values fail closed. Put event configuration on the `.ts` handler. A `.view.tsx` file is support
+code, not a second event. Denials require a nonempty reason and a deny-capable event family.
+
+### Execution trace events
+
+The exported `EventTraceEvent` discriminated union gives developer tooling one stable,
+payload-free vocabulary for the event kernel: `handler.start`, `handler.outcome`,
+`execute.start`, `providers.start` / `providers.finish`, `render.start` / `render.finish`, and
+terminal `failure`. The compiled hook wrapper emits the gate and execution boundaries.
+Rendered handlers emit render boundaries; provider observations occur only when a handler
+requests a provider. The handler outcome is `continue`, `deny`, or `render`.
+Each frozen event carries one `EventTraceExecution` identity, a monotonic timestamp and sequence,
+and only phase-specific metadata; failures use a bounded, stack-free `EventTraceErrorSummary`.
+`createEventTracer` emits to its explicit observer or, without one, to the process-local observer
+current at each emission (a no-op while none is installed), and isolates observer errors from
+execution.
+Developer tooling installs the process-local sink with `installEventTraceObserver`; the returned
+disposer restores the previous sink. The trace types and helpers are exported from
+`agent-bundle` and `agent-bundle/api`.
+
+Rendered events default to `standalone`; opt into `runtime: 'shared'` to reuse a generated MCP server. Lightweight `.ts` handlers always run in the hook wrapper.
+
+### Migrating existing events
+
+Move the old preflight function to the default export of the `.ts` event file, move JSX to
+its `.view.tsx` sibling, and replace `execute` results with `ctx.render('./name.view.js', data)`.
+Remove the `preflight` re-export. Inline `before()` and legacy `preflight` exports now fail
+with `AB4840`. `continue` and `deny` retain their meanings. Remove `config.providers` and use
+`context.provider(key)`. Native config hooks remain an advanced compatibility surface.
+
+### Request providers
+
+Call `await context.provider('writePolicy')` in a function event, or
+`await (await agent()).provider('writePolicy')` in JSX. The module loads only when requested;
+concurrent callers share one promise, including a rejection, within that request. Generated
+provider types infer keys and values. No `config.providers` declaration is needed. Cancellation
+and expired request-context checks apply to provider access too. `context.providers` is removed;
+use `context.process` for the framework-owned process identity. Pre-seeded values remain an
+explicit `runAgentRequest({ providers })` or test-harness input, read through `provider(key)`.
+
+### The canonical payload
+
+`canonical.payload` is the cross-host reading of the envelope for the route's family: the
+fields at least two hosts report under their own names — `toolName`, `toolInput`, and
+`toolResponse` on the tool families, `sessionId` (Claude and Codex `session_id`, Cursor
+`conversation_id`), `transcriptPath`, `cwd`, `prompt`, `agentId` and `agentType`, `reentry` (Claude
+and Codex `stop_hook_active`, Cursor `loop_count > 0`), and so on. Each field arrives as
+`{ value, nativeKey }`: the decoded value beside the host key it was read from, so a route can tell
+a mapped field from a missing one and still name the host's spelling in its own output. A field
+the host did not send is `undefined`, never defaulted. Two readings go beyond the key: Cursor's
+`tool_output` JSON string is parsed into `toolResponse` (and kept as the string when it is not
+valid JSON), and Cursor's `loop_count` counter becomes the `reentry` boolean.
+
+Type the route to its family — `AgentEventRouteProps<'tool/after'>` — and `payload` narrows to
+that family's fields, so reading `payload.reentry` on a tool route is a compile error; the
+generated `.agent-bundle/routes.d.ts` carries the same narrowing into `renderRoute`. A route
+typed with the bare `AgentEventRouteProps` sees every field as optional. Anything the payload does
+not model — Cursor's `attachments`, Claude's `background_tasks`, a host-only `duration` — is still
+on `native`. The per-family, per-host table (field × host → native key) is the
+[Canonical payload fields](../../reference/events.md#canonical-payload-fields) section of the
+generated events reference, rendered from the pinned capability tables; the runtime reads the same
+table, exported as `agentEventPayloadFields` and `agentEventPayloadNativeKeys`.
+
+Route-unit tests build the same props from a host envelope with `createEventRouteInput` from
+`agent-bundle/test`, so a fixture exercises `payload` rather than hand-written identity:
+
+```ts
+import { createEventRouteInput, renderRoute } from 'agent-bundle/test';
+
+const rendered = await renderRoute('event:tool/after', {
+  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, {
+    host: 'claude',
+  }),
+});
+```
+
+The route answers through its rendered document. `Agent.Context` text becomes the host's
+additional-context channel, and `Agent.Result`'s `value` may carry
+`{ outcome: 'continue' | 'allow' | 'ask' | 'deny', reason?, updatedInput? }`. `continue` — or
+no `value` at all — is the pass-through answer: the route has no opinion, so **no decision** is
+written and the host's normal permission flow applies. Only an explicit `allow`, `ask`, or
+`deny` is projected as one. The projection is per event and per host, and illegal combinations
+throw before anything reaches the host: `session/end`, `compact/after`, `tool/failure`, and
+`workspace/open` are observation-only everywhere; a decided `tool/before` becomes
+`hookSpecificOutput.permissionDecision: 'allow' | 'ask' | 'deny'` on Claude and Codex but
+`{ permission: 'allow' | 'deny', … }` on Cursor, which documents `ask` as unenforced and
+therefore rejects it; a denied `stop` becomes `{ decision: 'block', reason }` or Cursor's
+`followup_message`. `allow` and `ask` are `tool/before` and `model-switch/before` decisions
+(`allow` also answers `permission/request` on the user's behalf); every other family rejects them.
+A decided `model-switch/before` becomes `hookSpecificOutput.permissionDecision: 'allow' | 'ask' |
+'deny'` on Claude Code's `PreModelSwitch` (2.1.251 or later; `ask` is a refusal outside an
+interactive `/model`), and `model-switch/after` observes the completed switch with
+`Agent.Context` reaching Claude as `additionalContext` on the next request. Which families each
+host supports is the generated [Event and hook matrix](../../reference/events.md).
+
+`updatedInput` on `tool/before` rewrites the pending call and is independent of the decision. On
+Claude and Codex a rewrite returned with `continue` carries no `permissionDecision`, so the host
+evaluates its permission rules against the rewritten input; pair it with `allow` to auto-approve
+the rewrite or with `ask` to show the rewritten input to the user. Cursor documents
+`updated_input` only alongside a `permission`, so a rewrite is delivered as `permission: 'allow'`
+there.
+
+Event routes reach the twenty-two canonical families (`session/end`, `prompt/submit`,
+`compact/before`, `permission/request`, `model-switch/before`, …); config-declared `hooks` cover
+only the seven listed above.
+
+A route or handler that **throws** produces no document and therefore no decision: the generated
+wrapper writes to stderr, nothing to stdout, and exits `1`, which every supported host documents as
+a non-blocking error — the pending action proceeds as it would after a pass-through. The stderr
+text is the thrown message for a `runtime: 'standalone'` route or a config-declared handler; a route
+in the shared runtime reports `Event route rendering failed.`, because the runtime answers
+the wrapper with a generic `runtime-failed` error and keeps the original message in its own process.
+A thrown `tool/before` does not deny; return `outcome: 'deny'` for that. The per-surface table is
+in [What happens when a route throws](./mcp.mdx#what-happens-when-a-route-throws).
+
+### What is on the wire
+
+Both shapes compile into a wrapper under the root `hooks/` directory that the host invokes as
+`node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or with its own root token). A hook that only
+one selected host receives compiles to `hooks/<name>.mjs`; a hook shared by several selected hosts
+compiles once per host as `hooks/<name>.<host>.mjs`, because each wrapper bakes in its host's
+event spelling — `PreToolUse` / `PostToolUse` for Claude Code and Codex, camelCase `preToolUse` /
+`postToolUse` for Cursor — and each host's document points at its own wrapper. Claude Code's
+document is `hooks/hooks.json`, which it loads by convention without scanning `hooks/` for other
+documents, so the Claude manifest carries no `hooks` pointer: Claude Code reports a pointer at the
+conventional file as a duplicate hooks file (`manifest.hooks` is for additional documents only).
+Codex and Cursor manifests carry an explicit `hooks` pointer, so their documents sit beside their
+manifests as `.codex-plugin/hooks.json` and `.cursor-plugin/hooks.json`. Each wrapper compares the
+envelope's `hook_event_name` against the spelling baked for its own host, so
+`native hook_event_name must equal postToolUse` on a Claude session means Claude's document is
+invoking a Cursor wrapper, not that Claude sends camelCase. A
+config-declared handler runs in-process inside that wrapper. An event route with
+`runtime: 'shared'` instead forwards to the warm runtime living inside the generated MCP server
+process, so hooks share state with tools:
+
+1. **Host → wrapper (stdin).** The host writes one JSON envelope. The wrapper streams stdin with a
+   hard 1 MiB cap, parses exactly one value, and validates it per host and per event
+   (`session_id`, `transcript_path`, `cwd`, tool fields, …). Any mismatch exits nonzero.
+2. **Wrapper → runtime (IPC).** One newline-delimited request — `protocolVersion`,
+   `artifactEpoch`, `event`, `hostContractRevision`, `target`, and the validated `native`
+   envelope — over a per-user Unix socket (a named pipe on Windows). The socket directory is
+   `0700`, the socket `0600`, and the endpoint hash binds the artifact epoch, the target, and
+   the artifact's install directory, so two installs never share a runtime. The request is
+   raced against `timeoutMs` (default 5000 ms).
+3. **Runtime renders.** The server rejects epoch mismatches and malformed messages, builds the
+   `canonical` props, and renders the route component through the react-server worker inside
+   the request context.
+4. **Runtime → wrapper.** One JSON reply: `{ status: 'ok', output }`, or
+   `{ status: 'error', code }` where `code` is `epoch-mismatch`, `invalid-message`, or
+   `runtime-failed`.
+5. **Wrapper → host (stdout).** The host-native response, or nothing at all. A route that
+   renders no decision and no context writes no output and exits 0, so the host proceeds
+   exactly as it would without the hook; on `tool/before` that means its own permission prompt.
+   A decision field is written only when the route returned `allow`, `ask`, or `deny`.
+
+Failure is closed by default. The only fallback is `fallback: 'standalone'` on a route that
+also compiled its standalone form, and it fires **only** for `runtime-unavailable` (no live
+socket). `runtime-timeout`, `epoch-mismatch`, `invalid-message`, and `runtime-failed` exit
+nonzero — stale code never answers, and a fabricated response is never emitted.
+
+The runtime side fails closed too. The generated MCP server owns the socket: it claims the
+endpoint with an exclusive lock file, listens, and removes both again on shutdown only while
+they are still the files it created. A shutdown that cannot remove its own socket path — or a
+startup that cannot release its claim lock — reports an `EventRuntimeTransportError` with code
+`runtime-failed` (`Unable to remove the event runtime endpoint.` / `Unable to release the event
+runtime endpoint claim.`) instead of exiting silently; the failed startup shuts its listener
+down first, so it never leaves a live server behind the error. A stale socket or lock left by a
+crashed process is recovered by the next server, which probes the endpoint and reclaims a
+claim whose owner is provably dead.
+
+**Concurrent sessions.** Hosts routinely run several sessions of one plugin from the same
+install root — every Claude Code session Claude Desktop launches shares one
+`--plugin-dir`, and Cursor imports Claude-installed plugins from that same cache — so several
+generated MCP server processes with the same endpoint are normal. Exactly one of them owns
+the socket at a time. A server that starts while another process owns the endpoint does
+**not** exit: it comes up in the `standby` role, serves its own MCP session as usual, writes
+`agent-bundle event runtime: <socket> is owned by another process; standing by` to stderr,
+and probes the endpoint about once a second. The moment the owner exits, a standby takes the
+socket over through the same claim-and-listen path an unowned start uses (and logs
+`… was released by its owner; took it over`); if several stand by, the claim lock lets exactly
+one win and the rest keep waiting. Hook wrappers need no change: while an owner is alive they
+are answered as before, and during the takeover gap (at most about a second) they see
+`runtime-unavailable`, which is exactly the case the `fallback: 'standalone'` route above
+covers — a shared-only route exits nonzero for that one event. A takeover that fails for any
+reason other than the socket still being owned (a socket directory it cannot write, a claim
+that never clears) is reported on the server's stderr — one line per distinct failure, repeated
+at most every 30 seconds — while the server keeps standing by. A startup that fails for any
+other reason still fails closed, as does a stale socket the owner cannot remove.
+
+Inside one composite root each selected host reaches that runtime through the first generated
+MCP server its own MCP document lists — one process when every selected host lists the same
+server, one per host otherwise. The runtime's socket is identified by the artifact alone (its
+epoch and root directory, never the `targets` selection), and the invoking host rides on each
+request, so whichever process owns the socket answers every selected host's wrappers.
+
+A route with `runtime: 'standalone'` bundles its module into the wrapper itself: the same
+canonical identity, the same projection, no shared process state. `AB4817` refuses a route
+that requires the shared runtime on a target where no generated MCP entry hosts it and no
+standalone fallback exists.
+
+## Native hook compatibility
+
+The following config-based hooks are an adapter compatibility escape hatch. New framework
+handlers use the canonical event files above.
+
 ## Declaring a hook
 
 ```ts twoslash
@@ -206,368 +510,6 @@ A prebuilt hook emits its native command as `node "<root>/<payload path>" <args�
 declaration replacing a hand-rolled `hooks/hooks.json` per host. Prebuilt hooks are packaged like
 native hook documents: they do not compile wrappers and do not appear in the manifest's
 `executables.hooks[]` rows, so `hooks list` and `hooks simulate` do not see them.
-
-## Event routes
-
-Config-declared hooks are the compact, native escape hatch: the handler runs in-process inside
-the generated wrapper, and its second argument (`HookHandlerContext`) hands it the validated host
-envelope verbatim as `nativeInput`, beside the invoking `target` and `nativeEvent`. Use one when
-the handler genuinely needs the raw host envelope or host-specific behavior. For ordinary semantic
-events — including high-frequency events that should return before rendering — prefer an **event
-route**: a file under `src/events/` whose path is the canonical event family it handles
-(`src/events/tool/before.tsx`, `src/events/stop.tsx`). It is one async default Server Component,
-like an MCP tool route, plus a statically extracted `config` export:
-
-```tsx
-// src/events/tool/after.tsx
-import { Agent } from '@agent-bundle/runtime';
-import type { AgentEventRouteConfig, AgentEventRouteProps } from 'agent-bundle';
-
-export const config = {
-  runtime: 'standalone', // 'shared' renders inside the generated MCP server process
-  requires: ['events.toolAfter.context'],
-  timeoutMs: 30_000, // budget inside the host's own native deadline
-  tools: ['file.write'], // canonical selector -> per-host native matcher
-} satisfies AgentEventRouteConfig;
-
-export default async function AfterFileEdit(
-  { canonical, native, signal }: AgentEventRouteProps<'tool/after'>,
-) {
-  // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
-  // canonical.payload.toolName = { value: 'Write', nativeKey: 'tool_name' } on every host
-  const tool = canonical.payload.toolName?.value ?? 'a tool';
-  return (
-    <Agent.Result>
-      <Agent.Context>
-        {`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}
-      </Agent.Context>
-    </Agent.Result>
-  );
-}
-```
-
-`canonical` is the cross-host identity the framework derives — `event`, an `idempotencyKey`
-hashed from the event, target, and native payload, `observedAt`, a `sequence`, the
-`provenance` naming the host and the native event that fired, and the family's canonical
-`payload`. `native` is a frozen snapshot of the validated host envelope. Nothing in
-`canonical` is fabricated: a host that does not report a field leaves it absent.
-
-`requires` selects every configured host whose capability table supports every listed row. The
-event-route rows are `events.sessionStart.context`, `events.stop.deny`,
-`events.toolAfter.context`, and `events.toolBefore.deny`; the generated
-[Event and hook matrix](../../reference/events.md) shows the underlying host support. Use
-`requires` when the route needs a semantic capability rather than a particular host. `targets`
-remains the host-specific escape hatch; an event route cannot declare both. If none of the
-configured hosts satisfies a requirement, validation names the capability row and every host
-that was considered.
-
-### Preflight gates
-
-A named `preflight` export gives an event route a cheap gate that runs on the canonical event
-after envelope decoding, host validation, and canonicalization, and before any of the rendered
-route runtime — React, the RSC renderer, layouts, providers, state, notices — is loaded. Exactly
-one authoring form is accepted: a single relative default re-export in the route module, naming a
-module whose default export is the gate function.
-
-```tsx
-// src/events/tool/before.tsx
-import type { AgentEventRouteConfig, AgentEventRouteProps } from 'agent-bundle';
-
-export const config = { providers: ['projectPolicy'] } satisfies AgentEventRouteConfig;
-export { default as preflight } from './before.preflight.js';
-
-export default async function BeforeTool(
-  { canonical, native, signal }: AgentEventRouteProps<'tool/before'>,
-) {
-  // Runs only after preflight returned 'execute'.
-}
-```
-
-```ts
-// src/events/tool/before.preflight.ts
-import type { EventPreflight } from 'agent-bundle';
-
-export default (({ canonical }) =>
-  canonical.payload.toolName?.value === 'Write'
-    ? 'execute'
-    : { outcome: 'continue' }) satisfies EventPreflight<'tool/before'>;
-```
-
-Keep the preflight module plain Node/application code: import nothing from React, the RSC
-helpers, the rendered route module, or `src/providers/` (type-only imports are erased and are
-fine). The relative re-export is what makes the gate cheap: the compiler records the target module
-on the route's own graph node — `preflight` on the compiled route, part of the graph digest — as
-an entry it can bundle on its own, and keeps it out of route discovery, so `before.preflight.ts`
-beside `before.tsx` is application code the route names, never a second event route. The `.js`
-specifier resolves to the `.ts`/`.tsx` source, as route imports do. A gate declared inline in the
-route module (`export const preflight = …`, `export function preflight`) is rejected: evaluating
-that module evaluates its rendering and provider imports, the very cost the gate exists to avoid.
-
-Every rejected form is `AB4840`, reported once per route on the route module by `inspect`,
-`validate`, `build`, and `dev`: `preflight` declared inline or exported more than once;
-re-exported under a binding other than `default` (`export { gate as preflight } from './gate.js'`);
-re-exported from a bare package specifier; a relative target that is missing, unreadable, or part
-of a re-export cycle; a default export that cannot be followed through an acyclic chain of
-relative default re-exports; or a default export that is not a function the static scan can see —
-an object literal, a string, a class, or an identifier the module imports rather than declares
-(`satisfies`, `as`, and parentheses are looked through, so the typed form above still reads as a
-function). The route compiles without a gate beside the error, and because the diagnostic is an
-error the build fails rather than silently taking the expensive rendered path.
-
-Preflight may be synchronous or asynchronous and has exactly four results
-(`EventPreflightResult`):
-
-| Result | Meaning |
-| --- | --- |
-| `'execute'` | Load the rendered route entry, resolve its declared providers, and render it. |
-| `{ outcome: 'execute', data }` | Load and render the route with the strict-JSON `data` available as its `preflight` prop. |
-| `{ outcome: 'continue' }` | Pass through: nothing is projected and no host decision is written, so the host's normal flow applies — on `tool/before`, its own permission prompt. |
-| `{ outcome: 'deny', reason }` | Deny with a non-empty reason, projected per host by the same rules as a rendered route's `deny` (`hookSpecificOutput.permissionDecision: 'deny'` with `permissionDecisionReason` on a Claude `tool/before`, for example). |
-
-When the rendered route needs a value the gate already computed, type both sides with the same JSON shape — `EventPreflight<'tool/after', CompletedTickets>` and `AgentEventRouteProps<'tool/after', CompletedTickets>` — then return `{ outcome: 'execute', data }`; the route receives that value as the optional `preflight` prop (it is absent after bare `'execute'` or when no gate exists). The kernel snapshots `data` as strict JSON before it crosses the existing deferred executor and shared-runtime boundaries, so functions, class instances, cycles, accessors, and non-finite numbers fail closed instead of reaching the route.
-
-`execute` is the only result that loads the rendered route runtime. Validation
-(`validateEventPreflightResult`, exported from `agent-bundle`) fails closed on everything else:
-`undefined`, the bare string `'continue'`, an outcome other than `execute`, `continue`, or `deny` — a gate has
-no `allow`, `ask`, or `updatedInput`; return `'execute'` and let the rendered route make those
-decisions — any extra field (`reason` beside `continue`, `updatedInput` beside `deny`), an empty
-or whitespace-only reason, and `deny` on a family where no host projects a blocking denial.
-`eventFamilyAllowsPreflightDeny` (also exported) is that family list: a gate may deny on
-`tool/before`, `stop`, `agent/start`, `agent/stop`, `agent/idle`, `prompt/submit`,
-`compact/before`, `permission/request`, `model-switch/before`, `config/change`, and
-`task/create`; `session/start`, `session/end`, `tool/after`, `tool/failure`, `compact/after`,
-`permission/denied`, `stop/failure`, `file/change`, `task/complete`, `model-switch/after`, and
-`workspace/open` cannot deny from preflight. The per-host projection rules described under
-[The canonical payload](#the-canonical-payload) still apply to a gate's denial.
-
-The gate receives one frozen `EventPreflightContext<E>` — `{ canonical, host, signal, terminal }`
-— deliberately smaller than `AgentEventRouteProps`:
-
-| Field | What it is |
-| --- | --- |
-| `canonical` | The exact `AgentEventCanonicalIdentity` the rendered route would receive: `event`, `idempotencyKey`, `observedAt`, `sequence`, `provenance`, and the family's canonical `payload` (see [The canonical payload](#the-canonical-payload)). Type the gate to its family — `EventPreflight<'tool/before'>` — and `payload` narrows the same way it does for the route. |
-| `host` | `{ name, nativeEvent }`, frozen: the target the wrapper was compiled for (`'claude'`, `'codex'`, `'cursor'`) and the native event name it validated (`'PreToolUse'`, `'preToolUse'`), both known from the compiled hook before any envelope is read. |
-| `signal` | The request `AbortSignal` owned by the hook deadline. The kernel refuses to start a gate on an already-aborted signal, abandons a pending asynchronous gate the moment the signal aborts — rejecting with the signal's reason rather than waiting for the gate to notice — and checks the signal once more before validating the result, so a late answer is never projected. |
-| `terminal` | The `AgentTerminal` described in [The terminal capability](./mcp.mdx#the-terminal-capability): `hostSurface`, `stdout`, `stderr`, `sharesTarget`. Information only, never a writer; the `hook` surface reports `none` on both streams. |
-
-It does **not** contain `native`, state, notices, lineage, rendered layouts, application
-providers, React/RSC helpers, or the application request context. Envelope bounds and decoding,
-native host validation, canonicalization, capability translation, deadlines and aborts, outcome
-validation, and host projection remain framework-owned. A gate that must read an unmapped native
-field has two options: return `'execute'` and read `native` in the rendered route, or move the
-logic into a config-declared handler — the raw/native escape hatch, which receives the validated
-envelope verbatim as `context.nativeInput` and runs in-process in the wrapper. `EventPreflight`,
-`EventPreflightContext`, `EventPreflightResult`, `validateEventPreflightResult`, and
-`eventFamilyAllowsPreflightDeny` are exported from `agent-bundle`, `agent-bundle/api`, and
-`agent-bundle/routes`.
-
-### Execution trace events
-
-The exported `EventTraceEvent` discriminated union gives developer tooling one stable,
-payload-free vocabulary for the event kernel: `preflight.start`, `preflight.outcome`,
-`execute.start`, `providers.start` / `providers.finish`, `render.start` / `render.finish`, and
-terminal `failure`. Generated preflight shells currently emit the preflight and execute
-boundaries, including failures in either phase; provider and render boundaries are reserved for
-the unified trace consumer to connect inside the deferred worker.
-Each frozen event carries one `EventTraceExecution` identity, a monotonic timestamp and sequence,
-and only phase-specific metadata; failures use a bounded, stack-free `EventTraceErrorSummary`.
-`createEventTracer` emits to its explicit observer or, without one, to the process-local observer
-current at each emission (a no-op while none is installed), and isolates observer errors from
-execution.
-Developer tooling installs the process-local sink with `installEventTraceObserver`; the returned
-disposer restores the previous sink. The trace types and helpers are exported from
-`agent-bundle` and `agent-bundle/api`.
-
-### Declaring route providers
-
-Provider laziness is declaration-driven, and only event routes declare it:
-`AgentEventRouteConfig.providers` is an array of string literals inside the static config
-grammar, naming the conventional providers the rendered route reads through
-`(await agent()).providers.<key>`. Preflight materializes no application providers whatever the
-route declares. An executed route with a declaration loads and resolves only that subset — still
-once per request, sequentially in the deterministic key-then-source order (never declaration
-order), fail-closed, with the framework-owned `processLifetime` seeded first. `[]` mounts
-`processLifetime` alone. A route with no declaration keeps the compatibility behavior and
-resolves every conventional provider.
-
-Keys are the camel-cased stems of the `src/providers/<name>.*` modules the route graph discovers
-(`retry-policy.ts` is `retryPolicy`), the same keys `AgentBundleProviders` in the generated
-`.agent-bundle/routes.d.ts` lists. `processLifetime` is not one of them — it is seeded whatever
-the route declares — and must not be declared. The declaration is judged when the route graph
-compiles, so `inspect`, `validate`, `build`, and `dev` all report `AB4841`, once per route with
-every defect in one message: a `providers` that is not an array of string literals, a key listed
-twice, the reserved `processLifetime`, or a key that matches no discovered provider — a
-misspelling, a stem camel-cased differently, or a module discovery skips (an `_`- or `.`-prefixed
-path segment, a `.d.ts` file, or a path the project's ignore rules exclude) — with the project's
-provider keys listed for an unknown one. A declaration with any defect selects nothing, so the
-build fails rather than resolving a provider set the author did not write.
-
-Declare the narrow subset for ubiquitous routes so unrelated daemon, state, or provider work
-stays outside both the preflight executable and the deferred rendered route. This changes
-neither provider value types nor the synchronous `(await agent()).providers.<key>` contract.
-`renderRoute` from `agent-bundle/test` honors the same declaration: a route-unit render of
-`event:tool/before` mounts exactly the declared subset (every provider when the route declares
-none), so a test exercises the provider set the route will see.
-
-### The canonical payload
-
-`canonical.payload` is the cross-host reading of the envelope for the route's family: the
-fields at least two hosts report under their own names — `toolName`, `toolInput`, and
-`toolResponse` on the tool families, `sessionId` (Claude and Codex `session_id`, Cursor
-`conversation_id`), `transcriptPath`, `cwd`, `prompt`, `agentId` and `agentType`, `reentry` (Claude
-and Codex `stop_hook_active`, Cursor `loop_count > 0`), and so on. Each field arrives as
-`{ value, nativeKey }`: the decoded value beside the host key it was read from, so a route can tell
-a mapped field from a missing one and still name the host's spelling in its own output. A field
-the host did not send is `undefined`, never defaulted. Two readings go beyond the key: Cursor's
-`tool_output` JSON string is parsed into `toolResponse` (and kept as the string when it is not
-valid JSON), and Cursor's `loop_count` counter becomes the `reentry` boolean.
-
-Type the route to its family — `AgentEventRouteProps<'tool/after'>` — and `payload` narrows to
-that family's fields, so reading `payload.reentry` on a tool route is a compile error; the
-generated `.agent-bundle/routes.d.ts` carries the same narrowing into `renderRoute`. A route
-typed with the bare `AgentEventRouteProps` sees every field as optional. Anything the payload does
-not model — Cursor's `attachments`, Claude's `background_tasks`, a host-only `duration` — is still
-on `native`. The per-family, per-host table (field × host → native key) is the
-[Canonical payload fields](../../reference/events.md#canonical-payload-fields) section of the
-generated events reference, rendered from the pinned capability tables; the runtime reads the same
-table, exported as `agentEventPayloadFields` and `agentEventPayloadNativeKeys`.
-
-Route-unit tests build the same props from a host envelope with `createEventRouteInput` from
-`agent-bundle/test`, so a fixture exercises `payload` rather than hand-written identity:
-
-```ts
-import { createEventRouteInput, renderRoute } from 'agent-bundle/test';
-
-const rendered = await renderRoute('event:tool/after', {
-  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, {
-    host: 'claude',
-  }),
-});
-```
-
-The route answers through its rendered document. `Agent.Context` text becomes the host's
-additional-context channel, and `Agent.Result`'s `value` may carry
-`{ outcome: 'continue' | 'allow' | 'ask' | 'deny', reason?, updatedInput? }`. `continue` — or
-no `value` at all — is the pass-through answer: the route has no opinion, so **no decision** is
-written and the host's normal permission flow applies. Only an explicit `allow`, `ask`, or
-`deny` is projected as one. The projection is per event and per host, and illegal combinations
-throw before anything reaches the host: `session/end`, `compact/after`, `tool/failure`, and
-`workspace/open` are observation-only everywhere; a decided `tool/before` becomes
-`hookSpecificOutput.permissionDecision: 'allow' | 'ask' | 'deny'` on Claude and Codex but
-`{ permission: 'allow' | 'deny', … }` on Cursor, which documents `ask` as unenforced and
-therefore rejects it; a denied `stop` becomes `{ decision: 'block', reason }` or Cursor's
-`followup_message`. `allow` and `ask` are `tool/before` and `model-switch/before` decisions
-(`allow` also answers `permission/request` on the user's behalf); every other family rejects them.
-A decided `model-switch/before` becomes `hookSpecificOutput.permissionDecision: 'allow' | 'ask' |
-'deny'` on Claude Code's `PreModelSwitch` (2.1.251 or later; `ask` is a refusal outside an
-interactive `/model`), and `model-switch/after` observes the completed switch with
-`Agent.Context` reaching Claude as `additionalContext` on the next request. Which families each
-host supports is the generated [Event and hook matrix](../../reference/events.md).
-
-`updatedInput` on `tool/before` rewrites the pending call and is independent of the decision. On
-Claude and Codex a rewrite returned with `continue` carries no `permissionDecision`, so the host
-evaluates its permission rules against the rewritten input; pair it with `allow` to auto-approve
-the rewrite or with `ask` to show the rewritten input to the user. Cursor documents
-`updated_input` only alongside a `permission`, so a rewrite is delivered as `permission: 'allow'`
-there.
-
-Event routes reach the twenty-two canonical families (`session/end`, `prompt/submit`,
-`compact/before`, `permission/request`, `model-switch/before`, …); config-declared `hooks` cover
-only the seven listed above.
-
-A route or handler that **throws** produces no document and therefore no decision: the generated
-wrapper writes to stderr, nothing to stdout, and exits `1`, which every supported host documents as
-a non-blocking error — the pending action proceeds as it would after a pass-through. The stderr
-text is the thrown message for a `runtime: 'standalone'` route or a config-declared handler; a route
-in the default shared runtime reports `Event route rendering failed.`, because the runtime answers
-the wrapper with a generic `runtime-failed` error and keeps the original message in its own process.
-A thrown `tool/before` does not deny; return `outcome: 'deny'` for that. The per-surface table is
-in [What happens when a route throws](./mcp.mdx#what-happens-when-a-route-throws).
-
-### What is on the wire
-
-Both shapes compile into a wrapper under the root `hooks/` directory that the host invokes as
-`node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or with its own root token). A hook that only
-one selected host receives compiles to `hooks/<name>.mjs`; a hook shared by several selected hosts
-compiles once per host as `hooks/<name>.<host>.mjs`, because each wrapper bakes in its host's
-event spelling — `PreToolUse` / `PostToolUse` for Claude Code and Codex, camelCase `preToolUse` /
-`postToolUse` for Cursor — and each host's document points at its own wrapper. Claude Code's
-document is `hooks/hooks.json`, which it loads by convention without scanning `hooks/` for other
-documents, so the Claude manifest carries no `hooks` pointer: Claude Code reports a pointer at the
-conventional file as a duplicate hooks file (`manifest.hooks` is for additional documents only).
-Codex and Cursor manifests carry an explicit `hooks` pointer, so their documents sit beside their
-manifests as `.codex-plugin/hooks.json` and `.cursor-plugin/hooks.json`. Each wrapper compares the
-envelope's `hook_event_name` against the spelling baked for its own host, so
-`native hook_event_name must equal postToolUse` on a Claude session means Claude's document is
-invoking a Cursor wrapper, not that Claude sends camelCase. A
-config-declared handler runs in-process inside that wrapper. An event route with
-`runtime: 'shared'` instead forwards to the warm runtime living inside the generated MCP server
-process, so hooks share state with tools:
-
-1. **Host → wrapper (stdin).** The host writes one JSON envelope. The wrapper streams stdin with a
-   hard 1 MiB cap, parses exactly one value, and validates it per host and per event
-   (`session_id`, `transcript_path`, `cwd`, tool fields, …). Any mismatch exits nonzero.
-2. **Wrapper → runtime (IPC).** One newline-delimited request — `protocolVersion`,
-   `artifactEpoch`, `event`, `hostContractRevision`, `target`, and the validated `native`
-   envelope — over a per-user Unix socket (a named pipe on Windows). The socket directory is
-   `0700`, the socket `0600`, and the endpoint hash binds the artifact epoch, the target, and
-   the artifact's install directory, so two installs never share a runtime. The request is
-   raced against `timeoutMs` (default 5000 ms).
-3. **Runtime renders.** The server rejects epoch mismatches and malformed messages, builds the
-   `canonical` props, and renders the route component through the react-server worker inside
-   the request context.
-4. **Runtime → wrapper.** One JSON reply: `{ status: 'ok', output }`, or
-   `{ status: 'error', code }` where `code` is `epoch-mismatch`, `invalid-message`, or
-   `runtime-failed`.
-5. **Wrapper → host (stdout).** The host-native response, or nothing at all. A route that
-   renders no decision and no context writes no output and exits 0, so the host proceeds
-   exactly as it would without the hook; on `tool/before` that means its own permission prompt.
-   A decision field is written only when the route returned `allow`, `ask`, or `deny`.
-
-Failure is closed by default. The only fallback is `fallback: 'standalone'` on a route that
-also compiled its standalone form, and it fires **only** for `runtime-unavailable` (no live
-socket). `runtime-timeout`, `epoch-mismatch`, `invalid-message`, and `runtime-failed` exit
-nonzero — stale code never answers, and a fabricated response is never emitted.
-
-The runtime side fails closed too. The generated MCP server owns the socket: it claims the
-endpoint with an exclusive lock file, listens, and removes both again on shutdown only while
-they are still the files it created. A shutdown that cannot remove its own socket path — or a
-startup that cannot release its claim lock — reports an `EventRuntimeTransportError` with code
-`runtime-failed` (`Unable to remove the event runtime endpoint.` / `Unable to release the event
-runtime endpoint claim.`) instead of exiting silently; the failed startup shuts its listener
-down first, so it never leaves a live server behind the error. A stale socket or lock left by a
-crashed process is recovered by the next server, which probes the endpoint and reclaims a
-claim whose owner is provably dead.
-
-**Concurrent sessions.** Hosts routinely run several sessions of one plugin from the same
-install root — every Claude Code session Claude Desktop launches shares one
-`--plugin-dir`, and Cursor imports Claude-installed plugins from that same cache — so several
-generated MCP server processes with the same endpoint are normal. Exactly one of them owns
-the socket at a time. A server that starts while another process owns the endpoint does
-**not** exit: it comes up in the `standby` role, serves its own MCP session as usual, writes
-`agent-bundle event runtime: <socket> is owned by another process; standing by` to stderr,
-and probes the endpoint about once a second. The moment the owner exits, a standby takes the
-socket over through the same claim-and-listen path an unowned start uses (and logs
-`… was released by its owner; took it over`); if several stand by, the claim lock lets exactly
-one win and the rest keep waiting. Hook wrappers need no change: while an owner is alive they
-are answered as before, and during the takeover gap (at most about a second) they see
-`runtime-unavailable`, which is exactly the case the `fallback: 'standalone'` route above
-covers — a shared-only route exits nonzero for that one event. A takeover that fails for any
-reason other than the socket still being owned (a socket directory it cannot write, a claim
-that never clears) is reported on the server's stderr — one line per distinct failure, repeated
-at most every 30 seconds — while the server keeps standing by. A startup that fails for any
-other reason still fails closed, as does a stale socket the owner cannot remove.
-
-Inside one composite root each selected host reaches that runtime through the first generated
-MCP server its own MCP document lists — one process when every selected host lists the same
-server, one per host otherwise. The runtime's socket is identified by the artifact alone (its
-epoch and root directory, never the `targets` selection), and the invoking host rides on each
-request, so whichever process owns the socket answers every selected host's wrappers.
-
-A route with `runtime: 'standalone'` bundles its module into the wrapper itself: the same
-canonical identity, the same projection, no shared process state. `AB4817` refuses a route
-that requires the shared runtime on a target where no generated MCP entry hosts it and no
-standalone fallback exists.
 
 ## Inspect and simulate
 

@@ -27,10 +27,11 @@ export interface RouteProvenance {
   readonly relativePath: string;
 }
 
-/** The separately bundleable static preflight attached to one event route. */
-export interface CompiledEventPreflight {
+/** A lightweight event handler and its optional, separately bundled JSX view. */
+export interface CompiledEventHandler {
+  readonly view?: string;
   readonly provenance: RouteProvenance;
-  /** Absolute preflight module path. */
+  /** Absolute handler module path. */
   readonly source: string;
 }
 
@@ -101,27 +102,17 @@ export interface RouteInputSchema {
   readonly type: 'object';
 }
 
-/**
- * Where a contract's schema is declared: the module and the binding whose
- * initializer is the schema expression, at the end of any alias chain.
- */
+/** Location of a route's literal inputJsonSchema metadata. */
 export interface RouteContractOrigin {
-  /** The declaring binding: `statusInputSchema`; `inputSchema` for a route-local literal. */
+  /** The metadata binding: `inputJsonSchema`. */
   readonly binding: string;
   /** Project-relative POSIX path of the declaring module, e.g. `src/lib/protocol-schemas.ts`. */
   readonly module: string;
 }
 
 /**
- * One canonical input contract of the Application IR (#592 §1): a route's
- * `inputSchema` declaration, normalized once into the bounded JSON Schema
- * subset and shared by every route that binds the same declared schema.
- * Identity is the declaration site, so two routes importing one binding
- * share one contract while a route-local literal is
- * `contract:<route relativePath>#inputSchema`. Routes reference a contract
- * by {@link CompiledAgentRoute.contract}; projections consume it — the
- * routed CLI derives its argv grammar from `input`, generated route types
- * and the Workbench read it — instead of re-reading the route module.
+ * Literal input metadata consumed by CLI flags and execution-free inspection.
+ * Runtime schemas and generated TypeScript types remain separate authorities.
  */
 export interface RouteContract {
   /** `contract:<origin.module>#<origin.binding>`. */
@@ -148,11 +139,11 @@ export interface CompiledAgentRoute {
   /** Canonical event identity; present only when {@link kind} is `event-route`. */
   readonly event?: CanonicalAgentEvent;
   readonly id: string;
-  /** Statically projected bounded JSON Schema subset — the bound contract's `input` object; absent for missing or richer input schemas. */
+  /** Statically projected bounded JSON Schema subset — the bound contract's `input` object; absent without config.inputJsonSchema. */
   readonly inputSchema?: RouteInputSchema;
   readonly kind: CompiledRouteKind;
   /** Static cheap gate; present only on event routes that declare a valid relative default re-export. */
-  readonly preflight?: CompiledEventPreflight;
+  readonly handler?: CompiledEventHandler;
   readonly provenance: RouteProvenance;
   /** Omitted only by legacy or manually assembled graphs, where consumers must treat the declaration as unknown. */
   readonly resultSchemaState?: RouteResultSchemaState;
@@ -219,7 +210,7 @@ export interface CompiledServerSurface {
 export type CompiledCliMode = 'generated' | 'conventional' | 'conflict';
 
 /**
- * One argv projection of a CLI route's `inputSchema` property, derived
+ * One argv projection of a CLI route's `inputJsonSchema` property, derived
  * statically from the bounded zod grammar (#102 stage 2). `key` is the
  * schema property; `option` is its kebab-case `--option` spelling; a
  * positional entry consumes bare arguments in `positional` order instead.
@@ -290,9 +281,11 @@ export interface CompiledCliProjection {
  * One executable command compiled from a `src/cli/**` route: nesting is the
  * path-derived identity (`cli:library/audit` -> `library audit`), metadata
  * comes from the statically extracted route config, and the argv surface
- * comes from the bounded `inputSchema` grammar.
+ * comes from literal `inputJsonSchema` metadata or JSON input.
  */
 export interface CompiledCliCommand {
+  /** Canonical JSON input for a standalone command; absent for per-field flags. */
+  readonly input?: 'json';
   readonly aliases: readonly string[];
   readonly description?: string;
   /** Exit-code policy: `zero` on success, or `result` reading the validated result's `exitCode`. */
@@ -356,7 +349,7 @@ export interface CompiledCliSurface {
  */
 export interface CompiledRouteGraph {
   readonly cli?: CompiledCliSurface;
-  /** Sorted by id; absent when no route has a static contract, so pre-#593 graphs digest unchanged. */
+  /** Sorted by id; absent when no route declares input metadata. */
   readonly contracts?: readonly RouteContract[];
   readonly diagnostics: readonly Diagnostic[];
   /** sha256 over the graph's project-relative identity. */

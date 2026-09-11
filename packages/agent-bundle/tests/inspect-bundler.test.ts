@@ -11,7 +11,7 @@ import { launchEnvRuntimePath, mcpEntryRuntimePath, terminalCapabilityRuntimePat
 import { composeBundlerInspection } from '../src/build/inspect-bundler.ts';
 import { stableJson } from '../src/core/digest.ts';
 import type { NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
-import type { CompiledEventPreflight } from '../src/routes/types.ts';
+import type { CompiledEventHandler } from '../src/routes/types.ts';
 import { workspaceNodeModules } from './helpers/workspace-paths.ts';
 
 const roots: string[] = [];
@@ -317,7 +317,7 @@ it('reports a tools hatch the lowering refuses as an invalid inspection naming t
     .filter((name) => name.startsWith('.agent-bundle-dts-'))).toEqual([]);
 });
 
-it('inspects the per-host preflight wrapper under the composite identity', async () => {
+it('inspects the per-host handler wrapper under the composite identity', async () => {
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-inspect-hooks-')));
   roots.push(parent);
   const root = join(parent, 'project');
@@ -325,15 +325,16 @@ it('inspects the per-host preflight wrapper under the composite identity', async
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
     writeFile(join(root, 'src', 'events', 'tool', 'before.tsx'), 'export default () => undefined;\n'),
-    writeFile(join(root, 'src', 'events', 'tool', 'before.preflight.ts'), 'export default () => true;\n'),
+    writeFile(join(root, 'src', 'events', 'tool', 'before.handler.ts'), 'export default () => true;\n'),
   ]);
-  const preflight: CompiledEventPreflight = Object.freeze({
-    provenance: Object.freeze({ kind: 'conventional' as const, relativePath: 'src/events/tool/before.preflight.ts' }),
-    source: `${root}/src/events/tool/before.preflight.ts`,
+  const handler: CompiledEventHandler = Object.freeze({
+    provenance: Object.freeze({ kind: 'conventional' as const, relativePath: 'src/events/tool/before.handler.ts' }),
+    source: `${root}/src/events/tool/before.handler.ts`,
+  view: `${root}/src/events/tool/before.view.tsx`,
   });
   const hook: NormalizedHook = {
     event: 'beforeTool',
-    eventRoute: { event: 'tool/before', fallback: 'none', preflight, runtime: 'shared' },
+    eventRoute: { event: 'tool/before', fallback: 'none', handler, runtime: 'shared' },
     id: 'hook:event-route:tool-before',
     name: 'event-route-tool-before',
     provenance: { kind: 'conventional', sourcePath: `${root}/src/events/tool/before.tsx` },
@@ -346,8 +347,8 @@ it('inspects the per-host preflight wrapper under the composite identity', async
     hooks: [hook],
     mcpServers: [],
     metadata: {
-      id: 'plugin:preflight-inspect',
-      name: 'preflight-inspect',
+      id: 'plugin:handler-inspect',
+      name: 'handler-inspect',
       provenance: { kind: 'config', sourcePath: `${root}/agent-bundle.config.ts` },
       version: '1.0.0',
     },
@@ -390,8 +391,8 @@ it('inspects the per-host preflight wrapper under the composite identity', async
   ]);
   for (const entry of hooks) {
     expect(entry.target).toBe('claude+codex');
-    expect(entry.generatedEntry).toContain('executeEventPreflight');
-    expect(entry.generatedEntry).toContain(preflight.source);
+    expect(entry.generatedEntry).toContain('executeEventHandler');
+    expect(entry.generatedEntry).toContain(handler.source);
     expect(entry.generatedEntry).toContain('agent-bundle/event-project');
     expect(entry.generatedEntry).toContain('.execute.mjs');
     expect(entry.generatedEntry).not.toContain('AGENT_BUNDLE_HOOK_HOST');

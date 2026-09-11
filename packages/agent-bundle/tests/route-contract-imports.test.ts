@@ -80,7 +80,7 @@ const cliRoute = (variant: FixtureVariant): string => variant === 'inline'
   ? [
       "import { z } from 'zod';",
       '',
-      "export const config = { description: 'Show the queue.' };",
+      "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' }, limit: { type: 'number', description: 'Recent rows' }, statuses: { type: 'array', items: { type: 'string', enum: ['requested', 'queued', 'running', 'done'] } }, tickets: { type: 'array', items: { type: 'string' } } } }, description: 'Show the queue.' };",
       `export const inputSchema = ${inlineInputSchema};`,
       "export const resultSchema = z.object({ filters: inputSchema, operation: z.literal('status') });",
       "export default async function status({ input }: { input: z.infer<typeof inputSchema> }) {",
@@ -93,7 +93,7 @@ const cliRoute = (variant: FixtureVariant): string => variant === 'inline'
       '',
       "import { statusInputSchema, statusResultSchema } from '../lib/protocol-schemas.js';",
       '',
-      "export const config = { description: 'Show the queue.' };",
+      "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' }, limit: { type: 'number', description: 'Recent rows' }, statuses: { type: 'array', items: { type: 'string', enum: ['requested', 'queued', 'running', 'done'] } }, tickets: { type: 'array', items: { type: 'string' } } } }, description: 'Show the queue.' };",
       'export const inputSchema = statusInputSchema;',
       'export const resultSchema = statusResultSchema;',
       "export default async function status({ input }: { input: z.infer<typeof inputSchema> }) {",
@@ -107,7 +107,7 @@ const toolRoute = (variant: FixtureVariant): string => variant === 'inline'
       "import { Agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
       '',
-      "export const config = { description: 'Show the queue.' };",
+      "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' }, limit: { type: 'number', description: 'Recent rows' }, statuses: { type: 'array', items: { type: 'string', enum: ['requested', 'queued', 'running', 'done'] } }, tickets: { type: 'array', items: { type: 'string' } } } }, description: 'Show the queue.' };",
       `export const inputSchema = ${inlineInputSchema};`,
       "export const resultSchema = z.object({ filters: inputSchema, operation: z.literal('status') });",
       'export default async function HaulerStatus({ input }: { input: z.infer<typeof inputSchema> }) {',
@@ -122,7 +122,7 @@ const toolRoute = (variant: FixtureVariant): string => variant === 'inline'
       '',
       "import { statusInputSchema, statusResultSchema } from '../../../lib/protocol-schemas.js';",
       '',
-      "export const config = { description: 'Show the queue.' };",
+      "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' }, limit: { type: 'number', description: 'Recent rows' }, statuses: { type: 'array', items: { type: 'string', enum: ['requested', 'queued', 'running', 'done'] } }, tickets: { type: 'array', items: { type: 'string' } } } }, description: 'Show the queue.' };",
       'export const inputSchema = statusInputSchema;',
       'export const resultSchema = statusResultSchema;',
       'export default async function HaulerStatus({ input }: { input: z.infer<typeof inputSchema> }) {',
@@ -237,7 +237,7 @@ const typecheckProbe = (root: string): readonly string[] => {
     .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
 };
 
-it('shares imported route contracts across graph, argv, runtime, and generated types', { timeout: 120_000 }, async () => {
+it('uses explicit metadata with imported runtime schemas and preserves generated types', { timeout: 120_000 }, async () => {
   const [bareRoot, importedRoot, inlineRoot] = await Promise.all([
     writeFixture('bare'),
     writeFixture('imported'),
@@ -248,25 +248,17 @@ it('shares imported route contracts across graph, argv, runtime, and generated t
     routeGraph(importedRoot),
     routeGraph(inlineRoot),
   ]);
-  expect(importedGraph.contracts).toHaveLength(1);
-  expect(importedGraph.contracts?.[0]).toMatchObject({
-    id: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
-    origin: {
-      binding: 'statusInputSchema',
-      module: 'src/lib/protocol-schemas.ts',
-    },
-    routes: ['cli:status', 'tool:hauler/hauler_status'],
-  });
+  expect(importedGraph.contracts).toHaveLength(2);
 
   const importedCli = routeById(importedGraph, 'cli:status');
   const importedTool = routeById(importedGraph, 'tool:hauler/hauler_status');
   const inlineTool = routeById(inlineGraph, 'tool:hauler/hauler_status');
-  expect(importedCli?.contract).toBe('contract:src/lib/protocol-schemas.ts#statusInputSchema');
-  expect(importedTool?.contract).toBe('contract:src/lib/protocol-schemas.ts#statusInputSchema');
+  expect(importedCli?.contract).toBe('contract:src/cli/status.ts#inputJsonSchema');
+  expect(importedTool?.contract).toBe('contract:src/mcp/hauler/tools/hauler_status.tsx#inputJsonSchema');
   expect(commandById(importedGraph, 'cli:status')?.options)
     .toEqual(commandById(inlineGraph, 'cli:status')?.options);
   expect(importedTool?.inputSchema).toEqual(inlineTool?.inputSchema);
-  expect(importedCli?.inputSchema).toBe(importedTool?.inputSchema);
+  expect(importedCli?.inputSchema).toEqual(importedTool?.inputSchema);
 
   const built = await build({ output: 'artifact', packageOutputs: true, root: importedRoot });
   expect(built.diagnostics).toEqual([]);
@@ -308,20 +300,6 @@ it('shares imported route contracts across graph, argv, runtime, and generated t
     routes: { mcpCommands: true },
     targets: ['portable'],
   }) as RouteContractGraph;
-  expect(bareGraph.diagnostics).toEqual([
-    expect.objectContaining({
-      code: 'AB4838',
-      message: expect.stringContaining(
-        'inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) -> requestStatusSchema -> requestStatuses',
-      ),
-      sourcePath: join(bareRoot, 'src', 'cli', 'status.ts'),
-    }),
-  ]);
-  expect(bareGraph.diagnostics[0]?.message).toContain('is not a relative module path');
-  const bareCli = routeById(bareGraph, 'cli:status');
-  const bareTool = routeById(bareGraph, 'tool:hauler/hauler_status');
-  expect(bareCli).not.toHaveProperty('contract');
-  expect(bareCli).not.toHaveProperty('inputSchema');
-  expect(bareTool).not.toHaveProperty('contract');
-  expect(bareTool).not.toHaveProperty('inputSchema');
+  expect(bareGraph.diagnostics).toEqual([]);
+  expect(commandById(bareGraph, 'cli:status')?.options).toEqual(commandById(importedGraph, 'cli:status')?.options);
 });

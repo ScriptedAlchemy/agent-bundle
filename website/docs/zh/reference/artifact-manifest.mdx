@@ -1,5 +1,5 @@
 ---
-description: 'agent-bundle.manifest.json 契约（manifestVersion 5）：build 一次性写出的组合插件根目录索引——每个分节与字段、由谁写入、由谁读取、随包发布的 JSON Schema、保留键，以及版本规则。'
+description: 'agent-bundle.manifest.json 契约（manifestVersion 6）：build 一次性写出的组合插件根目录索引——每个分节与字段、由谁写入、由谁读取、随包发布的 JSON Schema、保留键，以及版本规则。'
 ---
 
 # 产物清单
@@ -16,11 +16,11 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | 属性 | 规则 |
 | --- | --- |
 | 只写一次 | 只有 `agent-bundle build` 在暂存根目录完成之后写出它。没有任何别的东西会创建它；构建之后唯一的编辑是 `files[]` 一节所述对派生变体的重新索引，它只重新测量非编译行，绝不触碰编译行。 |
-| `manifestVersion` | `5`。读取方拒绝任何其他值。 |
+| `manifestVersion` | `6`。读取方拒绝任何其他值。 |
 | 规范字节 | 文件就是该文档的规范 JSON 序列化——对象键已排序、没有无意义的空白、末尾恰有一个换行。每个读取方都会把解析结果重新序列化，字节不完全一致就拒绝该文件。手工编辑、重新格式化或重复键都会让读取失败。 |
 | 封闭键 | 每个对象只接受文档化的那些键。任何层级上的未知键都是解析错误。 |
 | 有序数组 | 每个数组都有显式的排序键（各分节下方注明），且没有重复项。 |
-| 精简读取方 | 上面各行描述的是完整解析器（`parseArtifactManifest`），下表中的消费者除一个之外都使用它：打包进生成 bin 的 `<plugin> web` 支持不经解析器读取清单。它只校验自己启动所需的切片并忽略其余所有键，但对这些切片是拒绝而非过滤，所用检查与完整解析器相同（由 `web-host/manifest.ts` 持有，两者都从它导入）：`5` 以外的 `manifestVersion` 或重复的 JSON 键；不是对象、未命名 host 或重复 host 的 `projections[]` 行；不是对象、`kind` 未知、按 kind 不应携带却带有 `launch` 记录（或应携带却缺失）、或重复 server `name` 的 `executables.mcpServers[]` 行——同名两行绝不会解析为后者；格式错误的 `launch` 记录，或其 entry 不是其服务器 kind 所启动的那种 `files[]` 行（`compiled` 对应 `bundle`，`prebuilt` 对应 `prebuilt`）、worker 不是 `bundle` 行、或 `artifact` 参数不在根目录之内的记录（参数可以指向根目录下含有行的目录）；以及 `server` 并非带 launch 记录之行的 `web.apps[]` 行。 |
+| 精简读取方 | 上面各行描述的是完整解析器（`parseArtifactManifest`），下表中的消费者除一个之外都使用它：打包进生成 bin 的 `<plugin> web` 支持不经解析器读取清单。它只校验自己启动所需的切片并忽略其余所有键，但对这些切片是拒绝而非过滤，所用检查与完整解析器相同（由 `web-host/manifest.ts` 持有，两者都从它导入）：`6` 以外的 `manifestVersion` 或重复的 JSON 键；不是对象、未命名 host 或重复 host 的 `projections[]` 行；不是对象、`kind` 未知、按 kind 不应携带却带有 `launch` 记录（或应携带却缺失）、或重复 server `name` 的 `executables.mcpServers[]` 行——同名两行绝不会解析为后者；格式错误的 `launch` 记录，或其 entry 不是其服务器 kind 所启动的那种 `files[]` 行（`compiled` 对应 `bundle`，`prebuilt` 对应 `prebuilt`）、worker 不是 `bundle` 行、或 `artifact` 参数不在根目录之内的记录（参数可以指向根目录下含有行的目录）；以及 `server` 并非带 launch 记录之行的 `web.apps[]` 行。 |
 | 路径 | 每个路径都是 POSIX 形式、相对根目录且安全：没有前导 `/`、没有反斜杠、没有 `.` 或 `..` 段，也绝不会是构建机上的绝对路径。把整个组合根目录搬到另一个绝对路径后，每个读取方仍然可用：所有路径都保持相对根目录，并在搬迁后的树内解析。任何分节指向的路径——宿主文档、可执行文件、App 视图、安装文件——同时也是一行 `files[]`。 |
 
 ## 由谁写入
@@ -58,7 +58,7 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
 
 | 字段 | 内容 |
 | --- | --- |
-| `manifestVersion` | `5`。为消费者读取的公开契约版本化。 |
+| `manifestVersion` | `6`。为消费者读取的公开契约版本化。 |
 | `runtime` | `{ node }`——该根目录据以构建的面向消费者的生成式可执行文件运行时下限，为满足框架下限的规范 `major.minor.patch` 字符串。 |
 
 ### `application`
@@ -140,10 +140,10 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
 | `source` | 是 | 路由模块，项目相对的 POSIX 路径——路由的可移植身份。 |
 | `provenance` | 是 | `{ kind: 'conventional' }`。今天唯一的来源是文件系统发现；这个判别字段是将来投影路由挂接的位置。 |
 | `event` | 恰对 `event-route` | 规范事件，例如 `tool/after`。 |
-| `execution` | 恰对 `event-route` | `{ fallback, preflight?, providers?, runtime }`，即产物检查可见的事件执行契约。`fallback` 为 `none` 或 `standalone`。`preflight` 在存在时是轻量预检模块相对项目根的 POSIX 路径。`providers` 是已排序且唯一的必需常规 provider 键列表；缺省表示解析所有 provider，`[]` 表示不解析任何 provider。`runtime` 为 `shared` 或 `standalone`。 |
+| `execution` | 仅 `event-route` | `{ fallback, handler?, runtime }`。`handler` 指向编译器内部的轻量处理器或门禁模块；`runtime` 选择 `shared` 或 `standalone` 渲染。provider 在请求中按需解析。 |
 | `serverId` | 恰对 MCP 类型 | 所属服务器 `mcp:<name>`，出现在 `app`、`prompt`、`resource` 与 `tool` 路由上。 |
 | `description` | 否 | `config.description`，当它是非空白字符串时。 |
-| `inputSchema` | 否 | 路由输入的有界 JSON Schema 投影：一个 `additionalProperties: false` 的对象，属性类型为 `boolean`、`number`、`string`（可带 `enum`）或由它们组成的 `array`，每个属性可带 `default` 与 `description`，外加可选的 `required` 列表。路由 schema 超出这一语法时缺省。 |
+| `inputSchema` | 否 | 路由输入的有界 JSON Schema 投影：一个 `additionalProperties: false` 的对象，属性类型为 `boolean`、`number`、`string`（可带 `enum`）或由它们组成的 `array`，每个属性可带 `default` 与 `description`，外加可选的 `required` 列表。来自 config.inputJsonSchema；未声明元数据时缺省。 |
 | `contract` | 否 | 该路由所绑定 `input` 所在的 `routes.contracts[]` 行；未提取到静态契约时缺省。 |
 
 `routes.cli.commands[]` 的一行，按拼接后的 `path` 排序：
@@ -153,6 +153,7 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
 | `routeId` | 是 | 该命令运行的 `cli:` 路由。 |
 | `path[]` | 是 | 命令段，至少一个。 |
 | `aliases[]` | 是 | 已排序的别名。 |
+| `input` | 否 | 独立命令接受 `--input` JSON 时为 `"json"`。工具投影使用 `projection.input`。 |
 | `options[]` | 是 | 路由输入 schema 的 argv 投影，按 `key` 排序：`{ key, option, kind, repeated, required, aliases?, choices?, description?, positional? }`，`kind` 为 `boolean`、`enum`、`number`、`string` 之一；`aliases` 是 CLI 投影额外声明的、已排序的 `--拼写`。 |
 | `exitCode` | 是 | `result` 或 `zero`。 |
 | `mcp` | 否 | 当该命令是某个 MCP 工具的 CLI 投影时为 `{ server, tool, confirm }`。 |
@@ -321,7 +322,7 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
     { "bytes": 412, "kind": "generated", "path": ".claude-plugin/plugin.json",
       "sha256": "…" }
   ],
-  "manifestVersion": 5,
+  "manifestVersion": 6,
   "projections": [
     { "builtInHost": "claude",
       "documents": { "hooks": "hooks/hooks.json", "marketplace": ".claude-plugin/marketplace.json",
@@ -373,7 +374,7 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
 | `readArtifactManifest(root)` | 打开 `<root>/agent-bundle.manifest.json`，返回 `{ status: 'ok', manifest, path, root }`、`{ status: 'missing', … }` 或 `{ status: 'invalid', detail, … }`。这是框架自身的消费者打开已构建根目录的唯一方式。 |
 | `parseArtifactManifest(bytes)` | 把规范字节解析并校验为冻结的 `ArtifactManifest`；任何违规——包括重复键或非规范字节——都会抛出。 |
 | `artifactManifestName` | `'agent-bundle.manifest.json'`。 |
-| `artifactManifestVersion` | `5`。 |
+| `artifactManifestVersion` | `6`。 |
 | `artifactCompilerRecordVersion` | `1`。 |
 
 类型（`ArtifactManifest`、`ArtifactManifestCompiler`、`ArtifactManifestCompilerAdapter`、
@@ -382,17 +383,18 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
 
 ## 保留键
 
-这些键属于设计的一部分，但**不会输出**，v4 读取方会像对待任何未知键一样拒绝它们。在此列出，是为了让消费者
+这些键属于设计的一部分，但**不会输出**，v6 读取方会像对待任何未知键一样拒绝它们。在此列出，是为了让消费者
 不要自创拼写：
 
 | 保留键 | 预期内容 |
 | --- | --- |
 | `projections[].components` | `inspect` 打印的逐宿主组件清点（`selected` / `skipped` 及原因）。 |
 | `executables.noticeDelivery` | 烘焙进每个编译后 wrapper 与 MCP 入口的通知投递交集。 |
-| `executables.hooks[].preflight` | 钩子行上的门禁与预检声明。 |
 | `executables.mcpServers[].apps[].client` | App 的生成式客户端与 `web` 环境。 |
 
 ## 版本规则
+
+版本 6 将事件 `execution.preflight` 改名为 `execution.handler`，并移除旧 `execution.providers` 选择字段。
 
 每个根目录携带两个版本号。键在每一层都是封闭的，因此**可选并不等于向后兼容**：版本 N 的读取方会拒绝
 任何它不认识的键或枚举值（精简的 web 读取方在读取任何切片之前就先拒绝版本不匹配）。

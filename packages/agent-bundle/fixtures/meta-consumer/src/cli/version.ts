@@ -4,6 +4,11 @@ import { z } from 'zod';
 import { identity } from '../lib/identity.ts';
 
 export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
   description: 'Prints the identity agent-bundle/meta resolved to.',
 } satisfies CliRouteConfig;
 

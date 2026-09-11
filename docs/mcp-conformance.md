@@ -111,8 +111,6 @@ framing by `packages/agent-bundle/tests/packed-stdio-projection.test.ts`):
   stamped with the related-task key; the task observes progress either way.
   Records are session-scoped, retained for `ttl` after settling, bounded at
   256 per server, and cancelled when the session closes.
-- The operation-based `createRscMcpServer` (`@agent-bundle/runtime/plugin`) is
-  unchanged: no `tasks` capability, ordinary processing.
 
 The conformance lane (`server --suite active`, specification `2025-11-25`)
 does not yet exercise the Tasks utility; when the official runner adds task

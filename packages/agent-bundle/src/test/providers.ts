@@ -2,7 +2,7 @@ import { join } from 'node:path';
 
 import type {
   AgentPluginIdentity,
-  AgentProviderResolver,
+  AgentRequestInitBase,
   AgentProviderValues,
   Observed,
   resolvePluginRoot,
@@ -11,8 +11,6 @@ import type {
 import {
   executeProviders,
   providerProcessLifetimeValue,
-  requiredProviderKeyProblemMessage,
-  selectRequiredProviders,
   type ExecutableProvider,
   type ProviderProcessLifetime,
   type ProviderProcessLifetimeValue,
@@ -25,18 +23,9 @@ import type { RenderedRouteProvenance } from './types.ts';
 /**
  * Conventional request context providers for harness request scopes.
  *
- * Every generated request scope discovers `src/providers/*` and executes them
- * once per request as the request's own provider resolver (#313, #366, #459):
- * after `runAgentRequest` froze the identity axes and opened the notice lease,
- * before the route runs, over the runtime's read-only request view. The
- * harness does the same for every manifest-backed render, dispatch, and
- * in-memory projection, through the shared execution helper the generated
- * scopes mirror, so a test observes the provider map the artifact would mount
- * and every provider observes the same `lineage`, identity (`plugin`
- * included), `state.read()`, and `notices.inbox()`/`published()` the route
- * will. A test that passes `context.providers`
- * opts out: the explicit map is used verbatim, exactly as the runtime's
- * request contract reads it.
+ * Factories load on demand through `context.provider(key)`, once per request.
+ * They receive the same identity and read-only handles as generated scopes.
+ * An explicit `context.providers` map bypasses discovery.
  *
  * What the harness simulates per executable is the framework-owned process
  * identity (`processLifetime`), not module evaluation. Provider modules load
@@ -53,53 +42,18 @@ import type { RenderedRouteProvenance } from './types.ts';
 
 export interface MountProvidersOptions {
   /** Explicit provider values from the test; when present they win and nothing is discovered. */
-  readonly explicit: AgentProviderValues | undefined;
+  readonly explicit: Partial<AgentProviderValues> | undefined;
   /** The surface-specific provider invocation the generated scope would pass (`tool`, `event`, `cli`, `script`). */
   readonly invocation: unknown;
   /** Absent for a module rendered directly: no project, so nothing to discover. */
   readonly manifest: AgentBundleTestManifest | undefined;
   /**
    * This request's claimed hit on the simulated executable's process identity
-   * (see {@link claimProcessHit}); mounted verbatim as `providers.processLifetime`.
+   * (see {@link claimProcessHit}); mounted verbatim as `context.process`.
    */
   readonly processHit: ProviderProcessLifetimeValue;
   readonly provenance?: RenderedRouteProvenance;
 }
-
-/**
- * Chooses the manifest providers one route request may load. Event routes
- * honor `config.providers`; every other surface preserves the all-provider
- * compatibility contract.
- */
-export const selectManifestProviderDescriptors = (
-  manifest: AgentBundleTestManifest,
-  routeId: string | undefined,
-): readonly TestableProviderDescriptor[] => {
-  const descriptors = manifest.providers ?? [];
-  const route = routeId === undefined ? undefined : manifest.routes[routeId];
-  const declaration = route?.kind === 'event-route' ? route.config['providers'] : undefined;
-  if (declaration !== undefined && !(
-    Array.isArray(declaration)
-    && declaration.every((key): key is string => typeof key === 'string')
-  )) {
-    throw new AgentTestError(
-      'contract-violation',
-      `Event route ${JSON.stringify(routeId)} has malformed config.providers in the compiled test manifest.`,
-    );
-  }
-  const selection = selectRequiredProviders(
-    descriptors,
-    declaration,
-  );
-  if (!selection.ok) {
-    throw new AgentTestError(
-      'contract-violation',
-      `Event route ${JSON.stringify(routeId)} has invalid config.providers in the compiled test manifest.`,
-      { details: selection.problems.map(requiredProviderKeyProblemMessage) },
-    );
-  }
-  return selection.providers;
-};
 
 const loadProvider = async (
   manifest: AgentBundleTestManifest,
@@ -160,29 +114,24 @@ export const harnessPluginRoot = (options: HarnessPluginRootOptions): Observed<A
   options.context.plugin
     ?? options.resolvePluginRoot({ fallback: join(options.manifest?.projectRoot ?? process.cwd(), '.agent-bundle') }).identity;
 
-/**
- * The `providers` init for one harness request scope: the explicit map when
- * the test supplied one, only the process identity for a module rendered
- * directly, otherwise a resolver `runAgentRequest` runs over its read-only
- * request view — the project's conventional providers, loaded and executed in
- * the generated order over the claimed process hit.
- */
-export const mountProviders = (options: MountProvidersOptions): AgentProviderValues | AgentProviderResolver => {
-  if (options.explicit !== undefined) return options.explicit;
+/** Supply explicit fixture values or a lazy resolver over the compiled provider catalog. */
+export const mountProviders = (options: MountProvidersOptions): Pick<AgentRequestInitBase, 'resolveProvider' | 'process'> & { readonly providers?: Partial<AgentProviderValues> } => {
+  if (options.explicit !== undefined) return { providers: options.explicit, process: options.processHit };
   const manifest = options.manifest;
   if (manifest === undefined) {
-    return { processLifetime: options.processHit };
+    return { process: options.processHit };
   }
-  return async (request) => {
-    const providers: ExecutableProvider[] = [];
-    for (const descriptor of selectManifestProviderDescriptors(manifest, options.provenance?.routeId)) {
-      providers.push(await loadProvider(manifest, descriptor, options.provenance));
-    }
-    return executeProviders({
-      invocation: options.invocation,
-      processLifetime: { ...options.processHit },
-      providers,
-      request,
-    });
+  return {
+    process: options.processHit,
+    resolveProvider: async (key, request) => {
+      const descriptor = (manifest.providers ?? []).find((provider) => provider.key === key);
+      if (descriptor === undefined) throw new TypeError(`Unknown provider ${JSON.stringify(key)}.`);
+      const values = await executeProviders({
+        invocation: options.invocation,
+        providers: [await loadProvider(manifest, descriptor, options.provenance)],
+        request,
+      });
+      return values[key];
+    },
   };
 };

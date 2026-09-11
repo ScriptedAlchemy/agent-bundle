@@ -243,7 +243,7 @@ const pathSuffix = (path: readonly PropertyKey[]): string =>
   path.map((segment) => (typeof segment === 'number' ? `[${String(segment)}]` : `.${String(segment)}`)).join('');
 
 const takesJsonInput = (command: CompiledCliCommand): boolean =>
-  command.mcp !== undefined && (command.projection === undefined || command.projection.input === 'json');
+  command.input === 'json' || (command.mcp !== undefined && (command.projection === undefined || command.projection.input === 'json'));
 
 /**
  * Spells a schema path the way the user typed it: the first segment is the
@@ -685,12 +685,12 @@ const parseMcpCommandInput = (
   command: CompiledCliCommand,
   parsed: ParsedGeneratedCliArgv,
 ): ParsedGeneratedCliArgv => {
-  if (command.mcp === undefined) return parsed;
-  if (command.mcp.confirm && parsed.input['yes'] !== true) {
+  if (command.mcp === undefined && command.input !== 'json') return parsed;
+  if (command.mcp?.confirm === true && parsed.input['yes'] !== true) {
     throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
   }
   if (command.projection !== undefined && command.projection.input !== 'json') {
-    if (!command.mcp.confirm) return parsed;
+    if (command.mcp?.confirm !== true) return parsed;
     const input = { ...parsed.input };
     delete input['yes'];
     return { ...parsed, input };
@@ -721,12 +721,12 @@ export interface GeneratedCliInputSchema {
 }
 
 /** Applies projection defaults, `mapInput`, and the route schema at the generated CLI boundary. */
-export const mapGeneratedCliInput = (
+export const mapGeneratedCliInput = async (
   command: CompiledCliCommand,
   inputSchema: GeneratedCliInputSchema,
   projectionModule: Readonly<Record<string, unknown>> | undefined,
   input: Readonly<Record<string, unknown>>,
-): unknown => {
+): Promise<unknown> => {
   const withDefaults: Record<string, unknown> = { ...input };
   for (const [key, value] of Object.entries(command.projection?.defaults ?? {})) {
     if (!Object.hasOwn(withDefaults, key)) withDefaults[key] = value;
@@ -738,7 +738,7 @@ export const mapGeneratedCliInput = (
       throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);
     }
     try {
-      mapped = mapInput(withDefaults);
+      mapped = await mapInput(withDefaults);
     } catch (error) {
       throw new CliInputError(error instanceof Error ? error.message : String(error));
     }

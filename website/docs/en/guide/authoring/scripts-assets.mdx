@@ -57,7 +57,7 @@ component and `main` (`AB4737`). For a bin-only module, prefix a path segment wi
 
 ### Rendered scripts
 
-`src/scripts/<name>.tsx` is a rendered script. Its async default component receives `argv` and
+`src/scripts/<name>.tsx` is a rendered script. Its default component receives `argv` and
 `signal` and renders through the Agent renderer with the full CLI output contract. It compiles to
 `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker.
 

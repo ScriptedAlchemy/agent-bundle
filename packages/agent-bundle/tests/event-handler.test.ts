@@ -1,25 +1,13 @@
 import { expect, it } from '@rstest/core';
 
 import {
-  executeEventPreflight,
-  eventFamilyAllowsPreflightDeny,
-  validateEventPreflightResult,
-  type EventPreflight,
-  type EventPreflightContext,
-} from '../src/events/preflight.ts';
-import { projectEventPreflightResult } from '../src/events/projection.ts';
-import {
-  canonicalAgentEvents,
-  eventFamilyAllowsPreflightDeny as publicEventFamilyAllowsPreflightDeny,
-  validateEventPreflightResult as publicValidateEventPreflightResult,
-  type CanonicalAgentEvent,
-  type EventPreflightContext as PublicEventPreflightContext,
-  type EventPreflightResult as PublicEventPreflightResult,
-} from '../src/routes/public.ts';
-import {
-  eventFamilyAllowsPreflightDeny as rootEventFamilyAllowsPreflightDeny,
-  validateEventPreflightResult as rootValidateEventPreflightResult,
-} from '../src/index.ts';
+  executeEventHandler,
+  validateEventHandlerResult,
+  type EventHandlerContext,
+} from '../src/events/handler.ts';
+import { projectEventHandlerResult } from '../src/events/projection.ts';
+import { eventContracts } from '../src/routes/events.ts';
+import { canonicalAgentEvents, type CanonicalAgentEvent } from '../src/routes/public.ts';
 
 /** Families whose existing projection emits a blocking deny on at least one host. */
 const familiesThatAllowDeny = [
@@ -59,65 +47,65 @@ it('classifies deny legality for every canonical event family', () => {
     [...canonicalAgentEvents].sort(),
   );
   for (const event of familiesThatAllowDeny) {
-    expect(eventFamilyAllowsPreflightDeny(event)).toBe(true);
+    expect(eventContracts[event].deny).toBe(true);
   }
   for (const event of familiesThatRejectDeny) {
-    expect(eventFamilyAllowsPreflightDeny(event)).toBe(false);
+    expect(eventContracts[event].deny).toBe(false);
   }
 });
 
 it('validates execute and continue results without a host decision', () => {
-  expect(validateEventPreflightResult('execute', 'tool/before')).toBe('execute');
-  expect(validateEventPreflightResult(
-    { data: { tickets: ['cc-7'] }, outcome: 'execute' },
+  expect(validateEventHandlerResult(undefined, 'tool/before')).toEqual({ outcome: 'continue' });
+  expect(() => validateEventHandlerResult('execute', 'tool/before')).toThrow();
+  expect(validateEventHandlerResult(
+    { data: { tickets: ['cc-7'] }, module: './before.view.js', outcome: 'render' },
     'tool/after',
-  )).toEqual({ data: { tickets: ['cc-7'] }, outcome: 'execute' });
-  expect(validateEventPreflightResult({ outcome: 'continue' }, 'tool/after')).toEqual({
+    './before.view.js',
+  )).toEqual({ data: { tickets: ['cc-7'] }, module: './before.view.js', outcome: 'render' });
+  expect(validateEventHandlerResult({ outcome: 'continue' }, 'tool/after')).toEqual({
     outcome: 'continue',
   });
-  expect(Object.isFrozen(validateEventPreflightResult({ outcome: 'continue' }, 'session/start'))).toBe(true);
+  expect(Object.isFrozen(validateEventHandlerResult({ outcome: 'continue' }, 'session/start'))).toBe(true);
 });
 
 it('validates a denying result only when the family admits deny and the reason is nonempty', () => {
-  expect(validateEventPreflightResult({ outcome: 'deny', reason: 'blocked command' }, 'tool/before')).toEqual({
+  expect(validateEventHandlerResult({ outcome: 'deny', reason: 'blocked command' }, 'tool/before')).toEqual({
     outcome: 'deny',
     reason: 'blocked command',
   });
-  expect(() => validateEventPreflightResult({ outcome: 'deny' }, 'tool/before'))
+  expect(() => validateEventHandlerResult({ outcome: 'deny' }, 'tool/before'))
     .toThrow(/requires a nonempty reason when outcome is deny/u);
-  expect(() => validateEventPreflightResult({ outcome: 'deny', reason: '' }, 'stop'))
+  expect(() => validateEventHandlerResult({ outcome: 'deny', reason: '' }, 'stop'))
     .toThrow(/requires a nonempty reason when outcome is deny/u);
-  expect(() => validateEventPreflightResult({ outcome: 'deny', reason: '   ' }, 'prompt/submit'))
+  expect(() => validateEventHandlerResult({ outcome: 'deny', reason: '   ' }, 'prompt/submit'))
     .toThrow(/requires a nonempty reason when outcome is deny/u);
 });
 
 it('rejects deny on observation-only families instead of copying host projection', () => {
   for (const event of familiesThatRejectDeny) {
-    expect(() => validateEventPreflightResult({ outcome: 'deny', reason: 'no' }, event))
+    expect(() => validateEventHandlerResult({ outcome: 'deny', reason: 'no' }, event))
       .toThrow(new RegExp(`${event.replace('/', '\\/')} cannot deny`, 'u'));
   }
 });
 
-it('rejects unsupported preflight fields and results', () => {
-  expect(() => validateEventPreflightResult(undefined, 'tool/before'))
-    .toThrow(/Event preflight result/u);
-  expect(() => validateEventPreflightResult('continue', 'tool/before'))
-    .toThrow(/Event preflight result/u);
-  expect(() => validateEventPreflightResult({ outcome: 'allow' }, 'tool/before'))
+it('rejects unsupported handler fields and results', () => {
+  expect(() => validateEventHandlerResult('continue', 'tool/before'))
+    .toThrow(/Event handler result/u);
+  expect(() => validateEventHandlerResult({ outcome: 'allow' }, 'tool/before'))
     .toThrow(/not supported/u);
-  expect(() => validateEventPreflightResult({ outcome: 'ask' }, 'tool/before'))
+  expect(() => validateEventHandlerResult({ outcome: 'ask' }, 'tool/before'))
     .toThrow(/not supported/u);
-  expect(() => validateEventPreflightResult({ outcome: 'execute' }, 'tool/before'))
+  expect(() => validateEventHandlerResult({ outcome: 'render', module: './before.view.js' }, 'tool/before', './before.view.js'))
     .toThrow(/JSON values/u);
-  expect(() => validateEventPreflightResult({ data: new Date(), outcome: 'execute' }, 'tool/before'))
+  expect(() => validateEventHandlerResult({ data: new Date(), module: './before.view.js', outcome: 'render' }, 'tool/before', './before.view.js'))
     .toThrow(/JSON objects must be plain objects/u);
-  expect(() => validateEventPreflightResult({ outcome: 'continue', reason: 'x' }, 'tool/before'))
+  expect(() => validateEventHandlerResult({ outcome: 'continue', reason: 'x' }, 'tool/before'))
     .toThrow(/unsupported field/u);
-  expect(() => validateEventPreflightResult(
+  expect(() => validateEventHandlerResult(
     { outcome: 'deny', reason: 'blocked', updatedInput: {} },
     'tool/before',
   )).toThrow(/unsupported field/u);
-  expect(() => validateEventPreflightResult({ outcome: 'continue', extra: true }, 'tool/before'))
+  expect(() => validateEventHandlerResult({ outcome: 'continue', extra: true }, 'tool/before'))
     .toThrow(/unsupported field/u);
 });
 
@@ -127,8 +115,8 @@ it('runs a gate with frozen cheap context and validates before returning', async
     host: { name: 'claude', nativeEvent: 'PreToolUse' },
     signal: new AbortController().signal,
     terminal: { interactive: false },
-  } as unknown as EventPreflightContext<'tool/before'>;
-  const result = await executeEventPreflight(
+  } as unknown as EventHandlerContext<'tool/before'>;
+  const result = await executeEventHandler(
     (received) => {
       expect(Object.isFrozen(received)).toBe(true);
       expect(Object.isFrozen(received.host)).toBe(true);
@@ -148,8 +136,8 @@ it('honors the framework-owned abort signal before and after an asynchronous gat
     host: { name: 'cursor', nativeEvent: 'preToolUse' },
     signal: controller.signal,
     terminal: { interactive: false },
-  } as unknown as EventPreflightContext<'tool/before'>;
-  const execution = executeEventPreflight(
+  } as unknown as EventHandlerContext<'tool/before'>;
+  const execution = executeEventHandler(
     () => new Promise(() => undefined),
     context,
   );
@@ -158,13 +146,13 @@ it('honors the framework-owned abort signal before and after an asynchronous gat
 });
 
 it('projects a gate decision through the rendered event outcome rules', () => {
-  expect(projectEventPreflightResult(
+  expect(projectEventHandlerResult(
     { outcome: 'continue' },
     'tool/before',
     'claude',
     'PreToolUse',
   )).toBeUndefined();
-  expect(projectEventPreflightResult(
+  expect(projectEventHandlerResult(
     { outcome: 'deny', reason: 'blocked' },
     'tool/before',
     'claude',
@@ -176,19 +164,4 @@ it('projects a gate decision through the rendered event outcome rules', () => {
       permissionDecisionReason: 'blocked',
     },
   });
-});
-
-it('re-exports the preflight contract through the public production path', () => {
-  expect(publicValidateEventPreflightResult).toBe(validateEventPreflightResult);
-  expect(publicEventFamilyAllowsPreflightDeny).toBe(eventFamilyAllowsPreflightDeny);
-  expect(rootValidateEventPreflightResult).toBe(validateEventPreflightResult);
-  expect(rootEventFamilyAllowsPreflightDeny).toBe(eventFamilyAllowsPreflightDeny);
-  const result: PublicEventPreflightResult = publicValidateEventPreflightResult('execute', 'tool/before');
-  const context: PublicEventPreflightContext<'tool/before'> = {} as EventPreflightContext<'tool/before'>;
-  const authoring: EventPreflight<'tool/before', { readonly ticket: string }> = () => ({
-    data: { ticket: 'cc-7' },
-    outcome: 'execute',
-  });
-  expect(result).toBe('execute');
-  expect(authoring(context)).toEqual({ data: { ticket: 'cc-7' }, outcome: 'execute' });
 });

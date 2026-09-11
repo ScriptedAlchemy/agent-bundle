@@ -1,7 +1,19 @@
 import { Agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
-export const config = { description: 'Summarizes one harness note.', title: 'Summarize' };
+export const config = {
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "note": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "note"
+    ],
+    "type": "object"
+  }, description: 'Summarizes one harness note.', title: 'Summarize' };
 
 export const inputSchema = z.object({ note: z.string() });
 

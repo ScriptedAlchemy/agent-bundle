@@ -139,8 +139,9 @@ it('compiles the conventional tree into one frozen graph with a machine-independ
 
 it('populates bounded input schemas for every route kind and includes them in the digest', async () => {
   const root = await createRoot();
+  const metadata = { additionalProperties: false, properties: { count: { type: 'number' }, root: { type: 'string', description: 'Project root.' } }, required: ['root'], type: 'object' };
   const bounded = (config = '') => [
-    config,
+    config ? config.replace('{', '{ inputJsonSchema: ' + JSON.stringify(metadata) + ',') : 'export const config = { inputJsonSchema: ' + JSON.stringify(metadata) + ' };',
     "export const inputSchema = z.object({ count: z.number().optional(), root: z.string().describe('Project root.') }).strict();",
     'export const resultSchema = {};',
     'export default async () => undefined;',
@@ -190,12 +191,10 @@ it('populates bounded input schemas for every route kind and includes them in th
   await writeFile(inspectPath, (await readFile(inspectPath, 'utf8')).replace('Project root.', 'Workspace root.'));
   const changed = await compileRouteGraph(changedRoot, fixtureConfig());
   expect(changed.digest).not.toBe(graph.digest);
-  // Pre-#593 pin: an inline-only tree must digest exactly as it does on
-  // current main. Contract ids for route-local literals do not join identity.
-  expect(graph.digest).toBe('d4d97709727353b0acf39b9d1b26a507e41c9ba22ba5f897c0a5e9578fd2fb50');
+
 });
 
-it('shares one RouteContract across a CLI route and a tool route that import the same schema', async () => {
+it('does not infer metadata by following imported runtime schemas', async () => {
   const root = await createRoot();
   const schema = [
     'export const statusInputSchema = z.object({',
@@ -218,25 +217,16 @@ it('shares one RouteContract across a CLI route and a tool route that import the
   });
   const graph = await compileRouteGraph(root, fixtureConfig());
   expect(graph.diagnostics).toEqual([]);
-  expect(graph.contracts).toHaveLength(1);
-  const [contract] = graph.contracts ?? [];
-  expect(contract).toMatchObject({
-    id: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
-    origin: { binding: 'statusInputSchema', module: 'src/lib/protocol-schemas.ts' },
-    routes: ['cli:status', 'tool:hauler/hauler_status'],
-  });
-  const cli = graph.cli!.routes.find((entry) => entry.id === 'cli:status')!;
-  const tool = graph.servers[0]!.routes.find((entry) => entry.id === 'tool:hauler/hauler_status')!;
-  expect(cli.contract).toBe(contract!.id);
-  expect(tool.contract).toBe(contract!.id);
-  expect(contract!.input).toBe(cli.inputSchema);
-  expect(contract!.input).toBe(tool.inputSchema);
+  expect(graph.contracts).toBeUndefined();
+  expect(graph.cli!.commands![0]!.input).toBe('json');
+  expect(graph.servers[0]!.routes[0]!.inputSchema).toBeUndefined();
 });
 
 it('assigns a route-local literal the contract id of its own module and lists it in contracts', async () => {
   const root = await createRoot();
   await writeTree(root, {
     'src/cli/audit.ts': [
+      "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { strict: { type: 'boolean' } } } };",
       'export const inputSchema = z.object({ strict: z.boolean().optional() }).strict();',
       'export const resultSchema = {};',
       'export default async () => undefined;',
@@ -247,12 +237,12 @@ it('assigns a route-local literal the contract id of its own module and lists it
   expect(graph.diagnostics).toEqual([]);
   expect(graph.contracts).toEqual([
     expect.objectContaining({
-      id: 'contract:src/cli/audit.ts#inputSchema',
-      origin: { binding: 'inputSchema', module: 'src/cli/audit.ts' },
+      id: 'contract:src/cli/audit.ts#inputJsonSchema',
+      origin: { binding: 'inputJsonSchema', module: 'src/cli/audit.ts' },
       routes: ['cli:audit'],
     }),
   ]);
-  expect(graph.cli!.routes[0]!.contract).toBe('contract:src/cli/audit.ts#inputSchema');
+  expect(graph.cli!.routes[0]!.contract).toBe('contract:src/cli/audit.ts#inputJsonSchema');
   expect(graph.contracts![0]!.input).toBe(graph.cli!.routes[0]!.inputSchema);
 });
 
@@ -287,7 +277,7 @@ it('does not list routes of a custom-mode server on any contract', async () => {
   expect(graph.contracts).toBeUndefined();
 });
 
-it('changes the graph digest when a route imports its schema from another module', async () => {
+it('keeps metadata identity independent of runtime schema construction', async () => {
   const schema = 'z.object({ name: z.string() }).strict()';
   const command = (inputSchema: string): string => [
     `export const inputSchema = ${inputSchema};`,
@@ -309,7 +299,7 @@ it('changes the graph digest when a route imports its schema from another module
   const imported = await compileRouteGraph(importedRoot, fixtureConfig());
   expect(inline.diagnostics).toEqual([]);
   expect(imported.diagnostics).toEqual([]);
-  expect(imported.digest).not.toBe(inline.digest);
+  expect(imported.digest).toBe(inline.digest);
 });
 
 it('skips ignored paths, private segments, and declaration files', async () => {
@@ -455,8 +445,7 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       'export default async () => undefined;',
       '',
     ].join('\n'),
-    // A default export that is not a component: present, but the rendered
-    // script would fail at run time, so presence alone is not enough.
+    // A declared default is linked statically; the runtime checks callability.
     'src/scripts/render-object.tsx': [
       'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
       'export default {};',
@@ -476,15 +465,13 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
   const result = await validate({ root: project });
   const gate = result.diagnostics.filter(({ code }) => code === 'AB4737');
   expect(gate.map((diagnostic) => diagnostic.sourcePath)).toEqual([
-    join(project, 'src/scripts/render-object.tsx'),
     join(project, 'src/scripts/render-poster.tsx'),
     join(project, 'src/scripts/render-tool.tsx'),
     join(project, 'src/scripts/render-typed.tsx'),
   ]);
-  expect(gate[0]!.message).toContain('render-object.tsx is also the entry of bin "object" but exports no async default Server Component');
-  expect(gate[1]!.message).toContain('render-poster.tsx is also the entry of bin "poster" but exports no named main');
-  expect(gate[2]!.message).toContain('render-tool.tsx is also the entry of bin "tool" but exports no async default Server Component');
-  expect(gate[3]!.message).toContain('render-typed.tsx is also the entry of bin "typed" but exports no async default Server Component');
+  expect(gate[0]!.message).toContain('render-poster.tsx is also the entry of bin "poster" but exports no named main');
+  expect(gate[1]!.message).toContain('render-tool.tsx is also the entry of bin "tool" but exports no default Server Component');
+  expect(gate[2]!.message).toContain('render-typed.tsx is also the entry of bin "typed" but exports no default Server Component');
   expect(gate.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
   // Every rendered script stays discovered beside its bin: the gate names
   // the conflict instead of dropping a route.
@@ -766,7 +753,7 @@ it('skips a server layout entirely when routes.servers pins that server to a non
     mcp: { servers: { relay: { url: 'https://example.test/mcp' } } },
     routes: { servers: { curator: 'generated', relay: 'remote' } },
   }));
-  expect(codesOf(generated.diagnostics)).toEqual(['AB4831', 'AB4830']);
+  expect(codesOf(generated.diagnostics)).toEqual(['AB4831']);
   expect(generated.layouts!.map((layout) => layout.id)).toEqual(['layout:root', 'layout:mcp:curator']);
 });
 
@@ -994,11 +981,11 @@ it('compiles dynamic-config routes with an empty config beside the named error',
   expect(graph.servers[0]!.routes[0]!.config).toBe(emptyRouteConfig);
 });
 
-it('resolves appResourceUri() references and imported const identifiers to the App route resourceUri', async () => {
+it('resolves appResourceUri() references and local const strings to the App route resourceUri', async () => {
   const root = await createRoot();
   await writeTree(root, {
     'src/mcp/curator/apps/dashboard.tsx': [
-      "import { APP_RESOURCE_URI } from '../constants.ts';",
+      "const APP_RESOURCE_URI = 'ui://curator/dashboard.html';",
       "export const config = { resourceUri: APP_RESOURCE_URI, template: './dashboard.html' };",
       moduleSource,
     ].join('\n'),
@@ -1010,7 +997,7 @@ it('resolves appResourceUri() references and imported const identifiers to the A
       moduleSource,
     ].join('\n'),
     'src/mcp/curator/resources/catalog.ts': [
-      "import { APP_RESOURCE_URI as URI } from '../constants';",
+      "const URI = 'ui://curator/dashboard.html';",
       "export const config = { _meta: { ui: { resourceUri: URI } }, uri: 'catalog://books' };",
       moduleSource,
     ].join('\n'),
@@ -1080,8 +1067,8 @@ it('diagnoses an appResourceUri() reference to an unknown App with AB4826 and ke
   expect(unknownApp.message).toContain('known App routes of "curator": app:curator/dashboard');
   const nonLiteral = graph.diagnostics.find((diagnostic) => diagnostic.code === 'AB4806')!;
   expect(nonLiteral.sourcePath).toBe(join(root, 'src/mcp/curator/tools/search.ts'));
-  expect(nonLiteral.message).toContain('whose `export const APP_RESOURCE_URI` initializer is not a string literal');
-  expect(nonLiteral.recovery).toContain("appResourceUri('<app>')");
+  expect(nonLiteral.message).toContain('reference to the identifier "APP_RESOURCE_URI"');
+  expect(nonLiteral.recovery).toContain('imported values and alias chains are not evaluated');
   const routes = graph.servers[0]!.routes;
   expect(routes.find((route) => route.id === 'tool:curator/inspect')!.config).toBe(emptyRouteConfig);
   expect(routes.find((route) => route.id === 'tool:curator/search')!.config).toBe(emptyRouteConfig);
@@ -1454,7 +1441,7 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   expect(first).toContain('import type * as route0 from "../src/events/workspace/open.js";');
   expect(first).toContain('import type * as route1 from "../src/mcp/curator/tools/inspect.js";');
   expect(first).toContain('"event:workspace/open": EventRouteContract<typeof route0.default, "workspace/open">;');
-  expect(first).toContain('"tool:curator/inspect": RouteContract<typeof route1.inputSchema, typeof route1.resultSchema>;');
+  expect(first).toContain('"tool:curator/inspect": ModuleContract<typeof route1>;');
   expect(first).not.toContain('src/scripts/rebuild-index');
   expect(first).not.toContain('"script:rebuild-index"');
   expect(first).toContain('export type RouteId = keyof AgentBundleRoutes;');
@@ -1542,10 +1529,10 @@ it('omits the App registration for graphs without an MCP tool route', () => {
   const declarations = routesModule.generateRouteTypes(toolFree);
   expect(routesModule.generateRouteTypes(structuredClone(toolFree))).toBe(declarations);
   // The harness registration and provider surface are unchanged by the absence of tools...
-  expect(declarations).toContain('"cli:report": RouteContract<typeof route0.inputSchema, typeof route0.resultSchema>;');
+  expect(declarations).toContain('"cli:report": ModuleContract<typeof route0>;');
   expect(declarations).toContain('"event:workspace/open": EventRouteContract<typeof route1.default, "workspace/open">;');
-  expect(declarations).toContain('"prompt:curator/brief": RouteContract<typeof route2.inputSchema, typeof route2.resultSchema>;');
-  expect(declarations).toContain('"resource:curator/catalog": RouteContract<typeof route3.inputSchema, typeof route3.resultSchema>;');
+  expect(declarations).toContain('"prompt:curator/brief": ModuleContract<typeof route2>;');
+  expect(declarations).toContain('"resource:curator/catalog": ModuleContract<typeof route3>;');
   expect(declarations).not.toContain('app:curator/dashboard');
   expect(declarations).toContain("declare module '@agent-bundle/runtime' {\n  interface Register {\n    readonly routes: AgentBundleRouteContracts;\n  }\n  interface AgentProviderValues {\n    readonly \"gitWorktree\": ProviderValueOf<typeof provider0.default>;\n  }\n}");
   // ...while nothing registers on `agent-bundle/app`: none of these routes is a `tools/call` target.
@@ -1787,7 +1774,7 @@ it('validates the single async route-module authoring contract statically', asyn
   ]);
 });
 
-it('follows a re-exported default to the module that declares it when one tool is placed on two servers (#446)', async () => {
+it('accepts explicit default re-exports when one tool is placed on two servers (#446)', async () => {
   const root = await createRoot();
   await writeTree(root, {
     // The primary placement: a full route module.
@@ -1830,8 +1817,7 @@ it('follows a re-exported default to the module that declares it when one tool i
       "export { default } from '@shared/routes/external';",
       '',
     ].join('\n'),
-    // The re-exported default is judged where it is declared: a sync
-    // function component there is still AB4810 here, naming the target.
+    // A synchronous component satisfies the same contract as an async component.
     'src/pages/sync.tsx': 'export default function SyncPage() { return undefined; }\n',
     'src/mcp/library/tools/sync.tsx': [
       "export const config = { description: 'Sync.' };",
@@ -1857,12 +1843,7 @@ it('follows a re-exported default to the module that declares it when one tool i
   }))).toEqual([
     {
       code: 'AB4810',
-      message: 'Route module src/mcp/library/tools/sync.tsx does not satisfy the public route contract: default export re-exported from "../../../pages/sync.tsx" (default) is not an async function component.',
-      source: 'src/mcp/library/tools/sync.tsx',
-    },
-    {
-      code: 'AB4810',
-      message: 'Route module src/mcp/library/tools/typed.tsx does not satisfy the public route contract: default export is not an async function component.',
+      message: 'Route module src/mcp/library/tools/typed.tsx does not satisfy the public route contract: missing default export.',
       source: 'src/mcp/library/tools/typed.tsx',
     },
   ]);
@@ -1879,79 +1860,13 @@ it('follows a re-exported default to the module that declares it when one tool i
   ]);
 });
 
-it('reports the scanned export surface of a re-exporting module', () => {
-  const modules = new Map<string, string>([
-    ['/project/src/shared/page.tsx', [
-      'export const helper = () => 1;',
-      'export async function Page() { return undefined; }',
-      'export { Page as Alias };',
-      'export default Page;',
-      '',
-    ].join('\n')],
-    ['/project/src/shared/cycle-a.tsx', "export { default } from './cycle-b.tsx';\n"],
-    ['/project/src/shared/cycle-b.tsx', "export { default } from './cycle-a.tsx';\n"],
-    // An emitted `.js` beside its `.tsx` source: TypeScript resolution order
-    // names the source first, so the async component is judged, not the
-    // stale sync emit.
-    ['/project/src/shared/dual.js', 'export default function Dual() { return undefined; }\n'],
-    ['/project/src/shared/dual.tsx', 'export default async function Dual() { return undefined; }\n'],
-    ['/project/src/shared/dir/index.tsx', 'export default async () => undefined;\n'],
-    ['/project/src/shared/legacy.cts', 'export default async function Legacy() { return undefined; }\n'],
-  ]);
-  const readModule = (path: string): string | undefined => modules.get(path);
-  const scan = (text: string, source: string): routesModule.RouteModuleExports =>
-    routesModule.scanRouteModuleExports(text, source.slice('/project/'.length), { readModule, source });
-
-  // The same TypeScript candidate order the config extractor uses.
-  expect(scan("export { default } from '../shared/dual.js';\n", '/project/src/mcp/dual.tsx').asyncDefault).toBe(true);
-  expect(scan("export { default } from '../shared/dir';\n", '/project/src/mcp/dir.tsx').asyncDefault).toBe(true);
-  expect(scan("export { default } from '../shared/legacy.cjs';\n", '/project/src/mcp/legacy.tsx').asyncDefault).toBe(true);
-  expect(scan("export { default } from '../shared/dual.ts';\n", '/project/src/mcp/exact.tsx').defaultReExport?.resolution).toBe('unresolved');
-
-  const followed = routesModule.scanRouteModuleExports(
-    "export { default, helper, Alias as Component } from '../shared/page.tsx';\n",
-    'src/mcp/a/tools/x.tsx',
-    { readModule, source: '/project/src/mcp/x.tsx' },
-  );
-  expect(followed.asyncDefault).toBe(true);
-  expect(followed.defaultFunction).toBe(true);
-  expect(followed.defaultReExport).toEqual({ name: 'default', resolution: 'followed', specifier: '../shared/page.tsx' });
-  expect([...followed.named].sort()).toEqual(['Component', 'helper']);
-  expect([...followed.namedFunctions].sort()).toEqual(['Component', 'helper']);
-  expect([...followed.namedAsyncFunctions]).toEqual(['Component']);
-
-  const aliased = routesModule.scanRouteModuleExports(
-    "export { Page as default } from '../shared/page.tsx';\n",
-    'src/mcp/a/tools/y.tsx',
-    { readModule, source: '/project/src/mcp/y.tsx' },
-  );
-  expect(aliased.asyncDefault).toBe(true);
-  expect(aliased.defaultReExport?.name).toBe('Page');
-
-  // Without a source there is nothing to resolve against.
-  const sourceless = routesModule.scanRouteModuleExports(
-    "export { default } from '../shared/page.tsx';\n",
-    'src/mcp/a/tools/z.tsx',
-    { readModule },
-  );
-  expect(sourceless.asyncDefault).toBe(false);
-  expect(sourceless.defaultReExport?.resolution).toBe('unresolved');
-
-  const cyclic = routesModule.scanRouteModuleExports(
-    modules.get('/project/src/shared/cycle-a.tsx')!,
-    'src/shared/cycle-a.tsx',
-    { readModule, source: '/project/src/shared/cycle-a.tsx' },
-  );
-  expect(cyclic.asyncDefault).toBe(false);
-  expect(cyclic.defaultReExport).toEqual({ name: 'default', resolution: 'unresolved', specifier: './cycle-b.tsx' });
-
-  // A relative target no candidate file satisfies cannot be judged either.
-  const missing = routesModule.scanRouteModuleExports(
-    "export { default } from './missing.tsx';\n",
-    'src/mcp/a/tools/m.tsx',
-    { readModule, source: '/project/src/mcp/m.tsx' },
-  );
-  expect(missing.defaultReExport?.resolution).toBe('unresolved');
+it('reads declared runtime exports without following re-exports or requiring async', () => {
+  const scan = routesModule.scanRouteModuleExports;
+  expect([...scan("export { default, value } from './missing.js';", 'route.ts').named]).toEqual(['default', 'value']);
+  expect([...scan('export type { default } from "./types.js"; export declare const value: string;', 'route.ts').named]).toEqual([]);
+  for (const body of ['export default () => 1;', 'export default async () => 1;']) {
+    expect(scan(body, 'route.ts').named.has('default')).toBe(true);
+  }
 });
 
 it('validates provider default factories with AB4940', async () => {
@@ -1969,7 +1884,6 @@ it('validates provider default factories with AB4940', async () => {
     source: sourcePath?.slice(root.length + 1).replaceAll('\\', '/'),
   }))).toEqual([
     { code: 'AB4940', source: 'src/providers/missing.ts' },
-    { code: 'AB4940', source: 'src/providers/not-a-function.ts' },
   ]);
 });
 
@@ -2051,7 +1965,6 @@ it('validates layout modules with AB4830, duplicate scopes with AB4831, and orph
   ]);
   expect(graph.diagnostics[0]!.message).toContain('src/layout.ts');
   expect(graph.diagnostics[0]!.message).toContain('src/layout.tsx');
-  expect(graph.diagnostics[1]!.message).toContain('default export is not a function component');
   expect(graph.diagnostics[1]!.message).toContain('exports route-only inputSchema, resultSchema');
   expect(graph.diagnostics[2]!.message).toContain('"ghost"');
   expect(graph.diagnostics[3]!.message).toContain('"panel"');
@@ -2061,108 +1974,7 @@ it('validates layout modules with AB4830, duplicate scopes with AB4831, and orph
   expect(graph.servers.map((server) => server.name)).toEqual(['curator', 'panel']);
 });
 
-it('judges a layout or provider for AB4837 only when a generated executable bundles it', async () => {
-  // Value imports of the compiler (#558): the route graph reports them
-  // before the bundler would inline the compiler into a self-contained
-  // executable. A layout is inlined only into the workers of the rendered
-  // routes it wraps; a provider into every generated request scope.
-  const compilerImport = "import { serveApp } from 'agent-bundle/api';\n";
-  const layout = `${compilerImport}export default ({ children }) => { void serveApp; return children; };\n`;
-  const provider = `${compilerImport}export default () => serveApp;\n`;
-  const codesBySource = (diagnostics: readonly { readonly code: string; readonly sourcePath?: string }[], root: string) =>
-    diagnostics
-      .filter(({ code }) => code === 'AB4837')
-      .map(({ sourcePath }) => sourcePath?.slice(root.length + 1).replaceAll('\\', '/'))
-      .sort();
-
-  // A generated tool route composes through the root layout: both are judged.
-  const wrapped = await createRoot();
-  await writeTree(wrapped, {
-    'src/layout.tsx': layout,
-    'src/mcp/curator/tools/inspect.tsx': moduleSource,
-    'src/providers/git-worktree.ts': provider,
-  });
-  const wrappedGraph = await compileRouteGraph(wrapped, fixtureConfig());
-  expect(codesBySource(wrappedGraph.diagnostics, wrapped)).toEqual(['src/layout.tsx', 'src/providers/git-worktree.ts']);
-  expect(wrappedGraph.diagnostics.find(({ code }) => code === 'AB4837')!.message)
-    .toMatch(/^Layout module src\/layout\.tsx imports "agent-bundle\/api" as a value; the generated executable is self-contained/u);
-
-  // Apps are browser builds and event routes take no layout, so nothing
-  // bundles the root layout — while the generated server and the hook
-  // wrapper still mount the provider.
-  const unwrapped = await createRoot();
-  await writeTree(unwrapped, {
-    'src/events/workspace/open.tsx': moduleSource,
-    'src/layout.tsx': layout,
-    'src/mcp/panel/apps/main.tsx': `export const config = { resourceUri: 'ui://panel/main.html' }; ${moduleSource}`,
-    'src/providers/git-worktree.ts': provider,
-  });
-  const unwrappedGraph = await compileRouteGraph(unwrapped, fixtureConfig());
-  expect(codesBySource(unwrappedGraph.diagnostics, unwrapped)).toEqual(['src/providers/git-worktree.ts']);
-
-  // A plain `.ts` command runs without a render session, so the routed CLI
-  // executable inlines no layout — but it mounts the providers.
-  const plainCli = await createRoot();
-  await writeTree(plainCli, {
-    'src/cli/doctor.ts': [
-      'export const inputSchema = z.object({}).strict();',
-      'export const resultSchema = {};',
-      'export default async () => undefined;',
-      '',
-    ].join('\n'),
-    'src/layout.tsx': layout,
-    'src/providers/git-worktree.ts': provider,
-  });
-  expect(codesBySource((await compileRouteGraph(plainCli, fixtureConfig())).diagnostics, plainCli))
-    .toEqual(['src/providers/git-worktree.ts']);
-
-  // A rendered `.tsx` command renders through the worker, which imports both.
-  const renderedCli = await createRoot();
-  await writeTree(renderedCli, {
-    'src/cli/doctor.tsx': [
-      'export const inputSchema = z.object({}).strict();',
-      'export const resultSchema = {};',
-      'export default async () => undefined;',
-      '',
-    ].join('\n'),
-    'src/layout.tsx': layout,
-    'src/providers/git-worktree.ts': provider,
-  });
-  expect(codesBySource((await compileRouteGraph(renderedCli, fixtureConfig())).diagnostics, renderedCli))
-    .toEqual(['src/layout.tsx', 'src/providers/git-worktree.ts']);
-
-  // A plain script is bundled from its own source: neither layouts nor
-  // providers are inlined. A rendered script's worker inlines both.
-  const plainScript = await createRoot();
-  await writeTree(plainScript, {
-    'src/layout.tsx': layout,
-    'src/providers/git-worktree.ts': provider,
-    'src/scripts/rebuild-index.ts': moduleSource,
-  });
-  expect(codesBySource((await compileRouteGraph(plainScript, fixtureConfig())).diagnostics, plainScript)).toEqual([]);
-  const renderedScript = await createRoot();
-  await writeTree(renderedScript, {
-    'src/layout.tsx': layout,
-    'src/providers/git-worktree.ts': provider,
-    'src/scripts/rebuild-index.tsx': moduleSource,
-  });
-  expect(codesBySource((await compileRouteGraph(renderedScript, fixtureConfig())).diagnostics, renderedScript))
-    .toEqual(['src/layout.tsx', 'src/providers/git-worktree.ts']);
-
-  // A server layout of a server that is not generated wraps nothing that is
-  // bundled either, and with no generated executable at all the provider is
-  // never inlined.
-  const custom = await createRoot();
-  await writeTree(custom, {
-    'src/mcp/curator/layout.tsx': layout,
-    'src/mcp/curator/tools/inspect.tsx': moduleSource,
-    'src/providers/git-worktree.ts': provider,
-  });
-  const customGraph = await compileRouteGraph(custom, fixtureConfig({ routes: { servers: { curator: 'custom' } } }));
-  expect(codesBySource(customGraph.diagnostics, custom)).toEqual([]);
-});
-
-it('rejects provider key collisions and the reserved processLifetime key', async () => {
+it('rejects provider key collisions and allows an authored processLifetime key', async () => {
   const root = await createRoot();
   const provider = 'export default () => undefined;\n';
   await writeTree(root, {
@@ -2173,17 +1985,14 @@ it('rejects provider key collisions and the reserved processLifetime key', async
 
   const graph = await compileRouteGraph(root, fixtureConfig());
 
-  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4941', 'AB4942']);
+  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4941']);
   expect(graph.diagnostics[0]).toMatchObject({
     message: expect.stringMatching(/fooBar/u),
     sourcePath: expect.stringMatching(/src[/\\]providers[/\\]foo[-_]bar\.ts$/u),
   });
   expect(graph.diagnostics[0]!.message).toContain('foo-bar.ts');
   expect(graph.diagnostics[0]!.message).toContain('foo_bar.ts');
-  expect(graph.diagnostics[1]).toMatchObject({
-    message: expect.stringMatching(/processLifetime/u),
-    sourcePath: join(root, 'src/providers/process-lifetime.ts'),
-  });
+  expect(graph.providers.some((provider) => provider.name === 'process-lifetime')).toBe(true);
 });
 
 it('discovers the canonical event families and validates their component contract', async () => {
@@ -2235,132 +2044,36 @@ it('discovers the canonical event families and validates their component contrac
     'tool/failure',
     'workspace/open',
   ]);
-  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4823', 'AB4810']);
+  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4823']);
   expect(graph.diagnostics[0]?.sourcePath).toBe(join(root, 'src/events/message/receive.tsx'));
-  expect(graph.diagnostics[1]?.sourcePath).toBe(join(root, 'src/events/tool/before.tsx'));
 });
 
-it('attaches a statically followable event preflight re-export to the event route node', async () => {
+it('pairs a lightweight handler with its explicit JSX view', async () => {
   const root = await createRoot();
   await writeTree(root, {
-    'src/events/tool/before.preflight.ts': 'export default ({ canonical }) => canonical.event === "tool/before" ? "execute" : { outcome: "continue" };\n',
-    'src/events/tool/before.tsx': [
-      "export { default as preflight } from './before.preflight.js';",
-      'export default async function BeforeTool() { return undefined; }',
-      '',
-    ].join('\n'),
+    'src/events/tool/before.ts': "export default async ({ render }) => render('./before.view.js', { ticket: 'cc-7' });",
+    'src/events/tool/before.view.tsx': 'export default async function BeforeView() { return undefined; }',
   });
-
   const graph = await compileRouteGraph(root, fixtureConfig());
-
   expect(graph.diagnostics).toEqual([]);
   expect(graph.events).toHaveLength(1);
-  expect(graph.events[0]).toMatchObject({
-    id: 'event:tool/before',
-    preflight: {
-      provenance: { kind: 'conventional', relativePath: 'src/events/tool/before.preflight.ts' },
-      source: join(root, 'src/events/tool/before.preflight.ts'),
-    },
+  expect(graph.events[0]?.handler).toEqual({
+    provenance: { kind: 'conventional', relativePath: 'src/events/tool/before.ts' },
+    source: join(root, 'src/events/tool/before.ts'),
+    view: join(root, 'src/events/tool/before.view.tsx'),
   });
-  expect(Object.isFrozen(graph.events[0]!.preflight)).toBe(true);
-
-  const otherRoot = await createRoot();
-  await writeTree(otherRoot, {
-    'src/events/tool/before.preflight.ts': 'export default () => "execute";\n',
-    'src/events/tool/before.tsx': [
-      "export { default as preflight } from './before.preflight.js';",
-      'export default async function BeforeTool() { return undefined; }',
-      '',
-    ].join('\n'),
-  });
-  expect((await compileRouteGraph(otherRoot, fixtureConfig())).digest).toBe(graph.digest);
 });
 
-it('rejects a conventional event route reused as another route preflight', async () => {
+it('rejects removed before and preflight exports with migration guidance', async () => {
   const root = await createRoot();
   await writeTree(root, {
-    'src/events/session/start.ts': 'export default function SessionStart() { return { outcome: "continue" }; }\n',
-    'src/events/tool/before.ts': [
-      "export { default as preflight } from '../session/start.js';",
-      'export default async function BeforeTool() { return undefined; }',
-      '',
-    ].join('\n'),
+    'src/events/tool/before.tsx': "export { default as preflight } from '../../gate.js'; export default async function View() {}",
+    'src/events/session/start.tsx': 'export function before() {} export default async function View() {}',
+    'src/gate.ts': "export default () => 'execute';",
   });
-
   const graph = await compileRouteGraph(root, fixtureConfig());
-
-  expect(graph.events.map((route) => route.id)).toEqual(['event:session/start', 'event:tool/before']);
-  expect(graph.events.find((route) => route.id === 'event:tool/before')?.preflight).toBeUndefined();
-  expect(graph.diagnostics).toEqual(expect.arrayContaining([
-    expect.objectContaining({ code: 'AB4840', sourcePath: join(root, 'src/events/tool/before.ts') }),
-  ]));
-});
-
-it('rejects event preflights that are inline, non-relative, unresolvable, cyclic, or non-functions', async () => {
-  const root = await createRoot();
-  const eventRoute = (preflight: string): string => [
-    preflight,
-    'export default async function EventRoute() { return undefined; }',
-    '',
-  ].join('\n');
-  await writeTree(root, {
-    'src/events/agent/start.ts': eventRoute('export const preflight = () => "execute";'),
-    'src/events/agent/stop.ts': eventRoute("export { default as preflight } from '@fixture/preflight';"),
-    'src/events/compact/after.ts': eventRoute("export { default as preflight } from './missing.js';"),
-    'src/events/compact/before.preflight.ts': "export { default } from './_before.preflight-cycle.js';\n",
-    'src/events/compact/_before.preflight-cycle.ts': "export { default } from './before.preflight.js';\n",
-    'src/events/compact/before.ts': eventRoute("export { default as preflight } from './before.preflight.js';"),
-    'src/events/session/end.preflight.ts': 'export default { outcome: "continue" };\n',
-    'src/events/session/end.ts': eventRoute("export { default as preflight } from './end.preflight.js';"),
-  });
-
-  const graph = await compileRouteGraph(root, fixtureConfig());
-
-  expect(graph.events.every((route) => route.preflight === undefined)).toBe(true);
-  expect(graph.diagnostics.map(({ code, sourcePath }) => ({
-    code,
-    source: sourcePath?.slice(root.length + 1).replaceAll('\\', '/'),
-  }))).toEqual([
-    { code: 'AB4840', source: 'src/events/agent/start.ts' },
-    { code: 'AB4840', source: 'src/events/agent/stop.ts' },
-    { code: 'AB4840', source: 'src/events/compact/after.ts' },
-    { code: 'AB4840', source: 'src/events/compact/before.ts' },
-    { code: 'AB4840', source: 'src/events/session/end.ts' },
-  ]);
-});
-
-it('validates event route provider declarations against conventional provider keys', async () => {
-  const root = await createRoot();
-  await writeTree(root, {
-    'src/events/tool/before.ts': [
-      "export const config = { providers: ['projectAuth'] };",
-      'export default async function BeforeTool() { return undefined; }',
-      '',
-    ].join('\n'),
-    'src/events/tool/after.ts': [
-      "export const config = { providers: ['missing', 'projectAuth', 'projectAuth', 'processLifetime'] };",
-      'export default async function AfterTool() { return undefined; }',
-      '',
-    ].join('\n'),
-    'src/events/session/start.ts': [
-      "export const config = { providers: 'projectAuth' };",
-      'export default async function SessionStart() { return undefined; }',
-      '',
-    ].join('\n'),
-    'src/providers/project-auth.ts': 'export default () => ({ authenticated: true });\n',
-    'src/providers/zeta.ts': 'export default () => "zeta";\n',
-  });
-
-  const graph = await compileRouteGraph(root, fixtureConfig());
-
-  expect(graph.events.find((route) => route.id === 'event:tool/before')?.config).toMatchObject({
-    providers: ['projectAuth'],
-  });
-  expect(graph.diagnostics.filter(({ code }) => code === 'AB4841').map(({ sourcePath }) =>
-    sourcePath?.slice(root.length + 1).replaceAll('\\', '/'))).toEqual([
-    'src/events/session/start.ts',
-    'src/events/tool/after.ts',
-  ]);
+  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4840', 'AB4840']);
+  expect(graph.diagnostics.every(({ recovery }) => recovery?.includes('.view.tsx'))).toBe(true);
 });
 
 it('fails unavailable event routes before packaging while admitting supported targets', async () => {
@@ -2538,7 +2251,7 @@ it('preserves sub-second event route timeout precision in the normalized model',
   }));
 });
 
-it('requires an explicit standalone mode when no generated runtime can host an event route', async () => {
+it('rejects explicit shared mode when no generated runtime can host an event route', async () => {
   const root = await createRoot();
   await writeTree(root, {
     'agent-bundle.config.ts': [
@@ -2549,7 +2262,7 @@ it('requires an explicit standalone mode when no generated runtime can host an e
       '',
     ].join('\n'),
     'package.json': '{"type":"module"}\n',
-    'src/events/session/start.tsx': 'export default async function SessionStart() { return undefined; }\n',
+    'src/events/session/start.tsx': "export const config = { runtime: 'shared' }; export default async function SessionStart() { return undefined; }\n",
   });
 
   const inspected = await inspect({ root });
@@ -2558,4 +2271,15 @@ it('requires an explicit standalone mode when no generated runtime can host an e
     code: 'AB4817',
     target: 'cursor',
   }));
+});
+
+it('rejects orphan views and misplaced view configuration', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/events/session/start.view.tsx': 'export default async function View() {}',
+    'src/events/tool/before.ts': 'export default async function Handler() {}',
+    'src/events/tool/before.view.tsx': "export const config = { runtime: 'shared' }; export default async function View() {}",
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4840', 'AB4840']);
 });

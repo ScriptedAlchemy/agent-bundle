@@ -21,11 +21,11 @@ export interface CreateEventRouteInputOptions {
   readonly validate?: boolean;
 }
 
-/** The `{ canonical, native, preflight? }` half of `AgentEventRouteProps<E>`; the harness supplies `signal`. */
+/** The `{ canonical, native, renderInput? }` half of `AgentEventRouteProps<E>`; the harness supplies `signal`. */
 export interface AgentEventRouteInput<E extends CanonicalAgentEvent = CanonicalAgentEvent> {
   readonly canonical: AgentEventCanonicalIdentity<E>;
   readonly native: AgentEventNativePayload;
-  readonly preflight?: JsonValue;
+  readonly renderInput?: JsonValue;
 }
 
 /**

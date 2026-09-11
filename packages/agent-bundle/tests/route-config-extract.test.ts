@@ -3,7 +3,6 @@ import { expect, it } from '@rstest/core';
 import {
   extractRouteConfig,
   resolveRouteConfigAppReferences,
-  type RouteConfigExtractionOptions,
 } from '../src/routes/config-extract.ts';
 import { appResourceUri, type AppRouteConfig, type ToolConfig } from '../src/routes/public.ts';
 import { emptyRouteConfig } from '../src/routes/types.ts';
@@ -24,16 +23,9 @@ it('types _meta.ui.resourceUri while keeping the MCP Apps ui block open, and ret
 const extract = (
   text: string,
   relativePath = 'src/mcp/notes/tools/search.ts',
-  options: RouteConfigExtractionOptions = {},
-) => extractRouteConfig(text, relativePath, `/project/${relativePath}`, options);
+) => extractRouteConfig(text, relativePath, `/project/${relativePath}`);
 
 const codes = (diagnostics: readonly { readonly code: string }[]): string[] => diagnostics.map((diagnostic) => diagnostic.code);
-
-/** An in-memory project tree standing in for the sibling modules a const reference imports. */
-const virtualProject = (files: Readonly<Record<string, string>>): RouteConfigExtractionOptions => ({
-  projectRoot: '/project',
-  readModule: (path) => files[path],
-});
 
 it('extracts the accepted literal grammar into a frozen config', () => {
   const { config, diagnostics } = extract([
@@ -118,100 +110,16 @@ it('resolves a same-module top-level const string literal, exported or not', () 
   expect(config).toEqual({ _meta: { ui: { resourceUri: 'ui://notes/panel.html' } }, title: 'Search notes' });
 });
 
-it('resolves an exported const string literal imported from a relative sibling module', () => {
-  const project = virtualProject({
-    '/project/src/mcp/notes/constants.ts': [
-      "export const APP_RESOURCE_URI = 'ui://notes/panel.html';",
-      "export const OTHER = 'unused';",
-      '',
-    ].join('\n'),
-    '/project/src/shared/index.ts': "export const SHARED_TITLE = 'Shared' as const;\n",
-  });
-  const { config, diagnostics } = extract([
-    "import { APP_RESOURCE_URI as URI } from '../constants.js';",
-    "import { SHARED_TITLE } from '../../../shared';",
-    "import type { ToolConfig } from 'agent-bundle';",
-    'export const config = { _meta: { ui: { resourceUri: URI } }, title: SHARED_TITLE } satisfies ToolConfig;',
-    'export default () => null;',
-  ].join('\n'), 'src/mcp/notes/tools/search.ts', project);
-  expect(diagnostics).toEqual([]);
-  expect(config).toEqual({ _meta: { ui: { resourceUri: 'ui://notes/panel.html' } }, title: 'Shared' });
-});
-
-it('resolves a string const reached through two relative hops and an export const re-alias', () => {
-  const project = virtualProject({
-    '/project/src/shared/title.ts': "export const SHARED_TITLE = 'Shared' as const;\n",
-    '/project/src/mcp/notes/constants.ts': [
-      "import { SHARED_TITLE } from '../../shared/title.js';",
-      'export const TITLE = SHARED_TITLE;',
-      '',
-    ].join('\n'),
-  });
-  const { config, diagnostics } = extract([
-    "import { TITLE } from '../constants.js';",
-    'export const config = { title: TITLE };',
-    'export default () => null;',
-  ].join('\n'), 'src/mcp/notes/tools/search.ts', project);
-  expect(diagnostics).toEqual([]);
-  expect(config).toEqual({ title: 'Shared' });
-});
-
-it.each([
-  [
-    'a bare package specifier',
-    "import { URI } from 'my-constants';",
-    {},
-    'imported from "my-constants", which is not a relative module path',
-  ],
-  [
-    'a missing sibling module',
-    "import { URI } from './missing';",
-    {},
-    'imported from "./missing", which does not resolve to a module inside the project',
-  ],
-  [
-    'a module outside the project root',
-    "import { URI } from '../../../../../outside';",
-    { '/outside.ts': "export const URI = 'ui://x/y.html';\n" },
-    'imported from "../../../../../outside", which resolves outside the project',
-  ],
-  [
-    'a sibling without that export',
-    "import { URI } from './constants';",
-    { '/project/src/mcp/notes/tools/constants.ts': "const URI = 'ui://x/y.html';\nexport const OTHER = 1;\n" },
-    'which does not declare a top-level `export const URI`',
-  ],
-  [
-    'a sibling whose const is not a string literal',
-    "import { URI } from './constants';",
-    { '/project/src/mcp/notes/tools/constants.ts': "export const URI = `ui://${'x'}/y.html`;\n" },
-    'whose `export const URI` initializer is not a string literal',
-  ],
-  [
-    'a type-only import',
-    "import type { URI } from './constants';",
-    { '/project/src/mcp/notes/tools/constants.ts': "export const URI = 'ui://x/y.html';\n" },
-    'neither a top-level const string literal in this module nor a named import',
-  ],
-  [
-    'a default import',
-    "import URI from './constants';",
-    { '/project/src/mcp/notes/tools/constants.ts': "export default 'ui://x/y.html';\n" },
-    'which is not a top-level `const` string literal',
-  ],
-])('keeps an identifier through %s dynamic (AB4806) and names both supported forms', (_name, importLine, files, fragment) => {
-  const { config, diagnostics } = extract([
-    importLine,
-    'export const config = { _meta: { ui: { resourceUri: URI } } };',
-  ].join('\n'), 'src/mcp/notes/tools/search.ts', virtualProject(files));
-  expect(config).toBe(emptyRouteConfig);
-  expect(diagnostics).toHaveLength(1);
-  expect(diagnostics[0]).toMatchObject({ code: 'AB4806', severity: 'error' });
-  expect(diagnostics[0]!.message).toContain('a reference to the identifier "URI"');
-  expect(diagnostics[0]!.message).toContain(fragment);
-  expect(diagnostics[0]!.recovery).toContain("appResourceUri('<app>')");
-  expect(diagnostics[0]!.recovery).toContain('agent-bundle/routes');
-  expect(diagnostics[0]!.recovery).toContain('const string literal');
+it('rejects imported metadata and alias chains without executing or resolving them', () => {
+  for (const source of [
+    "import { URI } from './constants.js'; export const config = { title: URI };",
+    "const TITLE = 'Title'; const ALIAS = TITLE; export const config = { title: ALIAS };",
+  ]) {
+    const result = extract(source);
+    expect(result.config).toBe(emptyRouteConfig);
+    expect(result.diagnostics[0]?.code).toBe('AB4806');
+    expect(result.diagnostics[0]?.recovery).toContain('imported values and alias chains are not evaluated');
+  }
 });
 
 it('records appResourceUri() references for the graph compiler and resolves them to the App resourceUri', () => {
@@ -370,10 +278,10 @@ it.each([
 it.each([
   ['identifier reference', "const base = {};\nexport const config = base;", 'AB4806', 'reference to the identifier "base"'],
   ['let-bound identifier', "let title = 'x';\nexport const config = { title };", 'AB4806', 'a shorthand property reference'],
-  ['let-bound identifier value', "let title = 'x';\nexport const config = { title: title };", 'AB4806', 'which is not a top-level `const` string literal'],
-  ['unknown identifier', 'export const config = { title: missing };', 'AB4806', 'neither a top-level const string literal in this module nor a named import'],
+  ['let-bound identifier value', "let title = 'x';\nexport const config = { title: title };", 'AB4806', 'reference to the identifier "title"'],
+  ['unknown identifier', 'export const config = { title: missing };', 'AB4806', 'reference to the identifier "missing"'],
   ['non-string const', 'const limit = 3;\nexport const config = { limit };', 'AB4806', 'a shorthand property reference'],
-  ['non-string const value', 'const limit = 3;\nexport const config = { limit: limit };', 'AB4806', 'whose top-level const initializer is not a string literal'],
+  ['non-string const value', 'const limit = 3;\nexport const config = { limit: limit };', 'AB4806', 'reference to the identifier "limit"'],
   ['call expression', 'export const config = make();', 'AB4806', 'a call expression'],
   ['template substitution', 'export const config = { title: `v${1}` };', 'AB4806', 'a template literal with substitutions'],
   ['object spread', 'export const config = { ...rest };', 'AB4806', 'a spread'],
