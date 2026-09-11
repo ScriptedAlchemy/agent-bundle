@@ -88,6 +88,69 @@ export default function Convert({input}) { return input; }
   }
 }, 240_000);
 
+it('shares one deadline across a lightweight handler and its deferred view', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ab-event-deadline-'));
+  let childPid: number | undefined;
+  try {
+    await symlink(join(process.cwd(), 'examples/audiobook-curator/node_modules'), join(root, 'node_modules'), 'dir');
+    const files = {
+      'package.json': JSON.stringify({ name: 'event-deadline', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', react: '19.2.8' } }),
+      'agent-bundle.config.ts': `import { defineConfig } from 'agent-bundle/config'; export default defineConfig({ plugin: { name: 'event-deadline', version: '1.0.0' }, targets: ['claude'] });`,
+      'src/events/tool/after.ts': `export const config = { timeoutMs: 1000 };
+export default async ({ render }) => {
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  return render('./after.view.js', {});
+};`,
+      'src/events/tool/after.view.tsx': `import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { Agent } from '@agent-bundle/runtime';
+export default async function AfterView() {
+  await writeFile(join(process.cwd(), 'view.pid'), String(process.pid));
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await writeFile(join(process.cwd(), 'late-success'), 'late');
+  return <Agent.Result><Agent.Context>late success</Agent.Context></Agent.Result>;
+}`,
+    };
+    for (const [path, text] of Object.entries(files)) {
+      await mkdir(dirname(join(root, path)), { recursive: true });
+      await writeFile(join(root, path), text);
+    }
+    const built = await build({ root, output: join(root, 'artifact') });
+    expect(built.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+    const output = built.build.compiledHooks[0]!.output;
+    await rm(join(root, 'src'), { recursive: true });
+    const startedAt = performance.now();
+    const result = await runNodeScript({
+      args: [output],
+      cwd: root,
+      input: JSON.stringify({
+        cwd: root,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session',
+        tool_input: {},
+        tool_name: 'Write',
+        tool_response: { ok: true },
+        tool_use_id: 'use-1',
+        transcript_path: join(root, 'transcript.json'),
+      }),
+    });
+    const elapsedMs = performance.now() - startedAt;
+    childPid = Number(await readFile(join(root, 'view.pid'), 'utf8'));
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toMatch(/abort/iu);
+    expect(elapsedMs).toBeGreaterThanOrEqual(700);
+    expect(elapsedMs).toBeLessThan(1_800);
+    expect(() => process.kill(childPid!, 0)).toThrow();
+    await expect(readFile(join(root, 'late-success'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    if (childPid !== undefined) {
+      try { process.kill(childPid, 'SIGKILL'); } catch { /* The deadline already terminated it. */ }
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+}, 180_000);
+
 it('mounts identities, state, notices, and provider observations in a compiled lightweight event', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-event-context-'));
   try {

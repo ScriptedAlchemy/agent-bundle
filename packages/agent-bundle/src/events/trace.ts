@@ -268,6 +268,8 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
   let closed = false;
   let firstAt: number | undefined;
   const startedAt: Partial<Record<EventTracePhase, number>> = {};
+  let activeProviders = 0;
+  let completedProviders = 0;
 
   const readClock = (): number | undefined => {
     try {
@@ -346,17 +348,38 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
       });
     },
     providersFinish: (count) => {
-      emit((at, next) => ({
-        at,
-        count,
-        ...durationField(startedAt.providers, at),
-        execution,
-        kind: 'providers.finish',
-        phase: 'providers',
-        sequence: next,
-      }));
+      if (activeProviders === 0) {
+        emit((at, next) => ({
+          at,
+          count,
+          execution,
+          kind: 'providers.finish',
+          phase: 'providers',
+          sequence: next,
+        }));
+        return;
+      }
+      completedProviders += count;
+      activeProviders -= 1;
+      if (activeProviders > 0) return;
+      emit((at, next) => {
+        const providerStartedAt = startedAt.providers;
+        delete startedAt.providers;
+        return {
+          at,
+          count: completedProviders,
+          ...durationField(providerStartedAt, at),
+          execution,
+          kind: 'providers.finish',
+          phase: 'providers',
+          sequence: next,
+        };
+      });
     },
     providersStart: () => {
+      activeProviders += 1;
+      if (activeProviders > 1) return;
+      completedProviders = 0;
       emit((at, next) => {
         startedAt.providers = at;
         return { at, execution, kind: 'providers.start', phase: 'providers', sequence: next };

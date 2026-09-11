@@ -189,6 +189,25 @@ it('emits a complete executing trace with monotonic sequence, timestamps, and ph
   expect(events[6]).toMatchObject({ durationMs: 10, kind: 'render.finish' });
 });
 
+it('measures overlapping providers as one aggregate phase', () => {
+  const { events, observer } = collect();
+  let now = 0;
+  const tracer = createEventTracer({ execution, now: () => now, observer });
+
+  tracer.providersStart();
+  now = 10;
+  tracer.providersStart();
+  now = 20;
+  tracer.providersFinish(1);
+  now = 30;
+  tracer.providersFinish(1);
+
+  expect(events).toEqual([
+    { at: 0, execution, kind: 'providers.start', phase: 'providers', sequence: 0 },
+    { at: 30, count: 2, durationMs: 30, execution, kind: 'providers.finish', phase: 'providers', sequence: 1 },
+  ]);
+});
+
 it('uses the process observer for framework-created tracers and restores it safely', () => {
   const { events, observer } = collect();
   const dispose = installEventTraceObserver(observer);

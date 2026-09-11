@@ -189,6 +189,33 @@ const withoutExecution = (event: EventTraceEvent): EventTraceReceiptEvent => {
   return rest;
 };
 
+const compactProviderEvents = (
+  events: readonly EventTraceReceiptEvent[],
+): readonly EventTraceReceiptEvent[] => {
+  const firstStart = events.find((event) => event.kind === 'providers.start');
+  const finishes = events.filter((event) => event.kind === 'providers.finish');
+  const lastFinish = finishes.at(-1);
+  if (firstStart === undefined && lastFinish === undefined) return events;
+  const count = finishes.reduce((total, event) => total + event.count, 0);
+  const compacted: EventTraceReceiptEvent[] = [];
+  for (const event of events) {
+    if (event.kind === 'providers.start') {
+      if (event === firstStart) compacted.push(event);
+      continue;
+    }
+    if (event.kind !== 'providers.finish') {
+      compacted.push(event);
+      continue;
+    }
+    if (event === lastFinish) compacted.push(Object.freeze({
+      ...event,
+      count,
+      ...(firstStart === undefined ? {} : { durationMs: Math.max(0, event.at - firstStart.at) }),
+    }));
+  }
+  return Object.freeze(compacted);
+};
+
 /**
  * Opens the receipt for one execution: resolves the endpoint and, when there
  * is one, returns the recorder whose `observer` the tracer feeds. `undefined`
@@ -226,7 +253,7 @@ export const openEventTraceReceipt = async (
       const session = options.env[EVENT_TRACE_RECEIPT_SESSION_ENV];
       const receipt: EventTraceReceipt = {
         ...(isHostSessionId(session) ? { devSession: session } : {}),
-        events,
+        events: compactProviderEvents(events),
         execution: options.execution,
         identity,
         lineage,
