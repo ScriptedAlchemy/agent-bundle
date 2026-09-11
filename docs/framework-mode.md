@@ -430,8 +430,10 @@ the host ever seeing a disconnect:
    installs a marked development variant through the ordinary installer once,
    pointing the host's MCP document at the proxy, then re-syncs hooks, Skills,
    and MCP Apps into the host's own layout on every adopted epoch with atomic
-   generation swaps and rollback (`AB7202`). Hooks are spawned per event, so
-   they pick up the new epoch on their next invocation.
+   generation swaps and rollback (`AB7202`). Re-sync removes only top-level
+   entries recorded as manager-published; neighboring host or user entries are
+   never inferred to be owned. Hooks are spawned per event, so they pick up the
+   new epoch on their next invocation.
 3. **A contract gate on adoption.** Declaring `dev.contracts` in
    `agent-bundle.config.ts` runs the generated contract matrix against each
    published epoch through an epoch-pinned generated stdio session before any

@@ -488,11 +488,12 @@ Every selected host installs from the same composite epoch root. Outside the run
 app-server path, each later `artifact.available` event copies that root into an immutable installed
 generation for each host. Top-level directories switch by atomic symlink (or Windows junction)
 rename and top-level files by atomic sibling-file rename, so a host sees an old or a new complete
-entry and no synchronized directory disappears between generations. A failed direct publication
-rolls the pointers back when a prior generation remains and emits an `AB7202` diagnostic on
-`dev.host.sync`; a failed build emits no `artifact.available` at all, so the last-good install is
-untouched. Re-sync writes the host cache directly and does not invoke the Claude or Codex CLI
-again.
+entry. After the first direct publication, no synchronized directory disappears between generations.
+A failed direct publication rolls the pointers back when a prior generation remains and emits an
+`AB7202` diagnostic on `dev.host.sync`; a failed build emits no `artifact.available` at all, so the last-good install is
+untouched. Re-sync records top-level ownership under `.agent-bundle-dev/` and removes only entries
+recorded as manager-published; neighboring host or user entries are never inferred to be owned.
+Re-sync writes the host cache directly and does not invoke the Claude or Codex CLI again.
 
 Stopping the dev server unregisters and removes its Claude and Codex development installs. A
 later run registers the same stable source path again, so restart does not leave duplicate

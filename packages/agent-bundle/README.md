@@ -405,11 +405,13 @@ not affect whether the project-local framework can be spawned.
 
 Each later `artifact.available` event copies the new target into an immutable installed generation.
 Top-level directories switch by atomic symlink (or Windows junction) rename and top-level files by
-atomic sibling-file rename, so a host sees an old or new complete entry and no synchronized
-directory disappears between generations. A failed publication rolls pointers back to the prior
-generation and emits an `AB7202` diagnostic on `dev.host.sync`; a failed build emits no
-`artifact.available`, so the last-good install is unchanged. Re-sync writes the host cache directly
-and does not invoke the Claude or Codex CLI again.
+atomic sibling-file rename, so a host sees each retained entry as an old or new complete value.
+Re-sync records top-level ownership under `.agent-bundle-dev/` and removes only manager-published
+entries the new epoch no longer contains, leaving neighboring host and user state untouched. A
+failed publication restores removed entries and rolls pointers back to the prior generation before
+emitting an `AB7202` diagnostic on `dev.host.sync`; a failed build emits no `artifact.available`, so
+the last-good install is unchanged. Re-sync writes the host cache directly and does not invoke the
+Claude or Codex CLI again.
 
 Stopping the dev server leaves the marked development install in place. Hooks and Skills remain on
 disk, while the stable proxy command fails closed until that project dev server is running again.
