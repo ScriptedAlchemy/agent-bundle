@@ -230,7 +230,9 @@ const escapesRoot = (root: string, candidate: string): boolean => !isInsideOrEqu
 const sha256Pattern = /^[a-f0-9]{64}$/u;
 
 const assertCanonicalPath = (value: string, label: string): void => {
-  if (value.includes('\\')) {
+  // Windows identities stay POSIX-form (`/` only). On POSIX, `\` is a filename
+  // character and must survive snapshot → context without being stripped.
+  if (sep === '\\' && value.includes('\\')) {
     throw new RangeError(`${label} must use a canonical POSIX path.`);
   }
   if (isAbsolute(value)) {

@@ -496,7 +496,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
       sourceInputs: [{ error: 'EACCES', path: 'agent-bundle.config.ts' }],
     }))).rejects.toThrow(/SHA-256 digest/i);
     for (const sourceInput of [
-      { path: 'skills\\review\\SKILL.md', sha256: 'a'.repeat(64) },
+      ...(sep === '\\' ? [{ path: 'skills\\review\\SKILL.md', sha256: 'a'.repeat(64) }] : []),
       { path: 'scratch/../source.ts', sha256: 'a'.repeat(64) },
       { path: 'source.txt', sha256: 'A'.repeat(64) },
     ]) {
@@ -1327,23 +1327,37 @@ posixContainmentIt('preserves a contained POSIX filename that includes a backsla
     '',
   ].join('\n'));
   try {
+    const slashPath = join(root, 'odd', 'dir', 'runtime');
+    const backslashPath = join(root, 'odd\\dir', 'runtime');
+    await mkdir(join(root, 'odd', 'dir'), { recursive: true });
+    await mkdir(join(root, 'odd\\dir'), { recursive: true });
+    await Promise.all([
+      writeFile(slashPath, 'slash-runtime\n'),
+      writeFile(backslashPath, 'backslash-runtime\n'),
+    ]);
     const prepared = await new ProjectService({ root }).prepare('build');
     const model = prepared.model;
     if (model === undefined) throw new Error('Expected a prepared model.');
-    const slashPath = join(root, 'odd', 'dir', 'runtime');
-    const backslashPath = join(root, 'odd\\dir', 'runtime');
+    const snapshot = await snapshotProjectSource(root, prepared.configPath);
+    const snapshotPaths = snapshot.inputs.map((input) => input.path);
+    expect(snapshotPaths).toContain('odd/dir/runtime');
+    expect(snapshotPaths).toContain('odd\\dir/runtime');
     const slashContext = createProjectContext({
       configPath: prepared.configPath,
       model: withPayloadSource(model, slashPath),
       root,
-      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+      sourceInputs: snapshot.inputs,
     });
     const backslashContext = createProjectContext({
       configPath: prepared.configPath,
       model: withPayloadSource(model, backslashPath),
       root,
-      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+      sourceInputs: snapshot.inputs,
     });
+    expect(slashContext.sourceInputs.map((input) => input.path)).toEqual(snapshotPaths);
+    expect(backslashContext.sourceInputs.map((input) => input.path)).toEqual(snapshotPaths);
+    expect(slashContext.revision).toBe(snapshot.revision);
+    expect(backslashContext.revision).toBe(snapshot.revision);
     const slashCanonical = canonicalizeNormalizedModel(root, withPayloadSource(model, slashPath));
     const backslashCanonical = canonicalizeNormalizedModel(root, withPayloadSource(model, backslashPath));
     expect(firstCanonicalPayloadSource(slashCanonical)).toBe('odd/dir/runtime');
