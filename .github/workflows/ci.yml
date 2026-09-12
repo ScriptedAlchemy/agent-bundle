@@ -378,6 +378,44 @@ jobs:
           AGENT_BUNDLE_PACKAGE_PREBUILT: '1'
         run: pnpm test:packed:native
 
+  # Narrow OS matrix for the host-install / filesystem slice. The rest of CI
+  # stays on ubuntu-latest (Verify, examples, release-gates, the pinned-CLI
+  # host-install-proofs job). Cloning those onto three OSes would multiply the
+  # PR critical path; this job is the smallest proof that the platform-generic
+  # npm package's win32/darwin branches are not Ubuntu-only qualifications:
+  # `dev --install-host` rollback and stale ownership, install/uninstall
+  # receipts, durable-fs publish/fsync, packaged installer-bin resolution,
+  # and the #769 internal-child cwd policy. It does not install `claude` or
+  # `codex` — those pins stay in host-install-proofs — so Claude/Codex legs
+  # in `dev-host-install.test.ts` skip here the same way they skip locally
+  # when the binaries are absent. One Node line (22.19, engines floor) keeps
+  # the matrix at three cells, not nine.
+  host-filesystem:
+    needs: changes
+    if: >-
+      ${{ !cancelled() &&
+      (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
+    name: Host filesystem (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          node-version: 22.19.0
+      - run: pnpm build
+      # Dist is already built; packed-install-bin's ad-hoc pack must not
+      # rebuild it. Workbench is unused by this slice.
+      - name: Host-install filesystem slice
+        env:
+          AGENT_BUNDLE_PACKAGE_PREBUILT: '1'
+          AGENT_BUNDLE_WORKBENCH_PREBUILT: '1'
+        run: pnpm test:host-filesystem
+
   rsc-runtime-micro-eval:
     # Deterministic end-to-end spot-check of the built RSC runtime artifacts
     # (hook -> RSC worker -> shared kernel state -> MCP tool lowering) without
