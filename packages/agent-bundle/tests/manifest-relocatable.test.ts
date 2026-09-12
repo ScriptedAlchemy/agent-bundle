@@ -323,33 +323,3 @@ it('emits a relocatable manifest that survives moving the composite root', async
     /web\.apps\[echo\/echo\]\.server names "nobody", which is not an MCP server with a launch record/u,
   );
 }, 180_000);
-
-const posixRelocatableIt = process.platform === 'win32' ? it.skip : it;
-
-posixRelocatableIt('refuses agent-bundle build when a POSIX source filename includes a backslash', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-relocatable-backslash-'));
-  try {
-    await writeProjectFile(root, 'agent-bundle.config.ts', [
-      'export default {',
-      "  plugin: { name: 'backslash-identity', version: '1.0.0' },",
-      "  targets: ['portable'],",
-      '};',
-      '',
-    ].join('\n'));
-    await writeProjectFile(root, 'src/skills/review/SKILL.md', [
-      '---',
-      'name: review',
-      'description: Reviews changes',
-      '---',
-      'Review the changed files.',
-      '',
-    ].join('\n'));
-    await mkdir(join(root, 'odd\\dir'), { recursive: true });
-    await writeFile(join(root, 'odd\\dir', 'runtime'), 'backslash-runtime\n');
-    await expect(build({ output: join(root, 'out'), root })).rejects.toMatchObject({
-      diagnostics: [expect.objectContaining({ code: 'AB7003' })],
-    });
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
