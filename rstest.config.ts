@@ -20,9 +20,10 @@ import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 /**
  * The default config: what `rstest <files>` runs when a script names files
- * without choosing a pool (`test:host-install`, `test:host-filesystem`,
- * `test:packed:native`, `test:session`, `test:examples:browser`) and what
- * `test:watch` discovers.
+ * without choosing a pool (`test:host-install`, `test:packed:native`,
+ * `test:session`, `test:examples:browser`) and what `test:watch` discovers.
+ * `test:host-filesystem` owns `rstest.host-filesystem.config.ts` so that
+ * slice never builds the rsc-agent-runtime example payload.
  * Its scope is every test the adapter-less pools do not own, so integration,
  * packed and evidence files land here alongside the unit files. It therefore
  * carries the process pool's shape — the worker cap, the polling scale and

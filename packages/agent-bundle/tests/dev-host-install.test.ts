@@ -370,6 +370,10 @@ it('installs a marked public-host dev variant from a stable source and removes i
 });
 
 it('refreshes a persistent Codex component snapshot before attaching each epoch', async () => {
+  // The fake Codex app-server listens on a Unix socket. Windows has no
+  // equivalent in this fixture; the rest of the slice still covers
+  // install/rollback/junctions.
+  if (process.platform === 'win32') return;
   const root = await createRoot();
   const codexRoot = await mkdtemp(join(tmpdir(), 'codex-'));
   roots.push(codexRoot);

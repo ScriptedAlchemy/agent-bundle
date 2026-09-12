@@ -388,8 +388,10 @@ jobs:
   # and the #769 internal-child cwd policy. It does not install `claude` or
   # `codex` — those pins stay in host-install-proofs — so Claude/Codex legs
   # in `dev-host-install.test.ts` skip here the same way they skip locally
-  # when the binaries are absent. One Node line (22.19, engines floor) keeps
-  # the matrix at three cells, not nine.
+  # when the binaries are absent. The slice uses
+  # `rstest.host-filesystem.config.ts` (not `rstest.config.ts`) so it never
+  # builds the Workbench e2e example payload. One Node line (22.19, engines
+  # floor) keeps the matrix at three cells, not nine.
   host-filesystem:
     needs: changes
     if: >-

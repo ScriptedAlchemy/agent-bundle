@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -76,7 +76,12 @@ export const rstestWorkerRoot = (): string => {
   const root = rstestWorkerRootPath(hostTemporaryRoot, workerId);
   mkdirSync(root, { recursive: true });
   writeOwnerMarker(root, workerId);
-  return root;
+  // macOS `/tmp` is a symlink to `/private/tmp`. Install, receipt, and
+  // durable-fs code realpath destinations; tests that compare `os.tmpdir()`
+  // strings to those results must see the same spelling. The short `/tmp`
+  // construction above stays for AF_UNIX headroom; TMPDIR gets the
+  // canonical path after the directory exists.
+  return realpathSync(root);
 };
 
 export const rstestWorkerCacheDirectory = (name: string): string => {

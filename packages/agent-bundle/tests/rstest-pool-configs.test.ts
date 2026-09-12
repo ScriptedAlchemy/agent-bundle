@@ -36,6 +36,7 @@ const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..
 
 const poolConfigs = [
   'rstest.config.ts',
+  'rstest.host-filesystem.config.ts',
   'rstest.unit.config.ts',
   'rstest.route-unit.config.ts',
   'rstest.projection.config.ts',
@@ -86,6 +87,7 @@ interface PoolExpectation {
 
 const expectations: Readonly<Record<PoolConfigName, PoolExpectation>> = {
   'rstest.config.ts': { extraSetupFiles: 0, globalSetup: examplePayloadGlobalSetup, testTimeout: 30_000 },
+  'rstest.host-filesystem.config.ts': { extraSetupFiles: 0, globalSetup: workspaceGlobalSetup, testTimeout: 30_000 },
   'rstest.integration.config.ts': { extraSetupFiles: 0, globalSetup: examplePayloadGlobalSetup, testTimeout: 30_000 },
   'rstest.mcp-conformance.config.ts': { extraSetupFiles: 0, globalSetup: workspaceGlobalSetup, testTimeout: 180_000 },
   'rstest.native-host.config.ts': { extraSetupFiles: 0, globalSetup: workspaceGlobalSetup, testTimeout: 60_000 },
@@ -161,7 +163,7 @@ describe('helper-built pools', () => {
 });
 
 describe('process pools', () => {
-  it.each(['rstest.config.ts', 'rstest.integration.config.ts'] as const)('%s shares the worker cap and the polling scale', (name) => {
+  it.each(['rstest.config.ts', 'rstest.host-filesystem.config.ts', 'rstest.integration.config.ts'] as const)('%s shares the worker cap and the polling scale', (name) => {
     const workers = processPoolMaxWorkers();
     expect(resolved[name].maxWorkers).toBe(workers);
     expect(resolved[name].env?.['AGENT_BUNDLE_TEST_TIME_SCALE']).toBe(String(processPoolTimeScale(workers)));

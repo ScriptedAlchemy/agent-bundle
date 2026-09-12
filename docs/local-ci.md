@@ -161,7 +161,8 @@ PR critical path.
 Hosted CI therefore adds one extra job, `host-filesystem`, on
 `ubuntu-latest`, `macos-latest`, and `windows-latest` (Node 22.19, engines
 floor — three cells, not a Node × OS product). It builds once and runs
-`pnpm test:host-filesystem`:
+`pnpm test:host-filesystem` (`rstest.host-filesystem.config.ts`, which does
+not build the Workbench e2e example payload):
 
 - `dev-host-install.test.ts` (Claude/Codex legs skip when those CLIs are
   absent; this job does not install them)
@@ -170,6 +171,7 @@ floor — three cells, not a Node × OS product). It builds once and runs
 - `durable-fs.test.ts` (atomic publish, Windows directory fsync)
 - `internal-child-resolution-policy.test.ts` (packaged child resolution, #769)
 - `packed-install-bin.test.ts` (packaged installer bin from a consumer cwd)
+- `rstest-worker-isolation.test.ts` (canonical TMPDIR; macOS `/tmp` → `/private/tmp`)
 
 That is the slice that can actually diverge by OS. macOS matters because
 Claude, Codex, and Cursor authors commonly develop there; Windows is in the
