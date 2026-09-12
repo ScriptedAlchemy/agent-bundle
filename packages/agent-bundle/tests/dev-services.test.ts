@@ -1319,9 +1319,11 @@ posixContainmentIt('rejects a contained POSIX filename that includes a backslash
     await writeFile(join(root, 'odd\\dir', 'runtime'), 'backslash-runtime\n');
     const prepared = await new ProjectService({ root }).prepare('build');
     expect(prepared).toMatchObject({
-      diagnostics: [expect.objectContaining({ code: 'AB7003' })],
-      projectContext: undefined,
+      diagnostics: [expect.objectContaining({ code: 'AB7003', recovery: expect.any(String) })],
+      source: { state: 'invalid' },
     });
+    expect(prepared.model).toBeUndefined();
+    expect(prepared.projectContext).toBeUndefined();
     await expect(build({ output: join(root, 'out'), root })).rejects.toMatchObject({
       diagnostics: [expect.objectContaining({ code: 'AB7003' })],
     });
