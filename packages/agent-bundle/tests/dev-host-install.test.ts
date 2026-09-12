@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, expect, it } from '@rstest/core';
 import { WebSocketServer } from 'ws';
@@ -45,7 +45,7 @@ afterAll(async () => {
 });
 
 const createRoot = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-host-install-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-dev-host-install-')));
   roots.push(root);
   return root;
 };
@@ -582,7 +582,7 @@ it('publishes a diagnostic event and preserves the installed generation when re-
 
 it('re-syncs the isolated Cursor install from coordinator epochs and ignores a failed rebuild', async () => {
   const built = builtFixture();
-  const projectRoot = join(built.artifactRoot, '..');
+  const projectRoot = resolve(built.artifactRoot, '..');
   const home = await createRoot();
   await mkdir(join(home, '.cursor'), { recursive: true });
   const eventHub = new ProjectEventHub();
@@ -606,11 +606,19 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
     projectService: new ProjectService({ root: projectRoot }),
     root: projectRoot,
   });
-  const destination = join(home, '.cursor', 'plugins', 'local', 'host-install-proof');
+  const syncEvents: unknown[] = [];
+  eventHub.subscribe((event) => {
+    if (event.type === 'dev.host.sync') syncEvents.push(event.payload);
+  });
   manager.start();
   try {
     await coordinator.start();
     await manager.settled();
+    const attached = manager.attached('cursor');
+    if (attached === undefined) {
+      throw new Error(`Cursor development install did not attach: ${JSON.stringify(syncEvents)}`);
+    }
+    const destination = attached.destination;
     const mcpBefore = await readFile(join(destination, '.cursor-plugin', 'mcp.json'), 'utf8');
     expect(mcpBefore).toContain(`"command":${JSON.stringify(process.execPath)}`);
     expect(await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).toContain(

@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -191,7 +191,8 @@ it('ships a self-contained installer bin that binds its own npm root', async () 
 
 it('installs, reports, replaces, plans, and uninstalls through the framework lifecycle with receipts', async () => {
   const destination = join(home, '.cursor', 'plugins', 'local', packageName);
-  const installedRoot = resolve(bin, '..', '..');
+  // `readArtifactManifest` reports the realpath root (Windows 8.3 → long).
+  const installedRoot = await realpath(resolve(bin, '..', '..'));
 
   const installed = await run(['install', 'cursor', '--json']);
   expect(installed.stderr).toBe('');

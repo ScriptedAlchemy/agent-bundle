@@ -623,7 +623,19 @@ const buildFixtureProject = async (options: {
   const artifactRoot = join(project, 'artifact');
   try {
     await cp(join(fixturesRoot, options.fixture), project, { recursive: true });
-    if (process.platform !== 'win32') {
+    if (process.platform === 'win32') {
+      // Junction the real package directories (not the pnpm symlink forest)
+      // so a later coordinator rebuild can resolve the same compile-time
+      // imports the initial CLI build used.
+      const modules = join(project, 'node_modules');
+      await mkdir(join(modules, '@modelcontextprotocol'), { recursive: true });
+      for (const specifier of ['@modelcontextprotocol/server', 'zod'] as const) {
+        const source = await realpath(join(packageRoot, 'node_modules', ...specifier.split('/')));
+        const dest = join(modules, ...specifier.split('/'));
+        await mkdir(dirname(dest), { recursive: true });
+        await symlink(source, dest, 'junction');
+      }
+    } else {
       await symlink(join(packageRoot, 'node_modules'), join(project, 'node_modules'), 'dir');
     }
     await options.prepareProject?.(project);
