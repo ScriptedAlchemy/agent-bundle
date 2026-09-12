@@ -304,6 +304,16 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     // proof asserts that exact text, so the rename must reach the test.
     expect(yield* readText(path.join(root, 'tests/projection/cli-dispatch.test.ts')))
       .toContain("Run 'status-plugin greet --help' for usage.");
+    // After #782 the compiler projects argv from literal inputJsonSchema, not
+    // from the Zod inputSchema expression. Missing metadata with positionals
+    // is AB4814 (`config.positionals names "name", which is not a projected
+    // inputSchema key`).
+    const greet = yield* readText(path.join(root, 'src/cli/greet.ts'));
+    expect(greet).toContain('inputJsonSchema');
+    expect(greet).toContain("positionals: ['name']");
+    expect(greet).toMatch(/name:\s*\{\s*type:\s*'string'/u);
+    expect(greet).toMatch(/shout:\s*\{\s*type:\s*'boolean'/u);
+    expect(greet).toMatch(/required:\s*\[\s*'name'\s*\]/u);
   }));
 
   for (const template of ['minimal', 'mcp-server', 'cli-tool'] as const) {

@@ -4,11 +4,12 @@ A routed command-line tool and library built with
 [agent-bundle](https://github.com/ScriptedAlchemy/agent-bundle). There is no
 second bundler config, no hand-written bin shim, and no argv parser: the
 `src/cli/**` convention compiles each command module into one generated
-executable, `dist/bin/my-agent-plugin.mjs`, with help, argv grammar, input
-validation, and exit codes derived from the module's own `config` and zod
-schemas. `src/index.ts` is the library export with declarations, and
-`src/scripts/hello.ts` ships as a plain script inside every host artifact. One
-`agent-bundle build` produces all of it alongside the host artifacts.
+executable, `dist/bin/my-agent-plugin.mjs`, with help and argv grammar from
+literal `config.inputJsonSchema` (plus `config.positionals`), and input
+validation and exit codes from the module's own zod schemas. `src/index.ts`
+is the library export with declarations, and `src/scripts/hello.ts` ships as
+a plain script inside every host artifact. One `agent-bundle build` produces
+all of it alongside the host artifacts.
 
 ## Commands
 
@@ -40,10 +41,11 @@ Validate and publish the generated npm root with
 
 - `agent-bundle.config.ts` — the one typed config: plugin identity and
   targets. Commands, the script, and the library are discovered by convention.
-- `src/cli/greet.ts` — the `greet` command: static `config`, `inputSchema`,
-  `resultSchema`, and an async default function. The file path is the command
-  name; nesting (`src/cli/library/audit.ts`) becomes `library audit`. A `.tsx`
-  command renders through the Agent renderer with Markdown, TTY, `--json`, and
+- `src/cli/greet.ts` — the `greet` command: static `config` (including
+  `inputJsonSchema` and `positionals`), `inputSchema`, `resultSchema`, and
+  an async default function. The file path is the command name; nesting
+  (`src/cli/library/audit.ts`) becomes `library audit`. A `.tsx` command
+  renders through the Agent renderer with Markdown, TTY, `--json`, and
   `--ndjson` output modes.
 - `src/scripts/hello.ts` — a conventional plain script exporting `main(argv)`;
   the framework generates the process envelope and `scripts/hello.mjs`.
