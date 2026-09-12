@@ -1,5 +1,5 @@
-import { readFileSync, realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 
 import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
 import type { DescriptiveMetadataResult } from './descriptive-metadata.ts';
@@ -259,33 +259,123 @@ const projectRelativePath = (root: string, value: string, label: string): string
   return projectRelative;
 };
 
+const isMissingPathError = (error: unknown): boolean => isErrno(error, 'ENOENT');
+
+const symlinkLoopError = (path: string): Error =>
+  Object.assign(new Error(`ELOOP: too many symbolic links encountered, stat '${path}'`), {
+    code: 'ELOOP',
+    path,
+    syscall: 'stat',
+  });
+
 /**
  * Existing paths collapse to on-disk identity (8.3, junctions, symlink hops).
  * Missing paths resolve the nearest existing ancestor and append the missing
  * suffix so a dangling leaf under an escaping symlink is judged against the
- * canonical target, not the lexical spelling. A path with no existing
- * ancestor stays lexical.
+ * canonical target, not the lexical spelling. A dangling symlink at the
+ * current path or any recursively visited target is not treated as missing:
+ * its chain is fully resolved even when the final target does not exist yet,
+ * then the missing suffix is appended, so containment sees the escape before
+ * the link materializes. Relative `readlink` targets are walked from the
+ * physical containing directory without `path.resolve`, so a stored
+ * `pivot/../missing` hop is applied after the pivot. Absolute stored targets
+ * are walked the same way from their own root. POSIX tokenization keeps
+ * literal backslashes inside one filename; Windows still splits on both
+ * separators. The walk retains the resolved prefix and missing suffix as it
+ * advances, so a deeper missing path does not re-walk every parent. Existing
+ * paths use native `realpath` (or inspect a symlink before any JS
+ * `realpathSync`) so an inside decoy cannot hide an outside destination.
+ * Symlink cycles propagate `ELOOP` and are never returned as a contained
+ * path. A path with no existing ancestor stays lexical.
  */
-const onDiskOrNearestAncestorPath = (lexicalPath: string): string => {
+const pathComponentSeparator = sep === '\\' ? /[/\\]/u : '/';
+
+const splitPathComponents = (value: string): readonly string[] =>
+  value.split(pathComponentSeparator).filter((part) => part.length > 0 && part !== '.');
+
+const tokenizeLexicalPath = (
+  lexicalPath: string,
+): { readonly parts: readonly string[]; readonly root: string } => {
+  const root = parse(lexicalPath).root;
+  return {
+    parts: splitPathComponents(lexicalPath.slice(root.length)),
+    root: root.length === 0 ? sep : root,
+  };
+};
+
+const realpathExisting = (value: string): string =>
+  typeof realpathSync.native === 'function' ? realpathSync.native(value) : realpathSync(value);
+
+const followSymlink = (
+  linkPath: string,
+  physicalParent: string,
+  seen: ReadonlySet<string>,
+): string => {
+  if (seen.has(linkPath)) throw symlinkLoopError(linkPath);
+  const rawTarget = readlinkSync(linkPath);
+  const nextSeen = new Set([...seen, linkPath]);
+  if (nextSeen.has(rawTarget)) throw symlinkLoopError(linkPath);
+  return isAbsolute(rawTarget)
+    ? walkFilesystemOrder(rawTarget, nextSeen)
+    : walkFrom(physicalParent, splitPathComponents(rawTarget), nextSeen);
+};
+
+const resolveExistingNode = (
+  path: string,
+  physicalParent: string,
+  seen: ReadonlySet<string>,
+): string => {
   try {
-    return realpathSync(lexicalPath);
+    if (lstatSync(path).isSymbolicLink()) return followSymlink(path, physicalParent, seen);
   } catch (error) {
-    if (!isErrno(error, 'ENOENT')) throw error;
+    if (!isMissingPathError(error)) throw error;
+    return path;
   }
-  const missing: string[] = [];
-  let cursor = lexicalPath;
-  for (;;) {
-    const parent = dirname(cursor);
-    if (parent === cursor) return lexicalPath;
-    missing.unshift(basename(cursor));
-    try {
-      return join(realpathSync(parent), ...missing);
-    } catch (error) {
-      if (!isErrno(error, 'ENOENT')) throw error;
-      cursor = parent;
-    }
+  try {
+    return realpathExisting(path);
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+    return path;
   }
 };
+
+const walkFrom = (
+  start: string,
+  parts: readonly string[],
+  seen: ReadonlySet<string>,
+): string => {
+  let current = resolveExistingNode(start, dirname(start), seen);
+  for (const part of parts) {
+    if (part === '..') {
+      const parent = dirname(current);
+      current = parent === current ? current : resolveExistingNode(parent, dirname(parent), seen);
+      continue;
+    }
+    current = resolveExistingNode(join(current, part), current, seen);
+  }
+  return current;
+};
+
+const walkFilesystemOrder = (
+  lexicalPath: string,
+  seen: ReadonlySet<string> = new Set(),
+): string => {
+  if (seen.size === 0) {
+    try {
+      return realpathExisting(lexicalPath);
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+    }
+  }
+  const { parts, root } = tokenizeLexicalPath(lexicalPath);
+  if (parts.length === 0) return resolveExistingNode(lexicalPath, root, seen);
+  return walkFrom(root, parts, seen);
+};
+
+const onDiskOrNearestAncestorPath = (
+  lexicalPath: string,
+  seen: ReadonlySet<string> = new Set(),
+): string => walkFilesystemOrder(lexicalPath, seen);
 
 /**
  * Project-relative POSIX path using on-disk identity. Snapshot inputs and
@@ -306,7 +396,9 @@ const resolvedProjectPath = (
   // (Windows `C:\…`, 8.3 aliases) are judged by realpath identity so a
   // short-name root and a long-name config file still name one project.
   if (!isAbsolute(value)) projectRelativePath(lexicalRoot, value, label);
-  const lexicalPath = isAbsolute(value) ? resolve(value) : resolve(lexicalRoot, value);
+  // Absolute authored paths keep `..` segments so a `symlink/../leaf` hop is
+  // walked in filesystem order. `path.resolve` would erase the symlink.
+  const lexicalPath = isAbsolute(value) ? value : resolve(lexicalRoot, value);
   const referencedPath = onDiskOrNearestAncestorPath(lexicalPath);
   if (escapesRoot(canonicalRoot, referencedPath)) {
     throw new RangeError(`${label} ${JSON.stringify(referencedPath)} is outside project root ${JSON.stringify(canonicalRoot)}.`);

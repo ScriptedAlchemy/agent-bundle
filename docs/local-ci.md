@@ -170,6 +170,7 @@ not build the Workbench e2e example payload):
 - `install.test.ts` / `uninstall.test.ts` (receipt ownership)
 - `durable-fs.test.ts` (atomic publish, Windows directory fsync)
 - `internal-child-resolution-policy.test.ts` (packaged child resolution, #769)
+- `npm-cli-resolution.test.ts` (Windows official + Unix/nvm + PATH + split-prefix/pnpm `npm_execpath`)
 - `packed-install-bin.test.ts` (packaged installer bin from a consumer cwd)
 - `rstest-worker-isolation.test.ts` (canonical TMPDIR; macOS `/tmp` → `/private/tmp`)
 
