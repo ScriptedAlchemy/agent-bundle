@@ -259,43 +259,38 @@ const projectRelativePath = (root: string, value: string, label: string): string
   return projectRelative;
 };
 
+const isUnresolvedPathError = (error: unknown): boolean =>
+  isErrno(error, 'ENOENT') || isErrno(error, 'ELOOP');
+
 /**
  * Existing paths collapse to on-disk identity (8.3, junctions, symlink hops).
  * Missing paths resolve the nearest existing ancestor and append the missing
  * suffix so a dangling leaf under an escaping symlink is judged against the
- * canonical target, not the lexical spelling. A dangling symlink ancestor is
- * not treated as missing: its target is resolved even when that target does
- * not exist yet, so containment sees the escape before the link materializes.
- * A path with no existing ancestor stays lexical.
+ * canonical target, not the lexical spelling. A dangling symlink at the
+ * current path or any recursively visited target is not treated as missing:
+ * its chain is fully resolved even when the final target does not exist yet,
+ * then the missing suffix is appended, so containment sees the escape before
+ * the link materializes. Symlink cycles stop walking and still go through
+ * containment. A path with no existing ancestor stays lexical.
  */
 const onDiskOrNearestAncestorPath = (lexicalPath: string, seen: ReadonlySet<string> = new Set()): string => {
   try {
     return realpathSync(lexicalPath);
   } catch (error) {
-    if (!isErrno(error, 'ENOENT')) throw error;
+    if (!isUnresolvedPathError(error)) throw error;
   }
-  const missing: string[] = [];
-  let cursor = lexicalPath;
-  for (;;) {
-    const parent = dirname(cursor);
-    if (parent === cursor) return lexicalPath;
-    missing.unshift(basename(cursor));
-    try {
-      return join(realpathSync(parent), ...missing);
-    } catch (error) {
-      if (!isErrno(error, 'ENOENT')) throw error;
+  try {
+    if (lstatSync(lexicalPath).isSymbolicLink()) {
+      const target = resolve(dirname(lexicalPath), readlinkSync(lexicalPath));
+      if (seen.has(target)) return target;
+      return onDiskOrNearestAncestorPath(target, new Set([...seen, target]));
     }
-    try {
-      if (lstatSync(parent).isSymbolicLink()) {
-        const target = resolve(dirname(parent), readlinkSync(parent));
-        if (seen.has(target)) return join(target, ...missing);
-        return join(onDiskOrNearestAncestorPath(target, new Set([...seen, target])), ...missing);
-      }
-    } catch (error) {
-      if (!isErrno(error, 'ENOENT')) throw error;
-    }
-    cursor = parent;
+  } catch (error) {
+    if (!isUnresolvedPathError(error)) throw error;
   }
+  const parent = dirname(lexicalPath);
+  if (parent === lexicalPath) return lexicalPath;
+  return join(onDiskOrNearestAncestorPath(parent, seen), basename(lexicalPath));
 };
 
 /**
