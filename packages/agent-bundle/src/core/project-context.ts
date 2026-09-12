@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
@@ -263,10 +263,12 @@ const projectRelativePath = (root: string, value: string, label: string): string
  * Existing paths collapse to on-disk identity (8.3, junctions, symlink hops).
  * Missing paths resolve the nearest existing ancestor and append the missing
  * suffix so a dangling leaf under an escaping symlink is judged against the
- * canonical target, not the lexical spelling. A path with no existing
- * ancestor stays lexical.
+ * canonical target, not the lexical spelling. A dangling symlink ancestor is
+ * not treated as missing: its target is resolved even when that target does
+ * not exist yet, so containment sees the escape before the link materializes.
+ * A path with no existing ancestor stays lexical.
  */
-const onDiskOrNearestAncestorPath = (lexicalPath: string): string => {
+const onDiskOrNearestAncestorPath = (lexicalPath: string, seen: ReadonlySet<string> = new Set()): string => {
   try {
     return realpathSync(lexicalPath);
   } catch (error) {
@@ -282,8 +284,17 @@ const onDiskOrNearestAncestorPath = (lexicalPath: string): string => {
       return join(realpathSync(parent), ...missing);
     } catch (error) {
       if (!isErrno(error, 'ENOENT')) throw error;
-      cursor = parent;
     }
+    try {
+      if (lstatSync(parent).isSymbolicLink()) {
+        const target = resolve(dirname(parent), readlinkSync(parent));
+        if (seen.has(target)) return join(target, ...missing);
+        return join(onDiskOrNearestAncestorPath(target, new Set([...seen, target])), ...missing);
+      }
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+    }
+    cursor = parent;
   }
 };
 

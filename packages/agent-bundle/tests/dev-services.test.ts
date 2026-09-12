@@ -899,6 +899,35 @@ it('reports snapshot failures as frozen preparation diagnostics', async () => {
   }
 });
 
+it('rejects a missing path under a dangling symlink that escapes the project', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    if (model === undefined) throw new Error('Expected a prepared model.');
+    const danglingTarget = `${root}-missing-external-dir`;
+    await symlink(danglingTarget, join(root, 'escaped-dir'), 'dir');
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model,
+      root,
+      sourceInputs: [
+        ...(prepared.projectContext?.sourceInputs ?? []),
+        { path: 'escaped-dir/missing.ts', sha256: 'a'.repeat(64) },
+      ],
+    })).toThrow(/outside project root/i);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it.each([
   { code: 'claude.outputStyles.directory.outside', field: 'outputStyles' },
   { code: 'claude.workflows.directory.outside', field: 'workflows' },
