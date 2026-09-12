@@ -1,5 +1,5 @@
-import { unlinkSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdirSync, unlinkSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -2327,17 +2327,18 @@ it('skips extract and validate when a discovered route module disappears before 
 });
 
 it('fails closed when a discovered route module cannot be read', async () => {
-  if (process.getuid?.() === 0) return;
   const root = await createRoot();
   const relativePath = 'src/mcp/curator/tools/inspect.tsx';
   await writeTree(root, {
     [relativePath]: `export const config = { title: 'Inspect' }; ${moduleSource}`,
   });
-  const source = join(root, relativePath);
-  await chmod(source, 0o000);
-  try {
-    await expect(compileRouteGraph(root, fixtureConfig())).rejects.toMatchObject({ code: 'EACCES' });
-  } finally {
-    await chmod(source, 0o644);
-  }
+
+  await expect(compileRouteGraph(
+    root,
+    fixtureConfig(),
+    mutateDiscoveredSource(root, relativePath, (source) => {
+      unlinkSync(source);
+      mkdirSync(source);
+    }),
+  )).rejects.toMatchObject({ code: 'EISDIR' });
 });
