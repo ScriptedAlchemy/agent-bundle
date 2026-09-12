@@ -8,7 +8,7 @@ import { expect, it } from '@rstest/core';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { containedPathComponents } from '../src/dev/project-service.ts';
-import { validate } from '../src/api.ts';
+import { build, validate } from '../src/api.ts';
 import { digest, sha256Hex } from '../src/core/digest.ts';
 import {
   DiagnosticService,
@@ -495,7 +495,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
       sourceInputs: [{ error: 'EACCES', path: 'agent-bundle.config.ts' }],
     }))).rejects.toThrow(/SHA-256 digest/i);
     for (const sourceInput of [
-      { path: 'skills\\review\\SKILL.md', sha256: 'a'.repeat(64) },
+      ...(sep === '\\' ? [{ path: 'skills\\review\\SKILL.md', sha256: 'a'.repeat(64) }] : []),
       { path: 'scratch/../source.ts', sha256: 'a'.repeat(64) },
       { path: 'source.txt', sha256: 'A'.repeat(64) },
     ]) {
@@ -1302,6 +1302,62 @@ posixContainmentIt('rejects a POSIX symlink target that uses a backslash in one 
       rm(root, { force: true, recursive: true }),
       rm(outside, { force: true, recursive: true }),
     ]);
+  }
+});
+
+posixContainmentIt('rejects a contained POSIX filename that includes a backslash', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  try {
+    await mkdir(join(root, 'odd\\dir'), { recursive: true });
+    await writeFile(join(root, 'odd\\dir', 'runtime'), 'backslash-runtime\n');
+    const prepared = await new ProjectService({ root }).prepare('build');
+    expect(prepared).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7003', recovery: expect.any(String) })],
+      source: { state: 'invalid' },
+    });
+    expect(prepared.model).toBeUndefined();
+    expect(prepared.projectContext).toBeUndefined();
+    await expect(build({ output: join(root, 'out'), root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7003' })],
+    });
+
+    const clean = await createProject([
+      '---',
+      'name: review',
+      'description: Reviews changes',
+      '---',
+      'Review the changed files.',
+      '',
+    ].join('\n'));
+    try {
+      const cleanPrepared = await new ProjectService({ root: clean }).prepare('build');
+      const model = cleanPrepared.model;
+      if (model === undefined) throw new Error('Expected a prepared model.');
+      expect(() => createProjectContext({
+        configPath: cleanPrepared.configPath,
+        model: withPayloadSource(model, join(clean, 'odd\\dir', 'runtime')),
+        root: clean,
+        sourceInputs: cleanPrepared.projectContext?.sourceInputs ?? [],
+      })).toThrow(/relocatable POSIX path/i);
+      const slashContext = createProjectContext({
+        configPath: cleanPrepared.configPath,
+        model: withPayloadSource(model, join(clean, 'odd', 'dir', 'runtime')),
+        root: clean,
+        sourceInputs: cleanPrepared.projectContext?.sourceInputs ?? [],
+      });
+      expect(slashContext.modelDigest).toEqual(expect.any(String));
+    } finally {
+      await rm(clean, { force: true, recursive: true });
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 
