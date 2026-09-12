@@ -1,6 +1,6 @@
 {
   "name": "@agent-bundle/runtime",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Agent Document contracts and streaming React Flight dispatch for Agent Bundle runtimes.",
   "license": "Apache-2.0",
   "keywords": [
