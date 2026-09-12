@@ -1292,6 +1292,8 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     projectRoot: prepared.root,
     registry: prepared.registry,
     routeGraph: prepared.routeGraph ?? emptyCompiledRouteGraph,
+    snapshotSource: prepared.snapshotSource,
+    configPath: prepared.configPath,
     ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
   });
   let packageBuild: PackageBuildResult | undefined;
@@ -1300,6 +1302,9 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
       artifactRoot: output,
       model,
       projectRoot: prepared.root,
+      snapshotSource: prepared.snapshotSource,
+      sourceInputs: projectContext.sourceInputs,
+      configPath: prepared.configPath,
       ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
     });
     if (packageBuild !== undefined) assertPackageOutputSources(packageBuild, projectContext);

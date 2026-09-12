@@ -16,6 +16,8 @@ import type {
 } from '../core/types.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
+import type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../core/project-context.ts';
+import { requireUnchangedSourceSnapshot } from '../core/source-publication.ts';
 import {
   accountedRequestsOf,
   createCompileEvidenceRecord,
@@ -368,6 +370,16 @@ export const buildPackageOutputs = async (options: {
   readonly artifactRoot: string;
   readonly model: NormalizedPlugin;
   readonly projectRoot: string;
+  /**
+   * Re-snapshot used after package source reads and before
+   * `publishArtifact`. Production `build()` passes
+   * `prepared.snapshotSource`.
+   */
+  readonly snapshotSource?: (
+    excludeRoots?: readonly string[],
+  ) => Promise<{ readonly inputs: readonly ProjectSourceSnapshotInput[] }>;
+  readonly sourceInputs?: readonly ProjectSourceInput[];
+  readonly configPath?: string;
   readonly tools?: AgentBundleToolsConfig;
 }): Promise<PackageBuildResult | undefined> => {
   const packageBuild = options.model.packageBuild;
@@ -521,6 +533,14 @@ export const buildPackageOutputs = async (options: {
       validJson: new Set(),
     });
     if (selfContainment.length > 0) throw new DiagnosticError(selfContainment);
+
+    if (options.snapshotSource !== undefined && options.sourceInputs !== undefined) {
+      await requireUnchangedSourceSnapshot(
+        () => options.snapshotSource!([stageRoot, compileRoot]),
+        options.sourceInputs,
+        options.configPath ?? options.model.metadata.provenance.sourcePath,
+      );
+    }
 
     await publishArtifact({ outputRoot, stageRoot });
     return Object.freeze({ evidence, files: Object.freeze(files), outputRoot });

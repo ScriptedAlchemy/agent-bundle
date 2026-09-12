@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { planComposite } from '../build/compose.ts';
@@ -93,8 +93,12 @@ export interface PreparedProject {
    * Re-snapshots the project with the same output and payload roots the
    * prepared identity hashed; a divergent re-snapshot would make
    * payload-bearing projects always appear drifted to epoch publication.
+   * Pass compiler-owned stage/compile roots so the walk does not treat the
+   * in-flight artifact as source.
    */
-  readonly snapshotSource: () => Promise<ProjectSourceSnapshot>;
+  readonly snapshotSource: (
+    excludeRoots?: readonly string[],
+  ) => Promise<ProjectSourceSnapshot>;
   readonly source: SourceStatus;
   /** The consumer bundler escape hatch, passed through for build lowering. */
   readonly tools?: AgentBundleToolsConfig;
@@ -255,7 +259,26 @@ const resolveOutputRoots = async (
 /** Bounds concurrent readdir calls so wide trees cannot exhaust file descriptors. */
 const walkConcurrency = 8;
 
-const sourcePaths = async (root: string, outputRoots: readonly string[]): Promise<readonly string[]> => {
+/**
+ * The compiler stages into `.<output>.stage-*` and `.<output>.compile-*`
+ * siblings of a configured output root (see watcher `isOutputStagingPath`).
+ * Those directories are build output, not project source.
+ */
+const isCompilerOwnedTempSibling = (
+  directory: string,
+  entryName: string,
+  outputRoots: readonly string[],
+): boolean =>
+  outputRoots.some((outputRoot) =>
+    dirname(outputRoot) === directory &&
+    (entryName.startsWith(`.${basename(outputRoot)}.stage-`) ||
+      entryName.startsWith(`.${basename(outputRoot)}.compile-`)));
+
+const sourcePaths = async (
+  root: string,
+  outputRoots: readonly string[],
+  excludeRoots: readonly string[] = [],
+): Promise<readonly string[]> => {
   const rules = await readProjectIgnoreRules(root);
   const paths: string[] = [];
   // Level-by-level walk: each level reads at most walkConcurrency directories
@@ -269,6 +292,8 @@ const sourcePaths = async (root: string, outputRoots: readonly string[]): Promis
         const source = join(directory, entry.name);
         if (isProjectPathIgnored(rules, root, source)) continue;
         if (outputRoots.some((outputRoot) => containedPathComponents(outputRoot, source) !== undefined)) continue;
+        if (excludeRoots.some((excludeRoot) => containedPathComponents(excludeRoot, source) !== undefined)) continue;
+        if (isCompilerOwnedTempSibling(directory, entry.name, outputRoots)) continue;
         if (entry.isDirectory()) next.push(source);
         else if (entry.isFile()) paths.push(source);
       }
@@ -326,10 +351,14 @@ export const snapshotProjectSource = async (
   configPath: string,
   outputRoots: readonly string[] = [],
   additionalSourceRoots: readonly string[] = [],
+  excludeRoots: readonly string[] = [],
 ): Promise<ProjectSourceSnapshot> => {
   const requestedRoot = resolve(root);
   const resolvedRoot = await realpath(requestedRoot);
   const resolvedOutputRoots = await resolveOutputRoots(requestedRoot, resolvedRoot, outputRoots);
+  const resolvedExcludeRoots = Object.freeze([
+    ...new Set(excludeRoots.map((entry) => resolve(entry))),
+  ]);
   const requestedConfigPath = resolve(requestedRoot, configPath);
   relativeSourcePath(requestedRoot, requestedConfigPath);
   const resolvedConfigPath = await realpath(requestedConfigPath);
@@ -347,7 +376,7 @@ export const snapshotProjectSource = async (
     ...(packageJsonPath === undefined || containedPathComponents(resolvedRoot, packageJsonPath) === undefined
       ? []
       : [packageJsonPath]),
-    ...(await sourcePaths(resolvedRoot, resolvedOutputRoots)),
+    ...(await sourcePaths(resolvedRoot, resolvedOutputRoots, resolvedExcludeRoots)),
     ...(await payloadSourcePaths(resolvedRoot, additionalSourceRoots)),
   ]);
   const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(resolvedRoot, source))))
@@ -609,7 +638,9 @@ const preparedProject = (
   registry: TargetRegistry,
   root: string,
   source: SourceStatus,
-  snapshotSource: () => Promise<ProjectSourceSnapshot>,
+  snapshotSource: (
+    excludeRoots?: readonly string[],
+  ) => Promise<ProjectSourceSnapshot>,
   model?: NormalizedPlugin,
   devRuntime?: DevRuntimePreparedProject,
   devRuntimeDiagnostic?: Diagnostic,
@@ -681,7 +712,8 @@ const invalidPreparedProject = (options: {
     sourceStatus(options.diagnostics, snapshot.revision, options.root),
     // A failed preparation never resolved its payload roots; the re-snapshot
     // observes the same source tree the failure snapshot did.
-    () => snapshotProjectSource(options.root, options.configPath, options.outputRoots),
+    (excludeRoots = []) =>
+      snapshotProjectSource(options.root, options.configPath, options.outputRoots, [], excludeRoots),
   );
 };
 
@@ -879,8 +911,10 @@ export class ProjectService {
         snapshot,
       );
     }
-    const snapshotSource = (): Promise<ProjectSourceSnapshot> =>
-      snapshotProjectSource(root, loaded.configPath, outputRoots, additionalSourceRoots);
+    const snapshotSource = (
+      excludeRoots: readonly string[] = [],
+    ): Promise<ProjectSourceSnapshot> =>
+      snapshotProjectSource(root, loaded.configPath, outputRoots, additionalSourceRoots, excludeRoots);
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision, root);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });

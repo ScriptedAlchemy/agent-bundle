@@ -171,6 +171,11 @@ in [Targets and artifacts](./targets-artifacts.mdx).
 The JSON document carries the reports under `hostValidation`, one per validated projection, each
 with a `load` verdict (`loaded`, `refused`, `unregistered`, or `failed`) when the load check ran.
 Programmatic `build()` calls never run host validation unless `hostValidation: true` is passed.
+If project source changes while compilation is running, `build` and `build()` reject the result
+with `AB7101` after compilation and validation, before the staged tree replaces live artifact or
+package output. Compiler metadata and compiled bytes from different snapshots are never published;
+any previous artifact or package output stays in place. Retry the build; the racing change is
+already on disk.
 
 ## install
 
