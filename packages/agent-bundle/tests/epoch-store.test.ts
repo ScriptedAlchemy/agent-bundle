@@ -270,6 +270,65 @@ it.each(['marker removal', 'marker file sync', 'marker directory sync'] as const
   },
 );
 
+it('treats Windows FlushFileBuffers EPERM on staged files as best-effort durability', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-epoch-win32-file-fsync-'));
+  const eperm = Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
+  const controlledOpen: typeof open = async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property === 'sync') return async () => {
+          if ((await target.stat()).isFile()) throw eperm;
+          await target.sync();
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  };
+  try {
+    const epoch = epochFor(root, 'epoch-win32-file-fsync');
+    const store = new EpochStore({
+      durabilityStorage: Object.freeze({ open: controlledOpen, remove: rm }),
+      platform: 'win32',
+      projectRoot: root,
+    });
+    await publishEpoch(store, epoch);
+    await expect(store.readActiveEpoch()).resolves.toEqual(epoch);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('fails epoch publication when file fsync EPERM is not a Windows FlushFileBuffers gap', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-epoch-posix-file-fsync-'));
+  const eperm = Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
+  const controlledOpen: typeof open = async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property === 'sync') return async () => {
+          if ((await target.stat()).isFile()) throw eperm;
+          await target.sync();
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  };
+  try {
+    const store = new EpochStore({
+      durabilityStorage: Object.freeze({ open: controlledOpen, remove: rm }),
+      platform: 'linux',
+      projectRoot: root,
+    });
+    await expect(publishEpoch(store, epochFor(root, 'epoch-posix-file-fsync'))).rejects.toBe(eperm);
+    await expect(store.readActiveEpoch()).resolves.toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('fsyncs staged artifacts and each durable publication rename in commit order', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle durable epoch publication '));
   const syncedPaths: string[] = [];

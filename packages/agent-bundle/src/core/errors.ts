@@ -21,10 +21,11 @@ export class CodedError<TCode extends string = string> extends Error {
 }
 
 /**
- * Windows has no public directory-fsync primitive. FlushFileBuffers on a
- * directory handle fails with EACCES, EINVAL, or EPERM depending on the
- * volume and Node/libuv mapping; durability there is best-effort. Regular
- * files never use this helper.
+ * Windows FlushFileBuffers capability failures. Directory handles have no
+ * public fsync primitive and fail with EACCES, EINVAL, or EPERM depending on
+ * the volume and Node/libuv mapping. Hosted Windows runners also return
+ * EPERM for some newly written regular files. Callers that already persisted
+ * bytes treat these codes as best-effort durability, not a lost write.
  */
 export const isTolerableWin32SyncError = (platform: string, error: unknown): boolean =>
   platform === 'win32'

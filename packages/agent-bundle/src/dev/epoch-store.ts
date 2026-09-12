@@ -21,6 +21,8 @@ export interface EpochStoreOptions {
   readonly move?: typeof rename;
   /** @internal Deterministic durability-failure seam. */
   readonly durabilityStorage?: EpochDurabilityStorage;
+  /** @internal Durability platform seam; defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform;
   readonly projectRoot: string;
 }
 
@@ -345,6 +347,7 @@ export class EpochStore {
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
   readonly #move: typeof rename;
+  readonly #platform: NodeJS.Platform;
   /** The process-wide lease mutex shared by every store over this project. */
   readonly #leaseTransitions: Semaphore.Semaphore;
   readonly #staging = new Map<symbol, StagingRecord>();
@@ -356,6 +359,7 @@ export class EpochStore {
     this.#activeEpochPath = join(agentBundlePath, activeEpochFileName);
     this.#cleanupRemove = options.cleanupRemove ?? rm;
     this.#durabilityStorage = options.durabilityStorage ?? Object.freeze({ open, remove: rm });
+    this.#platform = options.platform ?? process.platform;
     this.#epochsPath = join(agentBundlePath, 'epochs');
     this.#epochMetadataPath = join(this.#epochsPath, metadataDirectoryName);
     this.#move = options.move ?? rename;
@@ -704,7 +708,10 @@ export class EpochStore {
     try {
       await handle.sync();
     } catch (error) {
-      if (directory && isTolerableWin32SyncError(process.platform, error)) return;
+      // Hosted Windows FlushFileBuffers fails for directories and, on GHA
+      // runners, some newly written regular files (`AB7100` fsync EPERM
+      // after a successful compile). The bytes are already on disk.
+      if (isTolerableWin32SyncError(this.#platform, error)) return;
       throw error;
     }
     finally { await handle.close(); }
