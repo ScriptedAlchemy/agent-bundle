@@ -1293,9 +1293,10 @@ posixContainmentIt('rejects a POSIX symlink target that uses a backslash in one 
       sourceInputs: prepared.projectContext?.sourceInputs ?? [],
     })).toThrow(/outside project root/i);
 
-    await writeFile(join(outside, 'missing'), 'OUTSIDE\n');
+    const outsideMissing = join(outside, 'anchor', 'missing');
+    await writeFile(outsideMissing, 'OUTSIDE\n');
     expect(await readFile(payload, 'utf8')).toBe('OUTSIDE\n');
-    expect(nodeFs.realpathSync.native(payload)).toBe(nodeFs.realpathSync.native(join(outside, 'missing')));
+    expect(nodeFs.realpathSync.native(payload)).toBe(nodeFs.realpathSync.native(outsideMissing));
   } finally {
     await Promise.all([
       rm(root, { force: true, recursive: true }),
