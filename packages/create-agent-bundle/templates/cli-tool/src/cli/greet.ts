@@ -5,13 +5,23 @@ import { greet } from '../index.js';
 
 /**
  * A routed CLI command: the file path is the command name (`my-agent-plugin
- * greet`), the static `config` and `inputSchema` compile into the argv
- * grammar and generated help, and `resultSchema` validates what the command
- * prints as one canonical JSON line. No argv parsing lives in this file.
+ * greet`). `config.inputJsonSchema` and `config.positionals` compile the argv
+ * grammar and generated help; `inputSchema` validates parsed argv at run time;
+ * `resultSchema` validates the one canonical JSON line the command prints.
+ * No argv parsing lives in this file.
  */
 export const config = {
   description: 'Greet one person by name.',
   positionals: ['name'],
+  inputJsonSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string', description: 'Who to greet.' },
+      shout: { type: 'boolean', description: 'Upper-case the greeting.' },
+    },
+    required: ['name'],
+  },
 } satisfies CliRouteConfig;
 
 export const inputSchema = z.object({
