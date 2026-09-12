@@ -287,6 +287,13 @@ const onDiskOrNearestAncestorPath = (lexicalPath: string): string => {
   }
 };
 
+/**
+ * Project-relative POSIX path using on-disk identity. Snapshot inputs and
+ * `createProjectContext` must share this helper: a Windows `path.resolve`
+ * spelling (8.3 alias, junction hop) that differs from `realpath` would
+ * otherwise hash one revision at prepare and reject the same tree with
+ * `AB7101` after compile.
+ */
 const resolvedProjectPath = (root: string, value: string, label: string): string => {
   const canonicalRoot = realpathSync(resolve(root));
   const lexicalRoot = resolve(root);

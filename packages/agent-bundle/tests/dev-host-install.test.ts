@@ -582,7 +582,7 @@ it('publishes a diagnostic event and preserves the installed generation when re-
 
 it('re-syncs the isolated Cursor install from coordinator epochs and ignores a failed rebuild', async () => {
   const built = builtFixture();
-  const projectRoot = resolve(built.artifactRoot, '..');
+  const projectRoot = await realpath(resolve(built.artifactRoot, '..'));
   const home = await createRoot();
   await mkdir(join(home, '.cursor'), { recursive: true });
   const eventHub = new ProjectEventHub();
@@ -604,6 +604,8 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
     eventHub,
     outputPaths: [built.artifactRoot],
     prepareCommand: 'dev',
+    // The CLI proof writes `--output artifact`; keep that tree out of source
+    // identity so the in-process rebuild matches `agent-bundle dev`.
     projectService: new ProjectService({
       outputRoots: [built.artifactRoot],
       root: projectRoot,
@@ -611,21 +613,38 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
     root: projectRoot,
   });
   const syncEvents: unknown[] = [];
+  const coordinatorEvents: unknown[] = [];
   eventHub.subscribe((event) => {
     if (event.type === 'dev.host.sync') syncEvents.push(event.payload);
+    if (
+      event.type === 'artifact.available' ||
+      event.type === 'artifact.status' ||
+      event.type === 'build.failed'
+    ) {
+      coordinatorEvents.push({
+        ...(event.epochId === undefined ? {} : { epochId: event.epochId }),
+        payload: event.payload,
+        type: event.type,
+      });
+    }
   });
+  const skillPath = join(projectRoot, 'src', 'skills', 'probe', 'SKILL.md');
+  const hookPath = join(projectRoot, 'src', 'hooks', 'session-start.ts');
+  const [originalSkill, originalHook] = await Promise.all([
+    readFile(skillPath, 'utf8'),
+    readFile(hookPath, 'utf8'),
+  ]);
   manager.start();
   try {
     await coordinator.start();
     await manager.settled();
     const attached = manager.attached('cursor');
     if (attached === undefined) {
-      throw new Error(
-        `Cursor development install did not attach: ${JSON.stringify({
-          status: coordinator.status(),
-          syncEvents,
-        })}`,
-      );
+      throw new Error(`Cursor development install did not attach: ${JSON.stringify({
+        coordinatorEvents,
+        status: coordinator.status(),
+        syncEvents,
+      })}`);
     }
     const destination = attached.destination;
     const mcpBefore = await readFile(join(destination, '.cursor-plugin', 'mcp.json'), 'utf8');
@@ -670,6 +689,10 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
     expect(await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).toContain('# Updated skill');
     expect(await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8')).toBe(markerBeforeFailure);
   } finally {
+    await Promise.all([
+      writeFile(skillPath, originalSkill),
+      writeFile(hookPath, originalHook),
+    ]);
     await manager.close();
     await coordinator.close();
   }
