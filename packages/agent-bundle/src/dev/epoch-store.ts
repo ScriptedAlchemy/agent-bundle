@@ -703,15 +703,16 @@ export class EpochStore {
     }
   }
 
-  async #syncPath(path: string, _directory = false): Promise<void> {
-    const handle = await this.#durabilityStorage.open(path, 'r');
+  async #syncPath(path: string, directory = false): Promise<void> {
+    // Windows FlushFileBuffers requires write-capable access for regular
+    // files. `r+` does not create or truncate. Directory handles have no
+    // public fsync primitive and stay read-only plus the documented gap.
+    const flags = this.#platform === 'win32' && !directory ? 'r+' : 'r';
+    const handle = await this.#durabilityStorage.open(path, flags);
     try {
       await handle.sync();
     } catch (error) {
-      // Hosted Windows FlushFileBuffers fails for directories and, on GHA
-      // runners, some newly written regular files (`AB7100` fsync EPERM
-      // after a successful compile). The bytes are already on disk.
-      if (isTolerableWin32SyncError(this.#platform, error)) return;
+      if (directory && isTolerableWin32SyncError(this.#platform, error)) return;
       throw error;
     }
     finally { await handle.close(); }

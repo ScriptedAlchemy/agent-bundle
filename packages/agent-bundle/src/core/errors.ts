@@ -23,9 +23,9 @@ export class CodedError<TCode extends string = string> extends Error {
 /**
  * Windows FlushFileBuffers capability failures. Directory handles have no
  * public fsync primitive and fail with EACCES, EINVAL, or EPERM depending on
- * the volume and Node/libuv mapping. Hosted Windows runners also return
- * EPERM for some newly written regular files. Callers that already persisted
- * bytes treat these codes as best-effort durability, not a lost write.
+ * the volume and Node/libuv mapping. Callers that already persisted a
+ * directory treat these codes as best-effort durability, not a lost write.
+ * Regular-file sync still fails closed.
  */
 export const isTolerableWin32SyncError = (platform: string, error: unknown): boolean =>
   platform === 'win32'

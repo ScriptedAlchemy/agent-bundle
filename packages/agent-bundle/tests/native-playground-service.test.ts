@@ -630,7 +630,7 @@ const fileSyncEpermOpen = (eperm: Error): NativePlaygroundCatalogStorage['open']
     });
   };
 
-it('treats Windows FlushFileBuffers EPERM on catalog staging files as best-effort durability', async () => {
+it('fails catalog publication when Windows regular-file fsync EPERM is not a directory FlushFileBuffers gap', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-win32-file-fsync-'));
   const catalogDirectory = join(root, 'catalog');
   const eperm = Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
@@ -659,9 +659,7 @@ it('treats Windows FlushFileBuffers EPERM on catalog staging files as best-effor
     projectRoot: '/project',
   });
   try {
-    await expect(service.catalog(epoch('epoch-win32-file-fsync', join(root, 'artifact')))).resolves.toMatchObject({
-      epochId: 'epoch-win32-file-fsync',
-    });
+    await expect(service.catalog(epoch('epoch-win32-file-fsync', join(root, 'artifact')))).rejects.toBe(eperm);
   } finally {
     await service.close();
     if (previousPlatform === undefined) delete runtime[nativeCatalogDurabilityPlatformKey];

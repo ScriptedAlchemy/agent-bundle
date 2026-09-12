@@ -1244,14 +1244,7 @@ export class NativePlaygroundService {
     try {
       handle = await this.#catalogStorage.open(temporary, 'wx', 0o600);
       await handle.writeFile(contents, 'utf8');
-      try {
-        await handle.sync();
-      } catch (error) {
-        // Hosted Windows FlushFileBuffers fails for some newly written
-        // catalog staging files (`AB7100` fsync EPERM after a successful
-        // compile). The snapshot bytes are already on disk.
-        if (!isTolerableWin32SyncError(catalogDurabilityPlatform(), error)) throw error;
-      }
+      await handle.sync();
       staged = await handle.stat();
       if (!staged.isFile() || staged.nlink !== 1) {
         throw new Error('Native Playground catalog staging file is invalid.');
