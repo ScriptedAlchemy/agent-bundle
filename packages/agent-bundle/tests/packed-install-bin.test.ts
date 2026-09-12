@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -41,12 +41,24 @@ interface Run {
 
 /** npm's JavaScript CLI, never the extensionless `.bin` shim or `npm.cmd`. */
 const resolveNpmCli = (): string => {
-  const fromEnv = process.env['npm_execpath'];
-  if (fromEnv !== undefined && fromEnv.length > 0 && fromEnv.endsWith('npm-cli.js') && existsSync(fromEnv)) {
-    return fromEnv;
+  const sibling = join(dirname(process.execPath), 'npm');
+  let siblingTarget: string | undefined;
+  try {
+    siblingTarget = existsSync(sibling) ? realpathSync(sibling) : undefined;
+  } catch {
+    siblingTarget = undefined;
   }
-  const besideNode = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  if (existsSync(besideNode)) return besideNode;
+  const candidates = [
+    process.env['npm_execpath'],
+    join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    siblingTarget,
+  ];
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate.endsWith('npm-cli.js') && existsSync(candidate)) {
+      return candidate;
+    }
+  }
   return createRequire(import.meta.url).resolve('npm/bin/npm-cli.js');
 };
 
