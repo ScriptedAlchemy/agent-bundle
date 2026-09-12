@@ -642,7 +642,7 @@ export class EpochStore {
         yield* liftPromise(() => this.#removeStagingMarker(record));
         yield* liftPromise(() => this.#move(record.root, epochRoot));
         moved = true;
-        yield* liftPromise(() => this.#syncPath(this.#epochsPath));
+        yield* liftPromise(() => this.#syncPath(this.#epochsPath, true));
         if (beforeActivate !== undefined) {
           publication = (yield* liftPromise(() => beforeActivate(record.epoch))) ?? undefined;
         }
@@ -691,19 +691,19 @@ export class EpochStore {
     const markerPath = join(record.root, stagingMarkerFileName);
     await this.#syncPath(markerPath);
     await this.#durabilityStorage.remove(markerPath);
-    await this.#syncPath(record.root);
+    await this.#syncPath(record.root, true);
   }
 
   async #removePublicationPath(path: string, parent: string, recursive = false): Promise<void> {
     await rm(path, recursive ? { force: true, recursive: true } : { force: true });
     try {
-      await this.#syncPath(parent);
+      await this.#syncPath(parent, true);
     } catch (error) {
       if (!isErrno(error, 'ENOENT')) throw error;
     }
   }
 
-  async #syncPath(path: string): Promise<void> {
+  async #syncPath(path: string, _directory = false): Promise<void> {
     const handle = await this.#durabilityStorage.open(path, 'r');
     try {
       await handle.sync();
@@ -733,7 +733,7 @@ export class EpochStore {
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       await this.#syncTree(join(path, entry.name));
     }
-    await this.#syncPath(path);
+    await this.#syncPath(path, true);
   }
 
   async #verifyStaging(record: StagingRecord): Promise<void> {
@@ -897,7 +897,7 @@ export class EpochStore {
   async #writeJsonAtomically(path: string, value: EpochMetadata, progress?: AtomicWriteProgress): Promise<void> {
     const directory = dirname(path);
     await mkdir(directory, { recursive: true });
-    await this.#syncPath(dirname(directory));
+    await this.#syncPath(dirname(directory), true);
     const temporaryPath = join(
       directory,
       `.${basename(path)}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`,
@@ -907,7 +907,7 @@ export class EpochStore {
       await this.#syncPath(temporaryPath);
       await rename(temporaryPath, path);
       if (progress !== undefined) progress.renamed = true;
-      await this.#syncPath(directory);
+      await this.#syncPath(directory, true);
     } finally {
       await rm(temporaryPath, { force: true });
     }
