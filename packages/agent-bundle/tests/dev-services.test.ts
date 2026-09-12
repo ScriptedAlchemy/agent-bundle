@@ -12,6 +12,7 @@ import { validate } from '../src/api.ts';
 import { digest, sha256Hex } from '../src/core/digest.ts';
 import {
   DiagnosticService,
+  canonicalizeNormalizedModel,
   createProjectContext,
   ProjectService,
   snapshotProjectSource,
@@ -1302,6 +1303,43 @@ posixContainmentIt('rejects a POSIX symlink target that uses a backslash in one 
       rm(root, { force: true, recursive: true }),
       rm(outside, { force: true, recursive: true }),
     ]);
+  }
+});
+
+posixContainmentIt('preserves a contained POSIX filename that includes a backslash', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    if (model === undefined) throw new Error('Expected a prepared model.');
+    const slashPath = join(root, 'odd', 'dir', 'runtime');
+    const backslashPath = join(root, 'odd\\dir', 'runtime');
+    const slashContext = createProjectContext({
+      configPath: prepared.configPath,
+      model: withPayloadSource(model, slashPath),
+      root,
+      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+    });
+    const backslashContext = createProjectContext({
+      configPath: prepared.configPath,
+      model: withPayloadSource(model, backslashPath),
+      root,
+      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+    });
+    const slashCanonical = canonicalizeNormalizedModel(root, withPayloadSource(model, slashPath));
+    const backslashCanonical = canonicalizeNormalizedModel(root, withPayloadSource(model, backslashPath));
+    expect(slashCanonical.payloads?.[0]?.source).toBe('odd/dir/runtime');
+    expect(backslashCanonical.payloads?.[0]?.source).toBe('odd\\dir/runtime');
+    expect(backslashContext.modelDigest).not.toEqual(slashContext.modelDigest);
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 

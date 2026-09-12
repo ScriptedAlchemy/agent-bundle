@@ -1,5 +1,5 @@
 import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
 import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
 import type { DescriptiveMetadataResult } from './descriptive-metadata.ts';
@@ -8,7 +8,7 @@ import type { Diagnostic } from './diagnostics.ts';
 import { digest } from './digest.ts';
 import { isErrno } from './errors.ts';
 import { deepFreeze } from './freeze.ts';
-import { isInsideOrEqual } from './paths.ts';
+import { isInsideOrEqual, toPosixRelative } from './paths.ts';
 import { snapshotStrictJsonValue } from './strict-json.ts';
 import type { NormalizedPlugin, SourceProvenance } from './types.ts';
 
@@ -252,7 +252,7 @@ const projectRelativePath = (root: string, value: string, label: string): string
   if (escapesRoot(resolvedRoot, resolvedValue)) {
     throw new RangeError(`${label} ${JSON.stringify(resolvedValue)} is outside project root ${JSON.stringify(resolvedRoot)}.`);
   }
-  const projectRelative = relative(resolvedRoot, resolvedValue).replaceAll('\\', '/');
+  const projectRelative = toPosixRelative(resolvedRoot, resolvedValue);
   if (projectRelative.length === 0) {
     throw new RangeError(`${label} must not be the project root.`);
   }
@@ -411,7 +411,7 @@ const resolvedProjectPath = (
   if (options.requireExists === true) {
     realpathSync(referencedPath);
   }
-  const projectRelative = relative(canonicalRoot, referencedPath).replaceAll('\\', '/');
+  const projectRelative = toPosixRelative(canonicalRoot, referencedPath);
   if (projectRelative.length === 0) throw new RangeError(`${label} must not be the project root.`);
   return projectRelative;
 };

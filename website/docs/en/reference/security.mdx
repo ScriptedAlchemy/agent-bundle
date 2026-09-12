@@ -121,6 +121,9 @@ Path containment is enforced in both directions: a declared logo that escapes th
 (`AB6025`), a symlink resolving outside a Cursor bundle (`AB6028`), an installed local plugin whose
 symlink escapes `~/.cursor/plugins/local` (`AB7320`), an eval `runsDir` that leaves the project
 root, and an MCP server name that would traverse out of its state root are all rejected.
+`createProjectContext` and project preparation also fail closed when a dangling or cyclic symlink
+walk leaves the project root or loops (`ELOOP`). Returned project-relative identities use the host
+separator only, so a POSIX filename that contains a backslash stays one path segment.
 
 ## What is not claimed
 
