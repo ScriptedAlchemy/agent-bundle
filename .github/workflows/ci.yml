@@ -310,8 +310,11 @@ jobs:
           playwright-browser: chromium
       # Per-PR packed pool: single pack+install proofs plus the
       # minimal-template scaffolder smoke. The full template matrix runs in
-      # nightly.yml's packed-matrix job and in pre-publish `pnpm check:release`.
+      # nightly.yml's packed-matrix job, in release-candidate.yml for
+      # Version Packages / on-demand qualification, and in pre-publish
+      # `pnpm check:release`.
       - run: pnpm check:release:ci
+
       - if: failure()
         name: Preserve Playwright traces of failed browser tests
         uses: actions/upload-artifact@v7

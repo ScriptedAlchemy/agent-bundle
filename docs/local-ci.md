@@ -80,8 +80,9 @@ install, which one worktree provides just as well as three.
 `gates-node22` runs the full `check:release`, a strict superset of the hosted
 per-PR release-gates job (`check:release:ci`): it additionally runs the
 scaffolder template matrix that the hosted side defers to the nightly
-`packed-matrix` job, so local green covers both the per-PR and nightly packed
-pools.
+`packed-matrix` job and to `release-candidate.yml` (Version Packages
+candidates and `workflow_dispatch`), so local green covers the per-PR,
+nightly, and release-candidate packed pools.
 
 All four legs run concurrently. The summary table (leg × step × status ×
 duration × test census) is printed and written to
