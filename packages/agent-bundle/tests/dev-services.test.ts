@@ -917,6 +917,17 @@ const withPayloadSource = (
   }],
 });
 
+const firstCanonicalPayloadSource = (
+  canonical: Readonly<Record<string, unknown>>,
+): unknown => {
+  const payloads = canonical.payloads;
+  if (!Array.isArray(payloads)) return undefined;
+  const first: unknown = payloads[0];
+  return first !== null && typeof first === 'object' && 'source' in first
+    ? first.source
+    : undefined;
+};
+
 it('rejects a dangling payload-root symlink that escapes the project', async () => {
   const root = await createProject([
     '---',
@@ -1335,8 +1346,8 @@ posixContainmentIt('preserves a contained POSIX filename that includes a backsla
     });
     const slashCanonical = canonicalizeNormalizedModel(root, withPayloadSource(model, slashPath));
     const backslashCanonical = canonicalizeNormalizedModel(root, withPayloadSource(model, backslashPath));
-    expect(slashCanonical.payloads?.[0]?.source).toBe('odd/dir/runtime');
-    expect(backslashCanonical.payloads?.[0]?.source).toBe('odd\\dir/runtime');
+    expect(firstCanonicalPayloadSource(slashCanonical)).toBe('odd/dir/runtime');
+    expect(firstCanonicalPayloadSource(backslashCanonical)).toBe('odd\\dir/runtime');
     expect(backslashContext.modelDigest).not.toEqual(slashContext.modelDigest);
   } finally {
     await rm(root, { force: true, recursive: true });
