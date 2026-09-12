@@ -8,7 +8,7 @@ import type { Diagnostic } from './diagnostics.ts';
 import { digest } from './digest.ts';
 import { isErrno } from './errors.ts';
 import { deepFreeze } from './freeze.ts';
-import { isInsideOrEqual, toPosixRelative } from './paths.ts';
+import { isInsideOrEqual, isRelocatablePosixPath, toPosixRelative } from './paths.ts';
 import { snapshotStrictJsonValue } from './strict-json.ts';
 import type { NormalizedPlugin, SourceProvenance } from './types.ts';
 
@@ -230,9 +230,10 @@ const escapesRoot = (root: string, candidate: string): boolean => !isInsideOrEqu
 const sha256Pattern = /^[a-f0-9]{64}$/u;
 
 const assertCanonicalPath = (value: string, label: string): void => {
-  // Windows identities stay POSIX-form (`/` only). On POSIX, `\` is a filename
-  // character and must survive snapshot → context without being stripped.
-  if (sep === '\\' && value.includes('\\')) {
+  // Relative authored paths stay canonical POSIX. A literal `\` is filename
+  // data on POSIX and a separator on Windows, so it is never a portable
+  // identity; absolute on-disk names are judged after the filesystem walk.
+  if (value.includes('\\')) {
     throw new RangeError(`${label} must use a canonical POSIX path.`);
   }
   if (isAbsolute(value)) {
@@ -257,6 +258,11 @@ const projectRelativePath = (root: string, value: string, label: string): string
   const projectRelative = toPosixRelative(resolvedRoot, resolvedValue);
   if (projectRelative.length === 0) {
     throw new RangeError(`${label} must not be the project root.`);
+  }
+  if (!isRelocatablePosixPath(projectRelative)) {
+    throw new RangeError(
+      `${label} ${JSON.stringify(projectRelative)} is not a relocatable POSIX path.`,
+    );
   }
   return projectRelative;
 };
@@ -415,6 +421,11 @@ const resolvedProjectPath = (
   }
   const projectRelative = toPosixRelative(canonicalRoot, referencedPath);
   if (projectRelative.length === 0) throw new RangeError(`${label} must not be the project root.`);
+  if (!isRelocatablePosixPath(projectRelative)) {
+    throw new RangeError(
+      `${label} ${JSON.stringify(projectRelative)} is not a relocatable POSIX path.`,
+    );
+  }
   return projectRelative;
 };
 

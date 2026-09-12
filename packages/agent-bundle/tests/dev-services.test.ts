@@ -8,11 +8,10 @@ import { expect, it } from '@rstest/core';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { containedPathComponents } from '../src/dev/project-service.ts';
-import { validate } from '../src/api.ts';
+import { build, validate } from '../src/api.ts';
 import { digest, sha256Hex } from '../src/core/digest.ts';
 import {
   DiagnosticService,
-  canonicalizeNormalizedModel,
   createProjectContext,
   ProjectService,
   snapshotProjectSource,
@@ -917,17 +916,6 @@ const withPayloadSource = (
   }],
 });
 
-const firstCanonicalPayloadSource = (
-  canonical: Readonly<Record<string, unknown>>,
-): unknown => {
-  const payloads = canonical.payloads;
-  if (!Array.isArray(payloads)) return undefined;
-  const first: unknown = payloads[0];
-  return first !== null && typeof first === 'object' && 'source' in first
-    ? first.source
-    : undefined;
-};
-
 it('rejects a dangling payload-root symlink that escapes the project', async () => {
   const root = await createProject([
     '---',
@@ -1317,7 +1305,7 @@ posixContainmentIt('rejects a POSIX symlink target that uses a backslash in one 
   }
 });
 
-posixContainmentIt('preserves a contained POSIX filename that includes a backslash', async () => {
+posixContainmentIt('rejects a contained POSIX filename that includes a backslash', async () => {
   const root = await createProject([
     '---',
     'name: review',
@@ -1327,42 +1315,45 @@ posixContainmentIt('preserves a contained POSIX filename that includes a backsla
     '',
   ].join('\n'));
   try {
-    const slashPath = join(root, 'odd', 'dir', 'runtime');
-    const backslashPath = join(root, 'odd\\dir', 'runtime');
-    await mkdir(join(root, 'odd', 'dir'), { recursive: true });
     await mkdir(join(root, 'odd\\dir'), { recursive: true });
-    await Promise.all([
-      writeFile(slashPath, 'slash-runtime\n'),
-      writeFile(backslashPath, 'backslash-runtime\n'),
-    ]);
+    await writeFile(join(root, 'odd\\dir', 'runtime'), 'backslash-runtime\n');
     const prepared = await new ProjectService({ root }).prepare('build');
-    const model = prepared.model;
-    if (model === undefined) throw new Error('Expected a prepared model.');
-    const snapshot = await snapshotProjectSource(root, prepared.configPath);
-    const snapshotPaths = snapshot.inputs.map((input) => input.path);
-    expect(snapshotPaths).toContain('odd/dir/runtime');
-    expect(snapshotPaths).toContain('odd\\dir/runtime');
-    const slashContext = createProjectContext({
-      configPath: prepared.configPath,
-      model: withPayloadSource(model, slashPath),
-      root,
-      sourceInputs: snapshot.inputs,
+    expect(prepared).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7003' })],
+      projectContext: undefined,
     });
-    const backslashContext = createProjectContext({
-      configPath: prepared.configPath,
-      model: withPayloadSource(model, backslashPath),
-      root,
-      sourceInputs: snapshot.inputs,
+    await expect(build({ output: join(root, 'out'), root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7003' })],
     });
-    expect(slashContext.sourceInputs.map((input) => input.path)).toEqual(snapshotPaths);
-    expect(backslashContext.sourceInputs.map((input) => input.path)).toEqual(snapshotPaths);
-    expect(slashContext.revision).toBe(snapshot.revision);
-    expect(backslashContext.revision).toBe(snapshot.revision);
-    const slashCanonical = canonicalizeNormalizedModel(root, withPayloadSource(model, slashPath));
-    const backslashCanonical = canonicalizeNormalizedModel(root, withPayloadSource(model, backslashPath));
-    expect(firstCanonicalPayloadSource(slashCanonical)).toBe('odd/dir/runtime');
-    expect(firstCanonicalPayloadSource(backslashCanonical)).toBe('odd\\dir/runtime');
-    expect(backslashContext.modelDigest).not.toEqual(slashContext.modelDigest);
+
+    const clean = await createProject([
+      '---',
+      'name: review',
+      'description: Reviews changes',
+      '---',
+      'Review the changed files.',
+      '',
+    ].join('\n'));
+    try {
+      const cleanPrepared = await new ProjectService({ root: clean }).prepare('build');
+      const model = cleanPrepared.model;
+      if (model === undefined) throw new Error('Expected a prepared model.');
+      expect(() => createProjectContext({
+        configPath: cleanPrepared.configPath,
+        model: withPayloadSource(model, join(clean, 'odd\\dir', 'runtime')),
+        root: clean,
+        sourceInputs: cleanPrepared.projectContext?.sourceInputs ?? [],
+      })).toThrow(/relocatable POSIX path/i);
+      const slashContext = createProjectContext({
+        configPath: cleanPrepared.configPath,
+        model: withPayloadSource(model, join(clean, 'odd', 'dir', 'runtime')),
+        root: clean,
+        sourceInputs: cleanPrepared.projectContext?.sourceInputs ?? [],
+      });
+      expect(slashContext.modelDigest).toEqual(expect.any(String));
+    } finally {
+      await rm(clean, { force: true, recursive: true });
+    }
   } finally {
     await rm(root, { force: true, recursive: true });
   }
