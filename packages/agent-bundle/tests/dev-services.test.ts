@@ -1,3 +1,4 @@
+import * as nodeFs from 'node:fs';
 import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, sep, win32 } from 'node:path';
@@ -1194,6 +1195,107 @@ it('rejects symlink/../payload that escapes after the symlink hop', async () => 
         { path: [root, 'link', '..', 'payload', 'missing.ts'].join(sep), sha256: 'a'.repeat(64) },
       ],
     })).toThrow(/outside project root/i);
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(outside, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+const posixContainmentIt = process.platform === 'win32' ? it.skip : it;
+
+const storedDotDotTarget = (root: string, kind: 'relative' | 'absolute'): string =>
+  kind === 'relative' ? 'pivot/../missing' : `${root}${sep}pivot${sep}..${sep}missing`;
+
+it.each([
+  { kind: 'relative' as const },
+  { kind: 'absolute' as const },
+])('rejects a payload symlink whose stored $kind target is pivot/../missing', async ({ kind }) => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const outside = await mkdtemp(join(tmpdir(), `agent-bundle-stored-${kind}-dotdot-`));
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    if (model === undefined) throw new Error('Expected a prepared model.');
+    await mkdir(join(outside, 'anchor'));
+    await mkdir(join(root, 'missing'));
+    await writeFile(join(root, 'missing', 'decoy.txt'), 'inside-decoy\n');
+    await symlink(join(outside, 'anchor'), join(root, 'pivot'), 'dir');
+    const payload = join(root, 'payload');
+    await symlink(storedDotDotTarget(root, kind), payload);
+    expect(await nodeFs.promises.readlink(payload)).toBe(storedDotDotTarget(root, kind));
+
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model: withPayloadSource(model, payload),
+      root,
+      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+    })).toThrow(/outside project root/i);
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model: withPayloadSource(model, join(payload, 'child')),
+      root,
+      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+    })).toThrow(/outside project root/i);
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model,
+      root,
+      sourceInputs: [
+        ...(prepared.projectContext?.sourceInputs ?? []),
+        { path: join(payload, 'missing.ts'), sha256: 'a'.repeat(64) },
+      ],
+    })).toThrow(/outside project root/i);
+
+    await writeFile(join(outside, 'missing'), 'OUTSIDE\n');
+    expect(await readFile(payload, 'utf8')).toBe('OUTSIDE\n');
+    expect(nodeFs.realpathSync.native(payload)).toBe(nodeFs.realpathSync.native(join(outside, 'missing')));
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(outside, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+posixContainmentIt('rejects a POSIX symlink target that uses a backslash in one filename', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-posix-backslash-'));
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    if (model === undefined) throw new Error('Expected a prepared model.');
+    await mkdir(join(outside, 'anchor'));
+    await symlink(join(outside, 'anchor'), join(root, 'odd\\dir'), 'dir');
+    const payload = join(root, 'payload');
+    await symlink('odd\\dir/missing', payload);
+    expect(await nodeFs.promises.readlink(payload)).toBe('odd\\dir/missing');
+
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model: withPayloadSource(model, payload),
+      root,
+      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+    })).toThrow(/outside project root/i);
+
+    await writeFile(join(outside, 'missing'), 'OUTSIDE\n');
+    expect(await readFile(payload, 'utf8')).toBe('OUTSIDE\n');
+    expect(nodeFs.realpathSync.native(payload)).toBe(nodeFs.realpathSync.native(join(outside, 'missing')));
   } finally {
     await Promise.all([
       rm(root, { force: true, recursive: true }),

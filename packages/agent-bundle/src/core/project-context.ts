@@ -1,5 +1,5 @@
 import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 
 import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
 import type { DescriptiveMetadataResult } from './descriptive-metadata.ts';
@@ -276,57 +276,106 @@ const symlinkLoopError = (path: string): Error =>
  * current path or any recursively visited target is not treated as missing:
  * its chain is fully resolved even when the final target does not exist yet,
  * then the missing suffix is appended, so containment sees the escape before
- * the link materializes. Relative `readlink` targets are resolved against the
- * physical containing directory so a parent that is itself a symlink does not
- * keep a `../escape` hop inside the lexical spelling. Authored `..` is applied
- * after each hop; `path.resolve` is not used to flatten a `symlink/../leaf`
- * spelling. Symlink cycles propagate `ELOOP` and are never returned as a
- * contained path. A path with no existing ancestor stays lexical.
+ * the link materializes. Relative `readlink` targets are walked from the
+ * physical containing directory without `path.resolve`, so a stored
+ * `pivot/../missing` hop is applied after the pivot. Absolute stored targets
+ * are walked the same way from their own root. POSIX tokenization keeps
+ * literal backslashes inside one filename; Windows still splits on both
+ * separators. The walk retains the resolved prefix and missing suffix as it
+ * advances, so a deeper missing path does not re-walk every parent. Existing
+ * paths use native `realpath` (or inspect a symlink before any JS
+ * `realpathSync`) so an inside decoy cannot hide an outside destination.
+ * Symlink cycles propagate `ELOOP` and are never returned as a contained
+ * path. A path with no existing ancestor stays lexical.
  */
-const resolveExistingOrMissing = (lexicalPath: string, seen: ReadonlySet<string>): string => {
+const pathComponentSeparator = sep === '\\' ? /[/\\]/u : '/';
+
+const splitPathComponents = (value: string): readonly string[] =>
+  value.split(pathComponentSeparator).filter((part) => part.length > 0 && part !== '.');
+
+const tokenizeLexicalPath = (
+  lexicalPath: string,
+): { readonly parts: readonly string[]; readonly root: string } => {
+  const root = parse(lexicalPath).root;
+  return {
+    parts: splitPathComponents(lexicalPath.slice(root.length)),
+    root: root.length === 0 ? sep : root,
+  };
+};
+
+const realpathExisting = (value: string): string =>
+  typeof realpathSync.native === 'function' ? realpathSync.native(value) : realpathSync(value);
+
+const followSymlink = (
+  linkPath: string,
+  physicalParent: string,
+  seen: ReadonlySet<string>,
+): string => {
+  if (seen.has(linkPath)) throw symlinkLoopError(linkPath);
+  const rawTarget = readlinkSync(linkPath);
+  const nextSeen = new Set([...seen, linkPath]);
+  if (nextSeen.has(rawTarget)) throw symlinkLoopError(linkPath);
+  return isAbsolute(rawTarget)
+    ? walkFilesystemOrder(rawTarget, nextSeen)
+    : walkFrom(physicalParent, splitPathComponents(rawTarget), nextSeen);
+};
+
+const resolveExistingNode = (
+  path: string,
+  physicalParent: string,
+  seen: ReadonlySet<string>,
+): string => {
   try {
-    return realpathSync(lexicalPath);
+    if (lstatSync(path).isSymbolicLink()) return followSymlink(path, physicalParent, seen);
   } catch (error) {
     if (!isMissingPathError(error)) throw error;
+    return path;
   }
   try {
-    if (lstatSync(lexicalPath).isSymbolicLink()) {
-      const parent = dirname(lexicalPath);
-      const physicalParent = parent === lexicalPath
-        ? lexicalPath
-        : onDiskOrNearestAncestorPath(parent, seen);
-      const target = resolve(physicalParent, readlinkSync(lexicalPath));
-      if (seen.has(lexicalPath) || seen.has(target)) throw symlinkLoopError(lexicalPath);
-      return onDiskOrNearestAncestorPath(target, new Set([...seen, lexicalPath]));
+    return realpathExisting(path);
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+    return path;
+  }
+};
+
+const walkFrom = (
+  start: string,
+  parts: readonly string[],
+  seen: ReadonlySet<string>,
+): string => {
+  let current = resolveExistingNode(start, dirname(start), seen);
+  for (const part of parts) {
+    if (part === '..') {
+      const parent = dirname(current);
+      current = parent === current ? current : resolveExistingNode(parent, dirname(parent), seen);
+      continue;
     }
-  } catch (error) {
-    if (!isMissingPathError(error)) throw error;
+    current = resolveExistingNode(join(current, part), current, seen);
   }
-  const parent = dirname(lexicalPath);
-  if (parent === lexicalPath) return lexicalPath;
-  return join(onDiskOrNearestAncestorPath(parent, seen), basename(lexicalPath));
+  return current;
+};
+
+const walkFilesystemOrder = (
+  lexicalPath: string,
+  seen: ReadonlySet<string> = new Set(),
+): string => {
+  if (seen.size === 0) {
+    try {
+      return realpathExisting(lexicalPath);
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+    }
+  }
+  const { parts, root } = tokenizeLexicalPath(lexicalPath);
+  if (parts.length === 0) return resolveExistingNode(lexicalPath, root, seen);
+  return walkFrom(root, parts, seen);
 };
 
 const onDiskOrNearestAncestorPath = (
   lexicalPath: string,
   seen: ReadonlySet<string> = new Set(),
-): string => {
-  const root = parse(lexicalPath).root;
-  const parts = lexicalPath
-    .slice(root.length)
-    .split(/[/\\]/u)
-    .filter((part) => part.length > 0 && part !== '.');
-  if (parts.length === 0) return resolveExistingOrMissing(lexicalPath, seen);
-  let current = root.length === 0 ? sep : root;
-  for (const part of parts) {
-    if (part === '..') {
-      current = dirname(resolveExistingOrMissing(current, seen));
-      continue;
-    }
-    current = resolveExistingOrMissing(join(current, part), seen);
-  }
-  return current;
-};
+): string => walkFilesystemOrder(lexicalPath, seen);
 
 /**
  * Project-relative POSIX path using on-disk identity. Snapshot inputs and
