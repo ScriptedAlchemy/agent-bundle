@@ -234,6 +234,10 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
 const ampInstructions = (model: NormalizedPlugin): string[] => [
   '## Amp',
   '',
+  'Amp is experimental: contract-verified, runtime-unverified. The generated directory, PluginAPI factory,',
+  'skill registration, and event callbacks match the pinned Amp contract. Live activation, tool dispatch, and',
+  'event delivery have not been run here — `amp plugins list` and `amp skills list` require an Amp account.',
+  '',
   `This build contains one directory plugin at \`.amp/plugins/${model.metadata.name}/\`. Copy that directory`,
   'into the target project at the same path, or into the system plugin root:',
   '',
@@ -250,7 +254,8 @@ const ampInstructions = (model: NormalizedPlugin): string[] => [
   '',
   'Amp reload is interactive. In a running session open the command palette with Ctrl+O and run',
   '`plugins: reload`; Agent Bundle never automates it. `amp plugins list` in another shell inspects plugins but',
-  'does not reload the running session.',
+  'does not reload the running session, and without an Amp account it reports a connection or login error',
+  'instead of enabled or active state.',
   '',
 ];
 

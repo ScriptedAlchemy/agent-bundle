@@ -1105,7 +1105,7 @@ const installCursor = Effect.fnUntraced(function*(
 
 const ampNextSteps = Object.freeze([
   'Open Amp’s command palette with Ctrl+O and run `plugins: reload`.',
-  'Run `amp plugins list` in a shell to inspect the installed plugin.',
+  'Run `amp plugins list` in a shell to inspect the installed plugin (requires an Amp account; live activation is unverified).',
 ]);
 
 export const ampInstallLocation = (

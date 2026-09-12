@@ -15,7 +15,7 @@ description: '选择全部五个内置输出 target，查阅自动生成的能�
 
 | Target | 输出与预期读取方 | 重要边界 |
 | --- | --- | --- |
-| `amp` | `.amp/plugins/<name>/` 下的原生目录插件：`index.js` PluginAPI 工厂、显式注册的 Skills，以及映射后的事件回调。 | MCP 配置属于 Skill。适配器支持单个捆绑 Skill 旁边的、受支持的远程服务器或全局可解析命令，不支持编译器拥有的本地 MCP 入口。Amp 安装与真实账户执行是不同的证明级别。 |
+| `amp` | `.amp/plugins/<name>/` 下的原生目录插件：`index.js` PluginAPI 工厂、显式注册的 Skills，以及映射后的事件回调。**实验性：已核对契约，运行时未验证。** | MCP 配置属于 Skill。适配器支持单个捆绑 Skill 旁边的、受支持的远程服务器或全局可解析命令，不支持编译器拥有的本地 MCP 入口。文件放置与固定版本 PluginAPI 契约已证明；现场激活、工具与事件需要 Amp 账号，尚未运行。 |
 | `claude` | Claude Code：`.claude-plugin/plugin.json`、生成的市场条目，以及适用时的 `hooks/hooks.json` 与 `.mcp.json`。 | 编译后的语义 hook 与显式编写的原生 hook 使用不同的编写契约。LSP 等原生扩展仍是 Claude 专属配置。 |
 | `codex` | Codex：`.codex-plugin/plugin.json`、指向自身 hook/MCP 文档的显式路径，以及 `.agents/plugins/marketplace.json`。 | CLI、编辑器和桌面客户端的行为需要分别限定。提供 MCP App 资源不意味着每个 Codex 客户端都会显示它。 |
 | `cursor` | Cursor：`.cursor-plugin/plugin.json`、自身 hook/MCP 文档，以及可选的市场文档。 | 具有所有权记录的本地复制安装路径不同于原生市场 CLI 安装。不要手工改写 Cursor 的全局 hook 配置。 |
@@ -70,7 +70,8 @@ MCP 模板中由编译器拥有的本地服务器会被 Amp 的 Skill 级 MCP �
 | `prohibited` | 契约明确拒绝这种用法。不要复制私有实现来绕开诊断。 |
 
 运行验证是另一个维度。适配器可以已经实现，但依赖账户的激活仍然是 **unverified**。
-没有账户不是宿主无法执行操作的证据；反过来，文件放置成功也不证明宿主已启用插件或调用工具。
+Amp 就是当前例子：实验性、已核对契约、运行时未验证。没有账户不是宿主无法执行操作的证据；反过来，
+文件放置成功也不证明宿主已启用插件或调用工具。
 
 ## 框架能构建什么
 
@@ -117,7 +118,7 @@ MCP 模板中由编译器拥有的本地服务器会被 Amp 的 Skill 级 MCP �
 | 表面 | 如何选择 | 不意味着什么 |
 | --- | --- | --- |
 | 编译 | `targets` / 构建 `--target` | 所有选中宿主提供相同功能，或共享完全相同的原生安装根目录。 |
-| 开发安装 | `dev --install-host claude`、`codex` 或 `cursor` | 每个原生 target 都支持实时开发代理。Amp 使用文档中的复制/重新加载路径。 |
+| 开发安装 | `dev --install-host claude`、`codex` 或 `cursor` | 每个原生 target 都支持实时开发代理。实验性 Amp 使用文档中的复制/重新加载路径；该路径不是现场激活证明。 |
 | 嵌入式宿主终端 | 已安装且受支持的 Claude/Codex 会话集成 | 身份验证、信任和成功的模型执行由真实宿主提供，不是 Workbench 模拟出来的。 |
 | App 展示 | 受支持的浏览器宿主 `--profile` | 该 profile 是原生输出 target，或它就是正确的服务器启动投影。 |
 | npm 分发 | 打包生成的 npm 根目录 | 安装 npm 包会自动把插件注册到智能体宿主。 |

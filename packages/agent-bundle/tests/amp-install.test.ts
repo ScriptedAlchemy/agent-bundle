@@ -66,7 +66,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
     });
     expect(installed.nextSteps).toEqual([
       'Open Amp’s command palette with Ctrl+O and run `plugins: reload`.',
-      'Run `amp plugins list` in a shell to inspect the installed plugin.',
+      'Run `amp plugins list` in a shell to inspect the installed plugin (requires an Amp account; live activation is unverified).',
     ]);
     await expect(readFile(join(destination, 'index.js'), 'utf8')).resolves.toContain('first');
     await expect(readFile(join(destination, 'hooks', 'hooks-flight.mjs'), 'utf8')).resolves.toContain('first');

@@ -102,11 +102,16 @@ it('registers Amp as a built-in directory-plugin target with pinned evidence', (
   expect(registry.artifactLayout('amp').assets).toBeUndefined();
   expect(capabilityTable.pluginApi.package).toBe('@ampcode/plugin');
   expect(capabilityTable.pluginApi.version).toBe('0.0.0-20260907001852-gf348fed');
-  expect(capabilityTable.runtimeProof.state).toBe('unverified');
+  expect(capabilityTable.runtimeProof).toMatchObject({
+    maturity: 'experimental',
+    state: 'unverified',
+  });
+  expect(capabilityTable.runtimeProof.reason).toContain('contract-verified, runtime-unverified');
   expect(capabilityTable.lifecycle.activationState).toMatchObject({
     observable: ['placed', 'registered'],
     unavailable: ['enabled', 'active'],
   });
+  expect(capabilityTable.lifecycle.activationState.reason).toContain('contract-verified, runtime-unverified');
   expect(capabilityTable.plugins.precedence).toEqual(['project', 'system', 'personal', 'workspace']);
   expect(capabilityTable.skills.discoveryPrecedence).toEqual([
     '~/.config/agents/skills',

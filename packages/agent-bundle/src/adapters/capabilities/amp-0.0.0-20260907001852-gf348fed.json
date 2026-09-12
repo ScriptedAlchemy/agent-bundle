@@ -50,7 +50,7 @@
         "enabled",
         "active"
       ],
-      "reason": "The documented project/system directory is the registration; without an Amp account, enabled state and live activation remain unverified.",
+      "reason": "Experimental: contract-verified, runtime-unverified. The documented project/system directory is the registration; without an Amp account, enabled state and live activation remain unverified.",
       "evidence": [
         "2026-09-07: amp plugins list with @ampcode/cli@0.0.1788739286-gf348fe returned an account-dependent connection error."
       ]
@@ -285,8 +285,13 @@
     }
   },
   "runtimeProof": {
+    "maturity": "experimental",
     "state": "unverified",
-    "reason": "The owner has no Amp account. Type and fake-PluginAPI proofs cover the generated contract; live thread/model/tool execution is account-dependent."
+    "reason": "Experimental: contract-verified, runtime-unverified. The owner has no Amp account. Type and fake-PluginAPI proofs cover the generated factory, skill registration, and event-callback contract; live activation, thread, model, and tool execution are account-dependent and have not been run.",
+    "evidence": [
+      "2026-09-07: amp plugins list with @ampcode/cli@0.0.1788739286-gf348fe returned an account-dependent connection error.",
+      "2026-09-07: docs/audits/2026-09-07-amp-native-adapter-proof.md records TypeScript checkJs and fake-PluginAPI contract proofs only."
+    ]
   },
   "tokens": {
     "pluginData": false,

@@ -1,12 +1,12 @@
 ---
 pageType: home
-description: 'Compile skills, hooks, MCP servers, and scripts from one typed config into installable output for Amp, Claude Code, Codex, and Cursor.'
-titleSuffix: ' - Agent plugin compiler for Amp, Claude Code, Codex, and Cursor'
+description: 'Compile skills, hooks, MCP servers, and scripts from one typed config into installable output for Claude Code, Codex, Cursor, and experimental Amp.'
+titleSuffix: ' - Agent plugin compiler for Claude Code, Codex, Cursor, and experimental Amp'
 
 hero:
   name: agent-bundle
   text: One typed config, every agent host
-  tagline: Describe skills, hooks, MCP servers, and scripts once. Compile installable output for Amp, Claude Code, Codex, and Cursor.
+  tagline: Describe skills, hooks, MCP servers, and scripts once. Compile installable output for Claude Code, Codex, Cursor, and experimental Amp.
   image:
     src: /logo.svg
     alt: agent-bundle logo
@@ -198,11 +198,11 @@ root.
 ## One source, every host
 
 `targets` selects which host projections the one root carries; omit it and the root carries
-`portable` alone. Amp reads its nested directory plugin; the other rows read the composite root.
+`portable` alone. Experimental Amp reads its nested directory plugin; the other rows read the composite root.
 
 | Target | What it adds to the root | Installed with |
 | --- | --- | --- |
-| `amp` | `.amp/plugins/<name>/index.js`, explicitly registered bundled Skills, PluginAPI event callbacks, and skill-scoped MCP. | Copy the generated directory into the project/system root, or `agent-bundle install amp --from artifact`. |
+| `amp` | `.amp/plugins/<name>/index.js`, explicitly registered bundled Skills, PluginAPI event callbacks, and skill-scoped MCP. Experimental: contract-verified, runtime-unverified. | Copy the generated directory into the project/system root, or `agent-bundle install amp --from artifact`. Live activation needs an Amp account and is not proven in CI. |
 | `claude` | `.claude-plugin/plugin.json` and a local `marketplace.json`, plus `hooks/hooks.json` and `.mcp.json`. | `claude plugin marketplace add` and `claude plugin install`, or `agent-bundle install claude --from artifact`. |
 | `codex` | `.codex-plugin/plugin.json` with its `hooks.json` and `mcp.json`, plus `.agents/plugins/marketplace.json`. | `codex plugin marketplace add` and `codex plugin add`, or `agent-bundle install codex --from artifact`. |
 | `cursor` | `.cursor-plugin/plugin.json` with its `hooks.json` and `mcp.json`. | The generated `install.mjs`, or `agent-bundle install cursor --from artifact`. |

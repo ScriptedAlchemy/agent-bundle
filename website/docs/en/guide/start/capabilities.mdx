@@ -16,7 +16,7 @@ the compiler emits, not an account, a model, or a running development session.
 
 | Target | Output and intended reader | Important boundary |
 | --- | --- | --- |
-| `amp` | A native directory plugin at `.amp/plugins/<name>/`, with an `index.js` PluginAPI factory, explicitly registered Skills, and mapped event callbacks. | Its MCP configuration is skill-scoped. The adapter accepts supported remote or globally resolvable command servers beside exactly one bundled Skill, not compiler-owned local MCP entries. Amp installation and live account execution are different proof levels. |
+| `amp` | A native directory plugin at `.amp/plugins/<name>/`, with an `index.js` PluginAPI factory, explicitly registered Skills, and mapped event callbacks. **Experimental: contract-verified, runtime-unverified.** | Its MCP configuration is skill-scoped. The adapter accepts supported remote or globally resolvable command servers beside exactly one bundled Skill, not compiler-owned local MCP entries. File placement and the pinned PluginAPI contract are proven; live activation, tools, and events need an Amp account and have not been run. |
 | `claude` | Claude Code: `.claude-plugin/plugin.json`, the generated marketplace entry, `hooks/hooks.json`, and `.mcp.json` where applicable. | Compiled semantic hooks and explicitly authored native hooks have different authoring contracts. Native additions such as LSP declarations stay Claude-specific. |
 | `codex` | Codex: `.codex-plugin/plugin.json` and explicit pointers to its own hook/MCP documents, plus `.agents/plugins/marketplace.json`. | CLI, editor, and desktop behavior must be qualified separately. Serving an MCP App resource does not imply that every Codex client displays it. |
 | `cursor` | Cursor: `.cursor-plugin/plugin.json` and its own hook/MCP documents; an optional marketplace document. | The owned local-copy installation path differs from native marketplace CLI installation. Do not write Cursor's global hook configuration by hand. |
@@ -76,9 +76,10 @@ A capability judgment is scoped to a feature and its recorded evidence:
 | `prohibited` | The contract explicitly refuses this use. Do not bypass the diagnostic by copying a private implementation. |
 
 Runtime verification is a separate axis. A record may describe an implemented adapter while
-account-dependent activation remains **unverified**. Absence of an account is not evidence that
-that host cannot perform the operation. Conversely, successful file placement is not proof that
-the host enabled the plugin or invoked a tool.
+account-dependent activation remains **unverified**. Amp is the current example: experimental,
+contract-verified, runtime-unverified. Absence of an account is not evidence that that host
+cannot perform the operation. Conversely, successful file placement is not proof that the host
+enabled the plugin or invoked a tool.
 
 ## What the framework can build
 
@@ -130,7 +131,7 @@ here as supported targets.
 | Surface | Selection | What it does not imply |
 | --- | --- | --- |
 | Compilation | `targets` / build `--target` | All selected hosts expose identical features or share one native installation root. |
-| Development installation | `dev --install-host claude`, `codex`, or `cursor` | Every native target supports the live development proxy. Amp uses its documented copy/reload path. |
+| Development installation | `dev --install-host claude`, `codex`, or `cursor` | Every native target supports the live development proxy. Experimental Amp uses its documented copy/reload path; that path is not a live-activation proof. |
 | Embedded host terminal | The installed, supported Claude/Codex host-session integration | Authentication, trust, and successful model execution are supplied by the real host, not simulated by the Workbench. |
 | App presentation | A supported browser-host `--profile` | That profile is a native output target or the correct server launch projection. |
 | npm distribution | Pack the generated npm root | Installing the npm package automatically registers it with an agent host. |
