@@ -605,6 +605,66 @@ it('creates an exact deeply frozen root-independent project context', async () =
   }
 });
 
+it('refuses a deleted configuration path after canonical containment', async () => {
+  const skillMarkdown = [
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n');
+  const root = await createProject(skillMarkdown);
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    const sourceInputs = prepared.projectContext?.sourceInputs;
+    if (model === undefined || sourceInputs === undefined) {
+      throw new Error('Expected a prepared project context.');
+    }
+    await rm(join(root, 'agent-bundle.config.ts'));
+    expect(() => createProjectContext({
+      configPath: 'agent-bundle.config.ts',
+      model,
+      root,
+      sourceInputs,
+    })).toThrow(/ENOENT/i);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('refuses a deleted recorded source input after canonical containment', async () => {
+  const skillMarkdown = [
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n');
+  const root = await createProject(skillMarkdown);
+  try {
+    await writeFile(join(root, 'notes.txt'), 'notes\n');
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    const sourceInputs = prepared.projectContext?.sourceInputs;
+    if (model === undefined || sourceInputs === undefined) {
+      throw new Error('Expected a prepared project context.');
+    }
+    expect(sourceInputs.map((input) => input.path)).toContain('notes.txt');
+    await rm(join(root, 'notes.txt'));
+    expect(() => createProjectContext({
+      configPath: prepared.projectContext?.configPath ?? 'agent-bundle.config.ts',
+      model,
+      root,
+      sourceInputs,
+    })).toThrow(/ENOENT/i);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('prepares a symlinked project root from its canonical filesystem identity', async () => {
   const root = await createProject([
     '---',

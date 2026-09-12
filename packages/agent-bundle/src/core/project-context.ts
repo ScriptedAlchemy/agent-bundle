@@ -294,7 +294,12 @@ const onDiskOrNearestAncestorPath = (lexicalPath: string): string => {
  * otherwise hash one revision at prepare and reject the same tree with
  * `AB7101` after compile.
  */
-const resolvedProjectPath = (root: string, value: string, label: string): string => {
+const resolvedProjectPath = (
+  root: string,
+  value: string,
+  label: string,
+  options: { readonly requireExists?: boolean } = {},
+): string => {
   const canonicalRoot = realpathSync(resolve(root));
   const lexicalRoot = resolve(root);
   // Relative authored paths stay POSIX-canonical. Absolute on-disk paths
@@ -305,6 +310,14 @@ const resolvedProjectPath = (root: string, value: string, label: string): string
   const referencedPath = onDiskOrNearestAncestorPath(lexicalPath);
   if (escapesRoot(canonicalRoot, referencedPath)) {
     throw new RangeError(`${label} ${JSON.stringify(referencedPath)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
+  }
+  // Containment for a missing leaf uses the nearest existing ancestor.
+  // Configuration and recorded source inputs still have to exist after that
+  // gate: a deleted config or hashed input must not become a lexical-inside
+  // identity. Model/prebuilt paths omit this so a payload that is allowed
+  // not to exist yet stays valid.
+  if (options.requireExists === true) {
+    realpathSync(referencedPath);
   }
   const projectRelative = relative(canonicalRoot, referencedPath).replaceAll('\\', '/');
   if (projectRelative.length === 0) throw new RangeError(`${label} must not be the project root.`);
@@ -662,7 +675,7 @@ export const canonicalizeNormalizedModel = (
 
 /** Project-relative POSIX path used in source-input identity. */
 export const projectSourceIdentityPath = (root: string, value: string): string =>
-  resolvedProjectPath(root, value, 'Project source input path');
+  resolvedProjectPath(root, value, 'Project source input path', { requireExists: true });
 
 const canonicalSourceInputs = (
   root: string,
@@ -691,7 +704,9 @@ const canonicalSourceInputs = (
 /** Creates the single canonical identity carried from preparation to publication. */
 export const createProjectContext = (options: CreateProjectContextOptions): ProjectContext => {
   const canonicalRoot = realpathSync(resolve(options.root));
-  const configPath = resolvedProjectPath(canonicalRoot, options.configPath, 'Configuration path');
+  const configPath = resolvedProjectPath(canonicalRoot, options.configPath, 'Configuration path', {
+    requireExists: true,
+  });
   const sourceInputs = canonicalSourceInputs(canonicalRoot, options.sourceInputs);
   const configInput = sourceInputs.find((input) => input.path === configPath);
   if (configInput === undefined) {

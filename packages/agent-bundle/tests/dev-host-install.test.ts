@@ -637,6 +637,15 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
   manager.start();
   try {
     await coordinator.start();
+    const status = coordinator.status();
+    const available = coordinatorEvents.filter((event) =>
+      typeof event === 'object' && event !== null && 'type' in event && event.type === 'artifact.available');
+    if (status.artifact.state !== 'active' || available.length === 0) {
+      throw new Error(`Initial coordinator rebuild did not publish an active epoch: ${JSON.stringify({
+        coordinatorEvents,
+        status,
+      })}`);
+    }
     await manager.settled();
     const attached = manager.attached('cursor');
     if (attached === undefined) {
