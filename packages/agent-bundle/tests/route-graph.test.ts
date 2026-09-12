@@ -1,8 +1,10 @@
+import { mkdirSync, unlinkSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, expect, it } from '@rstest/core';
+import ignore from 'ignore';
 import ts from 'typescript-5';
 
 import { inspect, type ReadyInspectResult, validate } from '../src/api.ts';
@@ -68,6 +70,24 @@ const conventionalTree: Readonly<Record<string, string>> = {
 
 const codesOf = (diagnostics: readonly { readonly code: string }[]): string[] =>
   diagnostics.map((diagnostic) => diagnostic.code);
+
+/**
+ * Runs `mutate` after glob lists `relativePath` and before the source read, so
+ * the test can reproduce a scan-to-read race without mocking `readFile`.
+ */
+const mutateDiscoveredSource = (
+  root: string,
+  relativePath: string,
+  mutate: (source: string) => void,
+) => {
+  const rules = ignore();
+  const ignores = rules.ignores.bind(rules);
+  rules.ignores = (pathname: string) => {
+    if (pathname === relativePath) mutate(join(root, pathname));
+    return ignores(pathname);
+  };
+  return rules;
+};
 
 const createInspectProject = async (files: Readonly<Record<string, string>>): Promise<string> => {
   const root = await createRoot();
@@ -2282,4 +2302,43 @@ it('rejects orphan views and misplaced view configuration', async () => {
   });
   const graph = await compileRouteGraph(root, fixtureConfig());
   expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4840', 'AB4840']);
+});
+
+it('skips extract and validate when a discovered route module disappears before read', async () => {
+  const root = await createRoot();
+  const relativePath = 'src/mcp/curator/tools/inspect.tsx';
+  await writeTree(root, {
+    [relativePath]: `export const config = { title: 'Inspect' }; ${moduleSource}`,
+  });
+
+  const graph = await compileRouteGraph(
+    root,
+    fixtureConfig(),
+    mutateDiscoveredSource(root, relativePath, unlinkSync),
+  );
+
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.servers[0]!.routes).toEqual([
+    expect.objectContaining({
+      config: emptyRouteConfig,
+      id: 'tool:curator/inspect',
+    }),
+  ]);
+});
+
+it('fails closed when a discovered route module cannot be read', async () => {
+  const root = await createRoot();
+  const relativePath = 'src/mcp/curator/tools/inspect.tsx';
+  await writeTree(root, {
+    [relativePath]: `export const config = { title: 'Inspect' }; ${moduleSource}`,
+  });
+
+  await expect(compileRouteGraph(
+    root,
+    fixtureConfig(),
+    mutateDiscoveredSource(root, relativePath, (source) => {
+      unlinkSync(source);
+      mkdirSync(source);
+    }),
+  )).rejects.toMatchObject({ code: 'EISDIR' });
 });

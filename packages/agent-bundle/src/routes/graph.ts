@@ -42,6 +42,7 @@ import { isLayoutRouteKind } from './layouts.ts';
 import { providerKeyFromName } from './providers.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
@@ -522,14 +523,17 @@ const compiledRoute = (
 });
 
 /**
- * Reads one route module's source text. A racing deletion returns no text so
- * extract/validate skip the same way a later snapshot would.
+ * Reads one route module's source text. A racing deletion (`ENOENT`) returns
+ * no text so extract/validate skip the same way a later snapshot would.
+ * Permission, I/O, and other read failures propagate — they are not
+ * disappearance.
  */
 const readRouteModuleText = async (source: string): Promise<string | undefined> => {
   try {
     return await readFile(source, 'utf8');
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return undefined;
+    throw error;
   }
 };
 
