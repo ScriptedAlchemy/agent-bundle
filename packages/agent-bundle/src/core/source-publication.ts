@@ -24,7 +24,9 @@ export const projectSourceChangedDiagnostic = (configPath: string): Diagnostic =
 
 /**
  * Refuses publication when the complete source-input snapshot no longer
- * equals the snapshot taken at preparation.
+ * equals the snapshot taken at preparation. Call this after compilation
+ * and validation, while the artifact is still staged, and before
+ * `publishArtifact` replaces live output.
  */
 export const requireUnchangedSourceSnapshot = async (
   snapshotSource: () => Promise<{ readonly inputs: readonly ProjectSourceSnapshotInput[] }>,

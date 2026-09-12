@@ -192,6 +192,8 @@ export class ArtifactService {
         projectRoot: prepared.root,
         registry: prepared.registry,
         routeGraph: prepared.routeGraph ?? emptyCompiledRouteGraph,
+        snapshotSource: prepared.snapshotSource,
+        configPath: prepared.configPath,
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
       const firstValidation = this.#validateArtifact === undefined

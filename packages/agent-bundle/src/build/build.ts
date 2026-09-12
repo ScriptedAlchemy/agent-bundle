@@ -7,7 +7,8 @@ import packageManifest from '../../package.json' with { type: 'json' };
 
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { deduplicateDiagnostics, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
-import type { ProjectContext } from '../core/project-context.ts';
+import type { ProjectContext, ProjectSourceSnapshotInput } from '../core/project-context.ts';
+import { requireUnchangedSourceSnapshot } from '../core/source-publication.ts';
 import { pathTokens, type AgentBundleToolsConfig, type NormalizedMcpServer, type NormalizedPlugin } from '../core/types.ts';
 import { assertInside, isInsideOrEqual, isRelocatablePosixPath } from '../core/paths.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
@@ -118,6 +119,16 @@ export interface BuildOptions {
   readonly projectRoot: string;
   readonly registry: TargetRegistry;
   readonly routeGraph: CompiledRouteGraph;
+  /**
+   * Re-snapshot used after compilation/validation and before
+   * `publishArtifact`. Production `build()` and ArtifactService pass
+   * `prepared.snapshotSource`. Direct compiler callers may omit it.
+   */
+  readonly snapshotSource?: (
+    excludeRoots?: readonly string[],
+  ) => Promise<{ readonly inputs: readonly ProjectSourceSnapshotInput[] }>;
+  /** Absolute config path for AB7101 `sourcePath`; defaults to `projectContext.configPath`. */
+  readonly configPath?: string;
   /** The consumer bundler escape hatch, applied to every synthesized config. */
   readonly tools?: AgentBundleToolsConfig;
 }
@@ -881,6 +892,13 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     const diagnostics = await validateArtifact({ artifactRoot: stageRoot, registry: options.registry });
     if (diagnostics.some((entry) => entry.severity === 'error')) {
       throw new DiagnosticError(diagnostics);
+    }
+    if (options.snapshotSource !== undefined) {
+      await requireUnchangedSourceSnapshot(
+        () => options.snapshotSource!([stageRoot]),
+        options.projectContext.sourceInputs,
+        options.configPath ?? options.projectContext.configPath,
+      );
     }
     await publishArtifact({ outputRoot, stageRoot });
     return Object.freeze({
