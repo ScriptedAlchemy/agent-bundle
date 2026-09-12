@@ -473,6 +473,11 @@ it('creates an exact deeply frozen root-independent project context', async () =
       'src/skills/review/SKILL.md',
       'z-last.txt',
     ]);
+    const snapshot = await snapshotProjectSource(leftRoot, left.configPath);
+    expect(snapshot.inputs.map((input) => input.path)).toEqual(
+      left.projectContext?.sourceInputs.map((input) => input.path),
+    );
+    expect(snapshot.revision).toBe(left.projectContext?.revision);
     expect(Object.isFrozen(left.projectContext)).toBe(true);
     expect(Object.isFrozen(left.projectContext?.sourceInputs)).toBe(true);
     expect(Object.isFrozen(left.projectContext?.sourceInputs[0])).toBe(true);
@@ -524,6 +529,19 @@ it('creates an exact deeply frozen root-independent project context', async () =
       },
       root: leftRoot,
       sourceInputs: left.projectContext?.sourceInputs ?? [],
+    })).toThrow(/outside project root/i);
+    const externalDir = `${leftRoot}-external-dir`;
+    const escapedDirLink = join(leftRoot, 'escaped-dir');
+    await mkdir(externalDir);
+    await symlink(externalDir, escapedDirLink, 'dir');
+    expect(() => createProjectContext({
+      configPath: left.configPath,
+      model,
+      root: leftRoot,
+      sourceInputs: [
+        ...(left.projectContext?.sourceInputs ?? []),
+        { path: 'escaped-dir/missing.ts', sha256: 'a'.repeat(64) },
+      ],
     })).toThrow(/outside project root/i);
 
     const extensionValue = { nested: { enabled: true } };
@@ -582,7 +600,68 @@ it('creates an exact deeply frozen root-independent project context', async () =
       rm(leftRoot, { force: true, recursive: true }),
       rm(rightRoot, { force: true, recursive: true }),
       rm(`${leftRoot}-external-source.ts`, { force: true }),
+      rm(`${leftRoot}-external-dir`, { force: true, recursive: true }),
     ]);
+  }
+});
+
+it('refuses a deleted configuration path after canonical containment', async () => {
+  const skillMarkdown = [
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n');
+  const root = await createProject(skillMarkdown);
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    const sourceInputs = prepared.projectContext?.sourceInputs;
+    if (model === undefined || sourceInputs === undefined) {
+      throw new Error('Expected a prepared project context.');
+    }
+    await rm(join(root, 'agent-bundle.config.ts'));
+    expect(() => createProjectContext({
+      configPath: 'agent-bundle.config.ts',
+      model,
+      root,
+      sourceInputs,
+    })).toThrow(/ENOENT/i);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('refuses a deleted recorded source input after canonical containment', async () => {
+  const skillMarkdown = [
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n');
+  const root = await createProject(skillMarkdown);
+  try {
+    await writeFile(join(root, 'notes.txt'), 'notes\n');
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    const sourceInputs = prepared.projectContext?.sourceInputs;
+    if (model === undefined || sourceInputs === undefined) {
+      throw new Error('Expected a prepared project context.');
+    }
+    expect(sourceInputs.map((input) => input.path)).toContain('notes.txt');
+    await rm(join(root, 'notes.txt'));
+    expect(() => createProjectContext({
+      configPath: prepared.projectContext?.configPath ?? 'agent-bundle.config.ts',
+      model,
+      root,
+      sourceInputs,
+    })).toThrow(/ENOENT/i);
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 

@@ -27,6 +27,7 @@ import {
   type AgentComponentKind,
 } from './core/components.ts';
 import { errorMessage } from './core/errors.ts';
+import { resolveProcessNpmCliJs } from './core/npm-cli.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import {
   stateDefinitionProjection,
@@ -1375,9 +1376,10 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
       severity: 'error',
     }]);
   }
-  const { stdout } = await execFile('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
-    cwd: result.packageBuild.outputRoot,
-  });
+  const npmCli = resolveProcessNpmCliJs();
+  const npmPackDryRun = (cwd: string) =>
+    execFile(process.execPath, [npmCli, 'pack', '--dry-run', '--json', '--ignore-scripts'], { cwd });
+  const { stdout } = await npmPackDryRun(result.packageBuild.outputRoot);
   const pack = packOutputFromJson(stdout);
   const diagnostics = [...await packInventoryDiagnostics({
     model: result.model,
@@ -1387,9 +1389,7 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     projectRoot: options.root,
   })];
   if (resolve(options.root) !== resolve(result.packageBuild.outputRoot)) {
-    const published = await execFile('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
-      cwd: options.root,
-    });
+    const published = await npmPackDryRun(options.root);
     diagnostics.push(...await packageBinDiagnostics(
       options.root,
       packOutputFromJson(published.stdout),

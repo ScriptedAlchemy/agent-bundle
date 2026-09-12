@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, expect, it } from '@rstest/core';
 import { WebSocketServer } from 'ws';
@@ -34,6 +34,7 @@ const claudeAvailable = spawnSync('claude', ['--version'], { stdio: 'ignore', ti
 const codexAvailable = spawnSync('codex', ['--version'], { stdio: 'ignore', timeout: 5_000 }).status === 0;
 const claudeIt = claudeAvailable ? it : it.skip;
 const codexIt = codexAvailable ? it : it.skip;
+const unixSocketIt = process.platform === 'win32' ? it.skip : it;
 
 beforeAll(async () => {
   fixture = await buildHostInstallFixture({ environment: process.env });
@@ -44,7 +45,7 @@ afterAll(async () => {
 });
 
 const createRoot = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-host-install-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-dev-host-install-')));
   roots.push(root);
   return root;
 };
@@ -369,7 +370,10 @@ it('installs a marked public-host dev variant from a stable source and removes i
   expect(uninstalls).toHaveLength(2);
 });
 
-it('refreshes a persistent Codex component snapshot before attaching each epoch', async () => {
+unixSocketIt('refreshes a persistent Codex component snapshot before attaching each epoch', async () => {
+  // The fake Codex app-server listens on a Unix socket. Windows has no
+  // equivalent in this fixture; the rest of the slice still covers
+  // install/rollback/junctions.
   const root = await createRoot();
   const codexRoot = await mkdtemp(join(tmpdir(), 'codex-'));
   roots.push(codexRoot);
@@ -578,7 +582,7 @@ it('publishes a diagnostic event and preserves the installed generation when re-
 
 it('re-syncs the isolated Cursor install from coordinator epochs and ignores a failed rebuild', async () => {
   const built = builtFixture();
-  const projectRoot = join(built.artifactRoot, '..');
+  const projectRoot = await realpath(resolve(built.artifactRoot, '..'));
   const home = await createRoot();
   await mkdir(join(home, '.cursor'), { recursive: true });
   const eventHub = new ProjectEventHub();
@@ -598,15 +602,60 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
     createWatcher: () => ({ close: async () => undefined }),
     epochStore,
     eventHub,
+    outputPaths: [built.artifactRoot],
     prepareCommand: 'dev',
-    projectService: new ProjectService({ root: projectRoot }),
+    // The CLI proof writes `--output artifact`; keep that tree out of source
+    // identity so the in-process rebuild matches `agent-bundle dev`.
+    projectService: new ProjectService({
+      outputRoots: [built.artifactRoot],
+      root: projectRoot,
+    }),
     root: projectRoot,
   });
-  const destination = join(home, '.cursor', 'plugins', 'local', 'host-install-proof');
+  const syncEvents: unknown[] = [];
+  const coordinatorEvents: unknown[] = [];
+  eventHub.subscribe((event) => {
+    if (event.type === 'dev.host.sync') syncEvents.push(event.payload);
+    if (
+      event.type === 'artifact.available' ||
+      event.type === 'artifact.status' ||
+      event.type === 'build.failed'
+    ) {
+      coordinatorEvents.push({
+        ...(event.epochId === undefined ? {} : { epochId: event.epochId }),
+        payload: event.payload,
+        type: event.type,
+      });
+    }
+  });
+  const skillPath = join(projectRoot, 'src', 'skills', 'probe', 'SKILL.md');
+  const hookPath = join(projectRoot, 'src', 'hooks', 'session-start.ts');
+  const [originalSkill, originalHook] = await Promise.all([
+    readFile(skillPath, 'utf8'),
+    readFile(hookPath, 'utf8'),
+  ]);
   manager.start();
   try {
     await coordinator.start();
+    const status = coordinator.status();
+    const available = coordinatorEvents.filter((event) =>
+      typeof event === 'object' && event !== null && 'type' in event && event.type === 'artifact.available');
+    if (status.artifact.state !== 'active' || available.length === 0) {
+      throw new Error(`Initial coordinator rebuild did not publish an active epoch: ${JSON.stringify({
+        coordinatorEvents,
+        status,
+      })}`);
+    }
     await manager.settled();
+    const attached = manager.attached('cursor');
+    if (attached === undefined) {
+      throw new Error(`Cursor development install did not attach: ${JSON.stringify({
+        coordinatorEvents,
+        status: coordinator.status(),
+        syncEvents,
+      })}`);
+    }
+    const destination = attached.destination;
     const mcpBefore = await readFile(join(destination, '.cursor-plugin', 'mcp.json'), 'utf8');
     expect(mcpBefore).toContain(`"command":${JSON.stringify(process.execPath)}`);
     expect(await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).toContain(
@@ -649,6 +698,10 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
     expect(await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).toContain('# Updated skill');
     expect(await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8')).toBe(markerBeforeFailure);
   } finally {
+    await Promise.all([
+      writeFile(skillPath, originalSkill),
+      writeFile(hookPath, originalHook),
+    ]);
     await manager.close();
     await coordinator.close();
   }

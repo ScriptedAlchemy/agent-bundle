@@ -34,9 +34,10 @@ export const syncPath = async (path: string, options: SyncPathOptions = {}): Pro
   try {
     await handle.sync();
   } catch (error) {
-    // Windows has no public directory-fsync primitive. Only documented
-    // directory FlushFileBuffers capability failures are tolerated here;
-    // opening a directory and every retained regular-file sync still fail.
+    // Windows has no public directory-fsync primitive. Documented directory
+    // FlushFileBuffers capability failures (EACCES, EINVAL, EPERM) are
+    // tolerated here; opening a directory and every retained regular-file
+    // sync still fail.
     if (options.directory === true && isTolerableWin32SyncError(options.platform ?? process.platform, error)) return;
     throw error;
   } finally {

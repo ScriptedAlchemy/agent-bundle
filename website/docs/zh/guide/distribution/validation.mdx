@@ -211,8 +211,11 @@ schema 校验它们输出的 JSON 文档，并把宿主的 schema 生成器视�
 npx agent-bundle prepack --root . --output artifact --json
 ```
 
-`prepack` 运行发布构建，在 `dist/` 生成规范 npm 根目录，再从该根目录运行
-`npm pack --dry-run --json --ignore-scripts`。生成的包会原样复制已校验的组合产物，让路由式
+`prepack` 运行发布构建，在 `dist/` 生成规范 npm 根目录，再通过当前 Node 可执行文件
+（`process.execPath`）启动 npm 的 `npm-cli.js`，从该根目录运行
+`npm pack --dry-run --json --ignore-scripts`，因此在 `npm` 不是 PATH 上可直接
+spawn 的命令时（pnpm 管理的 Node，或 Windows 上 PATH 没有 `npm.cmd`）门禁仍可用。
+当 `npm_execpath` 指向 pnpm 时，它不会把该变量当作 npm。生成的包会原样复制已校验的组合产物，让路由式
 `package.json` bin 指向清单声明的 `bin/<name>.mjs`，并且只额外加入单独编写的 bin 与库。
 门禁会检查这份精确清单、清单哈希、包 bin 目标、发布版本一致性、包专属编译证据以及
 `package.json` 中的安装期依赖字段。作者写入的 `package.json.files` 与 `.npmignore` 规则不会缩窄

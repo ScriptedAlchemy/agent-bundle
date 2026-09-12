@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -269,6 +269,111 @@ it.each(['marker removal', 'marker file sync', 'marker directory sync'] as const
     }
   },
 );
+
+it('opens Windows regular files with write-capable non-truncating flags and preserves staged bytes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-epoch-win32-rplus-'));
+  const opened: { readonly directory: boolean; readonly flags: unknown }[] = [];
+  const recordingOpen: typeof open = async (path, flags, mode) => {
+    opened.push({ directory: (await lstat(path)).isDirectory(), flags });
+    return open(path, flags, mode);
+  };
+  try {
+    const epoch = epochFor(root, 'epoch-win32-rplus');
+    const store = new EpochStore({
+      durabilityStorage: Object.freeze({ open: recordingOpen, remove: rm }),
+      platform: 'win32',
+      projectRoot: root,
+    });
+    const staging = await store.createStagingEpoch({ epoch, targets: Object.keys(epoch.targetDigests) });
+    const pluginPayload = 'win32-rplus-plugin\n';
+    const manifestPayload = '{"kind":"rplus"}\n';
+    await Promise.all(Object.keys(epoch.targetDigests).map(async (target) => {
+      await mkdir(join(staging.root, target), { recursive: true });
+      await writeFile(join(staging.root, target, 'plugin.json'), pluginPayload);
+    }));
+    await writeFile(join(staging.root, 'agent-bundle.manifest.json'), manifestPayload);
+    await staging.publish(async () => undefined);
+    await expect(store.readActiveEpoch()).resolves.toEqual(epoch);
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', epoch.id, 'claude', 'plugin.json'), 'utf8'))
+      .resolves.toBe(pluginPayload);
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', epoch.id, 'agent-bundle.manifest.json'), 'utf8'))
+      .resolves.toBe(manifestPayload);
+    expect(opened.some((entry) => !entry.directory)).toBe(true);
+    expect(opened.some((entry) => entry.directory)).toBe(true);
+    for (const entry of opened) {
+      expect(entry.flags).toBe(entry.directory ? 'r' : 'r+');
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('refuses publication when a Windows regular-file fsync fails and keeps the previous active epoch', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-epoch-win32-file-fsync-fatal-'));
+  const eperm = Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
+  let failFiles = false;
+  const controlledOpen: typeof open = async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property === 'sync') return async () => {
+          if (failFiles && (await target.stat()).isFile()) throw eperm;
+          await target.sync();
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  };
+  try {
+    const store = new EpochStore({
+      durabilityStorage: Object.freeze({ open: controlledOpen, remove: rm }),
+      platform: 'win32',
+      projectRoot: root,
+    });
+    const active = epochFor(root, 'epoch-win32-file-sync-kept');
+    const replacement = epochFor(root, 'epoch-win32-file-sync-rejected');
+    await publishEpoch(store, active);
+    failFiles = true;
+    await expect(publishEpoch(store, replacement)).rejects.toBe(eperm);
+    await expect(store.readActiveEpoch()).resolves.toEqual(active);
+    const epochEntries = await readdir(join(root, '.agent-bundle', 'epochs'));
+    expect(epochEntries).toEqual(expect.arrayContaining([active.id, '.metadata']));
+    expect(epochEntries).not.toContain(replacement.id);
+    expect(epochEntries.filter((entry) => entry.startsWith('.stage-'))).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('fails epoch publication when file fsync EPERM is not a Windows directory FlushFileBuffers gap', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-epoch-posix-file-fsync-'));
+  const eperm = Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
+  const controlledOpen: typeof open = async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property === 'sync') return async () => {
+          if ((await target.stat()).isFile()) throw eperm;
+          await target.sync();
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  };
+  try {
+    const store = new EpochStore({
+      durabilityStorage: Object.freeze({ open: controlledOpen, remove: rm }),
+      platform: 'linux',
+      projectRoot: root,
+    });
+    await expect(publishEpoch(store, epochFor(root, 'epoch-posix-file-fsync'))).rejects.toBe(eperm);
+    await expect(store.readActiveEpoch()).resolves.toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 it('fsyncs staged artifacts and each durable publication rename in commit order', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle durable epoch publication '));

@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, w
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
+import { isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
 import { exists, isInside } from '../core/paths.ts';
 import { hasExactOwnKeys, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runPromise, runSync } from '../effect/boundary.ts';
@@ -21,6 +21,8 @@ export interface EpochStoreOptions {
   readonly move?: typeof rename;
   /** @internal Deterministic durability-failure seam. */
   readonly durabilityStorage?: EpochDurabilityStorage;
+  /** @internal Durability platform seam; defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform;
   readonly projectRoot: string;
 }
 
@@ -345,6 +347,7 @@ export class EpochStore {
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
   readonly #move: typeof rename;
+  readonly #platform: NodeJS.Platform;
   /** The process-wide lease mutex shared by every store over this project. */
   readonly #leaseTransitions: Semaphore.Semaphore;
   readonly #staging = new Map<symbol, StagingRecord>();
@@ -356,6 +359,7 @@ export class EpochStore {
     this.#activeEpochPath = join(agentBundlePath, activeEpochFileName);
     this.#cleanupRemove = options.cleanupRemove ?? rm;
     this.#durabilityStorage = options.durabilityStorage ?? Object.freeze({ open, remove: rm });
+    this.#platform = options.platform ?? process.platform;
     this.#epochsPath = join(agentBundlePath, 'epochs');
     this.#epochMetadataPath = join(this.#epochsPath, metadataDirectoryName);
     this.#move = options.move ?? rename;
@@ -700,11 +704,15 @@ export class EpochStore {
   }
 
   async #syncPath(path: string, directory = false): Promise<void> {
-    const handle = await this.#durabilityStorage.open(path, 'r');
+    // Windows FlushFileBuffers requires write-capable access for regular
+    // files. `r+` does not create or truncate. Directory handles have no
+    // public fsync primitive and stay read-only plus the documented gap.
+    const flags = this.#platform === 'win32' && !directory ? 'r+' : 'r';
+    const handle = await this.#durabilityStorage.open(path, flags);
     try {
       await handle.sync();
     } catch (error) {
-      if (directory && process.platform === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      if (directory && isTolerableWin32SyncError(this.#platform, error)) return;
       throw error;
     }
     finally { await handle.close(); }

@@ -406,7 +406,8 @@ import meta, { name, packageName, packageVersion, version } from 'agent-bundle/m
 npx agent-bundle prepack --root . --output artifact --json
 ```
 
-`prepack` 运行发布构建与 `npm pack --dry-run --json --ignore-scripts`，随后对精确的包与产物清单、
+`prepack` 运行发布构建，并通过 `process.execPath` 启动 npm 的 `npm-cli.js`
+执行 `npm pack --dry-run --json --ignore-scripts`（不是 PATH 上的裸 `npm`），随后对精确的包与产物清单、
 清单哈希、包 bin 目标以及发布版本一致性设卡。生成的包元数据会移除 pack 与 publish 生命周期钩子，
 避免源项目的 `prepack` 从 `dist/` 递归；消费者安装脚本保持不变。请直接运行门禁，不要依赖源包的
 生命周期钩子，然后发布它已经校验的 npm 根目录：

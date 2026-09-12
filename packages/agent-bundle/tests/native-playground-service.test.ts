@@ -600,21 +600,103 @@ it('tolerates only Windows directory fsync capability failures during catalog pu
     });
   };
   try {
-    for (const code of ['EACCES', 'EINVAL'] as const) {
+    for (const code of ['EACCES', 'EINVAL', 'EPERM'] as const) {
       await rm(catalogDirectory, { force: true, recursive: true });
       const service = serviceFor(code);
       await expect(service.catalog(epoch(`epoch-${code.toLowerCase()}`, join(root, code)))).resolves.toMatchObject({ epochId: `epoch-${code.toLowerCase()}` });
       await service.close();
     }
-    await rm(catalogDirectory, { force: true, recursive: true });
-    const service = serviceFor('EPERM');
-    await expect(service.catalog(epoch('epoch-eperm', join(root, 'EPERM')))).rejects.toMatchObject({
-      errors: [expect.objectContaining({ code: 'EPERM' }), expect.objectContaining({ code: 'EPERM' })],
-    });
-    await service.close();
   } finally {
     if (previousPlatform === undefined) delete runtime[nativeCatalogDurabilityPlatformKey];
     else runtime[nativeCatalogDurabilityPlatformKey] = previousPlatform;
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+const fileSyncEpermOpen = (eperm: Error): NativePlaygroundCatalogStorage['open'] =>
+  async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property === 'sync') {
+          return async () => {
+            if ((await target.stat()).isFile()) throw eperm;
+            await target.sync();
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  };
+
+it('fails catalog publication when Windows regular-file fsync EPERM is not a directory FlushFileBuffers gap', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-win32-file-fsync-'));
+  const catalogDirectory = join(root, 'catalog');
+  const eperm = Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
+  const runtime = globalThis as typeof globalThis & Record<symbol, NodeJS.Platform | undefined>;
+  const previousPlatform = runtime[nativeCatalogDurabilityPlatformKey];
+  runtime[nativeCatalogDurabilityPlatformKey] = 'win32';
+  const service = new NativePlaygroundService({
+    catalogDirectory,
+    catalogStorage: {
+      link,
+      mkdir,
+      open: fileSyncEpermOpen(eperm),
+      move: rename,
+      remove: rm,
+    },
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({
+        manifestPath: 'agent-bundle.manifest.json',
+        source: 'explicit' as const,
+        targetDigests: candidate.epoch.targetDigests,
+      }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  try {
+    await expect(service.catalog(epoch('epoch-win32-file-fsync', join(root, 'artifact')))).rejects.toBe(eperm);
+  } finally {
+    await service.close();
+    if (previousPlatform === undefined) delete runtime[nativeCatalogDurabilityPlatformKey];
+    else runtime[nativeCatalogDurabilityPlatformKey] = previousPlatform;
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('fails catalog publication when file fsync EPERM is not a Windows FlushFileBuffers gap', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-posix-file-fsync-'));
+  const catalogDirectory = join(root, 'catalog');
+  const eperm = Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
+  const service = new NativePlaygroundService({
+    catalogDirectory,
+    catalogStorage: {
+      link,
+      mkdir,
+      open: fileSyncEpermOpen(eperm),
+      move: rename,
+      remove: rm,
+    },
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({
+        manifestPath: 'agent-bundle.manifest.json',
+        source: 'explicit' as const,
+        targetDigests: candidate.epoch.targetDigests,
+      }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  try {
+    await expect(service.catalog(epoch('epoch-posix-file-fsync', join(root, 'artifact')))).rejects.toBe(eperm);
+  } finally {
+    await service.close();
     await rm(root, { force: true, recursive: true });
   }
 });

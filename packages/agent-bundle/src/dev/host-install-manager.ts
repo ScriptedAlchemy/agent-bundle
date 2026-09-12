@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   symlink,
@@ -327,14 +328,24 @@ const publishDirectoryPointer = async (
   epochId: string,
 ): Promise<void> => {
   const path = join(destination, entryName);
-  const target = relative(destination, join(generationRoot(destination, epochId), entryName));
+  const absoluteTarget = join(generationRoot(destination, epochId), entryName);
+  // Unix dir symlinks stay relative so a relocated install still points at
+  // its generation. Windows junctions are absolutized from `cwd` (not the
+  // link location), so a relative target would resolve to the wrong tree.
+  const target = process.platform === 'win32'
+    ? await realpath(absoluteTarget)
+    : relative(destination, absoluteTarget);
   const temporary = join(destination, `.${basename(entryName)}.dev-link-${process.pid}-${crypto.randomUUID()}`);
   const movedAside = join(destination, `.${basename(entryName)}.dev-previous-${process.pid}-${crypto.randomUUID()}`);
   await symlink(target, temporary, process.platform === 'win32' ? 'junction' : 'dir');
   let moved = false;
   try {
     const metadata = await lstat(path).catch(() => undefined);
-    if (metadata !== undefined && !metadata.isSymbolicLink()) {
+    // Unix `rename` replaces a symlink in place. Windows treats a junction as
+    // a directory, so rename onto an existing pointer fails; move it aside
+    // first, including when lstat reports a symbolic link.
+    const replaceInPlace = process.platform !== 'win32' && metadata?.isSymbolicLink() === true;
+    if (metadata !== undefined && !replaceInPlace) {
       await rename(path, movedAside);
       moved = true;
     }

@@ -1,11 +1,11 @@
 import { execFile as executeFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, chmod, cp, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { expect, it } from '@rstest/core';
+import { expect, it, rs } from '@rstest/core';
 import { Ajv } from 'ajv/dist/ajv.js';
 import addFormats from 'ajv-formats';
 
@@ -26,7 +26,9 @@ import {
   readInstallReceiptFile,
   treeInventory,
 } from '../src/install/receipt.ts';
+import * as installReceipt from '../src/install/receipt.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
+import { toPosixPath } from '../src/core/paths.ts';
 import { runCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
@@ -95,8 +97,10 @@ const isInventoryCall = (call: CommandCall): boolean =>
 const listFiles = async (root: string): Promise<readonly string[]> =>
   (await readdir(root, { recursive: true, withFileTypes: true }))
     .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name).slice(root.length + 1))
+    .map((entry) => toPosixPath(join(entry.parentPath, entry.name).slice(root.length + 1)))
     .sort((left, right) => left.localeCompare(right));
+
+const posixPermissionIt = process.platform === 'win32' ? it.skip : it;
 
 const writeJson = async (path: string, value: unknown): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -162,7 +166,14 @@ const createHostBundle = async (
       ...(host === 'cursor' ? {} : { marketplace: 'install-fixture-marketplace' }),
     }],
   );
-  return { bundleRoot, cleanupRoot, from };
+  // Production `readArtifactManifest` realpaths the bundle (Windows 8.3 → long
+  // path). Tests compare CLI cwd/args and receipt hashes to this identity.
+  const canonicalBundle = await realpath(bundleRoot);
+  return {
+    bundleRoot: canonicalBundle,
+    cleanupRoot,
+    from: options.nestedUnder === undefined ? canonicalBundle : from,
+  };
 };
 
 const refreshCursorBundle = async (fixture: { readonly bundleRoot: string }): Promise<void> =>
@@ -334,32 +345,35 @@ it.each([
 
     // The host install succeeded but the receipt could not be written: the plugin registration is reversed too
     // (plugin first, then the marketplace this run created), so nothing stays registered without a receipt.
-    const receiptStore = join(hostRoot, 'agent-bundle', 'receipts');
+    // Inject the write failure after host verbs: chmod on the store is a no-op
+    // on Windows and as root, and occupying the path breaks the pre-write read.
     await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
-    await mkdir(receiptStore, { recursive: true });
-    if (process.getuid?.() === 0) return; // root ignores directory modes; the receipt write cannot be made to fail here.
-    await chmod(receiptStore, 0o555);
+    const writeReceipt = rs.spyOn(installReceipt, 'writeStoredInstallReceipt')
+      .mockRejectedValueOnce(new Error('receipt write failed'));
     const unwritable: CommandCall[] = [];
-    const receiptFailed = await installBundle({
-      ...isolated(fixture),
-      commandRunner: { run: async (command, args, runOptions) => {
-        const call = { args: [...args], command, cwd: runOptions.cwd };
-        unwritable.push(call);
-        return { code: 0, stderr: '', stdout: isMarketplaceListCall(call) ? noMarketplaces(call) : '' };
-      } },
-      from: fixture.from,
-      host,
-      scope,
-    }).catch((failure: unknown) => failure);
-    expect(receiptFailed).toBeInstanceOf(Error);
-    expect(receiptFailed).not.toBeInstanceOf(DiagnosticError);
-    expect(unwritable.map((call) => call.args.join(' ')).slice(-2)).toEqual([
-      host === 'claude'
-        ? `plugin uninstall install-fixture@install-fixture-marketplace --scope ${scope} --keep-data`
-        : 'plugin remove install-fixture@install-fixture-marketplace',
-      'plugin marketplace remove install-fixture-marketplace',
-    ]);
-    await chmod(receiptStore, 0o755);
+    try {
+      const receiptFailed = await installBundle({
+        ...isolated(fixture),
+        commandRunner: { run: async (command, args, runOptions) => {
+          const call = { args: [...args], command, cwd: runOptions.cwd };
+          unwritable.push(call);
+          return { code: 0, stderr: '', stdout: isMarketplaceListCall(call) ? noMarketplaces(call) : '' };
+        } },
+        from: fixture.from,
+        host,
+        scope,
+      }).catch((failure: unknown) => failure);
+      expect(receiptFailed).toBeInstanceOf(Error);
+      expect(receiptFailed).not.toBeInstanceOf(DiagnosticError);
+      expect(unwritable.map((call) => call.args.join(' ')).slice(-2)).toEqual([
+        host === 'claude'
+          ? `plugin uninstall install-fixture@install-fixture-marketplace --scope ${scope} --keep-data`
+          : 'plugin remove install-fixture@install-fixture-marketplace',
+        'plugin marketplace remove install-fixture-marketplace',
+      ]);
+    } finally {
+      writeReceipt.mockRestore();
+    }
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
@@ -908,7 +922,7 @@ it('reports manifest-indexed byte drift as AB7001 with the path', async () => {
   }
 });
 
-it('reports manifest-indexed mode drift as AB7001', async () => {
+posixPermissionIt('reports manifest-indexed mode drift as AB7001', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
@@ -931,8 +945,7 @@ it('reports manifest-indexed mode drift as AB7001', async () => {
   }
 });
 
-it('accepts npm normalization while preserving executable-bit tamper checks', async () => {
-  if (process.platform === 'win32') return;
+posixPermissionIt('accepts npm normalization while preserving executable-bit tamper checks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-npm-modes-'));
   const packageRoot = join(root, 'package');
   const artifactRoot = join(packageRoot, 'artifact');
@@ -1356,13 +1369,16 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     await rm(join(fixture.bundleRoot, 'state'), { recursive: true });
 
     // Flipping only the executable bit is a content change: the installed copy must receive it.
-    await chmod(join(fixture.bundleRoot, 'payload.txt'), 0o755);
-    await refreshCursorBundle(fixture);
-    const executable = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
-    expect(executable).toMatchObject({ state: 'replaced' });
-    expect((await stat(join(destination, 'payload.txt'))).mode & 0o111).not.toBe(0);
-    expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' }))
-      .toMatchObject({ state: 'already-installed' });
+    // Windows stores no Unix execute bits; chmod 0755 is a no-op there.
+    if (process.platform !== 'win32') {
+      await chmod(join(fixture.bundleRoot, 'payload.txt'), 0o755);
+      await refreshCursorBundle(fixture);
+      const executable = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+      expect(executable).toMatchObject({ state: 'replaced' });
+      expect((await stat(join(destination, 'payload.txt'))).mode & 0o111).not.toBe(0);
+      expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' }))
+        .toMatchObject({ state: 'already-installed' });
+    }
 
     // An operator hard link to an owned file under an unrelated name is not ours: incoming path → collision.
     await link(join(destination, 'payload.txt'), join(destination, 'hard-linked.txt'));
@@ -1593,8 +1609,7 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
   }
 });
 
-it('tree inventory refuses paths that could not round-trip through a receipt', async () => {
-  if (process.platform === 'win32') return;
+posixPermissionIt('tree inventory refuses paths that could not round-trip through a receipt', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
@@ -1674,8 +1689,7 @@ it('never lets a receipt claim runtime state: a receipt owning state/ reads as l
   }
 });
 
-it('refuses a receipt that is not a regular file before reading it', async () => {
-  if (process.platform === 'win32') return;
+posixPermissionIt('refuses a receipt that is not a regular file before reading it', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
@@ -2131,7 +2145,7 @@ it('refuses marketplace mode for a bundle that contains nested Git metadata', as
     }).catch((failure: unknown) => failure);
 
     expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7003', target: 'cursor' }]);
-    expect((error as DiagnosticError).diagnostics[0]?.message).toContain(join('vendor', 'tool', '.git'));
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('vendor/tool/.git');
     expect(calls).toEqual([]);
     await expect(access(join(home, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {

@@ -1,11 +1,12 @@
 import { readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
 import type { DescriptiveMetadataResult } from './descriptive-metadata.ts';
 import { packageDescriptiveMetadata } from './descriptive-metadata.ts';
 import type { Diagnostic } from './diagnostics.ts';
 import { digest } from './digest.ts';
+import { isErrno } from './errors.ts';
 import { deepFreeze } from './freeze.ts';
 import { isInsideOrEqual } from './paths.ts';
 import { snapshotStrictJsonValue } from './strict-json.ts';
@@ -258,13 +259,65 @@ const projectRelativePath = (root: string, value: string, label: string): string
   return projectRelative;
 };
 
-const resolvedProjectPath = (root: string, value: string, label: string): string => {
+/**
+ * Existing paths collapse to on-disk identity (8.3, junctions, symlink hops).
+ * Missing paths resolve the nearest existing ancestor and append the missing
+ * suffix so a dangling leaf under an escaping symlink is judged against the
+ * canonical target, not the lexical spelling. A path with no existing
+ * ancestor stays lexical.
+ */
+const onDiskOrNearestAncestorPath = (lexicalPath: string): string => {
+  try {
+    return realpathSync(lexicalPath);
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+  }
+  const missing: string[] = [];
+  let cursor = lexicalPath;
+  for (;;) {
+    const parent = dirname(cursor);
+    if (parent === cursor) return lexicalPath;
+    missing.unshift(basename(cursor));
+    try {
+      return join(realpathSync(parent), ...missing);
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+      cursor = parent;
+    }
+  }
+};
+
+/**
+ * Project-relative POSIX path using on-disk identity. Snapshot inputs and
+ * `createProjectContext` must share this helper: a Windows `path.resolve`
+ * spelling (8.3 alias, junction hop) that differs from `realpath` would
+ * otherwise hash one revision at prepare and reject the same tree with
+ * `AB7101` after compile.
+ */
+const resolvedProjectPath = (
+  root: string,
+  value: string,
+  label: string,
+  options: { readonly requireExists?: boolean } = {},
+): string => {
   const canonicalRoot = realpathSync(resolve(root));
   const lexicalRoot = resolve(root);
-  projectRelativePath(lexicalRoot, value, label);
-  const referencedPath = realpathSync(resolve(lexicalRoot, value));
+  // Relative authored paths stay POSIX-canonical. Absolute on-disk paths
+  // (Windows `C:\…`, 8.3 aliases) are judged by realpath identity so a
+  // short-name root and a long-name config file still name one project.
+  if (!isAbsolute(value)) projectRelativePath(lexicalRoot, value, label);
+  const lexicalPath = isAbsolute(value) ? resolve(value) : resolve(lexicalRoot, value);
+  const referencedPath = onDiskOrNearestAncestorPath(lexicalPath);
   if (escapesRoot(canonicalRoot, referencedPath)) {
     throw new RangeError(`${label} ${JSON.stringify(referencedPath)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
+  }
+  // Containment for a missing leaf uses the nearest existing ancestor.
+  // Configuration and recorded source inputs still have to exist after that
+  // gate: a deleted config or hashed input must not become a lexical-inside
+  // identity. Model/prebuilt paths omit this so a payload that is allowed
+  // not to exist yet stays valid.
+  if (options.requireExists === true) {
+    realpathSync(referencedPath);
   }
   const projectRelative = relative(canonicalRoot, referencedPath).replaceAll('\\', '/');
   if (projectRelative.length === 0) throw new RangeError(`${label} must not be the project root.`);
@@ -272,7 +325,7 @@ const resolvedProjectPath = (root: string, value: string, label: string): string
 };
 
 const canonicalCompilerPath = (root: string, value: string, label: string): string =>
-  isAbsolute(value) ? projectRelativePath(root, value, label) : value;
+  isAbsolute(value) ? resolvedProjectPath(root, value, label) : value;
 
 const canonicalProvenance = (root: string, provenance: SourceProvenance): SourceProvenance => ({
   ...provenance,
@@ -495,7 +548,14 @@ export const canonicalizeNormalizedModel = (
     hooks: detached.hooks.map((hook) => ({
       ...hook,
       provenance: canonicalProvenance(root, hook.provenance),
-      source: canonicalCompilerPath(root, hook.source, 'Hook source path'),
+      // Prebuilt hook `source` may not exist yet; identity is the enumerated
+      // payload files, matching `modelPathReferences`. Relative sources stay
+      // authored. Absolute sources still canonicalize (nearest existing
+      // ancestor on ENOENT).
+      source:
+        hook.prebuiltPath === undefined || isAbsolute(hook.source)
+          ? canonicalCompilerPath(root, hook.source, 'Hook source path')
+          : hook.source,
     })),
     ...(detached.mcpApps === undefined
       ? {}
@@ -613,6 +673,10 @@ export const canonicalizeNormalizedModel = (
   });
 };
 
+/** Project-relative POSIX path used in source-input identity. */
+export const projectSourceIdentityPath = (root: string, value: string): string =>
+  resolvedProjectPath(root, value, 'Project source input path', { requireExists: true });
+
 const canonicalSourceInputs = (
   root: string,
   inputs: readonly ProjectSourceSnapshotInput[],
@@ -621,7 +685,7 @@ const canonicalSourceInputs = (
     if (input.error !== undefined || input.sha256 === undefined || !sha256Pattern.test(input.sha256)) {
       throw new TypeError(`Project source input ${JSON.stringify(input.path)} must have a lowercase SHA-256 digest.`);
     }
-    const path = resolvedProjectPath(root, input.path, 'Project source input path');
+    const path = projectSourceIdentityPath(root, input.path);
     return {
       ...(input.executable === undefined ? {} : { executable: input.executable }),
       path,
@@ -640,8 +704,10 @@ const canonicalSourceInputs = (
 /** Creates the single canonical identity carried from preparation to publication. */
 export const createProjectContext = (options: CreateProjectContextOptions): ProjectContext => {
   const canonicalRoot = realpathSync(resolve(options.root));
-  const configPath = resolvedProjectPath(canonicalRoot, options.configPath, 'Configuration path');
-  const sourceInputs = canonicalSourceInputs(options.root, options.sourceInputs);
+  const configPath = resolvedProjectPath(canonicalRoot, options.configPath, 'Configuration path', {
+    requireExists: true,
+  });
+  const sourceInputs = canonicalSourceInputs(canonicalRoot, options.sourceInputs);
   const configInput = sourceInputs.find((input) => input.path === configPath);
   if (configInput === undefined) {
     throw new TypeError(`Configuration source ${JSON.stringify(configPath)} must have a SHA-256 digest.`);

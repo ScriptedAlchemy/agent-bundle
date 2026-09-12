@@ -384,6 +384,27 @@ it('validates an argument-less prebuilt hook without demanding a wrapper index e
   }
 });
 
+it('validates a clean tree whose declared prebuilt payload paths do not exist yet', async () => {
+  const root = await createProject({
+    hooks: standardHooksBlock,
+    mcp: standardMcpBlock,
+    payload: standardPayloadBlock,
+    withPayloadFiles: false,
+  });
+  try {
+    const result = await validate({ root });
+    expect(result.diagnostics.filter((diagnostic) => diagnostic.code === 'AB7001')).toEqual([]);
+    expect(result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+    expect(result.model).toBeDefined();
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB4743', severity: 'warning' }),
+      expect.objectContaining({ code: 'AB4745', severity: 'warning' }),
+    ]));
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
 it('reports the prebuilt payload source diagnostics', async () => {
   const root = await createProject({
     hooks: [

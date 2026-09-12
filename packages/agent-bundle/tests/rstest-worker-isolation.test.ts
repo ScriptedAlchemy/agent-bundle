@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -35,15 +36,26 @@ it('keeps Doctor socket fixtures below the Linux AF_UNIX pathname cap', () => {
 });
 
 it('isolates concurrent Rstest invocations that share a host temporary root', () => {
-  const firstRoot = rstestWorkerRootPath('/tmp', '1', 'linux', '/workspace/first\0' + '101');
-  const secondRoot = rstestWorkerRootPath('/tmp', '1', 'linux', '/workspace/second\0' + '202');
+  for (const platform of ['linux', 'win32'] as const) {
+    const firstRoot = rstestWorkerRootPath('/tmp', '1', platform, '/workspace/first\0' + '101');
+    const secondRoot = rstestWorkerRootPath('/tmp', '1', platform, '/workspace/second\0' + '202');
+    expect(firstRoot).not.toBe(secondRoot);
+  }
+});
 
-  expect(firstRoot).not.toBe(secondRoot);
+it('publishes a realpath worker root so TMPDIR matches production path canonicalization', () => {
+  const root = rstestWorkerRoot();
+  expect(root).toBe(realpathSync(root));
 });
 
 it('stamps every worker root with the owner marker the local-CI runner cleans up by', () => {
   const root = rstestWorkerRoot();
-  expect(root.startsWith(join(rstestWorkerRootsParent, rstestWorkerRootPrefix)) || process.platform === 'win32').toBe(true);
+  const parent = process.platform === 'win32' ? undefined : realpathSync(rstestWorkerRootsParent);
+  expect(root.split(/[/\\]/u).some((segment) => segment.startsWith(rstestWorkerRootPrefix))).toBe(true);
+  expect(
+    process.platform === 'win32' ||
+    (parent !== undefined && root.startsWith(join(parent, rstestWorkerRootPrefix))),
+  ).toBe(true);
   // The setup file already isolated this worker, so TMPDIR points at the
   // root itself; the marker records the HOST temp root it was derived from
   // and the process that owns it.

@@ -19,6 +19,9 @@ packages/*/NOTICE
 # Aborted runtime-playground fixture workspaces
 .runtime-playground-*/
 
+# Windows host-install fixture builds (walk-up to package node_modules)
+packages/agent-bundle/.tmp-host-install/
+
 website/doc_build/
 website/docs/en/api/**/*.md
 website/docs/zh/api/**/*.md

@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 
 import { serialQueue, type SerialQueue } from '../../core/async.ts';
 import { containsProviderCredential, isCredentialKey } from '../../core/credentials.ts';
-import { isErrno } from '../../core/errors.ts';
+import { isErrno, isTolerableWin32SyncError } from '../../core/errors.ts';
 import { isInsideOrEqual } from '../../core/paths.ts';
 import { hasExactOwnKeys, isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import type { DevLogSink } from '../logs/dev-log-service.ts';
@@ -1390,10 +1390,11 @@ export class PlaygroundService {
       runDurabilityTestHook(`before-directory-fsync:${reason}`, path);
       fsyncSync(descriptor);
     } catch (error) {
-      // Windows has no public directory-fsync primitive. Only documented
-      // directory FlushFileBuffers capability failures are tolerated here;
-      // opening a directory and every retained regular-file sync still fail.
-      if (durabilityPlatform() === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      // Windows has no public directory-fsync primitive. Documented directory
+      // FlushFileBuffers capability failures (EACCES, EINVAL, EPERM) are
+      // tolerated here; opening a directory and every retained regular-file
+      // sync still fail.
+      if (isTolerableWin32SyncError(durabilityPlatform(), error)) return;
       throw error;
     } finally {
       closeSync(descriptor);

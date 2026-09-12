@@ -511,11 +511,24 @@ const normalizedRelative = (root: string, path: string): string =>
 const isolatedEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv>,
   values: Readonly<NodeJS.ProcessEnv>,
-): NodeJS.ProcessEnv => ({
-  ...packedNativeEnvironment(environment),
-  ...values,
-  ...(values.HOME === undefined ? {} : { USERPROFILE: values.HOME }),
-});
+): NodeJS.ProcessEnv => {
+  const merged: NodeJS.ProcessEnv = {
+    ...packedNativeEnvironment(environment),
+    ...values,
+    ...(values.HOME === undefined ? {} : { USERPROFILE: values.HOME }),
+  };
+  if (values.HOME === undefined) return merged;
+  // Windows env names are case-insensitive: a leftover `UserProfile` from the
+  // runner would otherwise win over the fixture HOME we just assigned.
+  const isolated: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(merged)) {
+    if (key.toLowerCase() === 'home' || key.toLowerCase() === 'userprofile') continue;
+    isolated[key] = value;
+  }
+  isolated.HOME = values.HOME;
+  isolated.USERPROFILE = values.HOME;
+  return isolated;
+};
 
 const stringEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv>,
@@ -598,12 +611,33 @@ const buildFixtureProject = async (options: {
   readonly fixture: string;
   readonly prepareProject?: (projectRoot: string) => Promise<void>;
 }): Promise<BuiltFixtureProject> => {
-  const root = await mkdtemp(join(tmpdir(), `agent-bundle-${options.fixture}-build-`));
+  // Windows junctions of a pnpm `node_modules` tree do not follow the nested
+  // relative store links, so Rspack cannot see `@modelcontextprotocol/server`.
+  // Build under the package so walk-up resolution finds the real tree.
+  const scratchParent = process.platform === 'win32'
+    ? join(packageRoot, '.tmp-host-install')
+    : tmpdir();
+  if (process.platform === 'win32') await mkdir(scratchParent, { recursive: true });
+  const root = await mkdtemp(join(scratchParent, `agent-bundle-${options.fixture}-build-`));
   const project = join(root, 'project');
   const artifactRoot = join(project, 'artifact');
   try {
     await cp(join(fixturesRoot, options.fixture), project, { recursive: true });
-    await symlink(join(packageRoot, 'node_modules'), join(project, 'node_modules'), 'dir');
+    if (process.platform === 'win32') {
+      // Junction the real package directories (not the pnpm symlink forest)
+      // so a later coordinator rebuild can resolve the same compile-time
+      // imports the initial CLI build used.
+      const modules = join(project, 'node_modules');
+      await mkdir(join(modules, '@modelcontextprotocol'), { recursive: true });
+      for (const specifier of ['@modelcontextprotocol/server', 'zod'] as const) {
+        const source = await realpath(join(packageRoot, 'node_modules', ...specifier.split('/')));
+        const dest = join(modules, ...specifier.split('/'));
+        await mkdir(dirname(dest), { recursive: true });
+        await symlink(source, dest, 'junction');
+      }
+    } else {
+      await symlink(join(packageRoot, 'node_modules'), join(project, 'node_modules'), 'dir');
+    }
     await options.prepareProject?.(project);
     const result = await run(process.execPath, [
       cli,

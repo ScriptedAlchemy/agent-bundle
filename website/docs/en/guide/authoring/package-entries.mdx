@@ -448,7 +448,8 @@ source-project extras are not.
 npx agent-bundle prepack --root . --output artifact --json
 ```
 
-`prepack` runs the release build and `npm pack --dry-run --json --ignore-scripts`, then gates the
+`prepack` runs the release build and `npm pack --dry-run --json --ignore-scripts`
+(npm's `npm-cli.js` via `process.execPath`, not a bare `npm` PATH spawn), then gates the
 exact package and artifact inventory, manifest hashes, package bin targets, and release-version
 agreement. It removes pack and publish lifecycle hooks from the generated package metadata, so a
 source-project `prepack` cannot recurse from `dist/`; consumer install scripts remain intact. Run

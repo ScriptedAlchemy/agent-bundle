@@ -23,8 +23,8 @@ Verify-equivalent leg on whatever Node is currently active, with the repo's
 normal local worker derivation. It skips the Node matrix and the
 examples/release/micro-eval gates, so it is a fast signal, not a merge gate.
 
-Docs-only PRs skip the hosted Verify, examples, release-gates, micro-eval, and
-host-install-proofs jobs. Docs-only means changes under `docs/` or `agent-patterns/`, changeset
+Docs-only PRs skip the hosted Verify, examples, release-gates, micro-eval,
+host-install-proofs, and host-filesystem jobs. Docs-only means changes under `docs/` or `agent-patterns/`, changeset
 markdown (`.changeset/*.md`), or top-level markdown. Nested markdown elsewhere
 is treated as code. Pushes to `main` never use this skip. The allowlist and
 fail-open listing checks are implemented by `scripts/classify-docs-only.mjs`
@@ -148,6 +148,46 @@ the `claude -p` session proofs (`AGENT_BUNDLE_HOST_INSTALL_CLAUDE_SESSION`,
 (`AGENT_BUNDLE_PACKED_NATIVE_{CLAUDE,CODEX}_SMOKE`). Those still run only in
 the opt-in `native-host-smoke` workflow on a signed-in runner.
 
+## Host-install filesystem OS matrix
+
+The published `agent-bundle` package has no `os` field: it is a
+platform-generic npm package, and `dev --install-host` already has Windows
+junction publish, atomic rename/rollback, ownership manifests, path-casing
+comparisons, and per-OS host config locations. Primary CI still runs Verify,
+examples, release-gates, and the pinned-CLI host-install proofs on
+`ubuntu-latest` only. Cloning that suite onto three OSes would multiply the
+PR critical path.
+
+Hosted CI therefore adds one extra job, `host-filesystem`, on
+`ubuntu-latest`, `macos-latest`, and `windows-latest` (Node 22.19, engines
+floor — three cells, not a Node × OS product). It builds once and runs
+`pnpm test:host-filesystem` (`rstest.host-filesystem.config.ts`, which does
+not build the Workbench e2e example payload):
+
+- `dev-host-install.test.ts` (Claude/Codex legs skip when those CLIs are
+  absent; this job does not install them)
+- `dev-host-install-manager.test.ts` (rollback and stale ownership)
+- `install.test.ts` / `uninstall.test.ts` (receipt ownership)
+- `durable-fs.test.ts` (atomic publish, Windows directory fsync)
+- `internal-child-resolution-policy.test.ts` (packaged child resolution, #769)
+- `packed-install-bin.test.ts` (packaged installer bin from a consumer cwd)
+- `rstest-worker-isolation.test.ts` (canonical TMPDIR; macOS `/tmp` → `/private/tmp`)
+
+That is the slice that can actually diverge by OS. macOS matters because
+Claude, Codex, and Cursor authors commonly develop there; Windows is in the
+matrix because the code already has `win32` branches, not because the rest
+of the suite is claimed green there. A green `Host filesystem (windows-latest)`
+job is evidence for this slice only.
+
+To run the same slice locally after `pnpm build`:
+
+```sh
+pnpm test:host-filesystem
+```
+
+The local gate does not fan this across OSes — one machine can prove one OS.
+Hosted macOS and Windows results are the qualification for those runners.
+
 ## Node provisioning
 
 The runner introduces no new tooling. For each hosted runtime line
@@ -233,10 +273,17 @@ then treat a repeat as a real signal.
   does not install host CLIs into its legs, so run those proofs by hand with
   the commands above when a change touches adapter emission, the installers,
   or the proof suites.
+- **host-filesystem** is the three-OS host-install/filesystem slice (see
+  [Host-install filesystem OS matrix](#host-install-filesystem-os-matrix)).
+  The local gate can run `pnpm test:host-filesystem` on the current OS after
+  `pnpm build`; it cannot prove macOS or Windows from a Linux machine.
 - **native-host-smoke** needs signed-in Claude/Codex CLIs and is opt-in even
   on hosted CI.
-- **Environment skew**: hosted runners are `ubuntu-latest`. Hosted Workbench
-  browser suites launch Playwright's bundled Chromium — pinned by the
+- **Environment skew**: Verify, examples, release-gates, micro-eval, and the
+  pinned-CLI host-install proofs stay on `ubuntu-latest`. The
+  `host-filesystem` job is the exception: `ubuntu-latest`, `macos-latest`,
+  and `windows-latest`. Hosted Workbench browser suites launch Playwright's
+  bundled Chromium — pinned by the
   Playwright version in the lockfile and selected with
   `AGENT_BUNDLE_PLAYWRIGHT_CHANNEL=chromium` (read by
   `packages/workbench/tests/support/workbench-e2e.ts`) — so the browser under
