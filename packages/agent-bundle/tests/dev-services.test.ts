@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, win32 } from 'node:path';
+import { dirname, join, relative, sep, win32 } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
@@ -1027,7 +1027,7 @@ it('accepts a missing payload directory that stays inside the project', async ()
   }
 });
 
-it('stops a dangling symlink cycle and still judges containment', async () => {
+it('rejects a cyclic payload-root symlink instead of hashing it as contained', async () => {
   const root = await createProject([
     '---',
     'name: review',
@@ -1044,12 +1044,18 @@ it('stops a dangling symlink cycle and still judges containment', async () => {
     const loopB = join(root, 'loop-b');
     await symlink('loop-b', loopA);
     await symlink('loop-a', loopB);
-    expect(createProjectContext({
+    expect(() => createProjectContext({
       configPath: prepared.configPath,
       model: withPayloadSource(model, loopA),
       root,
       sourceInputs: prepared.projectContext?.sourceInputs ?? [],
-    }).modelDigest).toEqual(expect.any(String));
+    })).toThrow(/ELOOP/i);
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model: withPayloadSource(model, loopB),
+      root,
+      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+    })).toThrow(/ELOOP/i);
     expect(() => createProjectContext({
       configPath: prepared.configPath,
       model,
@@ -1061,6 +1067,138 @@ it('stops a dangling symlink cycle and still judges containment', async () => {
     })).toThrow(/ELOOP/i);
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects an outside-crossing symlink cycle from both entry points', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const outside = `${root}-outside-loop`;
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    if (model === undefined) throw new Error('Expected a prepared model.');
+    const inside = join(root, 'inside-loop');
+    await symlink(outside, inside, 'dir');
+    await symlink(inside, outside, 'dir');
+    for (const entry of [inside, outside]) {
+      expect(() => createProjectContext({
+        configPath: prepared.configPath,
+        model: withPayloadSource(model, entry),
+        root,
+        sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+      })).toThrow(/ELOOP/i);
+    }
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model,
+      root,
+      sourceInputs: [
+        ...(prepared.projectContext?.sourceInputs ?? []),
+        { path: 'inside-loop/missing.ts', sha256: 'a'.repeat(64) },
+      ],
+    })).toThrow(/ELOOP/i);
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model,
+      root,
+      sourceInputs: [
+        ...(prepared.projectContext?.sourceInputs ?? []),
+        { path: join(outside, 'missing.ts'), sha256: 'a'.repeat(64) },
+      ],
+    })).toThrow(/ELOOP/i);
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(outside, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('rejects a dangling relative symlink under a parent that itself is a symlink', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const elsewhere = await mkdtemp(join(tmpdir(), 'agent-bundle-symlink-parent-'));
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    if (model === undefined) throw new Error('Expected a prepared model.');
+    const physical = join(elsewhere, 'physical');
+    await mkdir(physical);
+    await symlink(join('..', 'escape'), join(physical, 'rel'));
+    await symlink(physical, join(root, 'alias'), 'dir');
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model: withPayloadSource(model, join(root, 'alias', 'rel')),
+      root,
+      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+    })).toThrow(/outside project root/i);
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model,
+      root,
+      sourceInputs: [
+        ...(prepared.projectContext?.sourceInputs ?? []),
+        { path: 'alias/rel/missing.ts', sha256: 'a'.repeat(64) },
+      ],
+    })).toThrow(/outside project root/i);
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(elsewhere, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('rejects symlink/../payload that escapes after the symlink hop', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-symlink-dotdot-'));
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const model = prepared.model;
+    if (model === undefined) throw new Error('Expected a prepared model.');
+    await mkdir(join(root, 'payload'));
+    await symlink(outside, join(root, 'link'), 'dir');
+    const authored = [root, 'link', '..', 'payload'].join(sep);
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model: withPayloadSource(model, authored),
+      root,
+      sourceInputs: prepared.projectContext?.sourceInputs ?? [],
+    })).toThrow(/outside project root/i);
+    expect(() => createProjectContext({
+      configPath: prepared.configPath,
+      model,
+      root,
+      sourceInputs: [
+        ...(prepared.projectContext?.sourceInputs ?? []),
+        { path: [root, 'link', '..', 'payload', 'missing.ts'].join(sep), sha256: 'a'.repeat(64) },
+      ],
+    })).toThrow(/outside project root/i);
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(outside, { force: true, recursive: true }),
+    ]);
   }
 });
 
