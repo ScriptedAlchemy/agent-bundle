@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { rstestRunIdVariable, rstestWorkerRootOwnerFile } from './scripts/rstest-worker-roots.mjs';
 
@@ -76,12 +76,15 @@ export const rstestWorkerRoot = (): string => {
   const root = rstestWorkerRootPath(hostTemporaryRoot, workerId);
   mkdirSync(root, { recursive: true });
   writeOwnerMarker(root, workerId);
-  // macOS `/tmp` is a symlink to `/private/tmp`. Install, receipt, and
-  // durable-fs code realpath destinations; tests that compare `os.tmpdir()`
-  // strings to those results must see the same spelling. The short `/tmp`
-  // construction above stays for AF_UNIX headroom; TMPDIR gets the
-  // canonical path after the directory exists.
-  return realpathSync(root);
+  // macOS `/tmp` is a symlink to `/private/tmp`. Windows TEMP is often the
+  // 8.3 form `C:\Users\RUNNER~1\...` while `realpath` of a file under it
+  // expands to `C:\Users\runneradmin\...`. Install, receipt, and durable-fs
+  // code realpath destinations; tests that compare `os.tmpdir()` strings to
+  // those results must see the same spelling. Prefer the owner marker file:
+  // GetFinalPathNameByHandle expands 8.3 names more reliably for files than
+  // for the directory handle used to create this root.
+  const marker = join(root, rstestWorkerRootOwnerFile);
+  return existsSync(marker) ? dirname(realpathSync(marker)) : realpathSync(root);
 };
 
 export const rstestWorkerCacheDirectory = (name: string): string => {

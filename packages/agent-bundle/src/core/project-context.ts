@@ -261,8 +261,11 @@ const projectRelativePath = (root: string, value: string, label: string): string
 const resolvedProjectPath = (root: string, value: string, label: string): string => {
   const canonicalRoot = realpathSync(resolve(root));
   const lexicalRoot = resolve(root);
-  projectRelativePath(lexicalRoot, value, label);
-  const referencedPath = realpathSync(resolve(lexicalRoot, value));
+  // Relative authored paths stay POSIX-canonical. Absolute on-disk paths
+  // (Windows `C:\…`, 8.3 aliases) are judged by realpath identity so a
+  // short-name root and a long-name config file still name one project.
+  if (!isAbsolute(value)) projectRelativePath(lexicalRoot, value, label);
+  const referencedPath = realpathSync(isAbsolute(value) ? value : resolve(lexicalRoot, value));
   if (escapesRoot(canonicalRoot, referencedPath)) {
     throw new RangeError(`${label} ${JSON.stringify(referencedPath)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
   }
@@ -272,7 +275,7 @@ const resolvedProjectPath = (root: string, value: string, label: string): string
 };
 
 const canonicalCompilerPath = (root: string, value: string, label: string): string =>
-  isAbsolute(value) ? projectRelativePath(root, value, label) : value;
+  isAbsolute(value) ? resolvedProjectPath(root, value, label) : value;
 
 const canonicalProvenance = (root: string, provenance: SourceProvenance): SourceProvenance => ({
   ...provenance,
@@ -641,7 +644,7 @@ const canonicalSourceInputs = (
 export const createProjectContext = (options: CreateProjectContextOptions): ProjectContext => {
   const canonicalRoot = realpathSync(resolve(options.root));
   const configPath = resolvedProjectPath(canonicalRoot, options.configPath, 'Configuration path');
-  const sourceInputs = canonicalSourceInputs(options.root, options.sourceInputs);
+  const sourceInputs = canonicalSourceInputs(canonicalRoot, options.sourceInputs);
   const configInput = sourceInputs.find((input) => input.path === configPath);
   if (configInput === undefined) {
     throw new TypeError(`Configuration source ${JSON.stringify(configPath)} must have a SHA-256 digest.`);

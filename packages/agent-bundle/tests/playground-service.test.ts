@@ -203,7 +203,7 @@ const createFixture = async (input: Readonly<{
 };
 
 it('tolerates only unsupported Windows directory fsync errors', async () => {
-  for (const code of ['EACCES', 'EINVAL'] as const) {
+  for (const code of ['EACCES', 'EINVAL', 'EPERM'] as const) {
     const fixture = await createFixture();
     let observed = false;
     try {

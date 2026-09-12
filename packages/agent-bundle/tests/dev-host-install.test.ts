@@ -34,6 +34,7 @@ const claudeAvailable = spawnSync('claude', ['--version'], { stdio: 'ignore', ti
 const codexAvailable = spawnSync('codex', ['--version'], { stdio: 'ignore', timeout: 5_000 }).status === 0;
 const claudeIt = claudeAvailable ? it : it.skip;
 const codexIt = codexAvailable ? it : it.skip;
+const unixSocketIt = process.platform === 'win32' ? it.skip : it;
 
 beforeAll(async () => {
   fixture = await buildHostInstallFixture({ environment: process.env });
@@ -369,11 +370,10 @@ it('installs a marked public-host dev variant from a stable source and removes i
   expect(uninstalls).toHaveLength(2);
 });
 
-it('refreshes a persistent Codex component snapshot before attaching each epoch', async () => {
+unixSocketIt('refreshes a persistent Codex component snapshot before attaching each epoch', async () => {
   // The fake Codex app-server listens on a Unix socket. Windows has no
   // equivalent in this fixture; the rest of the slice still covers
   // install/rollback/junctions.
-  if (process.platform === 'win32') return;
   const root = await createRoot();
   const codexRoot = await mkdtemp(join(tmpdir(), 'codex-'));
   roots.push(codexRoot);

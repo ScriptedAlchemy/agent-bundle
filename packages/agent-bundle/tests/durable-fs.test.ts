@@ -25,18 +25,18 @@ it('tolerates only documented Windows directory fsync capability failures', asyn
     sync: async () => { throw errnoFailure(code, `${code} sync failed`); },
   });
 
-  for (const code of ['EACCES', 'EINVAL'] as const) {
+  for (const code of ['EACCES', 'EINVAL', 'EPERM'] as const) {
     await expect(syncPath('/ignored', { directory: true, open: failingOpen(code), platform: 'win32' }))
       .resolves.toBeUndefined();
   }
-  await expect(syncPath('/ignored', { directory: true, open: failingOpen('EPERM'), platform: 'win32' }))
-    .rejects.toMatchObject({ code: 'EPERM' });
+  await expect(syncPath('/ignored', { directory: true, open: failingOpen('EIO'), platform: 'win32' }))
+    .rejects.toMatchObject({ code: 'EIO' });
   await expect(syncPath('/ignored', { directory: true, open: failingOpen('EACCES'), platform: 'linux' }))
     .rejects.toMatchObject({ code: 'EACCES' });
   // Regular files never tolerate the gap, even on Windows.
   await expect(syncPath('/ignored', { open: failingOpen('EACCES'), platform: 'win32' }))
     .rejects.toMatchObject({ code: 'EACCES' });
-  expect(closed).toHaveLength(5);
+  expect(closed).toHaveLength(6);
 });
 
 it('publishes files by hard link, adopts raced winners, and never leaves staging behind', async () => {

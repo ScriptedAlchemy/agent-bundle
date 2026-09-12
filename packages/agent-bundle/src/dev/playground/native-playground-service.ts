@@ -28,7 +28,7 @@ import type { NativePlaygroundHost } from './native-playground-types.ts';
 import { safeDevWireText } from '../logs/dev-log-service.ts';
 import type { ArtifactEpoch } from '../types.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../../eval/workspace-diff.ts';
-import { isErrno } from '../../core/errors.ts';
+import { isErrno, isTolerableWin32SyncError } from '../../core/errors.ts';
 import { isInsideOrEqual, sameFile } from '../../core/paths.ts';
 
 export type { NativePlaygroundHost } from './native-playground-types.ts';
@@ -1459,7 +1459,7 @@ export class NativePlaygroundService {
     try {
       await handle.sync();
     } catch (error) {
-      if (catalogDurabilityPlatform() === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      if (isTolerableWin32SyncError(catalogDurabilityPlatform(), error)) return;
       throw error;
     } finally {
       await handle.close();

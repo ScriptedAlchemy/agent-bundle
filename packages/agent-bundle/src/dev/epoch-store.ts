@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, w
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
+import { isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
 import { exists, isInside } from '../core/paths.ts';
 import { hasExactOwnKeys, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runPromise, runSync } from '../effect/boundary.ts';
@@ -704,7 +704,7 @@ export class EpochStore {
     try {
       await handle.sync();
     } catch (error) {
-      if (directory && process.platform === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      if (directory && isTolerableWin32SyncError(process.platform, error)) return;
       throw error;
     }
     finally { await handle.close(); }

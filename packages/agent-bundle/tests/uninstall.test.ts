@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -90,7 +90,11 @@ const createFixture = async (
       ...(mcp === undefined ? {} : { mcp }),
     }],
   );
-  return { bundleRoot, cleanupRoot, home };
+  return {
+    bundleRoot: await realpath(bundleRoot),
+    cleanupRoot: await realpath(cleanupRoot),
+    home: await realpath(home),
+  };
 };
 
 const writeFixtureMcp = async (
@@ -618,7 +622,9 @@ it('rolls back earlier state markers when a later root cannot be recorded', asyn
       plugin: 'uninstall-fixture',
       pluginRoot: fixture.bundleRoot,
       scope: 'user',
-    })).rejects.toMatchObject({ code: 'ENAMETOOLONG' });
+    })).rejects.toMatchObject({
+      code: expect.stringMatching(/^(?:ENAMETOOLONG|EINVAL)$/u),
+    });
     await expect(readdir(firstRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });

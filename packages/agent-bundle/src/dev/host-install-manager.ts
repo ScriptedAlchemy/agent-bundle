@@ -334,7 +334,11 @@ const publishDirectoryPointer = async (
   let moved = false;
   try {
     const metadata = await lstat(path).catch(() => undefined);
-    if (metadata !== undefined && !metadata.isSymbolicLink()) {
+    // Unix `rename` replaces a symlink in place. Windows treats a junction as
+    // a directory, so rename onto an existing pointer fails; move it aside
+    // first, including when lstat reports a symbolic link.
+    const replaceInPlace = process.platform !== 'win32' && metadata?.isSymbolicLink() === true;
+    if (metadata !== undefined && !replaceInPlace) {
       await rename(path, movedAside);
       moved = true;
     }

@@ -600,18 +600,12 @@ it('tolerates only Windows directory fsync capability failures during catalog pu
     });
   };
   try {
-    for (const code of ['EACCES', 'EINVAL'] as const) {
+    for (const code of ['EACCES', 'EINVAL', 'EPERM'] as const) {
       await rm(catalogDirectory, { force: true, recursive: true });
       const service = serviceFor(code);
       await expect(service.catalog(epoch(`epoch-${code.toLowerCase()}`, join(root, code)))).resolves.toMatchObject({ epochId: `epoch-${code.toLowerCase()}` });
       await service.close();
     }
-    await rm(catalogDirectory, { force: true, recursive: true });
-    const service = serviceFor('EPERM');
-    await expect(service.catalog(epoch('epoch-eperm', join(root, 'EPERM')))).rejects.toMatchObject({
-      errors: [expect.objectContaining({ code: 'EPERM' }), expect.objectContaining({ code: 'EPERM' })],
-    });
-    await service.close();
   } finally {
     if (previousPlatform === undefined) delete runtime[nativeCatalogDurabilityPlatformKey];
     else runtime[nativeCatalogDurabilityPlatformKey] = previousPlatform;

@@ -20,6 +20,12 @@ export class CodedError<TCode extends string = string> extends Error {
   }
 }
 
-/** Windows denies fsync on directories and AV-locked files; durability there is best-effort. */
+/**
+ * Windows has no public directory-fsync primitive. FlushFileBuffers on a
+ * directory handle fails with EACCES, EINVAL, or EPERM depending on the
+ * volume and Node/libuv mapping; durability there is best-effort. Regular
+ * files never use this helper.
+ */
 export const isTolerableWin32SyncError = (platform: string, error: unknown): boolean =>
-  platform === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'));
+  platform === 'win32'
+  && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL') || isErrno(error, 'EPERM'));

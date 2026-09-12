@@ -511,11 +511,24 @@ const normalizedRelative = (root: string, path: string): string =>
 const isolatedEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv>,
   values: Readonly<NodeJS.ProcessEnv>,
-): NodeJS.ProcessEnv => ({
-  ...packedNativeEnvironment(environment),
-  ...values,
-  ...(values.HOME === undefined ? {} : { USERPROFILE: values.HOME }),
-});
+): NodeJS.ProcessEnv => {
+  const merged: NodeJS.ProcessEnv = {
+    ...packedNativeEnvironment(environment),
+    ...values,
+    ...(values.HOME === undefined ? {} : { USERPROFILE: values.HOME }),
+  };
+  if (values.HOME === undefined) return merged;
+  // Windows env names are case-insensitive: a leftover `UserProfile` from the
+  // runner would otherwise win over the fixture HOME we just assigned.
+  const isolated: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(merged)) {
+    if (key.toLowerCase() === 'home' || key.toLowerCase() === 'userprofile') continue;
+    isolated[key] = value;
+  }
+  isolated.HOME = values.HOME;
+  isolated.USERPROFILE = values.HOME;
+  return isolated;
+};
 
 const stringEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv>,
@@ -603,7 +616,11 @@ const buildFixtureProject = async (options: {
   const artifactRoot = join(project, 'artifact');
   try {
     await cp(join(fixturesRoot, options.fixture), project, { recursive: true });
-    await symlink(join(packageRoot, 'node_modules'), join(project, 'node_modules'), 'dir');
+    await symlink(
+      join(packageRoot, 'node_modules'),
+      join(project, 'node_modules'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
     await options.prepareProject?.(project);
     const result = await run(process.execPath, [
       cli,

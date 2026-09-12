@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, chmod, cp, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -162,7 +162,14 @@ const createHostBundle = async (
       ...(host === 'cursor' ? {} : { marketplace: 'install-fixture-marketplace' }),
     }],
   );
-  return { bundleRoot, cleanupRoot, from };
+  // Production `readArtifactManifest` realpaths the bundle (Windows 8.3 → long
+  // path). Tests compare CLI cwd/args and receipt hashes to this identity.
+  const canonicalBundle = await realpath(bundleRoot);
+  return {
+    bundleRoot: canonicalBundle,
+    cleanupRoot,
+    from: options.nestedUnder === undefined ? canonicalBundle : from,
+  };
 };
 
 const refreshCursorBundle = async (fixture: { readonly bundleRoot: string }): Promise<void> =>
