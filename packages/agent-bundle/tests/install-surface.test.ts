@@ -66,6 +66,14 @@ it.each(['amp', 'claude', 'codex', 'cursor', 'portable'])(
   },
 );
 
+it('labels Amp experimental in INSTALL.md: contract-verified, runtime-unverified', () => {
+  const install = writesFor('amp').get('INSTALL.md');
+
+  expect(install).toContain('Amp is experimental: contract-verified, runtime-unverified.');
+  expect(install).toContain('`amp plugins list` and `amp skills list` require an Amp account');
+  expect(install).not.toContain('live activation has been verified');
+});
+
 it('emits always-installable Claude and Codex local marketplaces with exact commands', () => {
   const claude = writesFor('claude');
   const codex = writesFor('codex');

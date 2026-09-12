@@ -1,5 +1,5 @@
 ---
-description: 'Install a built agent-bundle into Amp, Claude Code, Codex, or Cursor: host scopes, receipt-owned copies, install.mjs, npm CLI parity, and Doctor.'
+description: 'Install a built agent-bundle into Claude Code, Codex, Cursor, or experimental Amp: host scopes, receipt-owned copies, install.mjs, npm CLI parity, and Doctor.'
 ---
 
 # Host installation
@@ -35,7 +35,7 @@ plugin name for `cursor`.
 
 | Host | Mechanism | Scopes |
 | --- | --- | --- |
-| Amp | Copies only `.amp/plugins/<name>/` into the project root or `$XDG_CONFIG_HOME/amp/plugins/<name>` (falling back to `~/.config/amp/plugins/<name>`). It does not edit settings, trust, disabled state, personal/workspace repositories, or any other plugin. `amp plugins list` inspects the copy; reloading a running session remains the interactive Ctrl+O → `plugins: reload` action. | `project`, `user` (system root) |
+| Amp (experimental) | Copies only `.amp/plugins/<name>/` into the project root or `$XDG_CONFIG_HOME/amp/plugins/<name>` (falling back to `~/.config/amp/plugins/<name>`). It does not edit settings, trust, disabled state, personal/workspace repositories, or any other plugin. `amp plugins list` inspects the copy when an Amp account is available; reloading a running session remains the interactive Ctrl+O → `plugins: reload` action. Live activation is contract-verified, runtime-unverified. | `project`, `user` (system root) |
 | Claude Code | Delegates to `claude plugin marketplace add` and `claude plugin install`. Claude Code loads `hooks/hooks.json` and `.mcp.json` from the plugin root on its own, so `.claude-plugin/plugin.json` carries no `hooks` pointer (Claude Code reports one at that file as a duplicate hooks file); the Codex and Cursor documents beside their own manifests in the same root are never read by Claude Code. For a `directory` marketplace, Claude Code resolves `${CLAUDE_PLUGIN_ROOT}` to that directory itself, not to its plugin cache, so rebuilding it changes the hooks a running session executes. | `user`, `project`, `local` |
 | Codex | Delegates to `codex plugin marketplace add` and `codex plugin add`. `.codex-plugin/plugin.json` points at its own `.codex-plugin/hooks.json` and `.codex-plugin/mcp.json`, so Codex never falls back to discovering another host's documents in the root. | `user` |
 | Cursor | Copies the root into `~/.cursor/plugins/local/<name>` (`--mode local`, the default), because Cursor publishes no non-interactive install verb; `--mode marketplace` instead stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step. Either way Cursor loads the hook and MCP documents `.cursor-plugin/plugin.json` names — `.cursor-plugin/hooks.json` and `.cursor-plugin/mcp.json`, beside the manifest — so plugin hooks run with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json` entry. | `user` |
@@ -46,10 +46,11 @@ selected host binary is unavailable, rather than reporting a success it did not 
 installation diagnostics are the `AB700x` family: bundle identity, host availability, scope,
 command failure, and collision checks.
 
-Amp does not expose a non-interactive reload or standalone validator. Installation therefore
-returns the interactive reload step and never runs it. In this account-less validation
-environment, `amp plugins list` and `amp skills list --json` require login; live registration,
-enabled state, and tool execution are recorded as **unverified**, not unsupported.
+Amp is experimental: contract-verified, runtime-unverified. It does not expose a non-interactive
+reload or standalone validator. Installation therefore returns the interactive reload step and
+never runs it. In this account-less validation environment, `amp plugins list` and
+`amp skills list --json` require login; live registration, enabled state, and tool execution are
+recorded as **unverified**, not unsupported.
 
 ## The standalone installer
 

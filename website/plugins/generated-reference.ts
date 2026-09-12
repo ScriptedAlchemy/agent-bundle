@@ -122,10 +122,14 @@ const messages = {
       `:::info Generated page\nThis page is a build-time copy of [\`docs/diagnostics.md\`](${repositoryUrl}/docs/diagnostics.md), the repository's diagnostics contract. Change that file, not this page.\n:::`,
     hostsTitle: 'Host capability matrix',
     hostsDescription:
-      'Pinned host capability tables for the Claude Code, Codex, Cursor, and portable targets: observed versions, manifest locations, install surfaces, path tokens, MCP transports, conversation lineage, and plugin components.',
+      'Pinned host capability tables for Amp, Claude Code, Codex, Cursor, and portable: observed versions, runtime-proof status, manifest locations, install surfaces, path tokens, MCP transports, conversation lineage, and plugin components.',
     hostsIntro:
-      'Every target adapter projects the normalized bundle against a pinned capability table: a JSON document recording the host version the evidence was observed against, the paths the host reads, and — for each capability — whether it is `supported`, `degraded`, or `unavailable` with a written reason. Nothing is inferred: a capability without evidence is unavailable, never a silent guess.',
+      'Every target adapter projects the normalized bundle against a pinned capability table: a JSON document recording the host version the evidence was observed against, the paths the host reads, and — for each capability — whether it is `supported`, `degraded`, or `unavailable` with a written reason. Nothing is inferred: a capability without evidence is unavailable, never a silent guess. A `supported` contract row is not live execution; the Runtime proof section records that separate axis.',
     pinnedHosts: 'Pinned hosts',
+    runtimeProof: 'Runtime proof',
+    runtimeProofIntro:
+      'A `supported` or `degraded` contract row is not live host execution. The `runtimeProof` row is recorded when live activation, tools, or events were surveyed separately from the typed contract. `unverified` means the adapter is contract-checked; live activation has not been run. A host without a row has no such survey recorded here — that absence is not implied proof.',
+    runtimeProofUnrecorded: 'No separate runtime-proof row is recorded.',
     installSurface: 'Install surface',
     pathTokens: 'Path tokens',
     mcpTransports: 'MCP transports and token fields',
@@ -188,7 +192,7 @@ const messages = {
     eventsDescription:
       'Canonical event routes per host, config-declared hook events, canonical tool selectors mapped to native matchers, and the host-native events deliberately deferred.',
     eventsIntro:
-      'Event routes under `src/events/**` and config-declared `hooks` both compile against the same per-host tables. A canonical event lowers to the host-native event named here. A host without that event has nothing to lower to, so a route or hook that still selects that host fails the build (`<target>.hook.event.*`, or `AB4204` for an explicit config-hook target): exclude the host through the route\'s `config.targets` or the hook\'s `targets`. A config hook with no explicit `targets` inherits only the selected hosts that support hooks, so unsupported hosts are skipped there without a diagnostic. Every unavailable cell records its reason rather than inferring one.',
+      'Event routes under `src/events/**` and config-declared `hooks` both compile against the same per-host tables. A canonical event lowers to the host-native event named here. A host without that event has nothing to lower to, so a route or hook that still selects that host fails the build (`<target>.hook.event.*`, or `AB4204` for an explicit config-hook target): exclude the host through the route\'s `config.targets` or the hook\'s `targets`. A config hook with no explicit `targets` inherits only the selected hosts that support hooks, so unsupported hosts are skipped there without a diagnostic. Every unavailable cell records its reason rather than inferring one. Amp event cells are contract-verified from the pinned PluginAPI; live dispatch remains runtime-unverified.',
     eventRoutes: 'Canonical event routes',
     eventRoutesIntro:
       'Rows are the canonical event families a `src/events/<family>/*.tsx` route may declare; columns are the pinned hosts. A cell names the native event the route lowers to.',
@@ -243,10 +247,14 @@ const messages = {
       `:::info 生成页面\n本页是仓库诊断契约 [\`docs/diagnostics.md\`](${repositoryUrl}/docs/diagnostics.md) 在构建时的副本，内容保留英文原文。请修改该文件而不是本页。\n:::`,
     hostsTitle: '宿主能力矩阵',
     hostsDescription:
-      'Claude Code、Codex、Cursor 与 portable 目标的固定宿主能力表：观测版本、清单位置、安装方式、路径令牌、MCP 传输、会话谱系与插件组件。',
+      'Amp、Claude Code、Codex、Cursor 与 portable 目标的固定宿主能力表：观测版本、运行时证明状态、清单位置、安装方式、路径令牌、MCP 传输、会话谱系与插件组件。',
     hostsIntro:
-      '每个目标适配器都会把归一化后的 bundle 投影到一份固定的能力表上：这份 JSON 文档记录了证据所对应的宿主版本、宿主读取的路径，以及每项能力是 `supported`、`degraded` 还是 `unavailable`，并附带书面原因。没有任何推断：缺少证据的能力即为不可用，绝不会默默猜测。',
+      '每个目标适配器都会把归一化后的 bundle 投影到一份固定的能力表上：这份 JSON 文档记录了证据所对应的宿主版本、宿主读取的路径，以及每项能力是 `supported`、`degraded` 还是 `unavailable`，并附带书面原因。没有任何推断：缺少证据的能力即为不可用，绝不会默默猜测。`supported` 的契约行不是现场执行；“运行时证明”一节记录这条单独的轴。',
     pinnedHosts: '固定宿主',
+    runtimeProof: '运行时证明',
+    runtimeProofIntro:
+      '`supported` 或 `degraded` 的契约行不是宿主现场执行。仅当现场激活、工具或事件已与类型契约分开核查时，才会记录 `runtimeProof` 行。`unverified` 表示适配器已通过契约核对，现场激活尚未运行。没有该行的宿主只表示此处没有这类核查记录——并不等于已获证明。',
+    runtimeProofUnrecorded: '未单独记录运行时证明行。',
     installSurface: '安装方式',
     pathTokens: '路径令牌',
     mcpTransports: 'MCP 传输与令牌字段',
@@ -309,7 +317,7 @@ const messages = {
     eventsDescription:
       '各宿主的规范事件路由、配置声明的钩子事件、规范工具选择器到原生匹配器的映射，以及被有意推迟的宿主原生事件。',
     eventsIntro:
-      '`src/events/**` 下的事件路由与配置声明的 `hooks` 都基于同一组按宿主固定的表编译。规范事件会降级为此处列出的宿主原生事件。不具备该事件的宿主没有可降级的目标，因此仍然选中该宿主的路由或 hook 会让构建失败（`<target>.hook.event.*`，显式配置 hook 目标则为 `AB4204`）：请通过路由的 `config.targets` 或 hook 的 `targets` 排除该宿主。未显式声明 `targets` 的配置 hook 只继承所选宿主中支持 hook 的那些，因此不受支持的宿主会在那里被跳过且不产生诊断。每个不可用单元格都记录其原因，而非推断。',
+      '`src/events/**` 下的事件路由与配置声明的 `hooks` 都基于同一组按宿主固定的表编译。规范事件会降级为此处列出的宿主原生事件。不具备该事件的宿主没有可降级的目标，因此仍然选中该宿主的路由或 hook 会让构建失败（`<target>.hook.event.*`，显式配置 hook 目标则为 `AB4204`）：请通过路由的 `config.targets` 或 hook 的 `targets` 排除该宿主。未显式声明 `targets` 的配置 hook 只继承所选宿主中支持 hook 的那些，因此不受支持的宿主会在那里被跳过且不产生诊断。每个不可用单元格都记录其原因，而非推断。Amp 事件单元格来自固定版本 PluginAPI 的契约核对；现场派发仍为 runtime-unverified。',
     eventRoutes: '规范事件路由',
     eventRoutesIntro:
       '行是 `src/events/<family>/*.tsx` 路由可以声明的规范事件族；列是固定宿主。单元格给出该路由降级到的原生事件。',
@@ -527,6 +535,34 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
           asString(plugin.marketplace) === undefined ? m.notApplicable : code(asString(plugin.marketplace) ?? ''),
           asString(hooks.config) === undefined ? m.notApplicable : code(asString(hooks.config) ?? ''),
         ];
+      }),
+    ),
+  );
+
+  sections.push(`## ${m.runtimeProof}\n`);
+  sections.push(m.runtimeProofIntro);
+  sections.push(
+    table(
+      [m.headers.host, m.headers.state, m.headers.detail],
+      hosts.map(host => {
+        const proof = asObject(host.data.runtimeProof);
+        const state = asString(proof.state);
+        if (state === undefined) {
+          return [code(host.host), m.notApplicable, m.runtimeProofUnrecorded];
+        }
+        const details: string[] = [];
+        const maturity = asString(proof.maturity);
+        if (maturity !== undefined) {
+          details.push(code(maturity));
+        }
+        const reason = asString(proof.reason);
+        if (reason !== undefined) {
+          details.push(escapeProse(reason));
+        }
+        if (Array.isArray(proof.evidence)) {
+          details.push(m.evidenceNotes(proof.evidence.length));
+        }
+        return [code(host.host), state, details.length > 0 ? details.join('<br />') : m.notApplicable];
       }),
     ),
   );

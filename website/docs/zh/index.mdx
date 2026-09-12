@@ -1,12 +1,12 @@
 ---
 pageType: home
-description: '用一份带类型的配置描述 Skill、钩子、MCP 服务器与脚本，编译为 Amp、Claude Code、Codex 与 Cursor 可安装的产物。'
-titleSuffix: ' - 面向 Amp、Claude Code、Codex 与 Cursor 的 Agent 插件编译器'
+description: '用一份带类型的配置描述 Skill、钩子、MCP 服务器与脚本，编译为 Claude Code、Codex、Cursor 与实验性 Amp 可安装的产物。'
+titleSuffix: ' - 面向 Claude Code、Codex、Cursor 与实验性 Amp 的 Agent 插件编译器'
 
 hero:
   name: agent-bundle
   text: 一份带类型的配置，适配所有 Agent 宿主
-  tagline: 一次性描述 Skill、钩子、MCP 服务器与脚本，编译出 Amp、Claude Code、Codex 与 Cursor 可安装的产物。
+  tagline: 一次性描述 Skill、钩子、MCP 服务器与脚本，编译出 Claude Code、Codex、Cursor 与实验性 Amp 可安装的产物。
   image:
     src: /logo.svg
     alt: agent-bundle 徽标
@@ -188,12 +188,12 @@ CLI 安装的捆绑包——并运行结果为通过、失败或不确定的[评
 
 ## 一份源码，所有宿主
 
-`targets` 选择这一个根目录承载哪些宿主投影；省略它时根目录只承载 `portable`。Amp 读取嵌套目录插件；
+`targets` 选择这一个根目录承载哪些宿主投影；省略它时根目录只承载 `portable`。实验性 Amp 读取嵌套目录插件；
 其他行读取组合根目录。
 
 | Target | 为根目录添加的内容 | 安装方式 |
 | --- | --- | --- |
-| `amp` | `.amp/plugins/<name>/index.js`、显式注册的捆绑 Skill、PluginAPI 事件回调与 Skill 范围 MCP。 | 把生成目录复制到项目/系统根，或运行 `agent-bundle install amp --from artifact`。 |
+| `amp` | `.amp/plugins/<name>/index.js`、显式注册的捆绑 Skill、PluginAPI 事件回调与 Skill 范围 MCP。实验性：已核对契约，运行时未验证。 | 把生成目录复制到项目/系统根，或运行 `agent-bundle install amp --from artifact`。现场激活需要 Amp 账号，CI 中未证明。 |
 | `claude` | `.claude-plugin/plugin.json` 与本地 `marketplace.json`，以及 `hooks/hooks.json` 与 `.mcp.json`。 | `claude plugin marketplace add` 与 `claude plugin install`，或 `agent-bundle install claude --from artifact`。 |
 | `codex` | `.codex-plugin/plugin.json` 及其旁边的 `hooks.json` 与 `mcp.json`，以及 `.agents/plugins/marketplace.json`。 | `codex plugin marketplace add` 与 `codex plugin add`，或 `agent-bundle install codex --from artifact`。 |
 | `cursor` | `.cursor-plugin/plugin.json` 及其旁边的 `hooks.json` 与 `mcp.json`。 | 生成的 `install.mjs`，或 `agent-bundle install cursor --from artifact`。 |

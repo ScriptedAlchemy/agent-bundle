@@ -1,5 +1,5 @@
 ---
-description: '把已构建的 agent-bundle 安装进 Amp、Claude Code、Codex 或 Cursor：宿主作用域、回执归属副本、install.mjs、npm CLI 一致性与 Doctor。'
+description: '把已构建的 agent-bundle 安装进 Claude Code、Codex、Cursor 或实验性 Amp：宿主作用域、回执归属副本、install.mjs、npm CLI 一致性与 Doctor。'
 ---
 
 # 宿主安装
@@ -28,7 +28,7 @@ npx agent-bundle install amp --from artifact --scope user
 
 | 宿主 | 机制 | 作用域 |
 | --- | --- | --- |
-| Amp | 只把 `.amp/plugins/<name>/` 复制到项目根，或 `$XDG_CONFIG_HOME/amp/plugins/<name>`（回退为 `~/.config/amp/plugins/<name>`）。它不修改设置、信任、禁用状态、个人/工作区仓库或其他插件。`amp plugins list` 检查副本；运行中会话仍需交互式 Ctrl+O → `plugins: reload`。 | `project`、`user`（系统根） |
+| Amp（实验性） | 只把 `.amp/plugins/<name>/` 复制到项目根，或 `$XDG_CONFIG_HOME/amp/plugins/<name>`（回退为 `~/.config/amp/plugins/<name>`）。它不修改设置、信任、禁用状态、个人/工作区仓库或其他插件。有 Amp 账号时可用 `amp plugins list` 检查副本；运行中会话仍需交互式 Ctrl+O → `plugins: reload`。现场激活为已核对契约、运行时未验证。 | `project`、`user`（系统根） |
 | Claude Code | 委托给 `claude plugin marketplace add` 与 `claude plugin install`。Claude Code 会自行加载插件根目录下的 `hooks/hooks.json` 与 `.mcp.json`，因此 `.claude-plugin/plugin.json` 不带 `hooks` 指针（Claude Code 会把指向该文件的指针报告为重复的 hooks 文件）；同一根目录中紧挨着 Codex 与 Cursor 各自清单的文档从不会被 Claude Code 读取。对于 `directory` 类型的市场，Claude Code 会把 `${CLAUDE_PLUGIN_ROOT}` 解析为该目录本身而不是其插件缓存，因此重新构建该目录会改变正在运行的会话所执行的钩子。 | `user`、`project`、`local` |
 | Codex | 委托给 `codex plugin marketplace add` 与 `codex plugin add`。`.codex-plugin/plugin.json` 指向自己的 `.codex-plugin/hooks.json` 与 `.codex-plugin/mcp.json`，因此 Codex 绝不会回退到发现根目录中另一宿主的文档。 | `user` |
 | Cursor | 把根目录复制到 `~/.cursor/plugins/local/<name>`（默认的 `--mode local`），因为 Cursor 未发布非交互式安装动词；`--mode marketplace` 则在 `~/.cursor/agent-bundle/marketplaces/<name>` 下暂存一个已提交的本地市场仓库，并打印 Customize → Plugins →“Add Plugins from Local Repository”这一步。无论哪种方式，Cursor 都加载 `.cursor-plugin/plugin.json` 所指定的钩子与 MCP 文档——紧挨着清单的 `.cursor-plugin/hooks.json` 与 `.cursor-plugin/mcp.json`——因此插件 hook 会在替换 `${CURSOR_PLUGIN_ROOT}` 后运行，无需 `~/.cursor/hooks.json` 条目。 | `user` |
@@ -37,9 +37,9 @@ npx agent-bundle install amp --from artifact --scope user
 二进制文件不可用时，安装器会以一条带类型的诊断失败，而不是报告一次它并未完成的成功。宿主安装诊断属于
 `AB700x` 家族：捆绑包标识、宿主可用性、作用域、命令失败与冲突检查。
 
-Amp 没有非交互式 reload 或独立校验器。安装结果只记录交互式 reload 步骤，绝不自动执行。本环境没有 Amp
-账号，因此 `amp plugins list` 与 `amp skills list --json` 会要求登录；实时注册、启用状态与工具执行记为
-**未验证**，而不是不支持。
+Amp 是实验性目标：已核对契约，运行时未验证。它没有非交互式 reload 或独立校验器。安装结果只记录交互式
+reload 步骤，绝不自动执行。本环境没有 Amp 账号，因此 `amp plugins list` 与 `amp skills list --json`
+会要求登录；实时注册、启用状态与工具执行记为 **未验证**，而不是不支持。
 
 ## 独立安装器
 
