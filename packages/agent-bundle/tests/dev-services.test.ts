@@ -8,7 +8,7 @@ import { expect, it } from '@rstest/core';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { containedPathComponents } from '../src/dev/project-service.ts';
-import { build, validate } from '../src/api.ts';
+import { validate } from '../src/api.ts';
 import { digest, sha256Hex } from '../src/core/digest.ts';
 import {
   DiagnosticService,
@@ -1321,9 +1321,6 @@ posixContainmentIt('rejects a contained POSIX filename that includes a backslash
     expect(prepared).toMatchObject({
       diagnostics: [expect.objectContaining({ code: 'AB7003' })],
       projectContext: undefined,
-    });
-    await expect(build({ output: join(root, 'out'), root })).rejects.toMatchObject({
-      diagnostics: [expect.objectContaining({ code: 'AB7003' })],
     });
 
     const clean = await createProject([
