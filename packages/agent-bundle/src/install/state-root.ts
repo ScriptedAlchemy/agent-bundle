@@ -402,6 +402,8 @@ export const recordInstalledState = async (
       } catch (error) {
         if (
           !isErrno(error, 'EACCES') &&
+          // Windows `mkdir` of a file path reports EEXIST, not ENOTDIR.
+          !isErrno(error, 'EEXIST') &&
           !isErrno(error, 'ENOTDIR') &&
           !isErrno(error, 'EPERM') &&
           !isErrno(error, 'EROFS')

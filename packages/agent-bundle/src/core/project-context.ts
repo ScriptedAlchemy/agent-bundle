@@ -6,6 +6,7 @@ import type { DescriptiveMetadataResult } from './descriptive-metadata.ts';
 import { packageDescriptiveMetadata } from './descriptive-metadata.ts';
 import type { Diagnostic } from './diagnostics.ts';
 import { digest } from './digest.ts';
+import { isErrno } from './errors.ts';
 import { deepFreeze } from './freeze.ts';
 import { isInsideOrEqual } from './paths.ts';
 import { snapshotStrictJsonValue } from './strict-json.ts';
@@ -265,7 +266,19 @@ const resolvedProjectPath = (root: string, value: string, label: string): string
   // (Windows `C:\…`, 8.3 aliases) are judged by realpath identity so a
   // short-name root and a long-name config file still name one project.
   if (!isAbsolute(value)) projectRelativePath(lexicalRoot, value, label);
-  const referencedPath = realpathSync(isAbsolute(value) ? value : resolve(lexicalRoot, value));
+  const lexicalPath = isAbsolute(value) ? resolve(value) : resolve(lexicalRoot, value);
+  // Existing files must realpath so Windows 8.3 aliases, junctions, and
+  // symlink hops collapse to one identity. Missing files stay lexical:
+  // prebuilt hook `source` / payload directories may not exist yet (bytes
+  // join identity via enumerated payload files), and callers still need
+  // containment without `ENOENT`.
+  let referencedPath: string;
+  try {
+    referencedPath = realpathSync(lexicalPath);
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+    referencedPath = lexicalPath;
+  }
   if (escapesRoot(canonicalRoot, referencedPath)) {
     throw new RangeError(`${label} ${JSON.stringify(referencedPath)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
   }
@@ -498,7 +511,13 @@ export const canonicalizeNormalizedModel = (
     hooks: detached.hooks.map((hook) => ({
       ...hook,
       provenance: canonicalProvenance(root, hook.provenance),
-      source: canonicalCompilerPath(root, hook.source, 'Hook source path'),
+      // Prebuilt hook `source` may not exist yet; identity is the enumerated
+      // payload files, matching `modelPathReferences`. Relative sources stay
+      // authored. Absolute sources still canonicalize (lexical on ENOENT).
+      source:
+        hook.prebuiltPath === undefined || isAbsolute(hook.source)
+          ? canonicalCompilerPath(root, hook.source, 'Hook source path')
+          : hook.source,
     })),
     ...(detached.mcpApps === undefined
       ? {}

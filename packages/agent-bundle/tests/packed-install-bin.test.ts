@@ -1,9 +1,7 @@
 import { execFile as executeFile } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import { afterAll, beforeAll, expect, it } from '@rstest/core';
@@ -12,6 +10,7 @@ import { packageBinEntries } from '../src/core/package-dependencies.ts';
 import { removeProjectSource } from '../src/test/packed.ts';
 import { runBin } from './support/bin-process.ts';
 import { within } from './support/eventually.ts';
+import { resolveProcessNpmCliJs } from './support/npm-cli.ts';
 import { packedNativeNodeCommand } from './support/packed-native-smoke.ts';
 import {
   cachedNpmInstallArguments,
@@ -40,27 +39,7 @@ interface Run {
 }
 
 /** npm's JavaScript CLI, never the extensionless `.bin` shim or `npm.cmd`. */
-const resolveNpmCli = (): string => {
-  const sibling = join(dirname(process.execPath), 'npm');
-  let siblingTarget: string | undefined;
-  try {
-    siblingTarget = existsSync(sibling) ? realpathSync(sibling) : undefined;
-  } catch {
-    siblingTarget = undefined;
-  }
-  const candidates = [
-    process.env['npm_execpath'],
-    join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-    join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-    siblingTarget,
-  ];
-  for (const candidate of candidates) {
-    if (candidate !== undefined && candidate.endsWith('npm-cli.js') && existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return createRequire(import.meta.url).resolve('npm/bin/npm-cli.js');
-};
+const resolveNpmCli = (): string => resolveProcessNpmCliJs();
 
 const runNodeEntrypoint = async (
   entrypoint: string,

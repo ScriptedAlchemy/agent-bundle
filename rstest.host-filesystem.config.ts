@@ -26,6 +26,7 @@ export const hostFilesystemTestFiles = [
   'packages/agent-bundle/tests/install.test.ts',
   'packages/agent-bundle/tests/uninstall.test.ts',
   'packages/agent-bundle/tests/durable-fs.test.ts',
+  'packages/agent-bundle/tests/npm-cli-resolution.test.ts',
   'packages/agent-bundle/tests/packed-install-bin.test.ts',
   'packages/agent-bundle/tests/rstest-worker-isolation.test.ts',
 ] as const;

@@ -27,6 +27,7 @@ import {
   treeInventory,
 } from '../src/install/receipt.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
+import { toPosixPath } from '../src/core/paths.ts';
 import { runCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
@@ -95,8 +96,10 @@ const isInventoryCall = (call: CommandCall): boolean =>
 const listFiles = async (root: string): Promise<readonly string[]> =>
   (await readdir(root, { recursive: true, withFileTypes: true }))
     .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name).slice(root.length + 1))
+    .map((entry) => toPosixPath(join(entry.parentPath, entry.name).slice(root.length + 1)))
     .sort((left, right) => left.localeCompare(right));
+
+const posixPermissionIt = process.platform === 'win32' ? it.skip : it;
 
 const writeJson = async (path: string, value: unknown): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -344,7 +347,9 @@ it.each([
     const receiptStore = join(hostRoot, 'agent-bundle', 'receipts');
     await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
     await mkdir(receiptStore, { recursive: true });
-    if (process.getuid?.() === 0) return; // root ignores directory modes; the receipt write cannot be made to fail here.
+    // Windows has no directory modes; root ignores them. The rest of this
+    // test already proved the host-CLI path; skip the unwritable-receipt tail.
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
     await chmod(receiptStore, 0o555);
     const unwritable: CommandCall[] = [];
     const receiptFailed = await installBundle({
@@ -915,7 +920,7 @@ it('reports manifest-indexed byte drift as AB7001 with the path', async () => {
   }
 });
 
-it('reports manifest-indexed mode drift as AB7001', async () => {
+posixPermissionIt('reports manifest-indexed mode drift as AB7001', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
@@ -938,8 +943,7 @@ it('reports manifest-indexed mode drift as AB7001', async () => {
   }
 });
 
-it('accepts npm normalization while preserving executable-bit tamper checks', async () => {
-  if (process.platform === 'win32') return;
+posixPermissionIt('accepts npm normalization while preserving executable-bit tamper checks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-npm-modes-'));
   const packageRoot = join(root, 'package');
   const artifactRoot = join(packageRoot, 'artifact');
@@ -1600,8 +1604,7 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
   }
 });
 
-it('tree inventory refuses paths that could not round-trip through a receipt', async () => {
-  if (process.platform === 'win32') return;
+posixPermissionIt('tree inventory refuses paths that could not round-trip through a receipt', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
@@ -1681,8 +1684,7 @@ it('never lets a receipt claim runtime state: a receipt owning state/ reads as l
   }
 });
 
-it('refuses a receipt that is not a regular file before reading it', async () => {
-  if (process.platform === 'win32') return;
+posixPermissionIt('refuses a receipt that is not a regular file before reading it', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
@@ -2138,7 +2140,7 @@ it('refuses marketplace mode for a bundle that contains nested Git metadata', as
     }).catch((failure: unknown) => failure);
 
     expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7003', target: 'cursor' }]);
-    expect((error as DiagnosticError).diagnostics[0]?.message).toContain(join('vendor', 'tool', '.git'));
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('vendor/tool/.git');
     expect(calls).toEqual([]);
     await expect(access(join(home, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {

@@ -60,9 +60,12 @@ it('stamps every worker root with the owner marker the local-CI runner cleans up
   const owner = rstestWorkerRootOwner(root);
   expect(owner).toMatchObject({
     cwd: process.cwd(),
-    pid: process.pid,
     workerId: process.env['RSTEST_WORKER_ID'] ?? '0',
+    // Windows keys the worker root by worker id only, so the first process
+    // that created the shared directory owns the marker.
+    ...(process.platform === 'win32' ? {} : { pid: process.pid }),
   });
+  expect(typeof owner?.pid).toBe('number');
   // Absolute in the platform's own shape (`/tmp`, `C:\Temp`, a UNC root).
   expect(isAbsolute(owner?.temporaryRoot ?? '')).toBe(true);
   expect(owner?.temporaryRoot).not.toBe(root);
