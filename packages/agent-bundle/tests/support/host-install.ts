@@ -611,16 +611,21 @@ const buildFixtureProject = async (options: {
   readonly fixture: string;
   readonly prepareProject?: (projectRoot: string) => Promise<void>;
 }): Promise<BuiltFixtureProject> => {
-  const root = await mkdtemp(join(tmpdir(), `agent-bundle-${options.fixture}-build-`));
+  // Windows junctions of a pnpm `node_modules` tree do not follow the nested
+  // relative store links, so Rspack cannot see `@modelcontextprotocol/server`.
+  // Build under the package so walk-up resolution finds the real tree.
+  const scratchParent = process.platform === 'win32'
+    ? join(packageRoot, '.tmp-host-install')
+    : tmpdir();
+  if (process.platform === 'win32') await mkdir(scratchParent, { recursive: true });
+  const root = await mkdtemp(join(scratchParent, `agent-bundle-${options.fixture}-build-`));
   const project = join(root, 'project');
   const artifactRoot = join(project, 'artifact');
   try {
     await cp(join(fixturesRoot, options.fixture), project, { recursive: true });
-    await symlink(
-      join(packageRoot, 'node_modules'),
-      join(project, 'node_modules'),
-      process.platform === 'win32' ? 'junction' : 'dir',
-    );
+    if (process.platform !== 'win32') {
+      await symlink(join(packageRoot, 'node_modules'), join(project, 'node_modules'), 'dir');
+    }
     await options.prepareProject?.(project);
     const result = await run(process.execPath, [
       cli,
