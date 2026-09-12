@@ -326,6 +326,43 @@ it('queues watcher add, change, and delete paths as one rebuild during a running
   }
 });
 
+it('publishes artifact.available when the built epoch revision disagrees with the prepare snapshot', async () => {
+  const root = await createProject();
+  const hub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  const events: string[] = [];
+  hub.subscribe((event) => {
+    if (event.type !== 'replay.gap') events.push(event.type);
+  });
+
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: {
+        build: async (prepared) =>
+          succeeded(epochFor(root, 'epoch-split', `not-${prepared.source.revision ?? 'missing'}`)),
+      },
+      diagnosticService: {
+        close: async () => undefined,
+        lint: async (paths) => ({ diagnostics: [], paths }),
+      },
+      epochStore: new EpochStore({ projectRoot: root }),
+      eventHub: hub,
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    await coordinator.start();
+    expect(coordinator.status().artifact).toMatchObject({
+      activeEpoch: { id: 'epoch-split' },
+      state: 'active',
+    });
+    expect(events).toEqual(expect.arrayContaining(['artifact.available']));
+    await coordinator.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('retains the last good epoch as stale when a later rebuild fails', async () => {
   const root = await createProject();
   const hub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });

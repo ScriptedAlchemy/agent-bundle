@@ -568,7 +568,12 @@ export class DevCoordinator {
       });
       this.#activeEpoch = result.epoch;
       this.#onPublishedProject?.(prepared, result.epoch);
-      const artifact = artifactStatusFor(this.#activeEpoch, source.revision);
+      // A successful compile of this epoch is current for the tree that was
+      // just built. Comparing `source.revision` to `epoch.projectRevision`
+      // can disagree on Windows (8.3 vs long-path encoding in
+      // `canonicalSourceInputs` vs a prepare snapshot) and would skip
+      // `artifact.available`, so host-install never attaches.
+      const artifact = artifactStatusFor(this.#activeEpoch, this.#activeEpoch.projectRevision);
       this.#status = freezeProjectStatus({
         artifact,
         build: { lastAttempt: completed, state: 'idle' },

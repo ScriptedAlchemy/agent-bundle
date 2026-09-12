@@ -602,8 +602,12 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
     createWatcher: () => ({ close: async () => undefined }),
     epochStore,
     eventHub,
+    outputPaths: [built.artifactRoot],
     prepareCommand: 'dev',
-    projectService: new ProjectService({ root: projectRoot }),
+    projectService: new ProjectService({
+      outputRoots: [built.artifactRoot],
+      root: projectRoot,
+    }),
     root: projectRoot,
   });
   const syncEvents: unknown[] = [];
@@ -616,7 +620,12 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
     await manager.settled();
     const attached = manager.attached('cursor');
     if (attached === undefined) {
-      throw new Error(`Cursor development install did not attach: ${JSON.stringify(syncEvents)}`);
+      throw new Error(
+        `Cursor development install did not attach: ${JSON.stringify({
+          status: coordinator.status(),
+          syncEvents,
+        })}`,
+      );
     }
     const destination = attached.destination;
     const mcpBefore = await readFile(join(destination, '.cursor-plugin', 'mcp.json'), 'utf8');

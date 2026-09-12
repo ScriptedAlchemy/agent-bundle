@@ -26,6 +26,7 @@ import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from 
 import { digest } from '../core/digest.ts';
 import {
   createProjectContext,
+  projectSourceIdentityPath,
   snapshotPackageIdentity,
   type ProjectContext,
   type ProjectSourceSnapshotInput,
@@ -171,7 +172,7 @@ const relativeSourcePath = (root: string, source: string): string => {
 const sourceInput = async (root: string, source: string): Promise<ProjectSourceSnapshotInput> => {
   try {
     const resolvedSource = await realpath(source);
-    const path = relativeSourcePath(root, resolvedSource);
+    const path = projectSourceIdentityPath(root, resolvedSource);
     const [contents, metadata] = await Promise.all([
       readFile(resolvedSource),
       lstat(resolvedSource),
@@ -1016,7 +1017,8 @@ export class ProjectService {
         snapshot,
       );
     }
-    const source = sourceStatus(frozenDiagnostics, snapshot.revision, root);
+    const revision = projectContext?.revision ?? snapshot.revision;
+    const source = sourceStatus(frozenDiagnostics, revision, root);
     log(this.#options.logger, 'project.prepared', {
       diagnostics: frozenDiagnostics.length,
       root,

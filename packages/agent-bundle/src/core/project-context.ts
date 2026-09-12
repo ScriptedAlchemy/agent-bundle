@@ -653,6 +653,10 @@ export const canonicalizeNormalizedModel = (
   });
 };
 
+/** Project-relative POSIX path used in source-input identity. */
+export const projectSourceIdentityPath = (root: string, value: string): string =>
+  resolvedProjectPath(root, value, 'Project source input path');
+
 const canonicalSourceInputs = (
   root: string,
   inputs: readonly ProjectSourceSnapshotInput[],
@@ -661,7 +665,7 @@ const canonicalSourceInputs = (
     if (input.error !== undefined || input.sha256 === undefined || !sha256Pattern.test(input.sha256)) {
       throw new TypeError(`Project source input ${JSON.stringify(input.path)} must have a lowercase SHA-256 digest.`);
     }
-    const path = resolvedProjectPath(root, input.path, 'Project source input path');
+    const path = projectSourceIdentityPath(root, input.path);
     return {
       ...(input.executable === undefined ? {} : { executable: input.executable }),
       path,

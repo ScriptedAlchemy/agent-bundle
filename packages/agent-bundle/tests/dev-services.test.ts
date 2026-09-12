@@ -473,6 +473,11 @@ it('creates an exact deeply frozen root-independent project context', async () =
       'src/skills/review/SKILL.md',
       'z-last.txt',
     ]);
+    const snapshot = await snapshotProjectSource(leftRoot, left.configPath);
+    expect(snapshot.inputs.map((input) => input.path)).toEqual(
+      left.projectContext?.sourceInputs.map((input) => input.path),
+    );
+    expect(snapshot.revision).toBe(left.projectContext?.revision);
     expect(Object.isFrozen(left.projectContext)).toBe(true);
     expect(Object.isFrozen(left.projectContext?.sourceInputs)).toBe(true);
     expect(Object.isFrozen(left.projectContext?.sourceInputs[0])).toBe(true);
