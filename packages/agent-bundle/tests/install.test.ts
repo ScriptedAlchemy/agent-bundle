@@ -344,12 +344,11 @@ it.each([
 
     // The host install succeeded but the receipt could not be written: the plugin registration is reversed too
     // (plugin first, then the marketplace this run created), so nothing stays registered without a receipt.
-    // A regular file at the receipt-store path is portable (Windows has no
-    // directory modes; chmod 0555 is a no-op there and as root).
-    const receiptStore = join(hostRoot, 'agent-bundle', 'receipts');
+    // Occupy the exact receipt path with a directory so `rename` of the temp
+    // receipt fails after the host verbs (Windows has no directory modes;
+    // chmod 0555 is a no-op there and as root).
     await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
-    await mkdir(join(hostRoot, 'agent-bundle'), { recursive: true });
-    await writeFile(receiptStore, 'not-a-directory\n');
+    await mkdir(receiptPath, { recursive: true });
     const unwritable: CommandCall[] = [];
     const receiptFailed = await installBundle({
       ...isolated(fixture),
