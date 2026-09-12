@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
 import type { DescriptiveMetadataResult } from './descriptive-metadata.ts';
@@ -259,6 +259,34 @@ const projectRelativePath = (root: string, value: string, label: string): string
   return projectRelative;
 };
 
+/**
+ * Existing paths collapse to on-disk identity (8.3, junctions, symlink hops).
+ * Missing paths resolve the nearest existing ancestor and append the missing
+ * suffix so a dangling leaf under an escaping symlink is judged against the
+ * canonical target, not the lexical spelling. A path with no existing
+ * ancestor stays lexical.
+ */
+const onDiskOrNearestAncestorPath = (lexicalPath: string): string => {
+  try {
+    return realpathSync(lexicalPath);
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+  }
+  const missing: string[] = [];
+  let cursor = lexicalPath;
+  for (;;) {
+    const parent = dirname(cursor);
+    if (parent === cursor) return lexicalPath;
+    missing.unshift(basename(cursor));
+    try {
+      return join(realpathSync(parent), ...missing);
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+      cursor = parent;
+    }
+  }
+};
+
 const resolvedProjectPath = (root: string, value: string, label: string): string => {
   const canonicalRoot = realpathSync(resolve(root));
   const lexicalRoot = resolve(root);
@@ -267,18 +295,7 @@ const resolvedProjectPath = (root: string, value: string, label: string): string
   // short-name root and a long-name config file still name one project.
   if (!isAbsolute(value)) projectRelativePath(lexicalRoot, value, label);
   const lexicalPath = isAbsolute(value) ? resolve(value) : resolve(lexicalRoot, value);
-  // Existing files must realpath so Windows 8.3 aliases, junctions, and
-  // symlink hops collapse to one identity. Missing files stay lexical:
-  // prebuilt hook `source` / payload directories may not exist yet (bytes
-  // join identity via enumerated payload files), and callers still need
-  // containment without `ENOENT`.
-  let referencedPath: string;
-  try {
-    referencedPath = realpathSync(lexicalPath);
-  } catch (error) {
-    if (!isErrno(error, 'ENOENT')) throw error;
-    referencedPath = lexicalPath;
-  }
+  const referencedPath = onDiskOrNearestAncestorPath(lexicalPath);
   if (escapesRoot(canonicalRoot, referencedPath)) {
     throw new RangeError(`${label} ${JSON.stringify(referencedPath)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
   }
@@ -513,7 +530,8 @@ export const canonicalizeNormalizedModel = (
       provenance: canonicalProvenance(root, hook.provenance),
       // Prebuilt hook `source` may not exist yet; identity is the enumerated
       // payload files, matching `modelPathReferences`. Relative sources stay
-      // authored. Absolute sources still canonicalize (lexical on ENOENT).
+      // authored. Absolute sources still canonicalize (nearest existing
+      // ancestor on ENOENT).
       source:
         hook.prebuiltPath === undefined || isAbsolute(hook.source)
           ? canonicalCompilerPath(root, hook.source, 'Hook source path')

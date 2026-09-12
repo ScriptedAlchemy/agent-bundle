@@ -327,7 +327,11 @@ const publishDirectoryPointer = async (
   epochId: string,
 ): Promise<void> => {
   const path = join(destination, entryName);
-  const target = relative(destination, join(generationRoot(destination, epochId), entryName));
+  const absoluteTarget = join(generationRoot(destination, epochId), entryName);
+  // Unix dir symlinks stay relative so a relocated install still points at
+  // its generation. Windows junctions are absolutized from `cwd` (not the
+  // link location), so a relative target would resolve to the wrong tree.
+  const target = process.platform === 'win32' ? absoluteTarget : relative(destination, absoluteTarget);
   const temporary = join(destination, `.${basename(entryName)}.dev-link-${process.pid}-${crypto.randomUUID()}`);
   const movedAside = join(destination, `.${basename(entryName)}.dev-previous-${process.pid}-${crypto.randomUUID()}`);
   await symlink(target, temporary, process.platform === 'win32' ? 'junction' : 'dir');

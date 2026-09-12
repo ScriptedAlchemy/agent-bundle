@@ -81,3 +81,19 @@ it('does not assume npm is a resolvable package from createRequire', () => {
     files: {},
   }))).toThrow(/Unable to resolve npm-cli\.js from /u);
 });
+
+it('finds npm-cli.js when Node and npm live under different prefixes and npm_execpath is pnpm', () => {
+  const nodeDir = join('/pnpm', 'nodejs', 'bin');
+  const pathBin = join('/usr', 'local', 'bin');
+  const cli = join('/usr', 'local', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const pnpmCli = join('/pnpm', 'home', 'store', 'pnpm.cjs');
+  expect(resolveNpmCliJs(io({
+    env: { PATH: pathBin, npm_execpath: pnpmCli },
+    execPath: join(nodeDir, 'node'),
+    files: {
+      [cli]: true,
+      [join(pathBin, 'npm')]: cli,
+      [pnpmCli]: true,
+    },
+  }))).toBe(cli);
+});

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 
 import { removeRunRstestWorkerRoots, rstestRunIdVariable } from './scripts/rstest-worker-roots.mjs';
 
@@ -8,9 +9,10 @@ import { removeRunRstestWorkerRoots, rstestRunIdVariable } from './scripts/rstes
  * invocation created — plus, as a one-time repair, the untagged roots this
  * checkout's pools left behind before the teardown existed.
  *
- * Every pool worker derives a private temp root, `/tmp/ab-rstest-<hash16>`
- * (rstest.worker-isolation.ts), and stamps it with an owner marker. Nothing on
- * the `pnpm test*` path used to remove those roots — only scripts/local-ci.mjs
+ * Every pool worker derives a private temp root, `ab-rstest-<hash16>`
+ * (rstest.worker-isolation.ts: `/tmp` on Unix, host TEMP on Windows; the hash
+ * includes cwd and pid), and stamps it with an owner marker. Nothing on the
+ * `pnpm test*` path used to remove those roots — only scripts/local-ci.mjs
  * swept the ones derived from its private TMPDIR — so a developer machine
  * accumulated one root per worker per run, tens of thousands over time.
  *
@@ -60,7 +62,11 @@ export const teardown = async (): Promise<void> => {
   // Untagged roots this checkout left before the teardown existed go too:
   // nothing else reclaims them, and each one is a marker every later sweep
   // would read again.
-  const { removed, retained } = await removeRunRstestWorkerRoots({ reclaimUntaggedFrom: process.cwd(), runId });
+  const { removed, retained } = await removeRunRstestWorkerRoots({
+    ...(process.platform === 'win32' ? { parent: tmpdir() } : {}),
+    reclaimUntaggedFrom: process.cwd(),
+    runId,
+  });
   const debug = process.env[debugRootsVariable];
   if (debug === undefined || debug === '') return;
   const listed = (roots: readonly string[]): string => (roots.length === 0 ? '' : `\n  ${roots.join('\n  ')}`);

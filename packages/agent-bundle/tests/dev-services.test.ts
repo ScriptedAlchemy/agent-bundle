@@ -525,6 +525,19 @@ it('creates an exact deeply frozen root-independent project context', async () =
       root: leftRoot,
       sourceInputs: left.projectContext?.sourceInputs ?? [],
     })).toThrow(/outside project root/i);
+    const externalDir = `${leftRoot}-external-dir`;
+    const escapedDirLink = join(leftRoot, 'escaped-dir');
+    await mkdir(externalDir);
+    await symlink(externalDir, escapedDirLink, 'dir');
+    expect(() => createProjectContext({
+      configPath: left.configPath,
+      model,
+      root: leftRoot,
+      sourceInputs: [
+        ...(left.projectContext?.sourceInputs ?? []),
+        { path: 'escaped-dir/missing.ts', sha256: 'a'.repeat(64) },
+      ],
+    })).toThrow(/outside project root/i);
 
     const extensionValue = { nested: { enabled: true } };
     const frontmatter = { ...model.skills[0]!.frontmatter, custom: { enabled: true } };
@@ -582,6 +595,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
       rm(leftRoot, { force: true, recursive: true }),
       rm(rightRoot, { force: true, recursive: true }),
       rm(`${leftRoot}-external-source.ts`, { force: true }),
+      rm(`${leftRoot}-external-dir`, { force: true, recursive: true }),
     ]);
   }
 });

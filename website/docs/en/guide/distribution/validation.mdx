@@ -243,7 +243,11 @@ npx agent-bundle prepack --root . --output artifact --json
 ```
 
 `prepack` runs the release build, creates the canonical npm root at `dist/`, and runs
-`npm pack --dry-run --json --ignore-scripts` from that root. The generated package copies the
+`npm pack --dry-run --json --ignore-scripts` from that root by launching npm's
+`npm-cli.js` through the current Node executable (`process.execPath`), so the gate
+works when `npm` is not a spawnable PATH command (a pnpm-managed Node, or Windows
+without `npm.cmd` on PATH). It never treats `npm_execpath` as npm when that variable
+points at pnpm. The generated package copies the
 validated composite artifact unchanged, points routed `package.json` bins at the
 manifest-declared `bin/<name>.mjs`, and adds only separately authored bins and libraries. The gate
 checks that exact inventory, manifest hashes, package bin targets, release-version agreement,

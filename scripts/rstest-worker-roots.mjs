@@ -23,9 +23,9 @@
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-/** Parent directory of every non-Windows worker root (see rstestWorkerRootPath). */
+/** Parent directory of Unix worker roots (see rstestWorkerRootPath). Windows uses host TEMP. */
 export const rstestWorkerRootsParent = '/tmp';
-/** Directory-name prefix of every non-Windows worker root. */
+/** Directory-name prefix of every hashed worker root. */
 export const rstestWorkerRootPrefix = 'ab-rstest-';
 /** Owner marker written into each worker root by `rstestWorkerRoot()`. */
 export const rstestWorkerRootOwnerFile = '.ab-rstest-owner.json';

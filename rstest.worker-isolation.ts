@@ -3,7 +3,12 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { rstestRunIdVariable, rstestWorkerRootOwnerFile } from './scripts/rstest-worker-roots.mjs';
+import {
+  rstestRunIdVariable,
+  rstestWorkerRootOwnerFile,
+  rstestWorkerRootPrefix,
+  rstestWorkerRootsParent,
+} from './scripts/rstest-worker-roots.mjs';
 
 export const rstestWorkerId = (): string => process.env['RSTEST_WORKER_ID'] ?? '0';
 
@@ -59,7 +64,6 @@ export const rstestWorkerRootPath = (
   platform: NodeJS.Platform = process.platform,
   invocationId: string = process.cwd() + '\0' + String(process.pid),
 ): string => {
-  if (platform === 'win32') return join(temporaryRoot, 'agent-bundle-rstest-w' + workerId);
   const hash = createHash('sha256')
     .update(temporaryRoot, 'utf8')
     .update('\0', 'utf8')
@@ -68,7 +72,12 @@ export const rstestWorkerRootPath = (
     .update(invocationId, 'utf8')
     .digest('hex')
     .slice(0, 16);
-  return join('/tmp', `ab-rstest-${hash}`);
+  const name = rstestWorkerRootPrefix + hash;
+  // Linux AF_UNIX fixtures cap the pathname, so Unix roots live under `/tmp`
+  // rather than a long host TMPDIR. Windows has no such cap and cannot use
+  // `/tmp`; it still hashes cwd+pid so two processes that reuse worker id 1
+  // do not share one TEMP directory.
+  return platform === 'win32' ? join(temporaryRoot, name) : join(rstestWorkerRootsParent, name);
 };
 
 export const rstestWorkerRoot = (): string => {

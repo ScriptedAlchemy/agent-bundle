@@ -344,13 +344,12 @@ it.each([
 
     // The host install succeeded but the receipt could not be written: the plugin registration is reversed too
     // (plugin first, then the marketplace this run created), so nothing stays registered without a receipt.
+    // A regular file at the receipt-store path is portable (Windows has no
+    // directory modes; chmod 0555 is a no-op there and as root).
     const receiptStore = join(hostRoot, 'agent-bundle', 'receipts');
     await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
-    await mkdir(receiptStore, { recursive: true });
-    // Windows has no directory modes; root ignores them. The rest of this
-    // test already proved the host-CLI path; skip the unwritable-receipt tail.
-    if (process.platform === 'win32' || process.getuid?.() === 0) return;
-    await chmod(receiptStore, 0o555);
+    await mkdir(join(hostRoot, 'agent-bundle'), { recursive: true });
+    await writeFile(receiptStore, 'not-a-directory\n');
     const unwritable: CommandCall[] = [];
     const receiptFailed = await installBundle({
       ...isolated(fixture),
@@ -371,7 +370,6 @@ it.each([
         : 'plugin remove install-fixture@install-fixture-marketplace',
       'plugin marketplace remove install-fixture-marketplace',
     ]);
-    await chmod(receiptStore, 0o755);
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
@@ -1367,13 +1365,16 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     await rm(join(fixture.bundleRoot, 'state'), { recursive: true });
 
     // Flipping only the executable bit is a content change: the installed copy must receive it.
-    await chmod(join(fixture.bundleRoot, 'payload.txt'), 0o755);
-    await refreshCursorBundle(fixture);
-    const executable = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
-    expect(executable).toMatchObject({ state: 'replaced' });
-    expect((await stat(join(destination, 'payload.txt'))).mode & 0o111).not.toBe(0);
-    expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' }))
-      .toMatchObject({ state: 'already-installed' });
+    // Windows stores no Unix execute bits; chmod 0755 is a no-op there.
+    if (process.platform !== 'win32') {
+      await chmod(join(fixture.bundleRoot, 'payload.txt'), 0o755);
+      await refreshCursorBundle(fixture);
+      const executable = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+      expect(executable).toMatchObject({ state: 'replaced' });
+      expect((await stat(join(destination, 'payload.txt'))).mode & 0o111).not.toBe(0);
+      expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' }))
+        .toMatchObject({ state: 'already-installed' });
+    }
 
     // An operator hard link to an owned file under an unrelated name is not ours: incoming path → collision.
     await link(join(destination, 'payload.txt'), join(destination, 'hard-linked.txt'));

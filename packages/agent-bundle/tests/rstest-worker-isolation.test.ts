@@ -36,10 +36,11 @@ it('keeps Doctor socket fixtures below the Linux AF_UNIX pathname cap', () => {
 });
 
 it('isolates concurrent Rstest invocations that share a host temporary root', () => {
-  const firstRoot = rstestWorkerRootPath('/tmp', '1', 'linux', '/workspace/first\0' + '101');
-  const secondRoot = rstestWorkerRootPath('/tmp', '1', 'linux', '/workspace/second\0' + '202');
-
-  expect(firstRoot).not.toBe(secondRoot);
+  for (const platform of ['linux', 'win32'] as const) {
+    const firstRoot = rstestWorkerRootPath('/tmp', '1', platform, '/workspace/first\0' + '101');
+    const secondRoot = rstestWorkerRootPath('/tmp', '1', platform, '/workspace/second\0' + '202');
+    expect(firstRoot).not.toBe(secondRoot);
+  }
 });
 
 it('publishes a realpath worker root so TMPDIR matches production path canonicalization', () => {
@@ -50,6 +51,7 @@ it('publishes a realpath worker root so TMPDIR matches production path canonical
 it('stamps every worker root with the owner marker the local-CI runner cleans up by', () => {
   const root = rstestWorkerRoot();
   const parent = process.platform === 'win32' ? undefined : realpathSync(rstestWorkerRootsParent);
+  expect(root.split(/[/\\]/u).some((segment) => segment.startsWith(rstestWorkerRootPrefix))).toBe(true);
   expect(
     process.platform === 'win32' ||
     (parent !== undefined && root.startsWith(join(parent, rstestWorkerRootPrefix))),
@@ -60,12 +62,9 @@ it('stamps every worker root with the owner marker the local-CI runner cleans up
   const owner = rstestWorkerRootOwner(root);
   expect(owner).toMatchObject({
     cwd: process.cwd(),
+    pid: process.pid,
     workerId: process.env['RSTEST_WORKER_ID'] ?? '0',
-    // Windows keys the worker root by worker id only, so the first process
-    // that created the shared directory owns the marker.
-    ...(process.platform === 'win32' ? {} : { pid: process.pid }),
   });
-  expect(typeof owner?.pid).toBe('number');
   // Absolute in the platform's own shape (`/tmp`, `C:\Temp`, a UNC root).
   expect(isAbsolute(owner?.temporaryRoot ?? '')).toBe(true);
   expect(owner?.temporaryRoot).not.toBe(root);
