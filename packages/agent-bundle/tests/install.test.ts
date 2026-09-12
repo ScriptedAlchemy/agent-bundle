@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { expect, it } from '@rstest/core';
+import { expect, it, rs } from '@rstest/core';
 import { Ajv } from 'ajv/dist/ajv.js';
 import addFormats from 'ajv-formats';
 
@@ -26,6 +26,7 @@ import {
   readInstallReceiptFile,
   treeInventory,
 } from '../src/install/receipt.ts';
+import * as installReceipt from '../src/install/receipt.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { toPosixPath } from '../src/core/paths.ts';
 import { runCli } from '../src/cli.ts';
@@ -344,31 +345,35 @@ it.each([
 
     // The host install succeeded but the receipt could not be written: the plugin registration is reversed too
     // (plugin first, then the marketplace this run created), so nothing stays registered without a receipt.
-    // Occupy the exact receipt path with a directory so `rename` of the temp
-    // receipt fails after the host verbs (Windows has no directory modes;
-    // chmod 0555 is a no-op there and as root).
+    // Inject the write failure after host verbs: chmod on the store is a no-op
+    // on Windows and as root, and occupying the path breaks the pre-write read.
     await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
-    await mkdir(receiptPath, { recursive: true });
+    const writeReceipt = rs.spyOn(installReceipt, 'writeStoredInstallReceipt')
+      .mockRejectedValueOnce(new Error('receipt write failed'));
     const unwritable: CommandCall[] = [];
-    const receiptFailed = await installBundle({
-      ...isolated(fixture),
-      commandRunner: { run: async (command, args, runOptions) => {
-        const call = { args: [...args], command, cwd: runOptions.cwd };
-        unwritable.push(call);
-        return { code: 0, stderr: '', stdout: isMarketplaceListCall(call) ? noMarketplaces(call) : '' };
-      } },
-      from: fixture.from,
-      host,
-      scope,
-    }).catch((failure: unknown) => failure);
-    expect(receiptFailed).toBeInstanceOf(Error);
-    expect(receiptFailed).not.toBeInstanceOf(DiagnosticError);
-    expect(unwritable.map((call) => call.args.join(' ')).slice(-2)).toEqual([
-      host === 'claude'
-        ? `plugin uninstall install-fixture@install-fixture-marketplace --scope ${scope} --keep-data`
-        : 'plugin remove install-fixture@install-fixture-marketplace',
-      'plugin marketplace remove install-fixture-marketplace',
-    ]);
+    try {
+      const receiptFailed = await installBundle({
+        ...isolated(fixture),
+        commandRunner: { run: async (command, args, runOptions) => {
+          const call = { args: [...args], command, cwd: runOptions.cwd };
+          unwritable.push(call);
+          return { code: 0, stderr: '', stdout: isMarketplaceListCall(call) ? noMarketplaces(call) : '' };
+        } },
+        from: fixture.from,
+        host,
+        scope,
+      }).catch((failure: unknown) => failure);
+      expect(receiptFailed).toBeInstanceOf(Error);
+      expect(receiptFailed).not.toBeInstanceOf(DiagnosticError);
+      expect(unwritable.map((call) => call.args.join(' ')).slice(-2)).toEqual([
+        host === 'claude'
+          ? `plugin uninstall install-fixture@install-fixture-marketplace --scope ${scope} --keep-data`
+          : 'plugin remove install-fixture@install-fixture-marketplace',
+        'plugin marketplace remove install-fixture-marketplace',
+      ]);
+    } finally {
+      writeReceipt.mockRestore();
+    }
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
