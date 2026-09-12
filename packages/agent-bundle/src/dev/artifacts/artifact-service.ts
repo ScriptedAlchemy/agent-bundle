@@ -12,7 +12,7 @@ import {
 } from '../../build/validate-artifact.ts';
 import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from '../../core/diagnostics.ts';
 import { errorMessage } from '../../core/errors.ts';
-import type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../../core/project-context.ts';
+import { requireUnchangedSourceSnapshot } from '../../core/source-publication.ts';
 import type { NormalizedPlugin } from '../../core/types.ts';
 import {
   EpochPostCommitCleanupError,
@@ -107,23 +107,6 @@ const moveArtifactContents = async (
 
 const requireBuildableProject = (prepared: PreparedProject): NormalizedPlugin | undefined =>
   prepared.model === undefined || hasErrors(prepared.diagnostics) ? undefined : prepared.model;
-
-const sameInputs = (left: readonly ProjectSourceInput[], right: readonly ProjectSourceSnapshotInput[]): boolean =>
-  left.length === right.length && left.every((input, index) => {
-    const candidate = right[index];
-    return candidate !== undefined &&
-      input.path === candidate.path &&
-      candidate.error === undefined &&
-      input.executable === candidate.executable &&
-      input.sha256 === candidate.sha256;
-  });
-
-const projectSourceChangedDiagnostic = (configPath: string): Diagnostic => Object.freeze({
-  code: 'AB7101',
-  message: 'Project source changed while the artifact was compiling; publication was rejected.',
-  severity: 'error',
-  sourcePath: configPath,
-});
 
 const cleanupDiagnostic = (
   resource: 'build attempt' | 'staging epoch',
@@ -230,10 +213,11 @@ export class ArtifactService {
       buildDiagnostics = freezeDiagnostics([...prepared.diagnostics, ...compiled.diagnostics, ...validationDiagnostics]);
       if (hasErrors(buildDiagnostics)) throw new DiagnosticError(buildDiagnostics);
 
-      const currentSource = await prepared.snapshotSource();
-      if (!sameInputs(projectContext.sourceInputs, currentSource.inputs)) {
-        throw new DiagnosticError([projectSourceChangedDiagnostic(prepared.configPath)]);
-      }
+      await requireUnchangedSourceSnapshot(
+        prepared.snapshotSource,
+        projectContext.sourceInputs,
+        prepared.configPath,
+      );
 
       const epochId = this.#createEpochId();
       const epoch = freezeArtifactEpoch({

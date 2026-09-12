@@ -9,7 +9,7 @@ import { capabilityIsSupported, unavailableCapability } from './adapters/capabil
 import type { BuiltInHost } from './adapters/composite-layout.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
-import { build as buildArtifact, type BuildResult } from './build/build.ts';
+import { build as buildArtifact, type BuildOptions as ArtifactBuildOptions, type BuildResult } from './build/build.ts';
 import { routedCliBins } from './build/cli-bins.ts';
 import { planComposite } from './build/compose.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
@@ -28,6 +28,7 @@ import {
 } from './core/components.ts';
 import { errorMessage } from './core/errors.ts';
 import { isInsideOrEqual } from './core/paths.ts';
+import { requireUnchangedSourceSnapshot } from './core/source-publication.ts';
 import {
   stateDefinitionProjection,
   type StateNoticeRetentionProjection,
@@ -618,6 +619,11 @@ export interface InvalidInspectResult {
 export type InspectResult = ReadyInspectResult | InvalidInspectResult;
 
 export interface BuildOptions extends ProjectOptions {
+  /**
+   * Injectable only to make source-tearing tests deterministic; production
+   * always uses the artifact compiler.
+   */
+  readonly compile?: (options: ArtifactBuildOptions) => Promise<BuildResult>;
   /**
    * After the artifact is written, run the installed Claude developer
    * validator (`claude plugin validate --strict` against the emitted
@@ -1285,7 +1291,8 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     }]);
   }
   log(options.logger, 'artifact.build', { output, root: prepared.root });
-  const result = await buildArtifact({
+  const compile = options.compile ?? buildArtifact;
+  const result = await compile({
     model,
     outputRoot: output,
     projectContext,
@@ -1294,6 +1301,11 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     routeGraph: prepared.routeGraph ?? emptyCompiledRouteGraph,
     ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
   });
+  await requireUnchangedSourceSnapshot(
+    prepared.snapshotSource,
+    projectContext.sourceInputs,
+    prepared.configPath,
+  );
   let packageBuild: PackageBuildResult | undefined;
   if (packageOutputRoot !== undefined) {
     packageBuild = await buildPackageOutputs({
