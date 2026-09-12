@@ -1,6 +1,6 @@
 {
   "name": "rsc-markdown-stream",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Render React / RSC trees to a Markdown stream. A custom renderer: React → Markdown, never HTML.",
   "license": "Apache-2.0",
   "keywords": [

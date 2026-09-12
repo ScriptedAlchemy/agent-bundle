@@ -1,5 +1,0 @@
----
-"@agent-bundle/runtime": patch
----
-
-Expose the live agent tree to routes: `(await agent()).lineage.value.tree` — `{ siblings, children, roots }` of `AgentLineagePeer` (`{ conversation, depth, parent?, startedAt, subagent?, resolution }`) — lists every other live conversation under the request's root (any depth, the root itself included for a subagent), the request's live children, and the other live root conversations (on Cursor, only those seen in the same `workspace_roots`), read at resolve time from the same lineage registry that placed the request on every surface it feeds (event routes, generated MCP tool calls correlated through a hook window or a Codex `_meta`). Nothing is invented: stopped conversations are not listed, each peer carries the registry's own `resolution` for its placement, and the tree is absent when the registry did not place the request (a standalone hook, or a `_meta` naming a thread the registry never saw start). New exported types `AgentLineageTree` and `AgentLineagePeer`; `AgentLineage.tree` is optional, so existing readers and injected `context.lineage` fixtures are unchanged. (#544)

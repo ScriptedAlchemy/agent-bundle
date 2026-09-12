@@ -1,5 +1,0 @@
----
-"agent-bundle": patch
----
-
-Hold every host MCP document to the manifest's launch records: `agent-bundle build` and `validate-artifact` fail `AB6017` when a target document omits or renames a launchable `executables.mcpServers[]` server, reaches it over a non-stdio transport, starts an artifact file other than its `launch.entry` first, passes the record's `artifact` arguments out of order, or when `projections[host].documents.mcp` does not point at the target's MCP document. Both manifest readers now require a compiled server's `launch.entry` and `worker` to be `bundle` rows and a prebuilt server's entry a `prebuilt` row. `agent-bundle mcp run` launches the host document's line for the record of the same name and no longer falls back to the manifest record alone. `install` and `doctor` report `AB7001` when an indexed file's size or executable bit differs from its `files[]` row, not only its digest. One portable path-segment rule (`isPortablePathSegment`) governs `files[]` rows, the JSON Schema, and the install receipt. (#650)
