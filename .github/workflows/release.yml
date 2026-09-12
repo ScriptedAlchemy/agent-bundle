@@ -84,10 +84,13 @@ jobs:
       # GITHUB_TOKEN-created pushes do not recursively start workflows, but
       # workflow_dispatch is an explicit GitHub exception. ci.yml documents
       # manual dispatch as the full main-push matrix on any ref, including the
-      # Node floor and release-gates job, so qualify the exact generated head.
-      # Skip this when an external Changesets token is configured to avoid a
-      # duplicate run: that token's pull_request event already starts CI.
-      - name: Dispatch CI for Version Packages candidate
+      # Node floor and per-PR release-gates job (`pnpm check:release:ci`).
+      # release-candidate.yml is the packed-release boundary
+      # (`pnpm check:release`) for this same candidate. Skip both when an
+      # external Changesets token is configured: that token's pull_request
+      # event already starts CI, and its push to changeset-release/main
+      # starts release-candidate.yml.
+      - name: Dispatch qualification for Version Packages candidate
         if: >-
           steps.changesets.outputs.has-changesets == 'true' &&
           steps.changesets.outputs.pr-number != '' &&
@@ -95,7 +98,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh workflow run ci.yml --ref changeset-release/main
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref changeset-release/main
+          gh workflow run release-candidate.yml --ref changeset-release/main
+
       # Publishing disabled: when the Version Packages PR lands (no pending
       # changesets, "Version Packages" merge commit), prove the versioned
       # tree still passes the pre-publish gates that `pnpm release` would run.

@@ -1,0 +1,56 @@
+name: Release candidate
+
+# Packed-release boundary (`pnpm check:release`) for Version Packages
+# candidates and on-demand qualification. Ordinary pull requests keep the
+# faster `check:release:ci` contract in ci.yml; the nightly schedule and MCP
+# conformance lane stay in nightly.yml.
+on:
+  push:
+    branches:
+      - changeset-release/main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Only the latest candidate SHA matters: a Version Packages refresh cancels
+# the superseded packed-release run instead of stacking 40-minute jobs.
+concurrency:
+  group: release-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Same browser pin as ci.yml and nightly.yml: Workbench browser suites
+  # launch Playwright's bundled Chromium (see packages/workbench/tests/
+  # support/workbench-e2e.ts).
+  AGENT_BUNDLE_PLAYWRIGHT_CHANNEL: chromium
+
+jobs:
+  # Same packed-release lane as nightly.yml's packed-matrix job: Node 22.19,
+  # setup-workspace + Playwright Chromium, `pnpm check:release` (pack dry-run,
+  # lint:release, the full scaffolder template matrix, dist freshness).
+  packed-release:
+    # Defense in depth: this workflow's triggers already exclude ordinary
+    # PRs and main pushes. Keep the same predicate on the job so a later
+    # trigger expansion cannot silently qualify every PR.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/changeset-release/main'
+    name: Packed release (Node 22.19)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          node-version: 22.19.0
+          playwright-browser: chromium
+      - run: pnpm check:release
+      - if: failure()
+        name: Preserve Playwright traces of failed browser tests
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces-release-candidate
+          path: .rstest/playwright-traces
+          if-no-files-found: ignore
+          retention-days: 7

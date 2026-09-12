@@ -29,6 +29,10 @@ jobs:
   # Release-boundary scaffolder template matrix (mcp-server, cli-tool) plus
   # the full packed pool — the nightly form of pre-publish `check:release`.
   # The per-PR release-gates job runs the `check:release:ci` subset.
+  # Version Packages candidates and manual qualification use
+  # release-candidate.yml (same `pnpm check:release` command, not this
+  # schedule).
+
   # Known red until test/576-p1-test-fixes lands: scaffold-packed-matrix.e2e
   # asserts the scaffolded project's test output contains `"failedTests": 0`,
   # a string only Rstest's `md` reporter prints (auto-selected under an
