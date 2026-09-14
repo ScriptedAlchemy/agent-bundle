@@ -272,9 +272,101 @@ e2e('drives event, script, logs, diagnostics, and repair in real Chrome', { time
   }
 });
 
+e2e('drives the host-test routes and repairs a stale event build in real Chrome', { timeout: 120_000 * timeScale }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await copyExample('host-test');
+  const eventSource = join(project.root, 'src', 'events', 'tool', 'before.ts');
+  const healthyEvent = await readFile(eventSource, 'utf8');
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  const ledger = createExampleErrorLedger(page, server.url);
+  try {
+    const surface = await inspectWorkbenchSurface({ root: project.root });
+    const dumpLeaf = applicationLeaves(surface.application).find((leaf) => leaf.routeId === 'tool:host-test/dump');
+    if (dumpLeaf === undefined) throw new Error('host-test surface is missing tool:host-test/dump.');
+    await openWorkbench(page, server.url, '/');
+    await expectPrimaryNav(page);
+    await expect(applicationLeafItem(page, dumpLeaf).first()).toBeVisible({ timeout: browserTimeout });
+    await selectApplicationLeaf(page, server.url, dumpLeaf);
+    await expect(workbenchTestId(page, 'routeRun')).toBeVisible({ timeout: browserTimeout });
+    await captureExampleState(page, 'host-test', 'application-populated');
+
+    await openWorkbench(page, server.url, '/problems');
+    await editWatchedSource(server, project.root, eventSource, `${healthyEvent}\nconst = ;\n`, 'failed');
+    await expect(workbenchTestId(page, 'problemsBanner')).toBeVisible({ timeout: browserTimeout });
+    await captureExampleState(page, 'host-test', 'diagnostic-stale');
+
+    await editWatchedSource(server, project.root, eventSource, healthyEvent, 'succeeded');
+    await workbenchTestId(page, 'problemsRepair').click();
+    await waitForWorkbenchIdle(page);
+    await expect(workbenchTestId(page, 'problemsBanner')).toHaveCount(0, { timeout: browserTimeout });
+    await selectApplicationLeaf(page, server.url, dumpLeaf);
+    await expectLeafWorkspace(page, dumpLeaf);
+    await captureExampleState(page, 'host-test', 'diagnostic-repaired');
+    // Repair may reject the selected pre-failure epoch; consume only that expected
+    // 422 so the final health check still rejects every other error.
+    const staleArtifactError = (error: (typeof ledger.consoleErrors)[number]): boolean =>
+      error.text === 'Failed to load resource: the server responded with a status of 422 (Unprocessable Entity)'
+      && /^\/api\/artifacts\/epochs\/[^/]+$/u.test(new URL(error.url).pathname);
+    ledger.consoleErrors.splice(0, ledger.consoleErrors.length, ...ledger.consoleErrors.filter((error) => !staleArtifactError(error)));
+    await expectHealthyExamplePage(ledger);
+    await writeExampleReport();
+  } finally {
+    await server.close();
+    await project.release();
+  }
+});
+
+e2e('drives worktree-proximity and repairs a stale tool build in real Chrome', { timeout: 120_000 * timeScale }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await copyExample('worktree-proximity');
+  const toolSource = join(project.root, 'src', 'mcp', 'coordinator', 'tools', 'status.tsx');
+  const healthyTool = await readFile(toolSource, 'utf8');
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  const ledger = createExampleErrorLedger(page, server.url);
+  try {
+    const surface = await inspectWorkbenchSurface({ root: project.root });
+    const statusLeaf = applicationLeaves(surface.application).find((leaf) => leaf.routeId === 'tool:coordinator/status');
+    if (statusLeaf === undefined) throw new Error('worktree-proximity surface is missing tool:coordinator/status.');
+    await openWorkbench(page, server.url, '/');
+    await expectPrimaryNav(page);
+    await expect(applicationLeafItem(page, statusLeaf).first()).toBeVisible({ timeout: browserTimeout });
+    await selectApplicationLeaf(page, server.url, statusLeaf);
+    await expectLeafWorkspace(page, statusLeaf);
+    await captureExampleState(page, 'worktree-proximity', 'application-populated');
+
+    await openWorkbench(page, server.url, '/problems');
+    await editWatchedSource(server, project.root, toolSource, `${healthyTool}\nconst = ;\n`, 'failed');
+    await expect(workbenchTestId(page, 'problemsBanner')).toBeVisible({ timeout: browserTimeout });
+    await captureExampleState(page, 'worktree-proximity', 'diagnostic-stale');
+
+    await editWatchedSource(server, project.root, toolSource, healthyTool, 'succeeded');
+    await workbenchTestId(page, 'problemsRepair').click();
+    await waitForWorkbenchIdle(page);
+    await expect(workbenchTestId(page, 'problemsBanner')).toHaveCount(0, { timeout: browserTimeout });
+    await captureExampleState(page, 'worktree-proximity', 'diagnostic-repaired');
+    await expectHealthyExamplePage(ledger);
+    await writeExampleReport();
+  } finally {
+    await server.close();
+    await project.release();
+  }
+});
+
 e2e('drives every populated MCP App workflow surface in real Chrome', { timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('mcp-app');
+  const toolSource = join(project.root, 'src', 'mcp', 'status', 'tools', 'show-status.tsx');
+  const healthyTool = await readFile(toolSource, 'utf8');
   const server = await startDevServer({
     assets: createWorkbenchAssetSource({ root: workbenchAssets }),
     open: false,
@@ -356,6 +448,17 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await openWorkbench(page, server.url, '/advanced/evals');
     await expect(page.getByRole('tab', { name: 'Runs' })).toBeVisible({ timeout: browserTimeout });
     await captureExampleState(page, 'mcp-app', 'eval-completed');
+
+    await openWorkbench(page, server.url, '/problems');
+    await editWatchedSource(server, project.root, toolSource, `${healthyTool}\nconst = ;\n`, 'failed');
+    await expect(workbenchTestId(page, 'problemsBanner')).toBeVisible({ timeout: browserTimeout });
+    await captureExampleState(page, 'mcp-app', 'diagnostic-stale');
+
+    await editWatchedSource(server, project.root, toolSource, healthyTool, 'succeeded');
+    await workbenchTestId(page, 'problemsRepair').click();
+    await waitForWorkbenchIdle(page);
+    await expect(workbenchTestId(page, 'problemsBanner')).toHaveCount(0, { timeout: browserTimeout });
+    await captureExampleState(page, 'mcp-app', 'diagnostic-repaired');
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();
   } finally {

@@ -359,13 +359,7 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
         selection,
         title: 'Example Title',
       });
-      const argv = [
-        'convert',
-        '--author', input.author,
-        '--output', input.output,
-        '--selection', input.selection,
-        '--title', input.title,
-      ];
+      const argv = ['convert', '--input', JSON.stringify({ conversion: input })];
 
       // An empty selection reaches domain validation before any media probe or binary.
       const planned = await invokeCli([...argv, '--json']);
@@ -379,7 +373,12 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       // `--receipt`; the projected command shares the tool's optional field.
       // With or without it, the failure is the same and no receipt is written.
       const receipt = join(directory, 'convert-receipt.json');
-      const withReceipt = await invokeCli([...argv, '--receipt', receipt, '--json']);
+      const withReceipt = await invokeCli([
+        'convert',
+        '--input',
+        JSON.stringify({ conversion: { ...input, receipt } }),
+        '--json',
+      ]);
       expect(withReceipt.exitCode).toBe(1);
       expect(withReceipt.stderr).toBe(planned.stderr);
       await expect(readFile(receipt, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
@@ -391,7 +390,8 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
 
       const help = await invokeCli(['convert', '--help']);
       expect(help.stdout).toContain('MCP tool: curator:convert_audiobook');
-      expect(help.stdout).toContain('--apply');
+      expect(help.stdout).toContain('--input <string>');
+      expect(help.stdout).not.toContain('--apply');
       expect(help.stdout).not.toContain('requires --yes');
     });
   });

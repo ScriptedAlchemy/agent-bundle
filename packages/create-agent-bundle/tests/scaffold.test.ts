@@ -84,7 +84,8 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
   }));
 
   it.effect('emits the documented mcp-server inventory', () => Effect.gen(function* () {
-    const { files } = yield* scaffoldTemplate('mcp-server');
+    const path = yield* Path.Path;
+    const { files, root } = yield* scaffoldTemplate('mcp-server');
     expect(files).toEqual([
       '.gitignore',
       'README.md',
@@ -100,6 +101,9 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
       'tests/status.test.ts',
       'tsconfig.json',
     ]);
+    const tool = yield* readText(path.join(root, 'src/mcp/status/tools/report-status.tsx'));
+    expect(tool).toContain('export default defineTool({');
+    expect(tool).not.toContain('export const config');
   }));
 
   it.effect('emits the documented cli-tool inventory', () => Effect.gen(function* () {

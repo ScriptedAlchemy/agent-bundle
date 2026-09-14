@@ -11,16 +11,16 @@ import { build } from '../src/api.ts';
  * (`src/effect/errors.ts`, the `Data.Error` twins of `Error` / `CodedError`).
  *
  * `examples/host-test` emits every artifact class the framework produces:
- * per-event hook wrappers, the hooks Flight worker, CLI bins plus their
- * Flight worker, the framework MCP lifecycle shell plus its Flight worker, a
- * hand-rolled stdio MCP server, and the `install.mjs` script. The classes
- * that already carry the Effect runtime (hook wrappers, bins, framework MCP
- * shell) do so through `src/effect/boundary.ts`, whose coded base is the
- * plain `CodedError`; the classes without Effect (raw stdio server,
+ * per-event handler wrappers, the deferred event render executors, the hooks
+ * Flight worker, CLI bins plus their Flight worker, the framework MCP
+ * lifecycle shell plus its Flight worker, a hand-rolled stdio MCP server, and
+ * the `install.mjs` script. Render executors use `src/effect/boundary.ts`,
+ * whose coded base is the plain `CodedError`; physically cheap handler
+ * wrappers do not. The classes without Effect (raw stdio server,
  * `install.mjs`) must stay without it. A byte-size gate cannot see a 12 kB
  * delta inside a 2.4 MB unminified wrapper, so this test pins the invariant
  * itself: no emitted file contains the yieldable base, Effect-free classes
- * stay Effect-free, and the wrapper runtime's coded base stays plain.
+ * stay Effect-free, and the rendered wrapper runtime's coded base stays plain.
  */
 
 /** `Symbol.for` key Effect's `Data.Error` registers; present iff Effect's core is bundled. */
@@ -32,7 +32,8 @@ type ArtifactClass =
   | 'cli-bin'
   | 'cli-bin-flight-worker'
   | 'hook-flight-worker'
-  | 'hook-wrapper'
+  | 'hook-handler-wrapper'
+  | 'hook-render-executor'
   | 'install-script'
   | 'mcp-flight-worker'
   | 'mcp-framework-shell'
@@ -45,7 +46,8 @@ const classify = (relativePath: string): ArtifactClass | undefined => {
   if (file === undefined || !file.endsWith('.mjs')) return undefined;
   switch (kind) {
     case 'hooks':
-      return file === 'hooks-flight.mjs' ? 'hook-flight-worker' : 'hook-wrapper';
+      if (file === 'hooks-flight.mjs') return 'hook-flight-worker';
+      return file.endsWith('.execute.mjs') ? 'hook-render-executor' : 'hook-handler-wrapper';
     case 'bin':
       return file.endsWith('-flight.mjs') ? 'cli-bin-flight-worker' : 'cli-bin';
     case 'mcp':
@@ -60,16 +62,15 @@ const classify = (relativePath: string): ArtifactClass | undefined => {
 const effectFreeClasses: ReadonlySet<ArtifactClass> = new Set<ArtifactClass>(['install-script', 'mcp-raw-stdio-server']);
 /**
  * Classes whose bundled runtime always includes `src/effect/boundary.ts` and
- * therefore the plain `CodedError` (the framework MCP shell only does so on
- * hosts with an event runtime, so it is checked by the yieldable-base scan
- * alone).
+ * therefore the plain `CodedError`.
  */
-const boundaryClasses: ReadonlySet<ArtifactClass> = new Set<ArtifactClass>(['hook-wrapper']);
+const boundaryClasses: ReadonlySet<ArtifactClass> = new Set<ArtifactClass>(['hook-render-executor']);
 const everyClass: readonly ArtifactClass[] = [
   'cli-bin',
   'cli-bin-flight-worker',
   'hook-flight-worker',
-  'hook-wrapper',
+  'hook-handler-wrapper',
+  'hook-render-executor',
   'install-script',
   'mcp-flight-worker',
   'mcp-framework-shell',

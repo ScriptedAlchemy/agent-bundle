@@ -40,6 +40,9 @@ Ordinary imported handler functions are supported; the compiler does not inspect
 The default export must be the direct helper call with an inline object literal. Aliasing a
 constructed definition, passing computed options, or wrapping the call is rejected with
 `AB4810`; the compiler does not evaluate composition. Named import aliases are supported.
+The tool routes under `examples/*/src/mcp/**/tools/` and the `mcp-server` scaffold use this
+shape directly. The examples keep named schema exports beside the helper so colocated CLI
+projections and route tests can import their types.
 
 ## Generated route servers
 
@@ -58,7 +61,7 @@ The path supplies identity: `src/mcp/curator/tools/status.tsx` is the `status` t
 
 ### Compatibility: split tool exports
 
-Existing tools can still export `config`, schemas, and an default Server Component
+Existing tools can still export `config`, schemas, and a default Server Component
 separately. This is a compatibility format; use `defineTool` for new tools. Resources, prompts,
 and apps retain their existing contracts. A legacy tool looks like this:
 

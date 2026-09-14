@@ -85,18 +85,24 @@ describe('audiobook-curator projected CLI', () => {
       ['strict', false, null],
     ]);
 
-    // convert keeps its full named-option surface, including kebab-case
-    // projections of camelCase keys (--audio-bitrate, --forge-aac-encoder).
+    // Convert's large, cohesive input travels as one JSON object rather than
+    // being flattened into a brittle wall of flags.
     const convert = byName.get('convert')!;
-    expect(convert.options.map((option) => option.option).sort()).toEqual([
-      'apply', 'artwork', 'audio-bitrate', 'audio-codec', 'author', 'engine',
-      'forge-aac-encoder', 'forge-cli', 'jobs', 'language', 'narrator',
-      'output', 'overwrite', 'receipt', 'selection', 'title', 'year',
+    expect(convert.options).toEqual([
+      {
+        description: 'Tool input as one JSON object.',
+        key: 'input',
+        kind: 'string',
+        option: 'input',
+        repeated: false,
+        required: false,
+      },
     ]);
-    // --receipt is optional like the tool's; the retired route required it.
-    expect(convert.options.filter((option) => option.required).map((option) => option.option)).toEqual([
-      'author', 'output', 'selection', 'title',
-    ]);
+    expect(convert.projection).toEqual({
+      input: 'json',
+      mapInput: false,
+      module: 'src/mcp/curator/tools/convert_audiobook.cli.ts',
+    });
 
     // prepare [--apply] [--name FILE] --output DIR <source> — the projection
     // spells the operation's outputRoot/outputName as --output/--name.

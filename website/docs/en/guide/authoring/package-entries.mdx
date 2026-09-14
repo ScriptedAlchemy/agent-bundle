@@ -168,13 +168,16 @@ The compiler checks export presence; the generated executable loads the actual s
 TypeScript infers route input/output types from those exports, including defaults and transforms.
 
 For execution-free inspection, Workbench forms, and named CLI flags, declare literal
-`config.inputJsonSchema`. It accepts an object with `additionalProperties: false`, scalar
+`inputJsonSchema` in the tool's `defineTool` object. It accepts an object with
+`additionalProperties: false`, scalar
 string/number/boolean properties, string enums, arrays of scalars, and optional
 `required`, `description`, and `default` metadata. The runtime schema remains authoritative
 for validation, defaults, and transforms; metadata does not replace it.
 
 ```ts
-export const config = {
+import { defineTool } from 'agent-bundle/routes';
+
+export default defineTool({
   inputJsonSchema: {
     type: 'object',
     additionalProperties: false,
@@ -183,7 +186,9 @@ export const config = {
       limit: { type: 'number' },
     },
   },
-};
+  inputSchema,
+  resultSchema,
+}, handler);
 ```
 
 A standalone CLI route or tool projection without this metadata accepts `--input` JSON.
@@ -313,27 +318,32 @@ without `mapInput` rejects an unknown enum value while parsing argv, as a `src/c
 Named flags use explicit input metadata. Nested input can use JSON directly; commands without
 metadata default to this mode. Declare `input: 'json'` to select it explicitly:
 
-```ts title="src/mcp/curator/tools/select.cli.ts"
+```ts title="examples/audiobook-curator/src/mcp/curator/tools/convert_audiobook.cli.ts"
 import type { CliProjectionConfig } from 'agent-bundle/routes';
 
-import type { inputSchema } from './select.js';
+import type { inputSchema } from './convert_audiobook.js';
 
 export const config = {
-  command: ['select'],
+  command: ['convert'],
+  confirm: false,
+  description: 'Plan or apply a verified conversion to one chaptered M4B.',
   input: 'json',
 } satisfies CliProjectionConfig<typeof inputSchema>;
 ```
 
 ```sh
-my-plugin select --input '{"selection":{"by":"query","query":"dune"}}' --yes --json
+audiobook-curator convert --input \
+  '{"conversion":{"author":"Frank Herbert","output":"./Dune.m4b","selection":"./selection.json","title":"Dune"}}' \
+  --json
 ```
 
 The object reaches the tool's own `inputSchema` unchanged, so its defaults, refinements, and
 transforms apply exactly as they do for a `tools/call`; a schema issue is reported under
 `--input.<path>` and a non-object `--input` is refused with exit 2 before any tool runs. The
 command keeps everything else the projection controls — `command`, `aliases`, `description`,
-`confirm` (a mutation-capable tool still requires `--yes`), and `exitCode` — and help, `inspect`,
-and the artifact manifest record the mode (`projection.input: "json"`).
+`confirm`, and `exitCode` — and help, `inspect`, and the artifact manifest record the mode
+(`projection.input: "json"`). The curator's plan-first conversion sets `confirm: false`; its
+nested `conversion.apply` field remains the explicit mutation gate.
 
 `flags` is keyed by the canonical key of the tool's `RouteContract.input`. Discovery excludes
 `.cli.{ts,tsx}` before identity derivation and pairs the file with the sibling `.{ts,tsx}`. The

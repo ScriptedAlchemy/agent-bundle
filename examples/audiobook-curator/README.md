@@ -55,9 +55,10 @@ and `@agent-bundle/runtime` exports with `workspace:*` dependencies.
 `agent-bundle.config.ts` declares the plugin identity, Node runtime, and Claude
 and Codex targets. File conventions discover the rest.
 The MCP tree under `src/mcp/curator/` contains 16 tool routes, one catalog
-resource, and one curation prompt. Each executable route exports static
-`config`, `inputSchema`, and `resultSchema` values plus an async default Server
-Component. The compiler derives the `curator` server, lifecycle entry, warm
+resource, and one curation prompt. Each tool keeps named schemas for its CLI
+projection and default-exports `defineTool` with inline metadata and its async
+handler. The resource and prompt retain their own static route contracts. The
+compiler derives the `curator` server, lifecycle entry, warm
 Flight worker, and MCP registrations; there is no `src/application.ts`,
 operation-array registry, handwritten `src/mcp/curator.ts`, or per-operation
 server selector.
@@ -88,7 +89,12 @@ which MCP hosts receive as `CallToolResult._meta.curator`. A route therefore
 states only its value, its headline, and its report:
 
 ```tsx
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+export default defineTool({
+  annotations: { readOnlyHint: false },
+  description: 'Inventory source audio with retained per-file probe evidence.',
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as InventoryReceipt;
   return (
     <Agent.Result value={receipt}>
@@ -96,7 +102,7 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       <InventoryShelf receipt={receipt} />
     </Agent.Result>
   );
-}
+});
 ```
 
 ### `src/components/` is the shared presentation library
@@ -165,20 +171,23 @@ fallback in place. `--json` selects machine output and emits one
 result-schema-validated JSON value followed by a newline: the canonical final
 `Agent.Result` value, never the Markdown presentation or an intermediate
 Suspense fallback, and byte for byte the `structuredContent` of the tool call.
-`--report` and `--receipt` are optional on the command line exactly as they are
-on the tool; a command that gets one still writes the receipt file
+Named `--report` and `--receipt` options remain optional where fields are
+projected as flags; `convert` carries its optional `receipt` inside the JSON
+`conversion` object. A command that gets one still writes the receipt file
 when it succeeds. This is a
 behavior change from the retired `src/cli/` tree, where every command that
 took a report or receipt path — thirteen of the sixteen, `inventory --report`
-and `convert --receipt` among them — required it: those commands now run
+and the convert receipt among them — required it: those commands now run
 without the path and write no report or receipt file, and their exit codes,
 `--apply` gating, and error output are unchanged either way. `inspect`,
 `prepare`, and `shelf` never took one.
 
-Each tool module declares its `inputSchema` as an inline zod literal, because
-the argv projection is compiled statically from that literal; it is the only
-input schema. `src/operations/` keeps each operation's handler and result
-schema;
+Each tool module uses `defineTool` to keep static metadata, its schemas, and
+its handler together. Named schema exports remain for the colocated projection
+types. `convert` deliberately omits flag metadata: its union schema accepts the
+nested `conversion` object through explicit `input: 'json'` and transforms it
+to the same parsed domain input. `src/operations/` keeps each operation's
+handler and result schema;
 `src/cli-command.ts` names the `{ signal }` context every handler receives. Domain logic
 remains in `src/` over `foundation.ts` and `media-process.ts`, while
 `src/index.ts` remains the package library entry.

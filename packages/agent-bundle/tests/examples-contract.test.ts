@@ -353,6 +353,10 @@ it('serves the routed Audiobook Curator artifact through a real MCP client and i
     const usage = await execFile(process.execPath, [bin, 'inspect', '--help'], { cwd: fixtureRoot });
     expect(usage.stdout).toContain('MCP tool: curator:inspect_sources');
     expect(usage.stdout).toContain('--max-files <number>');
+    const convertUsage = await execFile(process.execPath, [bin, 'convert', '--help'], { cwd: fixtureRoot });
+    expect(convertUsage.stdout).toContain('MCP tool: curator:convert_audiobook');
+    expect(convertUsage.stdout).toContain('--input <string>');
+    expect(convertUsage.stdout).not.toContain('--author');
     await expect(execFile(process.execPath, [bin, 'curator', 'inspect_sources'], { cwd: fixtureRoot }))
       .rejects.toMatchObject({ code: 2, stderr: expect.stringContaining('Unknown command: curator.') });
     await expect(client.listResources()).resolves.toMatchObject({

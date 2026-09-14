@@ -25,7 +25,8 @@ to see how the surfaces fit together instead of studying one of them alone.
   `tools/show-status.tsx` (one service's health), `resources/readiness-policy.tsx` (the release
   rule at `policy://mcp-app-example/readiness`), and `apps/status.ts` + `status.html` (the App
   the tool opens through `_meta.ui.resourceUri`, spelled once with `appResourceUri('status')`).
-  There is no handwritten `McpServer`, no `registerTool`, and no
+  `show-status` uses `defineTool`, so that App binding, its schemas, and its handler stay in one
+  definition. There is no handwritten `McpServer`, no `registerTool`, and no
   `@modelcontextprotocol/server` dependency. See
   [MCP servers and MCP Apps](../guide/authoring/mcp.mdx).
 - **The generated stdio lifecycle is not yours to write.** The build emits the server entry and
@@ -72,7 +73,7 @@ to see how the surfaces fit together instead of studying one of them alone.
 | Path | What it is |
 | --- | --- |
 | `src/service-status.ts` | The service schemas and the two health records. |
-| `src/mcp/status/tools/show-status.tsx` | The `show-status` tool route; its `_meta.ui.resourceUri` opens the App. |
+| `src/mcp/status/tools/show-status.tsx` | The `defineTool` route; its inline `_meta.ui.resourceUri` opens the App. |
 | `src/mcp/status/resources/readiness-policy.tsx` | The `policy://mcp-app-example/readiness` resource route. |
 | `src/mcp/status/apps/status.ts` / `status.html` | The MCP App entry and template compiled to `mcp-apps/status.html`. |
 | `src/skills/service-readiness/` | The evidence, checks, and report needed for a service-readiness decision. |

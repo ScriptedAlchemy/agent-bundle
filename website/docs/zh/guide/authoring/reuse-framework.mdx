@@ -18,24 +18,22 @@ description: '用同一个工具提供 CLI 与 App 表面，复用契约、事�
 ```tsx
 // src/mcp/greeter/tools/hello.tsx
 import { Agent } from '@agent-bundle/runtime';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
-export const config = {
+export default defineTool({
   description: 'Greet a person.',
   annotations: { readOnlyHint: true },
-} satisfies ToolConfig;
-export const inputSchema = z.object({ name: z.string().min(1) }).strict();
-export const resultSchema = z.object({ greeting: z.string() }).strict();
-
-export default async function Hello({ input }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema: z.object({ name: z.string().min(1) }).strict(),
+  resultSchema: z.object({ greeting: z.string() }).strict(),
+}, async (input) => {
   const result = { greeting: `Hello, ${input.name}.` };
   return (
     <Agent.Result value={result}>
       <Agent.Text>{result.greeting}</Agent.Text>
     </Agent.Result>
   );
-}
+});
 ```
 
 这里服务器名是 `greeter`，协议工具名是 `hello`，规范路由 ID 是 `tool:greeter/hello`。
@@ -65,8 +63,8 @@ export const config = {
 不要在 mapper 中重复领域操作或结果渲染器。真正独立的聚合工作流仍可使用单独的 `src/cli/**` 路由。
 
 自动 flag 推导使用有界 schema 语法。复杂嵌套或 union schema 即使不能投影为命名 flags，仍然可以是有效工具。
-已有批量 MCP 命令路径支持 JSON 输入；给命名投影添加 `mapInput` 不会让它自动获得该模式。
-请使用[包入口](./package-entries.mdx)记录的实际支持路径，不要削弱工具 schema，也不要假装未实现的选项存在。
+在同目录投影上设置 `input: 'json'`，即可通过 `--input` 接收规范对象；JSON 模式不能与 flags、
+位置参数或 `mapInput` 组合。请使用[包入口](./package-entries.mdx)记录的实际支持路径，不要削弱工具 schema。
 
 ## 共享契约，而不是再建 schema 注册表
 

@@ -1,5 +1,6 @@
 import { Agent, agent } from '@agent-bundle/runtime';
 import React from 'react';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
@@ -13,7 +14,10 @@ const emptyShelf: CurationShelfState = {
   selections: [],
 };
 
-export const config = {
+export const inputSchema = z.object({}).strict();
+export const resultSchema = CurationShelfStateSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {},
@@ -21,12 +25,9 @@ export const config = {
   },
   annotations: { readOnlyHint: true },
   description: 'Review the persisted curation shelf of selected Audible editions and media mutations.',
-};
-
-export const inputSchema = z.object({}).strict();
-export const resultSchema = CurationShelfStateSchema;
-
-export default async function ReviewCurationShelf() {
+  inputSchema,
+  resultSchema,
+}, async () => {
   const state = (await agent()).state;
   if (state === undefined) {
     return (
@@ -43,4 +44,4 @@ export default async function ReviewCurationShelf() {
       <CurationShelf state={shelf} />
     </Agent.Result>
   );
-}
+});

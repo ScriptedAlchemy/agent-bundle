@@ -1,6 +1,6 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { InspectionShelf } from '../../../components/library-shelf.js';
@@ -9,7 +9,13 @@ import { discoveryOperations } from '../../../operations/discovery.js';
 
 const operation = discoveryOperations.inspect;
 
-export const config = {
+export const inputSchema = z.object({
+  maxFiles: z.number().int().min(1).max(256).optional(),
+  root: z.string().min(1).max(4096),
+}).strict();
+export const resultSchema = operation.resultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -27,14 +33,9 @@ export const config = {
   },
   annotations: { readOnlyHint: true },
   description: 'Inspect a bounded directory tree and report supported audiobook media without changing it.',
-};
-export const inputSchema = z.object({
-  maxFiles: z.number().int().min(1).max(256).optional(),
-  root: z.string().min(1).max(4096),
-}).strict();
-export const resultSchema = operation.resultSchema;
-
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as InspectionReceipt;
   return (
     <Agent.Result value={receipt}>
@@ -42,4 +43,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       <InspectionShelf receipt={receipt} />
     </Agent.Result>
   );
-}
+});

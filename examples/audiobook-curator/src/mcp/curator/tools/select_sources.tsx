@@ -1,6 +1,6 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { selectionHeadline } from '../../../components/headlines.js';
@@ -10,7 +10,13 @@ import { discoveryOperations } from '../../../operations/discovery.js';
 
 const operation = discoveryOperations.select;
 
-export const config = {
+export const inputSchema = z.object({
+  inventory: z.string().min(1).max(4096),
+  report: z.string().min(1).max(4096).optional(),
+}).strict();
+export const resultSchema = operation.resultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -28,14 +34,9 @@ export const config = {
   },
   annotations: { readOnlyHint: false },
   description: 'Select strongest source encodings while retaining alternates and duration review evidence.',
-};
-export const inputSchema = z.object({
-  inventory: z.string().min(1).max(4096),
-  report: z.string().min(1).max(4096).optional(),
-}).strict();
-export const resultSchema = operation.resultSchema;
-
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as SelectionReceipt;
   return (
     <Agent.Result value={receipt}>
@@ -43,4 +44,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       <SelectionShelf receipt={receipt} />
     </Agent.Result>
   );
-}
+});

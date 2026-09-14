@@ -1,6 +1,6 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { ChapterOutline, chaptersFromConvertReceipt } from '../../../components/chapter-outline.js';
@@ -12,82 +12,7 @@ import { outputOperations } from '../../../operations/output.js';
 
 const operation = outputOperations.convert;
 
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "apply": {
-        "type": "boolean"
-      },
-      "artwork": {
-        "type": "string"
-      },
-      "audioBitrate": {
-        "type": "string"
-      },
-      "audioCodec": {
-        "enum": [
-          "aac",
-          "alac"
-        ],
-        "type": "string"
-      },
-      "author": {
-        "type": "string"
-      },
-      "engine": {
-        "enum": [
-          "audiobook-forge",
-          "ffmpeg"
-        ],
-        "type": "string"
-      },
-      "forgeAacEncoder": {
-        "type": "string"
-      },
-      "forgeCli": {
-        "type": "string"
-      },
-      "jobs": {
-        "type": "number"
-      },
-      "language": {
-        "type": "string"
-      },
-      "narrator": {
-        "type": "string"
-      },
-      "output": {
-        "type": "string"
-      },
-      "overwrite": {
-        "type": "boolean"
-      },
-      "receipt": {
-        "type": "string"
-      },
-      "selection": {
-        "type": "string"
-      },
-      "title": {
-        "type": "string"
-      },
-      "year": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "author",
-      "output",
-      "selection",
-      "title"
-    ],
-    "type": "object"
-  },
-  annotations: { destructiveHint: true, readOnlyHint: false },
-  description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
-};
-export const inputSchema = z.object({
+const conversionSchema = z.object({
   apply: z.boolean().optional(),
   artwork: z.string().min(1).max(4096).optional(),
   audioBitrate: z.string().min(2).max(32).optional(),
@@ -106,9 +31,19 @@ export const inputSchema = z.object({
   title: z.string().min(1).max(1024),
   year: z.string().min(1).max(64).optional(),
 }).strict();
+
+export const inputSchema = z.union([
+  conversionSchema,
+  z.object({ conversion: conversionSchema }).strict().transform(({ conversion }) => conversion),
+]);
 export const resultSchema = operation.resultSchema;
 
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+export default defineTool({
+  annotations: { destructiveHint: true, readOnlyHint: false },
+  description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as ConvertReceipt;
   return (
     <Agent.Result value={receipt}>
@@ -118,4 +53,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       <ConversionIntegrityReport receipt={receipt} />
     </Agent.Result>
   );
-}
+});

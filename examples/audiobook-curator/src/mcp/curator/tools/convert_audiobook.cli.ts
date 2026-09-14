@@ -6,4 +6,5 @@ export const config = {
   command: ['convert'],
   confirm: false,
   description: 'Plan or apply a verified conversion to one chaptered M4B.',
+  input: 'json',
 } satisfies CliProjectionConfig<typeof inputSchema>;

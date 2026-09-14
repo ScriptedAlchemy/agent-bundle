@@ -52,25 +52,22 @@ Starter 已包含一个 `status` 服务器及其 `report-status` 工具。在旁
 
 ```tsx
 import { Agent } from '@agent-bundle/runtime';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
-export const config = {
+export default defineTool({
   description: 'Return a greeting without changing anything.',
   annotations: { readOnlyHint: true },
-} satisfies ToolConfig;
-
-export const inputSchema = z.object({ name: z.string().min(1) }).strict();
-export const resultSchema = z.object({ message: z.string() }).strict();
-
-export default async function Hello({ input }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema: z.object({ name: z.string().min(1) }).strict(),
+  resultSchema: z.object({ message: z.string() }).strict(),
+}, async (input) => {
   const result = { message: `Hello, ${input.name}.` };
   return (
     <Agent.Result value={result}>
       <Agent.Text>{result.message}</Agent.Text>
     </Agent.Result>
   );
-}
+});
 ```
 
 路径声明了 `status` 服务器上的 `hello` 工具；它的框架路由 ID 是 `tool:status/hello`。

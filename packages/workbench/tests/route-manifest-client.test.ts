@@ -152,6 +152,41 @@ it('reads the compiled manifest over the shared foreground session', async () =>
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/routes/manifest' }]);
 });
 
+it('reads JSON input mode from the CLI projection record', async () => {
+  const decoded = await clientFor(() => response({
+    manifest: {
+      ...manifest,
+      cli: {
+        ...manifest.cli,
+        commands: [{
+          ...manifest.cli.commands[0],
+          projection: {
+            input: 'json',
+            mapInput: false,
+            module: 'src/mcp/library/tools/audit.cli.ts',
+          },
+        }],
+      },
+    },
+  })).manifest();
+
+  expect(decoded.cli?.commands?.[0]?.projection?.input).toBe('json');
+});
+
+it('reads JSON input mode from a standalone CLI command record', async () => {
+  const decoded = await clientFor(() => response({
+    manifest: {
+      ...manifest,
+      cli: {
+        ...manifest.cli,
+        commands: [{ ...manifest.cli.commands[0], input: 'json' }],
+      },
+    },
+  })).manifest();
+
+  expect(decoded.cli?.commands?.[0]?.input).toBe('json');
+});
+
 it('decodes a CLI surface projection and option aliases on the strict wire', async () => {
   const projected = {
     ...manifest.cli.commands[0],

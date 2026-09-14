@@ -152,13 +152,16 @@ Run 'curator doctor --help' for usage.
 运行时的 `inputSchema` 和 `resultSchema` 可以导入，也可以由工厂创建。编译器检查导出是否存在，
 生成的可执行文件加载真实 schema。TypeScript 从这些导出推导输入和输出类型，包括默认值和转换。
 
-若需要不执行模块的检查、Workbench 表单或命名 CLI flag，请声明字面量 `config.inputJsonSchema`。
+若需要不执行模块的检查、Workbench 表单或命名 CLI flag，请在工具的 `defineTool` 对象中声明字面量
+`inputJsonSchema`。
 它接受 `additionalProperties: false` 的对象、字符串/数字/布尔标量、字符串枚举、标量数组，
 以及可选的 `required`、`description` 和 `default` 元数据。
 运行时 schema 仍负责校验、默认值和转换，元数据不会替代它。
 
 ```ts
-export const config = {
+import { defineTool } from 'agent-bundle/routes';
+
+export default defineTool({
   inputJsonSchema: {
     type: 'object',
     additionalProperties: false,
@@ -167,7 +170,9 @@ export const config = {
       limit: { type: 'number' },
     },
   },
-};
+  inputSchema,
+  resultSchema,
+}, handler);
 ```
 
 没有这些元数据的独立 CLI 路由或工具投影默认接受 `--input` JSON。
@@ -292,26 +297,30 @@ mapper——而枚举之外的值仍以 2 退出，并以 CLI 拼写报告为
 命名 flag 使用显式输入元数据。嵌套输入可以直接使用 JSON；没有元数据时默认采用该模式，
 也可以声明 `input: 'json'`：
 
-```ts title="src/mcp/curator/tools/select.cli.ts"
+```ts title="examples/audiobook-curator/src/mcp/curator/tools/convert_audiobook.cli.ts"
 import type { CliProjectionConfig } from 'agent-bundle/routes';
 
-import type { inputSchema } from './select.js';
+import type { inputSchema } from './convert_audiobook.js';
 
 export const config = {
-  command: ['select'],
+  command: ['convert'],
+  confirm: false,
+  description: 'Plan or apply a verified conversion to one chaptered M4B.',
   input: 'json',
 } satisfies CliProjectionConfig<typeof inputSchema>;
 ```
 
 ```sh
-my-plugin select --input '{"selection":{"by":"query","query":"dune"}}' --yes --json
+audiobook-curator convert --input \
+  '{"conversion":{"author":"Frank Herbert","output":"./Dune.m4b","selection":"./selection.json","title":"Dune"}}' \
+  --json
 ```
 
 该对象原样到达工具自己的 `inputSchema`，因此默认值、refinement 与 transform 的应用方式与
 `tools/call` 完全一致；schema 问题以 `--input.<path>` 报告，非对象的 `--input` 会在任何工具运行之前
 以退出码 2 被拒绝。命令保留投影控制的其余一切——`command`、`aliases`、`description`、`confirm`
-（可变更的工具仍需要 `--yes`）与 `exitCode`——帮助、`inspect` 与制品清单都会记录这一模式
-（`projection.input: "json"`）。
+与 `exitCode`——帮助、`inspect` 与制品清单都会记录这一模式（`projection.input: "json"`）。
+策展器的先计划后执行转换设置 `confirm: false`，嵌套的 `conversion.apply` 字段仍是显式修改门禁。
 
 `flags` 以工具的 `RouteContract.input` 的规范键为键。发现阶段会在派生身份之前排除 `.cli.{ts,tsx}`，
 并将该文件与同级的 `.{ts,tsx}` 配对。这个后缀在 `src/mcp/**` 下保留；加 `_` 前缀可以停用它。

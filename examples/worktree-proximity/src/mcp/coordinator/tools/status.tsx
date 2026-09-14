@@ -1,24 +1,10 @@
 import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
 import React from 'react';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import type { AgentTopologyProviderValue } from '../../../providers/agent-topology.js';
 import { ActivitySchema, BindingSchema } from '../../../state.js';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "actorId": {
-        "type": "string"
-      }
-    },
-    "type": "object"
-  },
-  annotations: { readOnlyHint: true },
-  description: 'Show the live agent tree the runtime resolved for this call, the worktree bindings, active intents, refusals, and the state of the proximity notices this agent published.',
-} satisfies ToolConfig;
 
 export const inputSchema = z
   .object({
@@ -132,9 +118,21 @@ const topologyOf = (providers: { readonly agentTopology?: AgentTopologyProviderV
     },
   };
 
-export default async function Status({
-  input,
-}: ToolRouteProps<typeof inputSchema>) {
+export default defineTool({
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "actorId": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  annotations: { readOnlyHint: true },
+  description: 'Show the live agent tree the runtime resolved for this call, the worktree bindings, active intents, refusals, and the state of the proximity notices this agent published.',
+  inputSchema,
+  resultSchema,
+}, async (input) => {
   // Everything this tool reports was read once, by the provider, from the
   // request the runtime opened for this call: no second read, no guess.
   const { agents, intent: intentResult, notices } = topologyOf({ agentTopology: await (await agent()).provider('agentTopology') });
@@ -205,4 +203,4 @@ export default async function Status({
       <Agent.Json value={result as unknown as JsonValue} />
     </Agent.Result>
   );
-}
+});

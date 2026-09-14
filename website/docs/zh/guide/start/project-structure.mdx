@@ -77,8 +77,9 @@ my-plugin/
 事件文件使用 `.ts` 返回轻量结果，使用 `.tsx` 渲染 JSX；需要渲染前门控时，从 `.ts` 处理器调用 `ctx.render()` 请求同级 `.view.tsx`。
 执行方式与 provider 访问见[钩子](../authoring/hooks.mdx)。
 
-路由 `config` 导出使用有界静态语法。运行时工作保留在处理器或领域模块中，不要为了获取元数据而执行它。
-Schema 保持唯一权威定义，不要在 CLI 和浏览器里分别重建协议类型。
+路由元数据使用有界静态语法。工具把它放入 `defineTool` 的内联对象；资源、提示、App 与兼容路由继续使用
+`config` 导出。运行时工作保留在处理器或领域模块中，Schema 保持唯一权威定义，不要在 CLI 和浏览器里
+分别重建协议类型。
 
 ### 添加交互式 App
 
@@ -100,14 +101,15 @@ export const config = {
 
 ```ts
 // Metadata in src/mcp/ops/tools/inspect.tsx
-import type { ToolConfig } from 'agent-bundle';
-import { appResourceUri } from 'agent-bundle/routes';
+import { appResourceUri, defineTool } from 'agent-bundle/routes';
 
-export const config = {
+export default defineTool({
   description: 'Inspect project status.',
   annotations: { readOnlyHint: true },
   _meta: { ui: { resourceUri: appResourceUri('dashboard') } },
-} satisfies ToolConfig;
+  inputSchema,
+  resultSchema,
+}, handler);
 ```
 
 浏览器使用 `agent-bundle/app` 的 `createAppClient`。
