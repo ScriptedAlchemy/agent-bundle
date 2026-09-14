@@ -75,8 +75,12 @@ committed lockfiles preserve that pair.
 
 `@agent-bundle/runtime` declares `zod` as a `^4.5.4` peer rather than a dependency for the same
 reason: route and state definitions hand Zod schemas across the runtime's API, and Zod 4 brands
-schema types by minor version, so the project and the runtime must share one installed copy. A
-project that bumps its own `zod` keeps typechecking; a nested second copy would not.
+schema types by minor version. A nested `zod@4.5.x` therefore rejects a consumer schema from
+`zod@4.6.x` (`Type '6' is not assignable to type '5'`). Two installations of the same minor
+still typecheck; the peer is so the project and the runtime resolve one copy and stay on
+compatible minors. Existing projects still pinned to `zod@4.4.3`, or any version below
+`4.5.4`, must upgrade that direct dependency before installing this runtime — npm otherwise
+rejects the required peer with `ERESOLVE`.
 
 ## Once npm releases exist
 
