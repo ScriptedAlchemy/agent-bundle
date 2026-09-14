@@ -110,6 +110,9 @@ handler work normally. The module argument must name the sibling `.view.js` file
 Data must be strict JSON and reaches the view as `renderInput`; arbitrary paths and non-JSON
 values fail closed. Put event configuration on the `.ts` handler. A `.view.tsx` file is support
 code, not a second event. Denials require a nonempty reason and a deny-capable event family.
+For complete copyable routes, `examples/host-test/src/events/` uses lightweight `events.*`
+handlers throughout; `session/start.ts` alone calls `ctx.render('./start.view.js', data)` because
+its sibling view genuinely adds session context.
 
 ### Execution trace events
 

@@ -20,24 +20,22 @@ route-file script, custom `McpServer`, or string-keyed dispatcher is not require
 ```tsx
 // src/mcp/greeter/tools/hello.tsx
 import { Agent } from '@agent-bundle/runtime';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
-export const config = {
+export default defineTool({
   description: 'Greet a person.',
   annotations: { readOnlyHint: true },
-} satisfies ToolConfig;
-export const inputSchema = z.object({ name: z.string().min(1) }).strict();
-export const resultSchema = z.object({ greeting: z.string() }).strict();
-
-export default async function Hello({ input }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema: z.object({ name: z.string().min(1) }).strict(),
+  resultSchema: z.object({ greeting: z.string() }).strict(),
+}, async (input) => {
   const result = { greeting: `Hello, ${input.name}.` };
   return (
     <Agent.Result value={result}>
       <Agent.Text>{result.greeting}</Agent.Text>
     </Agent.Result>
   );
-}
+});
 ```
 
 Here the server name is `greeter`, the protocol tool name is `hello`, and the canonical route ID
@@ -71,11 +69,10 @@ syntax. Do not repeat the domain operation or its result renderer inside the map
 separate `src/cli/**` route for a genuinely independent aggregate workflow.
 
 Automatic flag inference has a bounded schema grammar. A rich nested/union schema remains a
-valid tool even when it cannot be projected into named flags. The documented bulk MCP command
-path supports JSON input; named projections do not yet acquire that mode merely by adding a
-`mapInput` function. Use the actual supported path described in
-[package entries](./package-entries.mdx), rather than weakening the tool schema or pretending
-an unimplemented option exists.
+valid tool even when it cannot be projected into named flags. Set `input: 'json'` on the
+colocated projection to accept the canonical object through `--input`; do not combine JSON mode
+with flags, positionals, or `mapInput`. See
+[package entries](./package-entries.mdx) rather than weakening the tool schema.
 
 ## Share contracts, not a second schema registry
 

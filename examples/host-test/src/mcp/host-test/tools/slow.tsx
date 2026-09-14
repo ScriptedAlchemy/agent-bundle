@@ -1,7 +1,7 @@
 import { setTimeout } from 'node:timers/promises';
 
 import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import React from 'react';
 import { z } from 'zod';
 
@@ -10,7 +10,23 @@ import { capture } from '../../../capture.js';
 /** The longest hold a single call may ask for; hosts bound tool calls well above this. */
 export const MAX_SLOW_HOLD_MS = 30_000;
 
-export const config = {
+export const inputSchema = z.object({
+  holdMs: z.number().int().min(1).max(MAX_SLOW_HOLD_MS).default(3000)
+    .describe('How long the call stays open, in milliseconds (1–30000).'),
+  tickMs: z.number().int().min(50).max(MAX_SLOW_HOLD_MS).default(500)
+    .describe('Report progress every tickMs milliseconds.'),
+}).strict();
+
+export const resultSchema = z.object({
+  heldMs: z.number().int().nonnegative(),
+  log: z.string(),
+  ticks: z.number().int().nonnegative(),
+}).strict();
+
+const sleep = (ms: number, signal: AbortSignal): Promise<'aborted' | 'elapsed'> =>
+  setTimeout(ms, 'elapsed' as const, { signal }).catch(() => 'aborted' as const);
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -33,25 +49,9 @@ export const config = {
   // The 2025-11-25 Tasks utility: a task-aware host may run this call as a
   // task and poll it; a host that never asks gets the ordinary result.
   execution: { taskSupport: 'optional' },
-} satisfies ToolConfig;
-
-export const inputSchema = z.object({
-  holdMs: z.number().int().min(1).max(MAX_SLOW_HOLD_MS).default(3000)
-    .describe('How long the call stays open, in milliseconds (1–30000).'),
-  tickMs: z.number().int().min(50).max(MAX_SLOW_HOLD_MS).default(500)
-    .describe('Report progress every tickMs milliseconds.'),
-}).strict();
-
-export const resultSchema = z.object({
-  heldMs: z.number().int().nonnegative(),
-  log: z.string(),
-  ticks: z.number().int().nonnegative(),
-}).strict();
-
-const sleep = (ms: number, signal: AbortSignal): Promise<'aborted' | 'elapsed'> =>
-  setTimeout(ms, 'elapsed' as const, { signal }).catch(() => 'aborted' as const);
-
-export default async function Slow({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const observed = await capture({ kind: 'mcp', observed: { holdMs: input.holdMs, tickMs: input.tickMs, tool: 'slow' } });
   const { progress } = await agent();
   const total = Math.ceil(input.holdMs / input.tickMs);
@@ -72,4 +72,4 @@ export default async function Slow({ input, signal }: ToolRouteProps<typeof inpu
       <Agent.Text>{`Held the call for ${String(result.heldMs)}ms across ${String(ticks)} progress ticks; recorded in ${observed.log.path}.`}</Agent.Text>
     </Agent.Result>
   );
-}
+});

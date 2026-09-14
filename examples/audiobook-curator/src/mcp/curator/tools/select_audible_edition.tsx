@@ -1,6 +1,6 @@
 import { Agent, agent } from '@agent-bundle/runtime';
 import React from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import type { AudibleSelectionReceipt } from '../../../audible.js';
@@ -11,7 +11,15 @@ import { CurationShelfStateSchema } from '../../../state.js';
 
 const operation = audibleOperations.audibleSelect;
 
-export const config = {
+export const inputSchema = z.object({
+  candidate: z.number().int().min(1).max(500),
+  candidates: z.string().min(1).max(4096),
+  note: z.string().max(4096).optional(),
+  receipt: z.string().min(1).max(4096).optional(),
+}).strict();
+export const resultSchema = operation.resultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -36,16 +44,9 @@ export const config = {
   },
   annotations: { readOnlyHint: false },
   description: 'Record an explicit human-reviewed Audible edition choice from a candidate report.',
-};
-export const inputSchema = z.object({
-  candidate: z.number().int().min(1).max(500),
-  candidates: z.string().min(1).max(4096),
-  note: z.string().max(4096).optional(),
-  receipt: z.string().min(1).max(4096).optional(),
-}).strict();
-export const resultSchema = operation.resultSchema;
-
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as AudibleSelectionReceipt;
   const context = await agent();
   const shelf = context.state === undefined
@@ -70,4 +71,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       {shelf}
     </Agent.Result>
   );
-}
+});

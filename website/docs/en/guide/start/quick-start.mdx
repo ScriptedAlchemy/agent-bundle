@@ -56,25 +56,22 @@ The starter already has a `status` server with a `report-status` tool. Add
 
 ```tsx
 import { Agent } from '@agent-bundle/runtime';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
-export const config = {
+export default defineTool({
   description: 'Return a greeting without changing anything.',
   annotations: { readOnlyHint: true },
-} satisfies ToolConfig;
-
-export const inputSchema = z.object({ name: z.string().min(1) }).strict();
-export const resultSchema = z.object({ message: z.string() }).strict();
-
-export default async function Hello({ input }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema: z.object({ name: z.string().min(1) }).strict(),
+  resultSchema: z.object({ message: z.string() }).strict(),
+}, async (input) => {
   const result = { message: `Hello, ${input.name}.` };
   return (
     <Agent.Result value={result}>
       <Agent.Text>{result.message}</Agent.Text>
     </Agent.Result>
   );
-}
+});
 ```
 
 The path declares the `hello` tool on the `status` server; its framework route ID is

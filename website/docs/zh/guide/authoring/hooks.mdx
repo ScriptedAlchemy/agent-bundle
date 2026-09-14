@@ -102,6 +102,8 @@ export default async function BeforeWrite(
 数据必须是严格 JSON，视图通过 `renderInput` 接收；其他路径或非 JSON 值会导致执行失败。
 事件配置写在 `.ts` 处理器中，`.view.tsx` 只是配套视图，不会注册第二个事件。
 拒绝结果必须有非空原因，且事件族必须支持拒绝。
+可直接复制的完整路由见 `examples/host-test/src/events/`：其中都使用轻量 `events.*` 处理器；
+只有 `session/start.ts` 会调用 `ctx.render('./start.view.js', data)`，因为它的同级视图确实会添加会话上下文。
 
 ### 执行跟踪事件
 

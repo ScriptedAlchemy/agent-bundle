@@ -1,6 +1,6 @@
 import { Agent, agent } from '@agent-bundle/runtime';
 import React from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { ChapterOutline, chaptersFromApplyReceipt } from '../../../components/chapter-outline.js';
@@ -13,7 +13,15 @@ import { CurationShelfStateSchema } from '../../../state.js';
 
 const operation = mediaMutationOperations.applyChapters;
 
-export const config = {
+export const inputSchema = z.object({
+  apply: z.boolean().optional(),
+  chapters: z.string().min(1).max(4096),
+  file: z.string().min(1).max(4096),
+  receipt: z.string().min(1).max(4096).optional(),
+}).strict();
+export const resultSchema = operation.resultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -38,16 +46,9 @@ export const config = {
   },
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan or explicitly apply verified chapter rows while preserving all non-chapter media state.',
-};
-export const inputSchema = z.object({
-  apply: z.boolean().optional(),
-  chapters: z.string().min(1).max(4096),
-  file: z.string().min(1).max(4096),
-  receipt: z.string().min(1).max(4096).optional(),
-}).strict();
-export const resultSchema = operation.resultSchema;
-
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as ChapterReceipt;
   const headline = receipt.status === 'planned'
     ? `Planned ${receipt.chapters.length} chapters for ${receipt.file}.`
@@ -76,4 +77,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       {shelf}
     </Agent.Result>
   );
-}
+});

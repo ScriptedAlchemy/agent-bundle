@@ -1,6 +1,6 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { ChapterOutline, chaptersFromAuditReceipt } from '../../../components/chapter-outline.js';
@@ -11,7 +11,15 @@ import { outputOperations } from '../../../operations/output.js';
 
 const operation = outputOperations.audit;
 
-export const config = {
+export const inputSchema = z.object({
+  conversionReceipt: z.string().min(1).max(4096).optional(),
+  file: z.string().min(1).max(4096),
+  fullDecode: z.boolean().optional(),
+  receipt: z.string().min(1).max(4096).optional(),
+}).strict();
+export const resultSchema = operation.resultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -36,16 +44,9 @@ export const config = {
   annotations: { readOnlyHint: false },
   description: 'Validate chapter structure, optional conversion mapping, file/audio hashes, probe facts, and optional full decode.',
   exitCode: 'result',
-};
-export const inputSchema = z.object({
-  conversionReceipt: z.string().min(1).max(4096).optional(),
-  file: z.string().min(1).max(4096),
-  fullDecode: z.boolean().optional(),
-  receipt: z.string().min(1).max(4096).optional(),
-}).strict();
-export const resultSchema = operation.resultSchema;
-
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as IntegrityAuditReceipt;
   return (
     <Agent.Result value={receipt}>
@@ -54,4 +55,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       <ChapterOutline chapters={chaptersFromAuditReceipt(receipt)} />
     </Agent.Result>
   );
-}
+});

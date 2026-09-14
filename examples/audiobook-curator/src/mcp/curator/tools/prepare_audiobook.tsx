@@ -1,6 +1,6 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { PrepareMutation } from '../../../components/mutation-receipt.js';
@@ -9,7 +9,15 @@ import { outputOperations } from '../../../operations/output.js';
 
 const operation = outputOperations.prepare;
 
-export const config = {
+export const inputSchema = z.object({
+  apply: z.boolean().optional(),
+  outputName: z.string().min(5).max(204).optional(),
+  outputRoot: z.string().min(1).max(4096),
+  source: z.string().min(1).max(4096),
+}).strict();
+export const resultSchema = operation.resultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -34,16 +42,9 @@ export const config = {
   },
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan an M4B output, or apply the plan only when apply is explicitly true.',
-};
-export const inputSchema = z.object({
-  apply: z.boolean().optional(),
-  outputName: z.string().min(5).max(204).optional(),
-  outputRoot: z.string().min(1).max(4096),
-  source: z.string().min(1).max(4096),
-}).strict();
-export const resultSchema = operation.resultSchema;
-
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as PrepareReceipt;
   const headline = receipt.applied
     ? `Prepared audiobook output at ${receipt.output}.`
@@ -54,4 +55,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       <PrepareMutation receipt={receipt} />
     </Agent.Result>
   );
-}
+});

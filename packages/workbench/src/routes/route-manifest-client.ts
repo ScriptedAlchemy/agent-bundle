@@ -144,16 +144,17 @@ const cliProjectionSchema: z.ZodType<RouteManifestCliProjection> = z.strictObjec
   // The projection's own CLI defaults: the same literal shape a schema
   // `.default()` takes on the wire, keyed by canonical key.
   defaults: z.record(z.string(), inputSchemaLiteral).optional(),
+  input: z.literal('json').optional(),
   mapInput: z.boolean(),
   module: z.string(),
   relaxed: z.array(z.string()).optional(),
 });
 
 const cliCommandSchema: z.ZodType<RouteManifestCliCommand> = z.strictObject({
-  input: z.literal('json').optional(),
   aliases: z.array(z.string()),
   description: z.string().optional(),
   exitCode: z.enum(['result', 'zero']),
+  input: z.literal('json').optional(),
   mcp: z.strictObject({
     confirm: z.boolean(),
     server: z.string(),

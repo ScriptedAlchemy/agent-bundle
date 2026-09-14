@@ -1,5 +1,5 @@
 import { Agent, type JsonValue } from '@agent-bundle/runtime';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import React from 'react';
 
 import { capture } from '../../../capture.js';
@@ -14,7 +14,10 @@ import { dumpCaptures, dumpInputSchema, dumpResultSchema, renderDumpMarkdown } f
  */
 export const DEFAULT_DUMP_LIMIT = 50;
 
-export const config = {
+export const inputSchema = dumpInputSchema;
+export const resultSchema = dumpResultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -44,12 +47,9 @@ export const config = {
   annotations: { readOnlyHint: true },
   description:
     'Dump what the host-test probe has recorded from this host: every hook payload, the framework request context each one saw, and the MCP calls. Filter by any conversation, session, or subagent id. Returns the newest 50 matching records unless `limit` is given; `matched` counts every record the filter hit.',
-} satisfies ToolConfig;
-
-export const inputSchema = dumpInputSchema;
-export const resultSchema = dumpResultSchema;
-
-export default async function Dump({ input }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input) => {
   // The dump call is itself an observation: it records the request context the
   // generated MCP server mounted for this tool call before reading the log.
   const observed = await capture({ kind: 'mcp', observed: { tool: 'dump' } });
@@ -60,4 +60,4 @@ export default async function Dump({ input }: ToolRouteProps<typeof inputSchema>
       <Agent.Json value={result as unknown as JsonValue} />
     </Agent.Result>
   );
-}
+});

@@ -22,7 +22,9 @@ evidence, not proof that the host lacks a capability.
 
 Every canonical event family the framework admits has a semantic event route
 under `src/events/**`, each restricted to the hosts whose pinned capability
-table supports it. Every route appends one NDJSON line and dispatches a
+table supports it. The lightweight `.ts` handlers record without rendering;
+only `session/start.ts` loads `session/start.view.tsx` to announce the log path.
+Every route appends one NDJSON line and dispatches a
 bounded summary into the durable state kernel (`src/state.ts`,
 `host-test/captures`, workspace-durable). A line carries:
 
@@ -33,7 +35,7 @@ bounded summary into the durable state kernel (`src/state.ts`,
 | `request` | `(await agent())` as the route saw it: `invocation`, `host`, `session`, `actor`, `workspace`, `capabilities`, `lineage`, provider keys, and whether state and notices were mounted. `lineage` is always present: `available` with the resolved tree position, or `unavailable` with the runtime's per-host reason. |
 | `ids` | Every identity-shaped native field (`conversation_id`, `generation_id`, `session_id`, `subagent_id`, `tool_call_id`, `agent_id`, `turn_id`, `user_email`, …) lifted out for filtering. |
 | `process` | `pid`, `ppid`, `cwd`, `execPath`, entry file, uptime — of the process that ran the route. |
-| `runtime` | `shared-runtime` when the hook reached the warm MCP-hosted runtime, `standalone-hook` when it fell back to the hook process, `mcp-server`, or `cli`. |
+| `runtime` | `standalone-hook` for handler-only events, `shared-runtime` when the rendered session-start view reaches the warm MCP-hosted runtime, `mcp-server`, or `cli`. |
 | `env.names` | Environment variable **names** matching `CURSOR_*`, `CLAUDE_*`, `CODEX_*`, `AGENT_BUNDLE_*`, `PLUGIN_*`, `MCP_*`, `HOST_TEST_*`. Values are never written. |
 
 Two MCP servers ship in the plugin:

@@ -7,7 +7,13 @@ import type { Page, Request } from 'playwright-core';
 import { waitForWorkbenchIdle, workspaceRoot } from './workbench-e2e.ts';
 import { timeScale } from '../../../agent-bundle/tests/support/time-scale.ts';
 
-export type ExampleName = 'audiobook-curator' | 'hooks-and-scripts' | 'host-test' | 'mcp-app' | 'skills-starter';
+export type ExampleName =
+  | 'audiobook-curator'
+  | 'hooks-and-scripts'
+  | 'host-test'
+  | 'mcp-app'
+  | 'skills-starter'
+  | 'worktree-proximity';
 
 export interface ExampleCapture {
   readonly example: ExampleName;
@@ -46,7 +52,7 @@ export const copyExample = async (name: ExampleName): Promise<{ readonly release
   const root = await mkdtemp(join(temporaryParent, `${name}-e2e-`));
   const exampleSource = exampleRoot(name);
   await cp(exampleSource, root, {
-    filter: (source) => !['.agent-bundle', 'dist', 'node_modules'].includes(basename(source)),
+    filter: (source) => !['.agent-bundle', 'artifact', 'dist', 'node_modules'].includes(basename(source)),
     recursive: true,
   });
   await symlink(join(exampleSource, 'node_modules'), join(root, 'node_modules'), 'dir');

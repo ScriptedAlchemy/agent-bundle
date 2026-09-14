@@ -28,11 +28,13 @@ those features, not the build. This example has no hooks.
   runtime, and the two targets. File conventions discover the rest: 16 tool routes, one catalog
   resource, and one curation prompt under `src/mcp/curator/`. There is no route registry, no
   handwritten `src/mcp/curator.ts`, no per-operation server selector, and no `routes` setting.
+  Every tool uses `defineTool` to keep its metadata, schemas, and handler in one definition.
 - **One operation, one command.** Every tool has a colocated
   [`<tool>.cli.ts` projection](../guide/authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command)
   — `search_audible.cli.ts` spells the tool as `audible-search`, `--duration`, and a
   comma-separated or repeatable `--regions`; `prepare_audiobook.cli.ts` spells `outputRoot` as
-  `--output` — so the compiled graph carries exactly 16 CLI commands, each with the tool's own
+  `--output`; and `convert_audiobook.cli.ts` keeps its nested conversion contract whole behind
+  `--input` — so the compiled graph carries exactly 16 CLI commands, each with the tool's own
   identity (`tool:curator/<tool>`). There is no `src/cli/` directory and no
   `audiobook-curator curator <tool> --input` twin: the projection is the command. Every
   projection declares `confirm: false` because the plan-first commands gate their mutation on
@@ -74,9 +76,10 @@ Each command runs its tool's component. An interactive terminal draws the stream
 headline and report the MCP client receives as text content. `--json` selects machine output and
 emits one result-schema-validated JSON value followed by a newline: the canonical final
 `Agent.Result` value, never the Markdown presentation and never an intermediate Suspense fallback,
-and byte for byte the `structuredContent` of the tool call. `--report` and `--receipt` are
-optional on the command line exactly as they are on the tool; a command that gets one still
-writes the receipt file when it succeeds. This is a behavior change from the retired `src/cli/` tree, where
+and byte for byte the `structuredContent` of the tool call. Named `--report` and `--receipt`
+options remain optional where a command projects fields as flags; `convert` carries its optional
+`receipt` inside the JSON `conversion` object. A command that gets one still writes the receipt
+file when it succeeds. This is a behavior change from the retired `src/cli/` tree, where
 every command that took a report or receipt path — thirteen of the sixteen, `inventory --report`
 and `convert --receipt` among them — required it: those commands now run without the path and
 write no report or receipt file, and their exit codes, `--apply` gating, and error output are

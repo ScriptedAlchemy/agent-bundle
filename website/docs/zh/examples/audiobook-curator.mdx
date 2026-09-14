@@ -24,11 +24,13 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
 
 - **路由树就是应用。** `agent-bundle.config.ts` 声明标识、Node 运行时与两个 target。其余由文件约定
   发现：`src/mcp/curator/` 下的 16 个工具路由、1 个目录资源与 1 个策展提示词。这里没有路由注册表，
-  没有手写的 `src/mcp/curator.ts`，没有逐操作的服务器选择器，也没有 `routes` 设置。
+  没有手写的 `src/mcp/curator.ts`，没有逐操作的服务器选择器，也没有 `routes` 设置。每个工具都使用
+  `defineTool`，把元数据、schema 与处理器放在同一个定义中。
 - **一个操作，一条命令。** 每个工具都有一个同目录的
   [`<tool>.cli.ts` 投影模块](../guide/authoring/package-entries.mdx#将一个工具投影为惯用命令)——
   `search_audible.cli.ts` 把工具拼写为 `audible-search`、`--duration`，以及可逗号分隔或重复的
-  `--regions`；`prepare_audiobook.cli.ts` 把 `outputRoot` 拼写为 `--output`——因此编译后的图恰好有
+  `--regions`；`prepare_audiobook.cli.ts` 把 `outputRoot` 拼写为 `--output`；
+  `convert_audiobook.cli.ts` 则通过 `--input` 保留完整的嵌套转换契约——因此编译后的图恰好有
   16 条 CLI 命令，每条都带着工具自己的身份（`tool:curator/<tool>`）。没有 `src/cli/` 目录，也没有
   `audiobook-curator curator <tool> --input` 这样的孪生命令：投影就是命令。每个投影都声明
   `confirm: false`，因为这些先计划再执行的命令用 `--apply` 而不是 `--yes` 把关变更。
@@ -60,8 +62,9 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
 每条命令运行的就是其工具的组件。交互式终端会就地绘制流式的 `Agent.Progress` 回退；管道输出则是一份
 最终的 Markdown 文档——与 MCP 客户端作为文本内容收到的是同一份标题与报告。`--json` 选择机器输出，
 并输出一个经结果 schema 校验的 JSON 值加一个换行：这是最终的规范 `Agent.Result` 值，绝不是 Markdown
-表现，也绝不是中间的 Suspense 回退，并且与工具调用的 `structuredContent` 逐字节一致。`--report` 与
-`--receipt` 在命令行上和在工具上一样是可选的；传入了的命令在成功时仍会写出收据文件。这相对于已移除的
+表现，也绝不是中间的 Suspense 回退，并且与工具调用的 `structuredContent` 逐字节一致。把字段投影为
+flag 的命令仍提供可选的 `--report` 与 `--receipt`；`convert` 则把可选的 `receipt` 放在 JSON
+`conversion` 对象中。传入了的命令在成功时仍会写出收据文件。这相对于已移除的
 `src/cli/` 树是一处行为变化：那里每条接受报告或收据路径的命令（十六条中的十三条，包括 `inventory --report`
 与 `convert --receipt`）都把它设为必填；现在这些命令不带该路径也能运行且不写报告或收据文件，而退出码、
 `--apply` 把关与错误输出在两种情况下都不变。`inspect`、`prepare` 与 `shelf` 从来不接受这个参数。

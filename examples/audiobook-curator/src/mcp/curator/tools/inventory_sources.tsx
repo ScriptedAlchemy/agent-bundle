@@ -1,6 +1,6 @@
 import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { inventoryHeadline } from '../../../components/headlines.js';
@@ -10,7 +10,14 @@ import { discoveryOperations } from '../../../operations/discovery.js';
 
 const operation = discoveryOperations.inventory;
 
-export const config = {
+export const inputSchema = z.object({
+  source: z.string().min(1).max(4096).describe('Source audio path to inventory.'),
+  report: z.string().min(1).max(4096).optional().describe('Optional report destination.'),
+  strict: z.boolean().optional().describe('Fail when any source cannot be probed.'),
+}).strict();
+export const resultSchema = operation.resultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -35,15 +42,9 @@ export const config = {
   annotations: { readOnlyHint: false },
   description: 'Inventory source audio with retained per-file probe evidence.',
   exitCode: 'result',
-};
-export const inputSchema = z.object({
-  source: z.string().min(1).max(4096).describe('Source audio path to inventory.'),
-  report: z.string().min(1).max(4096).optional().describe('Optional report destination.'),
-  strict: z.boolean().optional().describe('Fail when any source cannot be probed.'),
-}).strict();
-export const resultSchema = operation.resultSchema;
-
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as InventoryReceipt;
   return (
     <Agent.Result value={receipt}>
@@ -51,4 +52,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       <InventoryShelf receipt={receipt} />
     </Agent.Result>
   );
-}
+});

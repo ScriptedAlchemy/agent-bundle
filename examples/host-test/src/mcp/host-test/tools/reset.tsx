@@ -1,20 +1,10 @@
 import { Agent, agent, type AgentStateHandle, type JsonValue } from '@agent-bundle/runtime';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import React from 'react';
 import { z } from 'zod';
 
 import { clearLog, resolveLog } from '../../../log.js';
 import type { CaptureEvents, CapturesState } from '../../../state.js';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {},
-    "type": "object"
-  },
-  annotations: { destructiveHint: true, readOnlyHint: false },
-  description: 'Clear the host-test capture log and the durable capture summary so the next probe starts empty.',
-} satisfies ToolConfig;
 
 export const inputSchema = z.object({}).strict();
 
@@ -25,7 +15,17 @@ export const resultSchema = z.object({
   stateReason: z.string().optional(),
 }).strict();
 
-export default async function Reset(_props: ToolRouteProps<typeof inputSchema>) {
+export default defineTool({
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  annotations: { destructiveHint: true, readOnlyHint: false },
+  description: 'Clear the host-test capture log and the durable capture summary so the next probe starts empty.',
+  inputSchema,
+  resultSchema,
+}, async () => {
   const context = await agent();
   const log = resolveLog();
   await clearLog(log);
@@ -52,4 +52,4 @@ export default async function Reset(_props: ToolRouteProps<typeof inputSchema>) 
       <Agent.Text>{`Cleared ${log.path}; durable state ${result.state}.`}</Agent.Text>
     </Agent.Result>
   );
-}
+});

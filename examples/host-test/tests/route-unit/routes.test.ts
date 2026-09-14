@@ -3,9 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, expect, it } from '@rstest/core';
-import { available, type AgentLineage } from '@agent-bundle/runtime';
+import { agent, available, runAgentRequest, type AgentLineage } from '@agent-bundle/runtime';
+import type { AgentEventRouteProps, CanonicalAgentEvent } from 'agent-bundle';
+import type { EventHandler, EventResult } from 'agent-bundle/routes';
 import { createEventRouteInput, expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
 
+import AgentStart from '../../src/events/agent/start.js';
+import AgentStop from '../../src/events/agent/stop.js';
+import SessionStart from '../../src/events/session/start.js';
+import SessionStartView from '../../src/events/session/start.view.js';
+import ToolBefore from '../../src/events/tool/before.js';
 import { LOG_DIR_ENV } from '../../src/log.js';
 import { DEFAULT_DUMP_LIMIT } from '../../src/mcp/host-test/tools/dump.js';
 import type { CaptureEvents, CapturesState } from '../../src/state.js';
@@ -19,13 +26,17 @@ let logDir: string;
 let mounted: MountedTestState<CapturesState, CaptureEvents>;
 let sequence = 0;
 
+type TestEvent = 'agent/start' | 'agent/stop' | 'session/start' | 'tool/before';
+type EventInput<Event extends CanonicalAgentEvent> =
+  Omit<AgentEventRouteProps<Event>, 'renderInput' | 'signal'>;
+
 // The probe records the whole envelope, so its tests hand it partial ones
 // (`validate: false`); the harness still projects `canonical.payload` from them.
-const eventInput = (
-  event: 'agent/start' | 'agent/stop' | 'session/start' | 'tool/before',
+const eventInput = <Event extends TestEvent>(
+  event: Event,
   native: Record<string, unknown>,
   host = 'claude',
-) => {
+): EventInput<Event> => {
   const built = createEventRouteInput(event, native, { host, validate: false });
   return {
     canonical: {
@@ -54,6 +65,52 @@ const render = async (
   },
   input,
 });
+
+const runEvent = async <Event extends CanonicalAgentEvent>(
+  handler: EventHandler<Event>,
+  input: EventInput<Event>,
+  sessionId = 'root-session',
+  host = 'claude',
+  lineage?: AgentLineage,
+): Promise<EventResult<Event>> => runAgentRequest({
+  ...mounted.context(),
+  host: available({ name: host }, 'native'),
+  invocation: { kind: 'event', operationId: `event:${input.canonical.event}` },
+  ...(lineage === undefined ? {} : { lineage: available(lineage, 'native') }),
+  session: available({ sessionId }, 'native'),
+  workspace: available({ root: '/repo' }, 'native'),
+}, async () => {
+  const context = await agent();
+  return handler({
+    ...input,
+    process: context.process,
+    provider: context.provider,
+    render: (module, data) => ({ data, module, outcome: 'render' }),
+    signal: context.signal,
+  });
+});
+
+const renderSessionStart = async (
+  input: EventInput<'session/start'>,
+  sessionId = 'root-session',
+  host = 'claude',
+  lineage?: AgentLineage,
+) => {
+  const result = await runEvent(SessionStart, input, sessionId, host, lineage);
+  if (result?.outcome !== 'render') throw new Error('session/start must render its announcement');
+  return renderRoute({ default: SessionStartView }, {
+    context: {
+      ...mounted.context(),
+      host: available({ name: host }, 'native'),
+      ...(lineage === undefined ? {} : { lineage: available(lineage, 'native') }),
+      session: available({ sessionId }, 'native'),
+      workspace: available({ root: '/repo' }, 'native'),
+    },
+    input: { ...input, renderInput: result.data },
+    kind: 'event-route',
+    routeId: 'event:session/start',
+  });
+};
 
 const readLogLines = async (): Promise<Record<string, unknown>[]> =>
   (await readFile(join(logDir, 'captures.ndjson'), 'utf8'))
@@ -106,7 +163,7 @@ it('holds the slow probe open for the requested time, reporting one progress tic
 });
 
 it('records the complete native envelope, the request context, and env names for every event', async () => {
-  const rendered = await render('event:session/start', eventInput('session/start', {
+  const rendered = await renderSessionStart(eventInput('session/start', {
     cwd: '/repo',
     hook_event_name: 'SessionStart',
     session_id: 'root-session',
@@ -149,7 +206,7 @@ it('records the mounted request.lineage verbatim and renders it in the dump tabl
     root: 'root-session',
     subagent: { id: 'agent-1' },
   };
-  await render('event:tool/before', eventInput('tool/before', {
+  await runEvent(ToolBefore, eventInput('tool/before', {
     agent_id: 'agent-1',
     cwd: '/repo',
     hook_event_name: 'PreToolUse',
@@ -171,7 +228,7 @@ it('records the mounted request.lineage verbatim and renders it in the dump tabl
 });
 
 it('redacts secret-looking native values but keeps ids intact', async () => {
-  await render('event:tool/before', eventInput('tool/before', {
+  await runEvent(ToolBefore, eventInput('tool/before', {
     cwd: '/repo',
     hook_event_name: 'PreToolUse',
     session_id: 'root-session',
@@ -187,7 +244,7 @@ it('redacts secret-looking native values but keeps ids intact', async () => {
 });
 
 it('keeps a bounded durable summary and dumps by any carried id', async () => {
-  await render('event:agent/start', eventInput('agent/start', {
+  await runEvent(AgentStart, eventInput('agent/start', {
     agent_id: 'agent-1',
     agent_type: 'general-purpose',
     cwd: '/repo',
@@ -195,7 +252,7 @@ it('keeps a bounded durable summary and dumps by any carried id', async () => {
     session_id: 'root-session',
     transcript_path: '/tmp/transcript.jsonl',
   }));
-  await render('event:agent/stop', eventInput('agent/stop', {
+  await runEvent(AgentStop, eventInput('agent/stop', {
     agent_id: 'agent-1',
     agent_transcript_path: null,
     agent_type: 'general-purpose',
@@ -206,7 +263,7 @@ it('keeps a bounded durable summary and dumps by any carried id', async () => {
     stop_hook_active: false,
     transcript_path: '/tmp/transcript.jsonl',
   }));
-  await render('event:session/start', eventInput('session/start', {
+  await renderSessionStart(eventInput('session/start', {
     cwd: '/repo',
     hook_event_name: 'SessionStart',
     session_id: 'other-session',
@@ -238,7 +295,7 @@ it('keeps a bounded durable summary and dumps by any carried id', async () => {
 // PostToolUseFailure, so the model had to guess a limit.
 it('a bare dump returns only the newest records while matched counts the whole log', async () => {
   for (let index = 0; index < DEFAULT_DUMP_LIMIT + 5; index += 1) {
-    await render('event:tool/before', eventInput('tool/before', {
+    await runEvent(ToolBefore, eventInput('tool/before', {
       cwd: '/repo',
       hook_event_name: 'PreToolUse',
       session_id: 'root-session',
@@ -263,7 +320,7 @@ it('a bare dump returns only the newest records while matched counts the whole l
 });
 
 it('reset clears the log and the durable summary', async () => {
-  await render('event:session/start', eventInput('session/start', {
+  await renderSessionStart(eventInput('session/start', {
     cwd: '/repo',
     hook_event_name: 'SessionStart',
     session_id: 'root-session',

@@ -1,6 +1,6 @@
 import { Agent } from '@agent-bundle/runtime';
 import React, { Suspense } from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { libraryAuditHeadline } from '../../../components/headlines.js';
@@ -11,7 +11,15 @@ import { discoveryOperations } from '../../../operations/discovery.js';
 
 const operation = discoveryOperations.libraryAudit;
 
-export const config = {
+export const inputSchema = z.object({
+  concurrency: z.number().int().min(1).max(8).optional(),
+  report: z.string().min(1).max(4096).optional(),
+  sources: z.array(z.string().min(1).max(4096)).min(1).max(64),
+  strict: z.boolean().optional(),
+}).strict();
+export const resultSchema = operation.resultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -39,16 +47,9 @@ export const config = {
   annotations: { readOnlyHint: false },
   description: 'Audit audiobook library metadata, duplicates, and multipart evidence without deletion advice.',
   exitCode: 'result',
-};
-export const inputSchema = z.object({
-  concurrency: z.number().int().min(1).max(8).optional(),
-  report: z.string().min(1).max(4096).optional(),
-  sources: z.array(z.string().min(1).max(4096)).min(1).max(64),
-  strict: z.boolean().optional(),
-}).strict();
-export const resultSchema = operation.resultSchema;
-
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as LibraryAuditReceipt;
   // The Suspense fallback is the progress surface: the MCP projector turns the
   // streamed `Agent.Progress` node into `notifications/progress` for a client
@@ -63,4 +64,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       </Suspense>
     </Agent.Result>
   );
-}
+});

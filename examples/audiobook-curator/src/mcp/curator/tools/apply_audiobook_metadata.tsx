@@ -1,6 +1,6 @@
 import { Agent, agent } from '@agent-bundle/runtime';
 import React from 'react';
-import type { ToolRouteProps } from 'agent-bundle';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
@@ -12,7 +12,21 @@ import { CurationShelfStateSchema } from '../../../state.js';
 
 const operation = mediaMutationOperations.applyMetadata;
 
-export const config = {
+export const inputSchema = z.object({
+  apply: z.boolean().optional(),
+  artwork: z.string().min(1).max(4096).optional(),
+  author: z.string().max(512).optional(),
+  file: z.string().min(1).max(4096),
+  language: z.string().min(1).max(64).optional(),
+  narrator: z.string().max(512).optional(),
+  product: z.string().min(1).max(4096),
+  receipt: z.string().min(1).max(4096).optional(),
+  title: z.string().max(1024).optional(),
+  year: z.string().max(64).optional(),
+}).strict();
+export const resultSchema = operation.resultSchema;
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -55,22 +69,9 @@ export const config = {
   },
   annotations: { destructiveHint: true, readOnlyHint: false },
   description: 'Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream.',
-};
-export const inputSchema = z.object({
-  apply: z.boolean().optional(),
-  artwork: z.string().min(1).max(4096).optional(),
-  author: z.string().max(512).optional(),
-  file: z.string().min(1).max(4096),
-  language: z.string().min(1).max(64).optional(),
-  narrator: z.string().max(512).optional(),
-  product: z.string().min(1).max(4096),
-  receipt: z.string().min(1).max(4096).optional(),
-  title: z.string().max(1024).optional(),
-  year: z.string().max(64).optional(),
-}).strict();
-export const resultSchema = operation.resultSchema;
-
-export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => {
   const receipt = await operation.handler(input, { signal }) as MetadataReceipt;
   const headline = receipt.status === 'planned'
     ? `Planned metadata for ${receipt.file}; audio remains unchanged.`
@@ -98,4 +99,4 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       {shelf}
     </Agent.Result>
   );
-}
+});
