@@ -73,6 +73,11 @@ pair without preinstalling React or bypassing peer checks. Routed scaffolds stil
 known-good React/React DOM pair intentionally: generated projects start reproducibly, and their
 committed lockfiles preserve that pair.
 
+`@agent-bundle/runtime` declares `zod` as a `^4.5.4` peer rather than a dependency for the same
+reason: route and state definitions hand Zod schemas across the runtime's API, and Zod 4 brands
+schema types by minor version, so the project and the runtime must share one installed copy. A
+project that bumps its own `zod` keeps typechecking; a nested second copy would not.
+
 ## Once npm releases exist
 
 The commands below are the **future** installation path. They do not work yet, because no npm
