@@ -92,7 +92,7 @@ it.each([
       markdownStream.tarball,
       'react@19.2.8',
       'react-dom@19.2.8',
-      'zod@4.4.3',
+      'zod@4.5.4',
     ], { cwd: project, env: installedEnvironment() });
 
     // The fixture selects `claude`, the only target whose capabilities cover
