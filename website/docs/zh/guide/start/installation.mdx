@@ -65,7 +65,7 @@ React 和 React DOM 声明同一个范围，因此全新的 npm 安装可以选�
 React，也无需绕过 peer 检查。路由式脚手架仍会有意固定一组已验证的 React/React DOM 版本：
 生成的项目由此保持可复现，提交后的 lockfile 会继续保留这组版本。
 
-出于同样的原因，`@agent-bundle/runtime` 将 `zod` 声明为 `^4.5.0` peer 依赖而非普通依赖：路由和
+出于同样的原因，`@agent-bundle/runtime` 将 `zod` 声明为 `^4.5.4` peer 依赖而非普通依赖：路由和
 状态定义会把 Zod schema 传过 runtime 的 API，而 Zod 4 会按 minor 版本给 schema 类型打标记，
 所以项目与 runtime 必须共用同一份安装。项目自行升级 `zod` 后仍能通过类型检查；若嵌套第二份
 副本则不行。

@@ -83,7 +83,7 @@
     "@rspack/core": "^2.2.0-0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "zod": "^4.5.0"
+    "zod": "^4.5.4"
   },
   "peerDependenciesMeta": {
     "@rspack/core": {
