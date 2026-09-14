@@ -55,9 +55,10 @@ and `@agent-bundle/runtime` exports with `workspace:*` dependencies.
 `agent-bundle.config.ts` declares the plugin identity, Node runtime, and Claude
 and Codex targets. File conventions discover the rest.
 The MCP tree under `src/mcp/curator/` contains 16 tool routes, one catalog
-resource, and one curation prompt. Each executable route exports static
-`config`, `inputSchema`, and `resultSchema` values plus an async default Server
-Component. The compiler derives the `curator` server, lifecycle entry, warm
+resource, and one curation prompt. Each tool keeps named schemas for its CLI
+projection and default-exports `defineTool` with inline metadata and its async
+handler. The resource and prompt retain their own static route contracts. The
+compiler derives the `curator` server, lifecycle entry, warm
 Flight worker, and MCP registrations; there is no `src/application.ts`,
 operation-array registry, handwritten `src/mcp/curator.ts`, or per-operation
 server selector.
