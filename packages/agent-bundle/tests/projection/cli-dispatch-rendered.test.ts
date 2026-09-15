@@ -48,7 +48,7 @@ describe('rendered commands at the CLI dispatch level', () => {
 
       expect(run.exitCode).toBe(1);
       expect(run.stdout).toBe('');
-      expect(run.stderr).toBe('fault: route threw\n');
+      expect(run.stderr).toBe('[render-failed] fault: route threw\n');
       expect(run.value).toBeUndefined();
     });
 
@@ -117,7 +117,7 @@ describe('rendered commands at the CLI dispatch level', () => {
 
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toBe('');
-    expect(run.stderr).toBe('report render exploded\n');
+    expect(run.stderr).toBe('[render-failed] report render exploded\n');
   });
 
   it("reports a rendered resultSchema rejection on stderr", async () => {

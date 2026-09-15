@@ -1251,6 +1251,7 @@ describe('rendered command projection (#102 stage 3)', () => {
   const runRendered = async (
     argv: readonly string[],
     options: {
+      readonly error?: Error;
       readonly events?: readonly CliRenderedEvent[];
       readonly isTty?: boolean;
       readonly validate?: (value: unknown) => unknown;
@@ -1263,7 +1264,9 @@ describe('rendered command projection (#102 stage 3)', () => {
       close: async () => {
         closed += 1;
       },
-      events: () => eventStream(options.events ?? events),
+      events: () => options.error === undefined
+        ? eventStream(options.events ?? events)
+        : new ReadableStream({ start: (controller) => controller.error(options.error) }),
       validate: options.validate ?? ((value) => value),
     };
     const code = await runGeneratedCliEntry({
@@ -1402,6 +1405,28 @@ describe('rendered command projection (#102 stage 3)', () => {
     });
     expect(incomplete.code).toBe(1);
     expect(incomplete.stderr).toContain('without a complete document');
+  });
+
+  it('reports a render failure as one typed line or one canonical JSON error', async () => {
+    const error = new Error('fake gateway failed');
+    error.stack = 'Error: fake gateway failed\n    at gbot-flight.mjs:42:7';
+
+    const text = await runRendered(['report', '/library'], { error });
+    expect(text.code).toBe(1);
+    expect(text.stdout).toBe('');
+    expect(text.stderr).toBe('[render-failed] fake gateway failed\n');
+    expect(text.stderr).not.toContain('gbot-flight.mjs');
+    expect(text.closed).toBe(1);
+
+    const json = await runRendered(['report', '/library', '--json'], { error });
+    expect(json.code).toBe(1);
+    expect(json.stdout).toBe('');
+    expect(json.stderr.trimEnd().split('\n')).toHaveLength(1);
+    expect(JSON.parse(json.stderr)).toEqual({
+      error: { code: 'render-failed', message: 'fake gateway failed' },
+    });
+    expect(json.stderr).not.toContain('gbot-flight.mjs');
+    expect(json.closed).toBe(1);
   });
 
   it('rejects --json combined with --ndjson', async () => {

@@ -1,5 +1,6 @@
 import type { CompiledCliCommand, CompiledCliOption } from './routes/types.ts';
 import { stableJson } from './core/digest.ts';
+import { errorMessage } from './core/errors.ts';
 import {
   detectProcessTerminal,
   type AgentTerminal,
@@ -861,6 +862,19 @@ interface RenderedRunOptions {
   readonly writeOut: (text: string) => void;
 }
 
+const renderFailedCode = 'render-failed';
+
+const writeRenderFailure = (
+  mode: CliOutputMode,
+  error: unknown,
+  writeErr: (text: string) => void,
+): void => {
+  const message = errorMessage(error);
+  writeErr(mode === 'json'
+    ? `${stableJson({ error: { code: renderFailedCode, message } })}\n`
+    : `[${renderFailedCode}] ${message}\n`);
+};
+
 /**
  * Drives one rendered run through its output mode: machine output on stdout,
  * diagnostics on stderr, deterministic exit codes (0 success or the `result`
@@ -929,7 +943,7 @@ const runRenderedInvocation = async (options: RenderedRunOptions): Promise<numbe
       writeErr('Aborted.\n');
       return 1;
     }
-    writeErr(`${error instanceof Error ? error.message : String(error)}\n`);
+    writeRenderFailure(mode, error, writeErr);
     return 1;
   }
   clearProgress();
