@@ -54,11 +54,15 @@ model can choose. Long or overlapping descriptions get truncated; vague
 triggers load the wrong Skill. Prefer a short capability plus a
 discriminating **when** — not a broad domain:
 
-```md
-<!-- Avoid: fires on anything database-shaped -->
-description: Create and validate Postgres schema migrations. Use when working with databases, queries, models, or persistence.
+Avoid — fires on anything database-shaped:
 
-<!-- Prefer: fires when the task is actually a migration -->
+```md
+description: Create and validate Postgres schema migrations. Use when working with databases, queries, models, or persistence.
+```
+
+Prefer — fires when the task is actually a migration:
+
+```md
 description: Create and validate Postgres schema migrations. Use when adding or changing a migration, or reviewing its rollout.
 ```
 
