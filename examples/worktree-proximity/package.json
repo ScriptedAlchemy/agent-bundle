@@ -27,6 +27,6 @@
     "@types/react": "19.3.0",
     "agent-bundle": "workspace:*",
     "react": "19.3.0",
-    "zod": "4.6.5"
+    "zod": "4.5.4"
   }
 }
