@@ -1,6 +1,6 @@
 ---
 name: curate-audiobooks
-description: Inventory, match, convert, repair, or audit an audiobook library while preserving immutable sources and reviewed edition identity.
+description: Inventory, match, convert, repair, or audit audiobooks. Use for a concrete curation step — not general media discussion.
 ---
 # Curate audiobooks
 

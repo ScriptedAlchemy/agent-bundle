@@ -1,6 +1,6 @@
 ---
 name: dependency-upgrade
-description: Plan, implement, or review a dependency upgrade that may change APIs, runtime support, generated output, or operational behavior.
+description: Plan, implement, or review a dependency upgrade that may change APIs or runtime. Use when bumping or replacing a dependency.
 ---
 # Dependency upgrade
 

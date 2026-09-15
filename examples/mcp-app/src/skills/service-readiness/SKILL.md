@@ -1,6 +1,6 @@
 ---
 name: service-readiness
-description: Assess service health evidence for a release, incident decision, or operational handoff.
+description: Assess service health evidence for a release, incident, or handoff. Use when a readiness verdict is requested.
 ---
 # Service readiness
 

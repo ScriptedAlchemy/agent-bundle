@@ -1,6 +1,6 @@
 ---
 name: incident-triage
-description: Triage a suspected active production incident and prepare evidence-based containment and handoff.
+description: Triage a suspected active production incident with evidence for containment and handoff.
 ---
 # Incident triage
 

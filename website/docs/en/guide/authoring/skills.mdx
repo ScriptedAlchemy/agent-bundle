@@ -49,15 +49,30 @@ emitted document, so they resolve inside whichever artifact the host installed.
 
 ## Keep instructions focused
 
-Put a concise capability and a discriminating trigger in `description`; put
-only useful shared instructions and real safety or authorization constraints
-in the body. A repeated “When to use” section is unnecessary when the
-description already gives the boundary.
+Host UIs load every Skill's `name` and `description` into context so the
+model can choose. Long or overlapping descriptions get truncated; vague
+triggers load the wrong Skill. Prefer a short capability plus a
+discriminating **when** — not a broad domain:
 
-Link substantial mode-specific procedures from `references/` and say when to
-read them. Do not load every reference at entry or create resource folders for
-a short, self-contained Skill. `assets/` holds files used in the output, not
-instructions that must always enter context.
+```md
+<!-- Avoid: fires on anything database-shaped -->
+description: Create and validate Postgres schema migrations. Use when working with databases, queries, models, or persistence.
+
+<!-- Prefer: fires when the task is actually a migration -->
+description: Create and validate Postgres schema migrations. Use when adding or changing a migration, or reviewing its rollout.
+```
+
+Put only useful shared instructions and real safety or authorization
+constraints in the body. A repeated “When to use” section is unnecessary when
+the description already gives the boundary.
+
+Treat the root `SKILL.md` as a router: link substantial mode-specific
+procedures from `references/` and say when to read them (progressive
+disclosure). Do not load every reference at entry or create resource folders
+for a short, self-contained Skill. `assets/` holds files used in the output,
+not instructions that must always enter context. Overly specific step-by-step
+itineraries that helped weaker models often over-constrain stronger ones —
+keep invariants, drop ceremony.
 
 Write the body so the agent matches the user's scope. A plan or review should
 not silently become implementation or release. Reuse existing authorization

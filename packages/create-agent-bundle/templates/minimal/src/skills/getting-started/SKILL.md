@@ -1,6 +1,6 @@
 ---
 name: getting-started
-description: Explain this plugin’s current Skills or help add a new Skill to its source.
+description: Explain this plugin’s current Skills or help add a new Skill under src/skills.
 ---
 # Getting started
 
