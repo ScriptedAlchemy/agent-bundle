@@ -28,12 +28,12 @@ import { assertScaffoldTarget, scaffold } from './scaffold.ts';
  */
 
 /** Cancelled prompts end the run quietly with exit code 0, as create-rstack does. */
-const checkCancel = <T>(value: T | symbol): T => {
+const checkCancel = <T>(value: T): Exclude<T, symbol> => {
   if (isCancel(value)) {
     cancel('Operation cancelled.');
     process.exit(0);
   }
-  return value as T;
+  return value as Exclude<T, symbol>;
 };
 
 const clackPrompter: Prompter = {
