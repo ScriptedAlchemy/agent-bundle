@@ -4,7 +4,7 @@ import { dirname, join, relative } from 'node:path';
 
 import { createRsbuild } from '@rsbuild/core';
 import { afterEach, describe, expect, it } from '@rstest/core';
-import { init, parse } from 'es-module-lexer';
+import { init, parse } from 'es-module-lexer/minimal';
 
 import type { CompilationEvidence } from '../src/build/compile-result.ts';
 import { MCP_APP_HTML_ADVISORY_BYTES } from '../src/build/mcp-app-diagnostics.ts';
@@ -88,7 +88,7 @@ const compileErrorShape = { code: 'AB4770', severity: 'error' } as const;
 const runtimeImportGraph = async (
   entry: string,
 ): Promise<{ readonly externalSpecifiers: readonly string[]; readonly files: ReadonlyMap<string, string> }> => {
-  await init;
+  await init();
   const files = new Map<string, string>();
   const externalSpecifiers: string[] = [];
   const queue = [entry];

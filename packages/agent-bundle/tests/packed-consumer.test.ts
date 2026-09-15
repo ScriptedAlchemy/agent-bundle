@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
-import { init, parse } from 'es-module-lexer';
+import { init, parse } from 'es-module-lexer/minimal';
 
 import { sha256Hex } from '../src/core/digest.ts';
 import { cachedNpmInstallArguments, installedEnvironment, linkWorkspaceTypes, packOutputFromJson } from './support/shared-pack.ts';
@@ -84,7 +84,7 @@ interface EmittedModuleReport {
  * outputs a real consumer builds from the installed tarball.
  */
 const emittedModuleReport = async (root: string): Promise<EmittedModuleReport> => {
-  await init;
+  await init();
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
   const files = entries
     .filter((entry) => entry.isFile() && /\.m?js$/u.test(entry.name))

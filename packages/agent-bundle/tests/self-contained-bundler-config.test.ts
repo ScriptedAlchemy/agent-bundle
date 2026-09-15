@@ -1,7 +1,7 @@
 import { createRsbuild } from '@rsbuild/core';
 import { createRslib } from '@rslib/core';
 import { expect, it } from '@rstest/core';
-import { init, parse } from 'es-module-lexer';
+import { init, parse } from 'es-module-lexer/minimal';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -180,7 +180,7 @@ it('lowers a generated executable with only Node builtins external and inlines i
     expectOnlyNodeBuiltinExternals(environment.output.externals);
 
     const bundle = await readFile(join(root, 'dist', 'scripts', 'probe.mjs'), 'utf8');
-    await init;
+    await init();
     const [imports] = parse(bundle);
     // `import.meta` is reported as a pseudo-import without a specifier.
     const specifiers = imports.filter((record) => record.d !== -2).map((record) => record.n);

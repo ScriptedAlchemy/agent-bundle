@@ -5,7 +5,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from '@rstest/core';
-import { init, parse } from 'es-module-lexer';
+import { init, parse } from 'es-module-lexer/minimal';
 
 import { build, type BuildProjectResult } from '../src/api.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
@@ -192,7 +192,7 @@ describe('handler artifact graph (#595)', () => {
   const cache = new Map<string, EmittedModule>();
 
   beforeAll(async () => {
-    await init;
+    await init();
     root = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-handler-graph-')));
     // The audiobook example's installed tree supplies @agent-bundle/runtime, react, and zod.
     await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');

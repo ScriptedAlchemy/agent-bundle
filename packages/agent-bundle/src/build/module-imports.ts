@@ -1,5 +1,7 @@
 import { parse as parseJavaScript } from 'acorn';
-import { init, parse } from 'es-module-lexer';
+// The minimal build keeps the v2 record shape and reports a template-literal
+// dynamic import as non-literal (`n` undefined); the full build globs it.
+import { init, parse } from 'es-module-lexer/minimal';
 
 /**
  * One import of an ES module as the lexer reports it: `specifier` is the
@@ -64,7 +66,7 @@ export const readModuleImports = async (
     const known = importsByDigest.get(`${options.check}:${options.sha256}`);
     if (known !== undefined) return known;
   }
-  await init;
+  await init();
   if (options.check === 'parsed') parseJavaScript(source, { ecmaVersion: 'latest', sourceType: 'module' });
   const [records] = parse(source);
   const imports = Object.freeze(records.map((record) => Object.freeze({
