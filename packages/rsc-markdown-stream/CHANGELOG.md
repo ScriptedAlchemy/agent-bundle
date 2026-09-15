@@ -1,5 +1,11 @@
 # rsc-markdown-stream
 
+## 0.1.2
+
+### Patch Changes
+
+- 04e1616: Update third-party dependencies: `agent-bundle` now compiles with `@rsbuild/core` 2.2.5, lints with `@rslint/core` 0.9.2, loads `agent-bundle.config.ts` through `@rstackjs/load-config` 1.0.0, and reads emitted-module imports for `validate --artifact` (`AB6005`) with `es-module-lexer` 3.0.2 (`ignore` 7.0.9 and `yaml` 2.9.1 also move); `create-agent-bundle` prompts with `@clack/prompts` 1.8.1; every package is now built and tested against React 19.3.0, `@types/react` 19.3.0, and `@types/node` 26.5.1. `zod` stays at 4.5.4: `@agent-bundle/runtime` declares `zod` as a `^4.5.4` peer and its dev pin proves that floor, and zod brands schemas by minor version, so every workspace package must share one minor. (#798)
+
 ## 0.1.1
 
 ### Patch Changes
