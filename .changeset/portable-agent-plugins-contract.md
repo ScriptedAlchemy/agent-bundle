@@ -1,5 +1,0 @@
----
-"agent-bundle": patch
----
-
-portable: complete the Agent Plugins 1.0.0 adoption (#307) — author the standard's §5.4 manifest metadata (`author`, `homepage`, `repository`, `license`, `keywords`) and §5.6 reverse-domain `extensions` under the `portable` config key and emit them into the root `plugin.json` (omitted fields leave the manifest byte-identical to the previous contract; malformed values fail closed with `portable.manifest.<field>.invalid`); add the pinned Agent Plugins byte lane (`validatePortablePlugin`, `AB6035`–`AB6038`: pinned schemas plus the normative command/cwd/URL/header/placeholder/version/skill-layout/symlink-containment rules) to `validate --artifact --host-validation`, to `doctor` for installed Cursor local plugins that declare the standard's `$schema` (`AB7320`), and to the portable host-install proof; record dated capability rows for every standard feature (manifest metadata, extensions, extension directories, legacy SSE); re-verify the schema pins against the live 1.0.0 schemas and the specification repository (2026-09-02); adapterRevision 1.5.0 → 1.6.0.

@@ -1,6 +1,6 @@
 {
   "name": "create-agent-bundle",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Scaffold a new agent-bundle plugin project from a checked-in template.",
   "license": "Apache-2.0",
   "keywords": [
