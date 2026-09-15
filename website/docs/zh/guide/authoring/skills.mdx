@@ -47,12 +47,24 @@ frontmatter 是必需的。缺少 frontmatter 的文档报告 `AB3001`；YAML �
 
 ## 让指令保持聚焦
 
-在 `description` 中简洁说明能力与明确的触发条件；正文只保留有用的共通指引和真实的安全或授权约束。
-如果描述已经说明适用边界，就无需重复一个 “When to use” 小节。
+宿主会把每个 Skill 的 `name` 与 `description` 载入上下文供模型选择。描述过长或彼此重叠会被截断；
+触发条件含糊会加载错误的 Skill。优先写简短能力加上明确的 **何时使用**，而不是宽泛领域：
 
-把较长的特定模式操作流程放入 `references/`，通过链接说明何时阅读。不要在入口加载所有参考文件，
-也不要为简短且自包含的 Skill 创建无用的资源目录。`assets/` 保存用于输出的文件，而不是必须始终
-加载到上下文中的指令。
+```md
+<!-- 避免：任何与数据库沾边都会触发 -->
+description: Create and validate Postgres schema migrations. Use when working with databases, queries, models, or persistence.
+
+<!-- 更好：只有真正做迁移时才触发 -->
+description: Create and validate Postgres schema migrations. Use when adding or changing a migration, or reviewing its rollout.
+```
+
+正文只保留有用的共通指引和真实的安全或授权约束。如果描述已经说明适用边界，就无需重复一个
+“When to use” 小节。
+
+把根目录 `SKILL.md` 当作路由器：把较长的特定模式操作流程放入 `references/`，并通过链接说明何时阅读
+（渐进披露）。不要在入口加载所有参考文件，也不要为简短且自包含的 Skill 创建无用的资源目录。
+`assets/` 保存用于输出的文件，而不是必须始终加载到上下文中的指令。曾帮助较弱模型的过细步骤清单，
+往往反而约束较强模型——保留不变量，删掉仪式。
 
 正文应让代理保持用户请求的范围：计划或审查不能悄悄变成实施或发布。复用已有授权与当前有效的证据，
 在确需批准前完成相关准备，最后交付所请求的结果及其验证或限制。除非真实工作契约要求，否则不要强制

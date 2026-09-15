@@ -1,6 +1,6 @@
 ---
 name: host-test
-description: Inspect host-test logs or probe hook, MCP, conversation, session, subagent, and lineage data.
+description: Inspect host-test capture logs for hooks, MCP, conversation, session, or lineage. Use when debugging what a host sent this probe.
 ---
 
 # Host test probe
