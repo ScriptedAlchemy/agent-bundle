@@ -180,6 +180,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       'export const resultSchema = z.object({ books: z.number(), root: z.string(), tooling: z.string(), view: z.unknown() }).strict();',
       'export default async function Report({ input, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
+      "  if (input.root === '/explode') throw new Error('report route exploded');",
       '  const context = await agent();',
       "  await context.progress.report({ completed: 1, message: 'scanning', total: 2 });",
       '  const result = { books: 2, root: input.root, tooling: `${(await context.provider("libraryTooling")).kind}:${(await context.provider("libraryTooling")).tool}`, view: (await context.provider("libraryTooling")).view };',
@@ -339,6 +340,25 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   // observed the same conventional provider as the plain command (#313).
   const reportJson = await execFile(binPath, ['report', '/library', '--json']);
   expect(JSON.parse(reportJson.stdout)).toEqual({ books: 2, root: '/library', tooling: 'cli:ffprobe 6.1', view: providerView });
+  // A root route throw belongs to the shell's typed failure path. React Flight
+  // must not echo its worker stack before the shell reports the failure.
+  const thrown = execFile(binPath, ['report', '/explode']);
+  await expect(thrown).rejects.toMatchObject({ code: 1, stdout: '' });
+  await thrown.catch((failure: { readonly stderr: string }) => {
+    expect(failure.stderr).toBe('[render-failed] report route exploded\n');
+    expect(failure.stderr).not.toContain('cli-bin-fixture-flight.mjs');
+    expect(failure.stderr).not.toMatch(/^\s+at /mu);
+  });
+  const thrownJson = execFile(binPath, ['report', '/explode', '--json']);
+  await expect(thrownJson).rejects.toMatchObject({ code: 1, stdout: '' });
+  await thrownJson.catch((failure: { readonly stderr: string }) => {
+    expect(failure.stderr.trimEnd().split('\n')).toHaveLength(1);
+    expect(JSON.parse(failure.stderr)).toEqual({
+      error: { code: 'render-failed', message: 'report route exploded' },
+    });
+    expect(failure.stderr).not.toContain('cli-bin-fixture-flight.mjs');
+    expect(failure.stderr).not.toMatch(/^\s+at /mu);
+  });
   // --ndjson exposes the sequence-numbered render-event stream, including
   // the progress the component reported through the request context.
   const reportEvents = await execFile(binPath, ['report', '/library', '--ndjson']);
@@ -392,7 +412,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   // request explicitly instead of leaving its Flight stream unsettled.
   await expect(execFile(binPath, ['exit-zero'], { timeout: 5_000 })).rejects.toMatchObject({
     code: 1,
-    stderr: 'Generated render worker exited with code 0.\n',
+    stderr: '[render-failed] Generated render worker exited with code 0.\n',
     stdout: '',
   });
 

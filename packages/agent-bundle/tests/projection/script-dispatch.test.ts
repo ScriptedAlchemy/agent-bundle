@@ -82,12 +82,14 @@ describe('rendered scripts at the script dispatch level', () => {
     const three = await runScript('summary', ['--json', '--exit=3']);
     expect(three.exitCode).toBe(1);
     expect(three.stdout).toBe('');
-    expect(three.stderr).toBe('Generated render worker exited with code 3.\n');
+    expect(JSON.parse(three.stderr)).toEqual({
+      error: { code: 'render-failed', message: 'Generated render worker exited with code 3.' },
+    });
     expect(three.value).toBeUndefined();
 
     const zero = await runScript('summary', ['--exit=0']);
     expect(zero.exitCode).toBe(1);
-    expect(zero.stderr).toBe('Generated render worker exited with code 0.\n');
+    expect(zero.stderr).toBe('[render-failed] Generated render worker exited with code 0.\n');
 
     // The run restored this process's exit, and the next run is unaffected.
     expect(process.exit).toBe(exitBefore);
@@ -101,7 +103,9 @@ describe('rendered scripts at the script dispatch level', () => {
 
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toBe('');
-    expect(run.stderr).toBe('Generated render worker exited with code 5.\n');
+    expect(JSON.parse(run.stderr)).toEqual({
+      error: { code: 'render-failed', message: 'Generated render worker exited with code 5.' },
+    });
     expect(run.value).toBeUndefined();
   });
 
@@ -195,11 +199,8 @@ describe('rendered scripts at the script dispatch level', () => {
 
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toBe('');
-    // The renderer logs the thrown error with its stack (the render worker's
-    // console, forwarded onto stderr in the generated executable), then the
-    // shell reports the failure message.
-    expect(run.stderr).toMatch(/^Error: summary render exploded\n {4}at Summary \(/u);
-    expect(run.stderr).toMatch(/\nsummary render exploded\n$/u);
+    expect(run.stderr).toBe('[render-failed] summary render exploded\n');
+    expect(run.stderr).not.toMatch(/^\s+at /mu);
   });
 
   it('reports cancellation through the shell after rendered progress begins', async () => {
@@ -519,7 +520,9 @@ describe('a rendered script whose module fails to evaluate', () => {
     expect(run.kind).toBe('rendered');
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toBe('');
-    expect(run.stderr).toBe('broken script failed to load\n');
+    expect(JSON.parse(run.stderr)).toEqual({
+      error: { code: 'render-failed', message: 'broken script failed to load' },
+    });
     expect(run.value).toBeUndefined();
     expect(run.provenance.execution).toBe('rendered-shell');
   });

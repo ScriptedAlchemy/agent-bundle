@@ -78,6 +78,11 @@ Rendered scripts and rendered routed-CLI commands share one output contract:
 written as non-MCP bytes to an MCP server's stdout. Diagnostics stay on stderr; machine output
 owns stdout.
 
+A rendered root that throws exits `1` with stdout empty. The shell writes one
+`[render-failed] <message>` line to stderr, or one canonical
+`{"error":{"code":"render-failed","message":"..."}}` line there under `--json`; the Flight
+worker does not echo React stack frames.
+
 The mode is selected from the executable's probed
 [terminal capability](./mcp.mdx#the-terminal-capability), and the component reads the same
 value from `(await agent()).terminal` (`hostSurface: 'script'`) — so a script that writes its

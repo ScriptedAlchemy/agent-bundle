@@ -1066,7 +1066,7 @@ const createFlightDispatcher = (options: FlightDispatcherOptions): AgentRuntime.
         options.componentProps(request),
         request.signal,
       ) as React.ReactNode,
-      { signal: request.signal },
+      { onError: () => undefined, signal: request.signal },
     )))),
   }, options.limits === undefined ? {} : { limits: options.limits });
 

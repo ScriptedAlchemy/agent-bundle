@@ -741,7 +741,7 @@ export const generatedRenderedRouteWorkerSource = (
     '    }, async () => {',
     "      if (message.observe === true) parentPort.postMessage({ id: message.id, type: 'observed-render-start' });",
     '      const renderStartedAt = performance.now();',
-    '      const flight = renderAgentFlight(composeLayouts(observedRoute, { ...message.props, signal: controller.signal }, controller.signal), { signal: controller.signal });',
+    '      const flight = renderAgentFlight(composeLayouts(observedRoute, { ...message.props, signal: controller.signal }, controller.signal), { onError: () => undefined, signal: controller.signal });',
     '      const reader = flight.getReader();',
     '      while (true) {',
     '        const next = await reader.read();',
