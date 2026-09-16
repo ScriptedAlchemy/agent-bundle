@@ -377,7 +377,7 @@ it('uses only an installed tarball after source deletion', async () => {
     const frameworkRoot = join(consumerRoot, 'framework-build-project');
     await mkdir(join(frameworkRoot, 'src', 'mcp'), { recursive: true });
     await Promise.all([
-      writeFile(join(frameworkRoot, 'package.json'), '{"name":"framework-build-fixture","type":"module","private":true}\n'),
+      writeFile(join(frameworkRoot, 'package.json'), '{"name":"framework-build-fixture","type":"module","private":true,"version":"1.0.0"}\n'),
       writeFile(join(frameworkRoot, 'tsconfig.json'), JSON.stringify({
         compilerOptions: {
           module: 'esnext',

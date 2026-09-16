@@ -70,10 +70,10 @@ it('never shadows the consumer\'s tsc bin from a packed npm install', async () =
         '',
       ].join('\n')),
       writeFile(routePath, [
-        "export const config = { annotations: { readOnlyHint: true }, description: 'Read status.' } satisfies { description: string };",
+        "import { defineTool } from 'agent-bundle/routes';",
         'export const inputSchema = {};',
         'export const resultSchema = {};',
-        'export default async () => undefined;',
+        "export default defineTool({ annotations: { readOnlyHint: true }, description: 'Read status.', inputSchema, resultSchema }, async () => undefined);",
         '',
       ].join('\n')),
     ]);
