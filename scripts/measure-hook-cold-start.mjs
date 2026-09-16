@@ -72,13 +72,13 @@ const measure = async () => {
   try {
     await mkdir(join(root, 'src', 'hooks'), { recursive: true });
     await Promise.all([
-      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(root, 'package.json'), '{"type":"module","version":"0.0.0"}\n'),
       writeFile(
         join(root, 'agent-bundle.config.ts'),
         [
           'export default {',
           '  hooks: { sessionStart: { handler: "./src/hooks/session-start.ts" } },',
-          "  plugin: { name: 'cold-start', version: '0.0.0' },",
+          "  plugin: { name: 'cold-start' },",
           "  targets: ['claude'],",
           '};',
           '',

@@ -33,14 +33,14 @@ e2e('renders a compiled MCP tool\'s Suspense fallback before its gated child rel
     createProject: () => createProjectFixture({
       config: [
         'export default {',
-        "  plugin: { name: 'streaming-render-e2e', version: '1.0.0' },",
+        "  plugin: { name: 'streaming-render-e2e' },",
         "  targets: ['portable'],",
         '};',
         '',
       ].join('\n'),
       files: {
         ...gatedRouteFiles,
-        'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
+        'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module","version":"1.0.0"}\n',
       },
       prefix: 'agent-bundle-streaming-render-e2e-',
     }),
