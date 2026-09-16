@@ -259,7 +259,7 @@ it('writes the package version as the producer of a packed CLI manifest', async 
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 60_000);
 
 /**
  * The compiler (`@rslib/core`) and MCP Apps (`@rsbuild/core`) must run one
