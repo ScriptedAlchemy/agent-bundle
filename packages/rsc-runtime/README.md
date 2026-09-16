@@ -1,8 +1,8 @@
 # `@agent-bundle/runtime`
 
 Agent Document contracts and React-owned Flight execution for Agent Bundle routes.
-No npm release is cut yet; install the pkg.pr.new preview of any `main` commit or pull
-request — see [Preview packages](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md).
+Install the pkg.pr.new preview of any `main` commit or pull request — see
+[Preview packages](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md).
 
 The runtime executes route models through React-owned RSC/Flight behind the
 `AgentRenderDispatcher` execution-host seam. Incremental Flight decoding
@@ -69,8 +69,8 @@ minor the suite proves, inside the `^19.1.0` its Flight binding
 `react-server-dom-rspack` `0.1.0` (an exact dependency) accepts — and
 react-dom itself insists that `react` and `react-dom` match exactly; the proof
 example compiles them with `rsbuild-plugin-rsc` `0.1.1`. `rsc-markdown-stream`
-is declared `workspace:^`, which `pnpm publish` ships as the caret of the
-version released beside it. The package does not own application state,
+is declared `workspace:^`, which pnpm's packer rewrites to the caret of the
+version packed beside it. The package does not own application state,
 persistence, a concrete execution host, or host packaging. Node 22.19 or newer
 is required.
 

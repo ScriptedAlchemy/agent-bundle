@@ -268,8 +268,9 @@ then treat a repeat as a real signal.
 - **dependency-review** runs as a GitHub-side action against the GitHub
   advisory database on the PR diff; it has no local equivalent and stays a
   hosted-only, PR-time check.
-- **package-preview** (pkg.pr.new) and the **release publish** workflow are
-  publish-side effects, not checks; nothing about them gates a merge.
+- **package-preview** (pkg.pr.new) and the **Release packages** workflow have
+  hosted publish-side effects. The latter also verifies the four remote
+  commit URLs, which a local gate cannot reproduce.
 - **host-install-proofs** needs the pinned `claude` and `codex` CLIs on PATH
   (see [Real-host install proofs](#real-host-install-proofs)). The local gate
   does not install host CLIs into its legs, so run those proofs by hand with

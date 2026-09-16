@@ -2,26 +2,21 @@
 # Release packages workflow summary: outcome, stages, and optional pack evidence.
 set -euo pipefail
 
-publish_enabled=${PUBLISH_ENABLED:-false}
 has_changesets=${HAS_CHANGESETS:-false}
-published=${PUBLISHED:-false}
 qualify_outcome=${QUALIFY_OUTCOME:-skipped}
 changesets_outcome=${CHANGESETS_OUTCOME:-skipped}
-registry_outcome=${REGISTRY_OUTCOME:-skipped}
+preview_outcome=${PREVIEW_OUTCOME:-skipped}
 job_status=${JOB_STATUS:-success}
 workflow_sha=${CANDIDATE_SHA:-}
 
 if [ "$changesets_outcome" = failure ] || [ "$changesets_outcome" = cancelled ] \
   || [ "$qualify_outcome" = failure ] || [ "$qualify_outcome" = cancelled ] \
-  || [ "$registry_outcome" = failure ] || [ "$registry_outcome" = cancelled ] \
+  || [ "$preview_outcome" = failure ] || [ "$preview_outcome" = cancelled ] \
+  || { [ "$qualify_outcome" = success ] && [ "$preview_outcome" != success ]; } \
   || [ "$job_status" = failure ] || [ "$job_status" = cancelled ]; then
   outcome=failed
-# Registry verification is the publication proof; the action's `published`
-# flag only says whether its publish script printed tag lines. A qualified
-# candidate that is not on npm is a failed registry step, never a green
-# "qualified-without-publish".
-elif [ "$registry_outcome" = success ]; then
-  outcome=published
+elif [ "$qualify_outcome" = success ]; then
+  outcome=preview-release
 else
   outcome=version-maintenance-only
 fi
@@ -32,7 +27,7 @@ else
   version_maintenance=skipped
 fi
 
-if [ "$qualify_outcome" = success ] || [ "$published" = true ]; then
+if [ "$qualify_outcome" = success ]; then
   qualification=executed
 elif [ "$qualify_outcome" = failure ] || [ "$qualify_outcome" = cancelled ]; then
   qualification=failed
@@ -40,27 +35,19 @@ else
   qualification=skipped
 fi
 
-if [ "$published" = true ]; then
-  publication=executed
-elif [ "$registry_outcome" = success ]; then
-  publication=already-on-registry
+if [ "$preview_outcome" = success ]; then
+  preview=resolved
+elif [ "$preview_outcome" = failure ] || [ "$preview_outcome" = cancelled ]; then
+  preview=failed
 else
-  publication=skipped
+  preview=skipped
 fi
 
-if [ "$registry_outcome" = success ]; then
-  registry=executed
-elif [ "$registry_outcome" = failure ]; then
-  registry=failed
-else
-  registry=skipped
-fi
-
-if [ "$outcome" = published ]; then
-  publication_line='publication: published'
+if [ "$outcome" = preview-release ]; then
+  distribution_line='distribution: pkg.pr.new previews resolved'
   candidate_sha=$workflow_sha
 else
-  publication_line='publication: NOT PUBLISHED'
+  distribution_line='distribution: no versioned release'
   if [ "$qualification" = executed ]; then
     candidate_sha=$workflow_sha
   else
@@ -72,13 +59,12 @@ cat <<EOF
 outcome: $outcome
 workflow_sha: $workflow_sha
 candidate_sha: $candidate_sha
-$publication_line
+$distribution_line
 
 stages:
 - version-maintenance: $version_maintenance
 - qualification: $qualification
-- publication: $publication
-- registry-verification: $registry
+- pkg.pr.new-preview: $preview
 EOF
 
 if [ "$qualification" = executed ] && [ -n "${EVIDENCE_FILE:-}" ] && [ -f "$EVIDENCE_FILE" ]; then

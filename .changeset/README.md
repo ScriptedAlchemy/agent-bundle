@@ -1,11 +1,11 @@
 # Changesets
 
-This repository versions its published packages with
+This repository versions its distributed packages with
 [Changesets](https://github.com/changesets/changesets). A changeset is a small
 Markdown file in this directory that names the packages a pull request
 changes, the bump each one needs, and a user-facing summary. `changeset
 version` folds pending changesets into `CHANGELOG.md` and `package.json`
-versions; `changeset publish` (when enabled) publishes the result.
+versions. pkg.pr.new publishes commit-addressed previews of the result.
 
 ## Which packages get changesets
 
@@ -108,10 +108,9 @@ because they change no publishable package.
   `rsc-markdown-stream: workspace:^` edge republishes it with the renderer's
   new caret. The scaffolder's two optional `workspace:*` peers patch-bump and
   republish it whenever either member of its exact release pair moves.
-- `access` stays `"restricted"` at the repository level until the release
-  owner decides the npm package names and access policy
-  (`docs/preview-packages.md`). `@agent-bundle/runtime` and
-  `create-agent-bundle` already override it with `publishConfig.access`.
+- `access` stays `"restricted"` at the repository level. It is harmless while
+  Changesets only versions packages and pkg.pr.new is the distribution
+  channel; no npm publish command consumes it.
 
 ## Release flow
 
@@ -138,16 +137,12 @@ because they change no publishable package.
    directly.
 
 3. Merging Version Packages pushes a `Version Packages` commit to `main`
-   with no pending changesets. The workflow runs the release gates
-   (`pnpm check:release`) and then `scripts/verify-registry-versions.sh`,
-   which fails the job unless every publishable `package.json` version
-   resolves on npm. With publishing disabled that step is red by design:
-   green means published, never "versioned but not shipped".
-4. Publishing is opt-in: set the repository variable
-   `AGENT_BUNDLE_NPM_PUBLISH=true` and the `NPM_TOKEN` secret. The action
-   then runs `pnpm release` (`pnpm check:release && changeset publish`) with
-   npm provenance (`NPM_CONFIG_PROVENANCE=true`, `id-token: write`) and
-   creates GitHub releases and tags.
-
-Until publishing is enabled, installable previews come from pkg.pr.new
-(`pnpm preview:publish`, `docs/preview-packages.md`).
+   with no pending changesets. The `Release packages` workflow first calls
+   the reusable `Package preview` workflow, which runs `pnpm preview:publish`
+   and verifies that all four package URLs resolve for the merge SHA. The
+   release job depends on that proof and runs `pnpm check:release`; a green
+   Version Packages run therefore means both the packed gates and the exact
+   commit-addressed previews passed.
+4. Consumers pin the resulting artifacts as
+   `https://pkg.pr.new/ScriptedAlchemy/agent-bundle/<package>@<sha>`. No npm
+   registry credential is needed or expected.

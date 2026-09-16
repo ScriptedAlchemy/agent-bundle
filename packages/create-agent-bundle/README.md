@@ -4,15 +4,8 @@ Scaffold a new [agent-bundle](https://github.com/ScriptedAlchemy/agent-bundle)
 plugin project from a checked-in template: one `agent-bundle.config.ts`, the
 entry-file conventions, a passing test, and a delivery gate, ready to run.
 
-```sh
-npm create agent-bundle@latest my-plugin
-# or
-npx create-agent-bundle my-plugin --template mcp-server
-```
-
-Until the first npm release is cut, install the scaffolder from the
-[pkg.pr.new preview channel](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md)
-instead of the npm registry:
+Run the scaffolder from the
+[pkg.pr.new preview channel](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md):
 
 ```sh
 npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
@@ -66,20 +59,9 @@ Preview scaffolders pin `agent-bundle` and `@agent-bundle/runtime` to exact
 [pkg.pr.new](https://pkg.pr.new) tarballs from one commit SHA. A runtime
 template overridden from a preview scaffolder accepts another exact
 pkg.pr.new URL or the unversioned local names `agent-bundle.tgz` and
-`agent-bundle-runtime.tgz`; versioned registry or local overrides require the
-matching npm scaffolder release.
-
-An npm release records its compatible compiler and runtime versions as
-optional peers in the packed `create-agent-bundle` manifest. The scaffolder
-pins those two recorded versions independently — it never derives the runtime
-version from the compiler version — and rejects a runtime-bearing scaffold
-whose `--framework-version` does not match the recorded compiler. A local
-compiler tarball selects the sibling runtime tarball with the recorded runtime
-version and validates both package names and versions before writing the
-project.
-Until this project owns the npm package names, use the preview command above;
-a locally packed release record does not make the unrelated registry package
-safe to install.
+`agent-bundle-runtime.tgz`. A local compiler tarball selects the sibling
+runtime tarball with the recorded runtime version and validates both package
+names and versions before writing the project.
 
 ## License
 

@@ -486,7 +486,7 @@ const main = async () => {
     '',
     ...tableLines,
     '',
-    'Not covered locally: dependency-review (GitHub-side), package previews and npm publish (publish-side), native host smokes (opt-in). See docs/local-ci.md.',
+    'Not covered locally: dependency-review (GitHub-side), pkg.pr.new publication (publish-side), native host smokes (opt-in). See docs/local-ci.md.',
     '',
   ].join('\n');
 

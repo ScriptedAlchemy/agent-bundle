@@ -18,30 +18,27 @@ const summarize = async (extra: NodeJS.ProcessEnv) => {
   return stdout;
 };
 
-it('reports version-maintenance-only as NOT PUBLISHED with skipped qualification stages', async () => {
+it('reports version maintenance separately from a versioned release', async () => {
   expect(await summarize({
-    PUBLISH_ENABLED: 'false',
     HAS_CHANGESETS: 'true',
-    PUBLISHED: 'false',
     QUALIFY_OUTCOME: 'skipped',
     CHANGESETS_OUTCOME: 'success',
-    REGISTRY_OUTCOME: 'skipped',
+    PREVIEW_OUTCOME: 'success',
     JOB_STATUS: 'success',
   })).toContain([
     'outcome: version-maintenance-only',
     `workflow_sha: ${candidateSha}`,
     'candidate_sha: (not qualified)',
-    'publication: NOT PUBLISHED',
+    'distribution: no versioned release',
     '',
     'stages:',
     '- version-maintenance: executed',
     '- qualification: skipped',
-    '- publication: skipped',
-    '- registry-verification: skipped',
+    '- pkg.pr.new-preview: resolved',
   ].join('\n'));
 });
 
-it('reports a registry-verified candidate as published with pack evidence and pending follow-ups', async () => {
+it('reports a qualified Version Packages commit only after its previews resolve', async () => {
   const evidenceFile = join(await mkdtemp(join(tmpdir(), 'release-outcome-')), 'evidence.json');
   await writeFile(evidenceFile, `${JSON.stringify({
     executedBins: ['agent-bundle'],
@@ -61,123 +58,56 @@ it('reports a registry-verified candidate as published with pack evidence and pe
     workspaceRefs: [],
   })}\n`);
   const stdout = await summarize({
-    PUBLISH_ENABLED: 'false',
     HAS_CHANGESETS: 'false',
-    PUBLISHED: 'false',
     QUALIFY_OUTCOME: 'success',
     CHANGESETS_OUTCOME: 'success',
-    REGISTRY_OUTCOME: 'success',
+    PREVIEW_OUTCOME: 'success',
     JOB_STATUS: 'success',
     EVIDENCE_FILE: evidenceFile,
   });
   expect(stdout).toContain([
-    'outcome: published',
+    'outcome: preview-release',
     `workflow_sha: ${candidateSha}`,
     `candidate_sha: ${candidateSha}`,
-    'publication: published',
+    'distribution: pkg.pr.new previews resolved',
     '',
     'stages:',
     '- version-maintenance: skipped',
     '- qualification: executed',
-    '- publication: already-on-registry',
-    '- registry-verification: executed',
+    '- pkg.pr.new-preview: resolved',
   ].join('\n'));
   expect(stdout).toContain('- agent-bundle@0.1.0 agent-bundle-0.1.0.tgz sha256:deadbeef');
   expect(stdout).toContain('- @agent-bundle/runtime dependencies rsc-markdown-stream: ^0.1.0');
   expect(stdout).toContain('workspace-only refs:\n- none');
   expect(stdout).toContain('- packed-release: executed');
-  expect(stdout).toContain('- #688 schema-label provenance: pending');
 });
 
-it('reports cancelled qualification as failed', async () => {
+it('reports failed qualification as failed', async () => {
   expect(await summarize({
-    PUBLISH_ENABLED: 'false',
     HAS_CHANGESETS: 'false',
-    PUBLISHED: 'false',
-    QUALIFY_OUTCOME: 'cancelled',
+    QUALIFY_OUTCOME: 'failure',
     CHANGESETS_OUTCOME: 'success',
-    REGISTRY_OUTCOME: 'skipped',
-    JOB_STATUS: 'cancelled',
+    PREVIEW_OUTCOME: 'success',
+    JOB_STATUS: 'failure',
   })).toContain('outcome: failed\n');
 });
 
-it('reports published from registry proof even when the action flag stayed false', async () => {
+it('never reports a release without preview proof', async () => {
   expect(await summarize({
-    PUBLISH_ENABLED: 'true',
     HAS_CHANGESETS: 'false',
-    PUBLISHED: 'false',
-    QUALIFY_OUTCOME: 'skipped',
-    CHANGESETS_OUTCOME: 'success',
-    REGISTRY_OUTCOME: 'success',
-    JOB_STATUS: 'success',
-  })).toContain([
-    'outcome: published',
-    `workflow_sha: ${candidateSha}`,
-    `candidate_sha: ${candidateSha}`,
-    'publication: published',
-    '',
-    'stages:',
-    '- version-maintenance: skipped',
-    '- qualification: skipped',
-    '- publication: already-on-registry',
-    '- registry-verification: executed',
-  ].join('\n'));
-});
-
-it('reports a qualified candidate without registry proof as NOT PUBLISHED maintenance, not a green outcome', async () => {
-  expect(await summarize({
-    PUBLISH_ENABLED: 'false',
-    HAS_CHANGESETS: 'false',
-    PUBLISHED: 'false',
     QUALIFY_OUTCOME: 'success',
     CHANGESETS_OUTCOME: 'success',
-    REGISTRY_OUTCOME: 'skipped',
+    PREVIEW_OUTCOME: 'skipped',
     JOB_STATUS: 'success',
   })).toContain([
-    'outcome: version-maintenance-only',
+    'outcome: failed',
     `workflow_sha: ${candidateSha}`,
     `candidate_sha: ${candidateSha}`,
-    'publication: NOT PUBLISHED',
+    'distribution: no versioned release',
     '',
     'stages:',
     '- version-maintenance: skipped',
     '- qualification: executed',
-    '- publication: skipped',
-    '- registry-verification: skipped',
-  ].join('\n'));
-});
-
-it('reports a Version Packages merge whose registry check failed as failed', async () => {
-  expect(await summarize({
-    PUBLISH_ENABLED: 'false',
-    HAS_CHANGESETS: 'false',
-    PUBLISHED: 'false',
-    QUALIFY_OUTCOME: 'success',
-    CHANGESETS_OUTCOME: 'success',
-    REGISTRY_OUTCOME: 'failure',
-    JOB_STATUS: 'failure',
-  })).toContain('outcome: failed\nworkflow_sha');
-});
-
-it('reports published only when publish is enabled and registry succeeded', async () => {
-  expect(await summarize({
-    PUBLISH_ENABLED: 'true',
-    HAS_CHANGESETS: 'false',
-    PUBLISHED: 'true',
-    QUALIFY_OUTCOME: 'skipped',
-    CHANGESETS_OUTCOME: 'success',
-    REGISTRY_OUTCOME: 'success',
-    JOB_STATUS: 'success',
-  })).toContain([
-    'outcome: published',
-    `workflow_sha: ${candidateSha}`,
-    `candidate_sha: ${candidateSha}`,
-    'publication: published',
-    '',
-    'stages:',
-    '- version-maintenance: skipped',
-    '- qualification: executed',
-    '- publication: executed',
-    '- registry-verification: executed',
+    '- pkg.pr.new-preview: skipped',
   ].join('\n'));
 });
