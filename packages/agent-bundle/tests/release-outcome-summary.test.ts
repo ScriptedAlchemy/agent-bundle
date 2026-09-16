@@ -124,7 +124,7 @@ it('reports published from registry proof even when the action flag stayed false
   ].join('\n'));
 });
 
-it('never reports a qualified candidate that is missing from npm as green', async () => {
+it('reports a qualified candidate without registry proof as NOT PUBLISHED maintenance, not a green outcome', async () => {
   expect(await summarize({
     PUBLISH_ENABLED: 'false',
     HAS_CHANGESETS: 'false',
@@ -133,7 +133,18 @@ it('never reports a qualified candidate that is missing from npm as green', asyn
     CHANGESETS_OUTCOME: 'success',
     REGISTRY_OUTCOME: 'skipped',
     JOB_STATUS: 'success',
-  })).not.toContain('qualified');
+  })).toContain([
+    'outcome: version-maintenance-only',
+    `workflow_sha: ${candidateSha}`,
+    `candidate_sha: ${candidateSha}`,
+    'publication: NOT PUBLISHED',
+    '',
+    'stages:',
+    '- version-maintenance: skipped',
+    '- qualification: executed',
+    '- publication: skipped',
+    '- registry-verification: skipped',
+  ].join('\n'));
 });
 
 it('reports a Version Packages merge whose registry check failed as failed', async () => {
