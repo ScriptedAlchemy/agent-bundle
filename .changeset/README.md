@@ -108,10 +108,9 @@ because they change no publishable package.
   `rsc-markdown-stream: workspace:^` edge republishes it with the renderer's
   new caret. The scaffolder's two optional `workspace:*` peers patch-bump and
   republish it whenever either member of its exact release pair moves.
-- `access` stays `"restricted"` at the repository level until the release
-  owner decides the npm package names and access policy
-  (`docs/preview-packages.md`). `@agent-bundle/runtime` and
-  `create-agent-bundle` already override it with `publishConfig.access`.
+- `access` is `"public"` at the repository level, and every publishable
+  package uses `publishConfig.access: "public"`. The scoped
+  `@agent-bundle/runtime` package must keep that explicit override.
 
 ## Release flow
 
@@ -148,6 +147,26 @@ because they change no publishable package.
    then runs `pnpm release` (`pnpm check:release && changeset publish`) with
    npm provenance (`NPM_CONFIG_PROVENANCE=true`, `id-token: write`) and
    creates GitHub releases and tags.
+
+## Enabling npm publishing
+
+The `agent-bundle` name on npm belongs to an unrelated project. Complete a
+transfer or choose a different package name, and create or confirm control of
+the `@agent-bundle` npm scope, before enabling this workflow; otherwise
+`changeset publish` can leave a partial four-package release.
+
+1. Create an npm granular access token for CI with **Read and write (publish
+   and stage)**, **Bypass 2FA**, and the **All packages** grant so it can
+   publish `agent-bundle`, `create-agent-bundle`, `rsc-markdown-stream`, and
+   the `@agent-bundle` scope; set it as the repository secret `NPM_TOKEN`.
+2. Set the repository variable `AGENT_BUNDLE_NPM_PUBLISH=true`.
+3. Merge the Version Packages pull request.
+
+After step 2, keep `main` unchanged until step 3: any intervening push runs
+registry verification and is red while the versioned packages are absent.
+
+If publishing does not happen, **Verify published registry artifacts** fails
+on any package version that `npm view` cannot resolve.
 
 Until publishing is enabled, installable previews come from pkg.pr.new
 (`pnpm preview:publish`, `docs/preview-packages.md`).

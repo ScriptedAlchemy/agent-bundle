@@ -1,16 +1,14 @@
 # Preview packages (pkg.pr.new)
 
-Nothing is published to npm yet, deliberately: the current package names are
-placeholders, and npm publishing is deferred until the final name is chosen
-(it will then use [npm package provenance](https://docs.npmjs.com/generating-provenance-statements);
-the publish step exports `NPM_CONFIG_PROVENANCE=true` and runs the packed
-release gates before `changeset publish`, and only runs at all when the
+Automated npm publishing is not enabled. It will use
+[npm package provenance](https://docs.npmjs.com/generating-provenance-statements);
+the publish step exports `NPM_CONFIG_PROVENANCE=true`, runs the packed release
+gates before `changeset publish`, and only runs when the
 `AGENT_BUNDLE_NPM_PUBLISH` repository variable is `true` — see "How an npm
-release will flow" below). Before enabling that path, the
-release owner must resolve the repository-wide `"access": "restricted"`
-policy for `agent-bundle`, which does not currently override it with
-`publishConfig.access`. Until then
-pkg.pr.new is the release channel. Every CI package-preview run publishes real,
+release will flow" below. All publishable packages use public access, but the
+`agent-bundle` name on npm belongs to an unrelated project; complete a transfer
+or choose another name before enabling publication. Until then, pkg.pr.new is
+the release channel. Every CI package-preview run publishes real,
 installable tarballs of all four publishable workspace packages (`agent-bundle`,
 `@agent-bundle/runtime`, `rsc-markdown-stream`, `create-agent-bundle`) to
 [pkg.pr.new](https://pkg.pr.new)

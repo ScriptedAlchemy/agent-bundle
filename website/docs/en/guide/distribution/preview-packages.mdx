@@ -1,14 +1,12 @@
 ---
-description: 'The pkg.pr.new preview channel that stands in for npm: how previews are published, how to pin them, and what changes at the first npm release.'
+description: 'The pkg.pr.new preview channel that stands in for npm: how previews are published, how to pin them, and how automated publishing is enabled.'
 ---
 
 # Preview packages
 
-Nothing is published to npm yet, deliberately. The current package names are placeholders, and
-npm publishing is deferred until the final name is chosen. Until then, **pkg.pr.new is the
-release channel**: every CI package-preview run publishes real, installable tarballs of all four
-publishable workspace packages to a free continuous-release registry keyed by commit SHA and pull
-request.
+Automated npm publishing is not enabled yet. Until it is, **pkg.pr.new is the CI release
+channel**: every package-preview run publishes real, installable tarballs of all four publishable
+workspace packages to a free continuous-release registry keyed by commit SHA and pull request.
 
 The install commands and the runtime pairing rule are in
 [Installation](../start/installation.mdx). This page is the channel itself: where previews come
@@ -59,16 +57,26 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 A scaffolded project pins `agent-bundle` to the preview of the same commit the scaffolder came
 from, so both sides of the pairing rule hold automatically.
 
-## What changes at the first npm release
+## Enabling npm publishing
 
-The first npm release will use
+Automated npm releases use
 [npm package provenance](https://docs.npmjs.com/generating-provenance-statements): the publish
 step exports `NPM_CONFIG_PROVENANCE=true` and runs the packed release gates before
-`changeset publish`. `publishConfig.provenance` is already set.
+`changeset publish`. Every publishable package sets `publishConfig.provenance` and public access.
 
-Before that path is enabled, the release owner has to resolve two things: the final package name
-and license, and the repository-wide `"access": "restricted"` policy for `agent-bundle`, which is
-not currently overridden with `publishConfig.access`.
+The `agent-bundle` name on npm belongs to an unrelated project. Complete a transfer or choose a
+different package name, and create or confirm control of the `@agent-bundle` npm scope, before
+enabling this workflow; otherwise `changeset publish` can leave a partial four-package release.
+
+1. Create an npm granular access token for CI with **Read and write (publish and stage)** and
+   **Bypass 2FA** and the **All packages** grant so it can publish `agent-bundle`,
+   `create-agent-bundle`, `rsc-markdown-stream`, and the `@agent-bundle` scope; set it as the
+   repository secret `NPM_TOKEN`.
+2. Set the repository variable `AGENT_BUNDLE_NPM_PUBLISH=true`.
+3. Merge the Version Packages pull request.
+
+After step 2, keep `main` unchanged until step 3: any intervening push runs registry verification
+and is red while the versioned packages are absent.
 
 The `Release packages` workflow records one of `version-maintenance-only`,
 `published`, or `failed`, with executed and skipped stages. Qualification runs against the exact versioned candidate SHA, not the
@@ -77,7 +85,8 @@ refreshes that PR nor qualifies a versioned candidate — is
 `version-maintenance-only`. A Version Packages merge, and every `main` push while
 publishing is enabled, must end with each publishable `package.json` version resolving on
 npm (`scripts/verify-registry-versions.sh`); otherwise the run is `failed` and
-**NOT PUBLISHED**.
+**NOT PUBLISHED**. If publishing does not happen, **Verify published registry artifacts** fails
+on any package version that `npm view` cannot resolve.
 
 `pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release`, and
 `pnpm test:packed:release` — before publishing. `lint:release` runs `attw` with the `esm-only`

@@ -30,8 +30,8 @@ jobs:
     timeout-minutes: 60
     env:
       # npm publishing is opt-in and off by default: previews ship through
-      # pkg.pr.new (docs/preview-packages.md) until the package-name and
-      # access decisions are made. Set the repository variable
+      # pkg.pr.new (docs/preview-packages.md) until npm ownership of the
+      # package names is resolved. Set the repository variable
       # AGENT_BUNDLE_NPM_PUBLISH=true *and* the NPM_TOKEN secret to let the
       # action run `pnpm release` (release gates + `changeset publish`) when
       # the Version Packages PR merges. While off, the action still opens and

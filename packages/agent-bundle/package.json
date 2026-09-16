@@ -18,6 +18,7 @@
     "url": "git+https://github.com/ScriptedAlchemy/agent-bundle.git"
   },
   "publishConfig": {
+    "access": "public",
     "provenance": true
   },
   "type": "module",

@@ -1,11 +1,10 @@
 ---
-description: '代替 npm 的 pkg.pr.new 预览通道：预览包如何发布、如何固定版本，以及首个 npm 版本发布后会发生什么变化。'
+description: '代替 npm 的 pkg.pr.new 预览通道：预览包如何发布、如何固定版本，以及如何启用自动发布。'
 ---
 
 # 预览包
 
-目前尚未向 npm 发布任何内容，这是刻意为之。现有的包名只是占位符，npm 发布被推迟到最终包名确定之后。
-在那之前，**pkg.pr.new 就是发布通道**：每次 CI 的 package-preview 运行都会把全部四个可发布的工作区包
+自动 npm 发布尚未启用。在启用之前，**pkg.pr.new 是 CI 发布通道**：每次 package-preview 运行都会把全部四个可发布的工作区包
 以真实、可安装的 tarball 形式发布到一个按 commit SHA 与 pull request 索引的免费持续发布注册表。
 
 安装命令与 runtime 配对规则在[安装](../start/installation.mdx)中。本页讲的是通道本身：预览包从哪里来、
@@ -50,22 +49,33 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 脚手架生成的项目会把 `agent-bundle` 固定到脚手架自身所来自的那个提交的预览版本，因此上述配对规则的
 两侧会自动成立。
 
-## 首个 npm 版本发布后会发生什么变化
+## 启用 npm 发布
 
-首个 npm 版本将使用
+自动 npm 发布使用
 [npm package provenance](https://docs.npmjs.com/generating-provenance-statements)：发布步骤会导出
 `NPM_CONFIG_PROVENANCE=true`，并在 `changeset publish` 之前运行打包发布门禁。
-`publishConfig.provenance` 已经设置好了。
+每个可发布包都设置了 `publishConfig.provenance` 和公开访问权限。
 
-在启用这条路径之前，发布负责人必须解决两件事：最终的包名与许可证，以及 `agent-bundle` 仓库层面的
-`"access": "restricted"` 策略——目前它并没有被 `publishConfig.access` 覆盖。
+npm 上的 `agent-bundle` 名称属于一个无关项目。启用此工作流之前，必须完成名称转让或选择其他包名，
+并创建或确认对 `@agent-bundle` npm scope 的控制权；否则 `changeset publish` 可能只发布四个包中的一部分。
+
+1. 为 CI 创建一个 npm granular access token，并启用 **Read and write (publish and stage)**
+   与 **Bypass 2FA**，同时使用 **All packages** 授权，使其能够发布 `agent-bundle`、
+   `create-agent-bundle`、`rsc-markdown-stream` 和 `@agent-bundle` scope；将其设置为仓库
+   secret `NPM_TOKEN`。
+2. 设置仓库变量 `AGENT_BUNDLE_NPM_PUBLISH=true`。
+3. 合并 Version Packages pull request。
+
+完成第 2 步后，在第 3 步之前不要更改 `main`：只要版本化包还不在 npm 上，任何中间推送都会运行
+注册表验证并显示为红色。
 
 `Release packages` 工作流会记录 `version-maintenance-only`、`published` 或 `failed` 之一，
 并列出已执行与已跳过的阶段。资格认定针对精确的版本化候选
 SHA，而不是预版本的 main 提交。成功刷新 Version Packages PR，或既没有刷新该 PR 也没有对版本化候选做资格认定的
 `main` 推送，结果都是 `version-maintenance-only`。合并 Version Packages 之后，以及启用发布期间的每次 `main`
 推送，都必须以每个可发布包的 `package.json` 版本在 npm 上可解析结束（`scripts/verify-registry-versions.sh`）；
-否则该次运行为 `failed` 并写明 **NOT PUBLISHED**。
+否则该次运行为 `failed` 并写明 **NOT PUBLISHED**。如果发布没有发生，
+**Verify published registry artifacts** 会在任何无法通过 `npm view` 解析的包版本上失败。
 
 `pnpm release` 会在发布之前运行发布门禁 —— `pnpm pack:dry-run`、`pnpm lint:release` 与
 `pnpm test:packed:release`。`lint:release` 先对打包后的 `agent-bundle`、`@agent-bundle/runtime`、`rsc-markdown-stream` 与
