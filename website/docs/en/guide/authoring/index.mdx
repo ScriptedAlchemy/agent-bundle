@@ -29,11 +29,9 @@ export default defineConfig({
 | `name` | The host-native plugin slug. Never the npm package name. |
 | `description` | One sentence shown by hosts and written into generated manifests. |
 | `logo` | Project-relative path to an image copied into host artifacts that support it. |
-| `version` | **Deprecated.** The release version belongs in `package.json`. |
 
-`package.json` is authoritative for release identity. A declared `plugin.version` that disagrees
-with it reports the `AB4008` warning, and a release build with no version anywhere is refused
-outright (`AB4013`) rather than packaging the development fallback. Plugin code reads its own
+`package.json` is authoritative for release identity. A release build with no valid package
+version is refused outright (`AB4013`) rather than packaging the development fallback. Plugin code reads its own
 identity from `agent-bundle/meta` instead of a hand-maintained version module.
 
 ## Targets

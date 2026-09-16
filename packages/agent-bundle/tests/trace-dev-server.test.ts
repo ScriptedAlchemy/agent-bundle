@@ -11,7 +11,7 @@ import type { EventTraceReceipt } from '../src/events/trace-receipt.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
-import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { exampleNodeModules } from './helpers/workspace-paths.ts';
 import { replaceWatchedSourceAndAwaitRebuild } from './support/watched-files.ts';
 
 const runHook = (
@@ -32,7 +32,7 @@ it('serves replay and live trace entries and lowers build failures', { timeout: 
   const project = await createProjectFixture({
     config: [
       'export default {',
-      "  plugin: { name: 'trace-dev-server', version: '1.0.0' },",
+      "  plugin: { name: 'trace-dev-server' },",
       "  targets: ['claude'],",
       '};',
       '',
@@ -51,16 +51,19 @@ it('serves replay and live trace entries and lowers build failures', { timeout: 
         '',
       ].join('\n'),
       'src/mcp/status/tools/report.tsx': [
-        "import { Agent } from '@agent-bundle/runtime';",
-        "import { createElement } from 'react';",
-        "import { z } from 'zod';",
-        '',
-        'export const inputSchema = z.object({}).strict();',
-        'export const resultSchema = z.object({ ready: z.boolean() }).strict();',
-        'export default async function Report() {',
-        "  return createElement(Agent.Text, null, 'Ready.');",
-        '}',
-        '',
+      "import { defineTool } from 'agent-bundle/routes';",
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "",
+      "export const inputSchema = z.object({}).strict();",
+      "export const resultSchema = z.object({ ready: z.boolean() }).strict();",
+      "export default defineTool({",
+      "  inputSchema,",
+      "  resultSchema,",
+      "}, async () => {",
+      "  return createElement(Agent.Text, null, 'Ready.');",
+      "});",
       ].join('\n'),
     },
     prefix: 'agent-bundle-trace-dev-server-',
@@ -71,7 +74,7 @@ it('serves replay and live trace entries and lowers build failures', { timeout: 
   let trace: TraceHub | undefined;
   await mkdir(assetsRoot, { recursive: true });
   await Promise.all([
-    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir'),
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Trace</title>'),
   ]);
   try {

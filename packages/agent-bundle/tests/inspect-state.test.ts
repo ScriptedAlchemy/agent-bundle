@@ -27,7 +27,7 @@ const createProject = async (): Promise<string> => {
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
     writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'state-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -174,7 +174,7 @@ it('reports the declared notice retention policy and rejects a malformed one as 
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  notices: { retention: { maxTerminal: 12, terminalTtl: '2d' } },",
-      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'state-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -190,7 +190,7 @@ it('reports the declared notice retention policy and rejects a malformed one as 
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  notices: { retention: { terminalTtl: 'soon' } },",
-      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'state-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -238,7 +238,7 @@ it('reports stateless inspection and rejects competing state focuses', async () 
     ].join('\n'));
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'state-fixture' },",
       "  targets: ['portable'],",
       '  state: false,',
       '};',

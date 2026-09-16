@@ -1,5 +1,5 @@
 export default {
-  plugin: { name: 'canonical-collision', version: '1.0.0' },
+  plugin: { name: 'canonical-collision' },
   scripts: {
     bundle: './src/bundle.ts',
     'dir/../bundle': './src/bundle.ts',

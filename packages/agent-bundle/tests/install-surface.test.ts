@@ -782,7 +782,7 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
   expect(writesFor('cursor').get('INSTALL.md')).toContain('content-hash comparison');
 
   const installer = writesFor('cursor').get('install.mjs') ?? '';
-  expect(installer).toContain("argument === '--replace' || argument === '--force'");
+  expect(installer).toContain("argument === '--replace'");
   expect(installer).toContain(`const receiptFile = ${JSON.stringify(installReceiptFile)};`);
   expect(installer).toContain(`const receiptFormat = ${JSON.stringify(installReceiptFormat)};`);
   expect(installer).toContain(`const legacyReceiptFormat = ${JSON.stringify(legacyInstallReceiptFormat)};`);
@@ -843,7 +843,7 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
 
     const help = await run(installer, ['--help'], home);
     expect(help).toMatchObject({ code: 0 });
-    expect(help.stdout).toContain('[--replace|--force]');
+    expect(help.stdout).toContain('[--replace]');
     const unknown = await run(installer, ['--bogus'], home);
     expect(unknown.code).toBe(2);
     expect(unknown.stderr).toContain('Unknown installer argument "--bogus"');
@@ -1055,7 +1055,7 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     expect(legacy.stderr).toContain(`content ${legacyHash.slice(0, 12)}`);
     expect(legacy.stderr).toContain('same version, different content');
     expect(legacy.stderr).toContain('--replace');
-    const adopted = await run(installer, ['--force'], home);
+    const adopted = await run(installer, ['--replace'], home);
     expect(adopted).toMatchObject({ code: 0, stderr: '' });
     expect(adopted.stdout).toContain('Replaced install-fixture@1.2.3');
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');

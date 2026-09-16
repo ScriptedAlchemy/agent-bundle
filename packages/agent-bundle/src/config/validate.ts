@@ -2165,11 +2165,10 @@ export interface ValidateSourceOptions {
 }
 
 /**
- * AB4008-AB4011: the package-identity axes derived from `package.json`
- * (issue #94). The package version is authoritative release identity, so a
- * conflicting `plugin.version` and any invalid derived value surface as
- * warnings — never errors: a missing package.json (or missing name/version
- * fields) stays a normal, silent development state with a labeled fallback.
+ * AB4009-AB4011: the package-identity axes derived from `package.json`
+ * (issue #94). Invalid derived values surface as warnings — never errors: a
+ * missing package.json (or missing name/version fields) stays a normal,
+ * silent development state with a labeled fallback.
  */
 const packageIdentityIssueCode = (kind: PackageIdentityIssueKind): string => {
   switch (kind) {
@@ -2200,34 +2199,15 @@ const validatePackageIdentity = (loaded: LoadedConfig, release: boolean): Diagno
       'Correct the package.json field so the derived package identity is valid, then validate again.',
     ));
   }
-  const plugin = loaded.config.plugin as unknown;
-  const pluginVersion =
-    typeof plugin === 'object' && plugin !== null && !Array.isArray(plugin)
-      ? (plugin as Record<string, unknown>).version
-      : undefined;
-  if (
-    identity.packageVersion !== undefined &&
-    typeof pluginVersion === 'string' &&
-    pluginVersion.trim().length > 0 &&
-    pluginVersion !== identity.packageVersion
-  ) {
-    diagnostics.push(warningDiagnostic(
-      'AB4008',
-      `Config plugin.version ${JSON.stringify(pluginVersion)} differs from package.json version ${JSON.stringify(identity.packageVersion)}; the package version is authoritative for release identity.`,
-      loaded.configPath,
-      'Align plugin.version with the package.json version, or update package.json.',
-    ));
-  }
-  const declared = typeof pluginVersion === 'string' && pluginVersion.trim().length > 0;
-  if (release && !declared && identity.packageVersion === undefined) {
+  if (release && identity.packageVersion === undefined) {
     // A development-only fallback may exist, but it can never produce a
-    // release artifact (issue #94): with no authored plugin.version and no
-    // valid package.json version, this project has no release identity to
-    // stamp into manifests, host projections, or compiled surfaces.
+    // release artifact (issue #94): without a valid package.json version this
+    // project has no release identity to stamp into manifests, host
+    // projections, or compiled surfaces.
     diagnostics.push({
       code: 'AB4013',
-      message: 'This project has no release version: plugin.version is omitted and package.json declares no valid semantic version, so the build would package the development fallback.',
-      recovery: `Add a valid semantic "version" to package.json, or declare plugin.version in the config. Development commands keep the labeled ${developmentFallbackVersion} fallback.`,
+      message: 'This project has no release version: package.json declares no valid semantic version, so the build would package the development fallback.',
+      recovery: `Add a valid semantic "version" to package.json. Development commands keep the labeled ${developmentFallbackVersion} fallback.`,
       severity: 'error',
       sourcePath: packageJsonPath,
     });
@@ -2430,21 +2410,17 @@ export const validateSource = (
       ? (plugin as Record<string, unknown>)
       : undefined;
   const pluginName = pluginRecord?.name;
-  const pluginVersion = pluginRecord?.version;
 
   if (typeof pluginName !== 'string' || pluginName.trim().length === 0) {
     diagnostics.push(
       sourceDiagnostic('AB4000', 'Plugin metadata must define a nonempty name.', loaded.configPath),
     );
   }
-  // `plugin.version` is optional since #94 stage 3: omitting it derives the
-  // version from package.json. Declaring it as anything but a nonempty
-  // string is still a mistake with no defensible reading.
-  if (pluginVersion !== undefined && (typeof pluginVersion !== 'string' || pluginVersion.trim().length === 0)) {
+  if (pluginRecord !== undefined && Object.hasOwn(pluginRecord, 'version')) {
     diagnostics.push(
       sourceDiagnostic(
         'AB4001',
-        'Plugin metadata version must be a nonempty string when it is declared; omit it to derive the version from package.json.',
+        'Plugin metadata no longer accepts version; declare the release version in package.json.',
         loaded.configPath,
       ),
     );

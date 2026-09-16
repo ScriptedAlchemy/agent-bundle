@@ -19,10 +19,9 @@ export interface AgentBundleMeta {
   /** The validated semantic release version, absent for unpackaged development projects. */
   readonly packageVersion: string | undefined;
   /**
-   * The resolved plugin version: the authored `plugin.version` when declared,
-   * otherwise the package.json version. A release build refuses to package a
-   * project that has neither (AB4013), so a compiled artifact never carries
-   * the development fallback.
+   * The package.json version. A release build refuses to package a project
+   * without one (AB4013), so a compiled artifact never carries the
+   * development fallback.
    */
   readonly version: string;
 }

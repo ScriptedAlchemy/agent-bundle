@@ -37,7 +37,7 @@ const createProject = async (): Promise<string> => {
       join(root, 'agent-bundle.config.ts'),
       [
         'export default ({ command, mode, projectRoot, selectedTargets }) => ({',
-        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'api-fixture' },",
         '  targets: selectedTargets.length === 0 ? [\'codex\', \'claude\'] : selectedTargets,',
         "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
         '  fixtureContext: { command, mode, projectRoot, selectedTargets },',
@@ -49,6 +49,7 @@ const createProject = async (): Promise<string> => {
       join(root, 'src', 'skills', 'review', 'SKILL.md'),
       '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
     ),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'src', 'hook.ts'), 'export default () => undefined;\n'),
   ]);
   return root;
@@ -147,7 +148,7 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'synthetic-api-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'synthetic-api-fixture' },",
       "  synthetic: { enabled: true },",
       "  targets: ['synthetic'],",
       '};',
@@ -202,7 +203,7 @@ it('projects only the capability contract fields of adapter-owned rows into insp
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'synthetic-api-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'synthetic-api-fixture' },",
       "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
       "  synthetic: { enabled: true },",
       "  targets: ['synthetic'],",
@@ -232,7 +233,7 @@ it('accepts claude.userConfig through the public inspection and build APIs', asy
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'user-config-api', version: '1.0.0' },",
+      "  plugin: { name: 'user-config-api' },",
       "  targets: ['claude'],",
       '  claude: {',
       '    userConfig: {',
@@ -295,7 +296,7 @@ it('returns a frozen invalid inspection for opaque source failures', async () =>
 it('attaches a specific recovery to every invalid inspection diagnostic', async () => {
   const root = await createProject();
   try {
-    await writeFile(join(root, 'agent-bundle.config.ts'), "export default { plugin: { version: '1.0.0' } };\n");
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default { plugin: {} };\n');
 
     const result = await inspect({ root });
 
@@ -320,7 +321,7 @@ it('accepts the public claude.dependencies config surface and plans its manifest
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'api-fixture' },",
       "  targets: ['claude'],",
       '  claude: {',
       "    dependencies: [{ name: 'audit-logger', marketplace: 'acme-shared' }, { name: 'policy-kit', version: '^2.0', marketplace: 'acme-shared' }],",
@@ -350,7 +351,7 @@ it('reports one modern-MCP source diagnostic for a legacy SSE declaration', asyn
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'codex-sse', version: '1.0.0' },",
+      "  plugin: { name: 'codex-sse' },",
       "  targets: ['codex'],",
       "  mcp: { servers: { events: { transport: 'sse', url: 'https://mcp.example.test/events' } } },",
       '};',
@@ -379,7 +380,7 @@ it('resolves artifact output with CLI, config, and default precedence', async ()
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  output: { distPath: 'artifact-out' },",
-      "  plugin: { name: 'output-path-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'output-path-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -398,7 +399,7 @@ it('resolves artifact output with CLI, config, and default precedence', async ()
 
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'output-path-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'output-path-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -512,7 +513,7 @@ it('build reports one informational AB6019 skip for all Claude-validated targets
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'api-fixture' },",
       "  targets: ['claude', 'codex'],",
       '};',
       '',
@@ -600,7 +601,7 @@ it('deduplicates identical adapter diagnostics without collapsing distinct stabl
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'adapter-diagnostic-identity', version: '1.0.0' },",
+      "  plugin: { name: 'adapter-diagnostic-identity' },",
       "  synthetic: { enabled: true },",
       "  targets: ['synthetic'],",
       '};',
@@ -627,7 +628,7 @@ it('contains hostile source getters as reusable preparation diagnostics', async 
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       "const hostile = { toString() { throw new Error('hostile source getter was stringified'); } };",
       'hostile.self = hostile;',
-      'const config = { plugin: { name: \'hostile-config\', version: \'1.0.0\' }, targets: [\'codex\'] };',
+      'const config = { plugin: { name: \'hostile-config\' }, targets: [\'codex\'] };',
       "Object.defineProperty(config, 'hooks', { enumerable: true, get() { throw hostile; } });",
       'export default config;',
       '',
@@ -655,7 +656,7 @@ it('contains hostile source getters as reusable preparation diagnostics', async 
 
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'recovered-config', version: '1.0.0' },",
+      "  plugin: { name: 'recovered-config' },",
       "  targets: ['codex'],",
       '};',
       '',
@@ -676,7 +677,7 @@ it('fails closed when routes getter throws during inspection', async () => {
       writeFile(join(root, 'agent-bundle.config.ts'), [
         "const hostile = { toString() { throw new Error('hostile routes getter was stringified'); } };",
         'hostile.self = hostile;',
-        'const config = { plugin: { name: \'hostile-routes\', version: \'1.0.0\' }, targets: [\'codex\'] };',
+        'const config = { plugin: { name: \'hostile-routes\' }, targets: [\'codex\'] };',
         "Object.defineProperty(config, 'routes', { enumerable: true, get() { throw hostile; } });",
         'export default config;',
         '',
@@ -731,7 +732,7 @@ it('contains a throwing adapter plan as a reusable preparation diagnostic', asyn
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'hostile-adapter', version: '1.0.0' },",
+      "  plugin: { name: 'hostile-adapter' },",
       "  synthetic: { enabled: true },",
       "  targets: ['synthetic'],",
       '};',
@@ -779,7 +780,7 @@ it('contains an adapter planner that fails after preparation during inspect', as
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'inspection-planner', version: '1.0.0' },",
+      "  plugin: { name: 'inspection-planner' },",
       "  synthetic: { enabled: true },",
       "  targets: ['synthetic'],",
       '};',
@@ -863,7 +864,7 @@ it('reports skipped target/component pairs against each target emission surface'
       writeFile(join(root, 'agent-bundle.config.ts'), [
         'export default {',
         "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
-        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'api-fixture' },",
         "  scripts: { report: { entry: './src/report.ts', targets: ['codex'] } },",
         "  targets: ['portable', 'codex', 'claude', 'cursor'],",
         '};',
@@ -963,7 +964,7 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
         '    },',
         '  },',
         "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
-        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'api-fixture' },",
         "  targets: ['portable', 'codex', 'claude', 'cursor'],",
         '};',
         '',
@@ -1107,7 +1108,7 @@ it('accounts an admitted degraded event route as selected, matching the validati
       ].join('\n')),
       writeFile(join(root, 'agent-bundle.config.ts'), [
         'export default {',
-        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'api-fixture' },",
         `  targets: ['${syntheticTarget}'],`,
         '};',
         '',
@@ -1162,7 +1163,7 @@ it('judges event-route admission and lsp emission by the component-emission over
       writeFile(join(root, 'agent-bundle.config.ts'), [
         'export default {',
         "  synthetic: { lspServers: { rust: { command: 'rust-analyzer' } } },",
-        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'api-fixture' },",
         `  targets: ['${syntheticTarget}'],`,
         '};',
         '',
@@ -1197,7 +1198,7 @@ it('never reports an lsp component as selected when the declaring planner reject
       "      second: { command: 'second-ls', extensionToLanguage: { '.ts': 'typescript' } },",
       '    },',
       '  },',
-      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'api-fixture' },",
       "  targets: ['claude'],",
       '};',
       '',
@@ -1227,7 +1228,7 @@ it('reports omitted component features per target from the host feature rows (#1
       writeFile(join(root, 'agent-bundle.config.ts'), [
         'export default {',
         "  hooks: { beforeTool: { handler: './src/hook.ts', timeout: 3, tools: ['shell'] } },",
-        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'api-fixture' },",
         "  targets: ['claude', 'cursor'],",
         '};',
         '',
@@ -1303,7 +1304,7 @@ it('never counts an opaque third-party lspServers declaration as emitted by a ho
       'export default {',
       "  synthetic: { lspServers: { rust: { command: 'rust-analyzer' } } },",
       "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
-      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'api-fixture' },",
       `  targets: [${JSON.stringify(target)}],`,
       '};',
       '',
@@ -1337,7 +1338,7 @@ it('never counts an opaque third-party lspServers declaration as emitted by a ho
       'export default {',
       "  codex: { lspServers: { rust: { command: 'rust-analyzer' } } },",
       "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
-      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'api-fixture' },",
       "  targets: ['codex', 'claude'],",
       '};',
       '',
@@ -1365,7 +1366,7 @@ it('reports target exclusion before unsupported capability when both omit a comp
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  hooks: { sessionStart: { handler: './src/hook.ts', targets: ['codex'] } },",
-      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'api-fixture' },",
       "  targets: ['portable', 'codex'],",
       '};',
       '',
@@ -1391,7 +1392,7 @@ it('surfaces the computed native matcher on inspected hook entries', async () =>
       "    beforeTool: { handler: './src/hook.ts', tools: ['shell', 'file.write'] },",
       "    sessionStart: { handler: './src/hook.ts' },",
       '  },',
-      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'api-fixture' },",
       "  targets: ['claude'],",
       '};',
       '',
@@ -1440,7 +1441,7 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
         'export default {',
         "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
         "  mcp: { servers: { synthetic: { entry: './src/mcp-server.ts' } } },",
-        "  plugin: { name: 'synthetic-api-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'synthetic-api-fixture' },",
         "  synthetic: { enabled: true },",
         "  targets: ['synthetic'],",
         '};',
@@ -1552,6 +1553,7 @@ it('returns an output-independent project context without absolute project paths
       'configDigest',
       'configPath',
       'modelDigest',
+      'packageVersion',
       'revision',
       'sourceInputs',
     ]);
@@ -1572,7 +1574,7 @@ it('keeps rule and command model digests root-independent and sensitive to conte
   const [leftRoot, rightRoot] = await Promise.all([createProject(), createProject()]);
   const config = [
     'export default {',
-    "  plugin: { name: 'rule-digest-fixture', version: '1.0.0' },",
+    "  plugin: { name: 'rule-digest-fixture' },",
     "  targets: ['cursor'],",
     '};',
     '',
@@ -1660,7 +1662,7 @@ it('rejects an output beneath an escaping symlink before loading source or writi
       "import { writeFileSync } from 'node:fs';",
       `writeFileSync(${JSON.stringify(marker)}, 'evaluated\\n');`,
       'export default {',
-      "  plugin: { name: 'escaping-output', version: '1.0.0' },",
+      "  plugin: { name: 'escaping-output' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -1685,7 +1687,7 @@ it('rejects a dangling output symlink before loading source', async () => {
       "import { writeFileSync } from 'node:fs';",
       `writeFileSync(${JSON.stringify(marker)}, 'evaluated\\n');`,
       'export default {',
-      "  plugin: { name: 'dangling-output', version: '1.0.0' },",
+      "  plugin: { name: 'dangling-output' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -1709,7 +1711,7 @@ it('rejects an output symlink to the project root before loading source', async 
       "import { writeFileSync } from 'node:fs';",
       `writeFileSync(${JSON.stringify(marker)}, 'evaluated\\n');`,
       'export default {',
-      "  plugin: { name: 'root-output', version: '1.0.0' },",
+      "  plugin: { name: 'root-output' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -1782,7 +1784,7 @@ it('normalizes named top-level scripts with stable IDs, modes, and sorted target
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'script-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'script-fixture' },",
         "  targets: ['codex', 'claude'],",
         '  scripts: {',
         "    bundle: { entry: './src/bundle.ts', targets: ['codex', 'claude'] },",
@@ -1839,11 +1841,12 @@ it('builds conventional src/scripts modules beside explicit entries', async () =
   const root = join(parent, 'project with spaces');
   await mkdir(join(root, 'src', 'scripts'), { recursive: true });
   await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'conventional-scripts-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'conventional-scripts-fixture' },",
         "  targets: ['portable'],",
         "  scripts: { claimed: './src/scripts/claimed.ts' },",
         '};',
@@ -1899,7 +1902,7 @@ it('refuses unshippable conventional script routes with actionable diagnostics',
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'unshippable-scripts-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'unshippable-scripts-fixture' },",
         "  targets: ['portable'],",
         "  scripts: { audit: './src/tasks/audit.ts' },",
         '};',
@@ -1939,11 +1942,12 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
   const output = join(root, 'artifact');
   await mkdir(join(root, 'src'), { recursive: true });
   await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'copy-script-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'copy-script-fixture' },",
         "  targets: ['portable', 'codex', 'claude'],",
         '  scripts: {',
         "    bash: './src/run.BASH',",
@@ -2038,9 +2042,10 @@ it('canonicalizes copied script extensions in emitted artifact paths', async () 
   const output = join(root, 'artifact');
   await mkdir(join(root, 'src'), { recursive: true });
   await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
-      "  plugin: { name: 'uppercase-script-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'uppercase-script-fixture' },",
       "  targets: ['portable'],",
       "  scripts: { upper: './src/run.SH' },",
       '};',
@@ -2092,7 +2097,7 @@ it('documents a versioned MCP App resource URI accepted by source validation', a
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'readme-uri-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'readme-uri-fixture' },",
         "  targets: ['portable'],",
         '  mcp: { servers: { local: {',
         "    entry: './src/server.ts',",
@@ -2124,7 +2129,7 @@ it('rejects unsafe, unsupported, missing, non-file, and unknown-target named scr
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'invalid-script-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'invalid-script-fixture' },",
         "  targets: ['portable'],",
         '  scripts: {',
         "    '../unsafe': './src/run.sh',",

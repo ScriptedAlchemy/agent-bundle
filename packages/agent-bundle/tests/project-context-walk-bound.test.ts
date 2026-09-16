@@ -15,12 +15,13 @@ const createProject = async (): Promise<string> => {
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'dev-service-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'dev-service-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
       ].join('\n'),
     ),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'src', 'skills', 'review', 'SKILL.md'), [
       '---',
       'name: review',

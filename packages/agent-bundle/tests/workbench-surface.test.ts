@@ -255,7 +255,7 @@ describe('capability counts', () => {
     const project = await createProjectFixture({
       config: [
         'export default {',
-        "  plugin: { name: 'workbench-surface-counts', version: '1.0.0' },",
+        "  plugin: { name: 'workbench-surface-counts' },",
         "  targets: ['claude', 'codex'],",
         "  hooks: { PostToolUse: [{ handler: 'src/hooks/audit.ts', targets: [] }] },",
         '  scripts: {',
@@ -294,7 +294,7 @@ describe('capability counts', () => {
     const project = await createProjectFixture({
       config: [
         'export default {',
-        "  plugin: { name: 'workbench-surface-prebuilt-hooks', version: '1.0.0' },",
+        "  plugin: { name: 'workbench-surface-prebuilt-hooks' },",
         "  targets: ['claude', 'codex'],",
         "  payload: { runtime: './built/runtime' },",
         '  hooks: { afterTool: [',
@@ -321,7 +321,7 @@ describe('capability counts', () => {
       const prebuiltOnly = await createProjectFixture({
         config: [
           'export default {',
-          "  plugin: { name: 'workbench-surface-prebuilt-only', version: '1.0.0' },",
+          "  plugin: { name: 'workbench-surface-prebuilt-only' },",
           "  targets: ['claude'],",
           "  payload: { runtime: './built/runtime' },",
           "  hooks: { afterTool: [{ args: ['--host', 'claude'], handler: { prebuilt: './built/runtime/hook.js' }, targets: ['claude'], tools: ['file.write'] }] },",
@@ -351,7 +351,7 @@ describe('capability counts', () => {
     const project = await createProjectFixture({
       config: [
         'export default {',
-        "  plugin: { name: 'workbench-surface-nothing-emitted', version: '1.0.0' },",
+        "  plugin: { name: 'workbench-surface-nothing-emitted' },",
         "  targets: ['claude'],",
         "  hooks: { PostToolUse: [{ handler: 'src/hooks/audit.ts', targets: [] }] },",
         "  scripts: { nowhere: { entry: 'src/tools/nowhere.ts', targets: [] } },",
@@ -388,7 +388,7 @@ describe('preparation parity with the Workbench server', () => {
     const suiteModule = resolve(import.meta.dirname, '../src/eval/suite.ts');
     const configFactory = (name: string, evalsDir: string): string => [
       'export default (context) => ({',
-      `  plugin: { name: ${JSON.stringify(name)}, version: '1.0.0' },`,
+      `  plugin: { name: ${JSON.stringify(name)} },`,
       // Production selects claude alone; the Workbench (development) sees both.
       "  targets: context.mode === 'development' ? ['claude', 'codex'] : ['claude'],",
       `  evals: { include: [${JSON.stringify(`${evalsDir}/**/*.eval.ts`)}] },`,
@@ -457,7 +457,7 @@ describe('an unusable project', () => {
     const project = await createProjectFixture({
       config: [
         'export default {',
-        "  plugin: { name: 'workbench-surface-invalid', version: '1.0.0' },",
+        "  plugin: { name: 'workbench-surface-invalid' },",
         "  targets: ['claude', 'no-such-host'],",
         '};',
         '',

@@ -29,7 +29,6 @@ export default {
   plugin: {
     description: 'A complete Agent Bundle compiler integration fixture.',
     name: 'integration-fixture',
-    version: '1.0.0',
   },
   scripts: {
     bundle: './src/bundle.ts',

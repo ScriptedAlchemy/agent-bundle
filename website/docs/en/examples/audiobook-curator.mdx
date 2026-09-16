@@ -65,8 +65,8 @@ those features, not the build. This example has no hooks.
   projected commands compile into `dist/bin/audiobook-curator.mjs` for `package.json` `bin`, and
   `dist/index.js` plus declarations serve `exports`. See
   [CLI and library package entries](../guide/authoring/package-entries.mdx).
-- **`package.json` is the single version source.** The config declares no `plugin.version`; the
-  resolved version flows into project context, artifact manifests, `inspect` output, dev status,
+- **`package.json` is the single version source.** The resolved version flows into project
+  context, artifact manifests, `inspect` output, dev status,
   and the `agent-bundle/meta` constant this plugin imports.
 
 ## Every command renders its tool's document

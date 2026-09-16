@@ -1,16 +1,6 @@
+import { defineTool } from 'agent-bundle/routes';
 import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
 import { z } from 'zod';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {},
-    "type": "object"
-  },
-  annotations: { readOnlyHint: true },
-  description: 'Reports the plugin root and durable-state anchor this route observes.',
-  title: 'Plugin root',
-};
 
 export const inputSchema = z.object({}).strict();
 
@@ -23,7 +13,7 @@ export const resultSchema = z.object({
  * level can assert the anchor a generated scope resolved from
  * `AGENT_BUNDLE_PLUGIN_ROOT` (or its fallback) reached the request.
  */
-export default async function PluginRoot() {
+async function PluginRoot() {
   const { plugin } = await agent();
   const observed: JsonValue = plugin.state === 'available'
     ? { source: plugin.source, state: plugin.state, value: { root: plugin.value.root, stateRoot: plugin.value.stateRoot } }
@@ -34,3 +24,16 @@ export default async function PluginRoot() {
     </Agent.Result>
   );
 }
+
+export default defineTool({
+inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  annotations: { readOnlyHint: true },
+  description: 'Reports the plugin root and durable-state anchor this route observes.',
+  title: 'Plugin root',
+  inputSchema,
+  resultSchema,
+}, async () => PluginRoot());

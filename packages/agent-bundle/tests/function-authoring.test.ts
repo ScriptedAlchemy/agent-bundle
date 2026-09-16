@@ -22,7 +22,7 @@ export default tool({ description: 'Status', inputSchema: z.object({ verbose: z.
 
 it('extracts a bounded definition without inspecting or evaluating its handler', () => {
   expect(extractRouteConfig(source, path, path)).toMatchObject({ config: { description: 'Status' }, diagnostics: [] });
-  expect(validateRouteModuleContract(source, path, path)).toEqual([]);
+  expect(validateRouteModuleContract(source, path, path, 'tool')).toEqual([]);
 });
 
 it('extracts shorthand schemas in their original module scope', () => {
@@ -31,7 +31,7 @@ import { z } from 'zod';
 const inputSchema = z.object({ verbose: z.boolean().default(false) });
 export default defineTool({ inputSchema, resultSchema: z.string() }, async () => 'ok');`;
   expect(readRouteDefinition(parseModule(path, shorthand))?.inputSchema).toBeDefined();
-  expect(validateRouteModuleContract(shorthand, path, path)).toEqual([]);
+  expect(validateRouteModuleContract(shorthand, path, path, 'tool')).toEqual([]);
 });
 
 it('normalizes the same inferred handler for generated and source execution', async () => {

@@ -255,7 +255,7 @@ it('resolves Claude path tokens outside command when launching a generated artif
             },
           },
         },
-        plugin: { name: 'path-token-fixture', version: '1.0.0' },
+        plugin: { name: 'path-token-fixture' },
         targets: ['claude'],
       }),
       { skills: [] },

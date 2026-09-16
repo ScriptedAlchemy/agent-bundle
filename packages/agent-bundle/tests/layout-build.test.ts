@@ -24,27 +24,35 @@ const writeProjectFile = async (root: string, path: string, contents: string): P
 };
 
 const lookupRoute = [
+  "import { defineTool } from 'agent-bundle/routes';",
   "import { Agent, agent } from '@agent-bundle/runtime';",
   "import { z } from 'zod';",
-  "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"default\":\"ready\"}},\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
   'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
   "export const resultSchema = z.object({ invocation: z.enum(['cli', 'tool']), message: z.string() }).strict();",
-  'export default async function Lookup({ input }) {',
+  'export default defineTool({',
+  "  inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"default\":\"ready\"}},\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Looks up one value.',",
+  '  inputSchema,',
+  '  resultSchema,',
+  '}, async (input) => {',
   '  const context = await agent();',
   '  const result = { invocation: context.invocation.kind, message: input.message };',
   '  return <Agent.Result metadata={{ from: "route" }} value={result}><Agent.Markdown>{`Lookup: ${input.message}`}</Agent.Markdown></Agent.Result>;',
-  '}',
+  '});',
   '',
 ].join('\n');
 
 const explodeRoute = [
+  "import { defineTool } from 'agent-bundle/routes';",
   "import { z } from 'zod';",
-  "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{},\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Throws before rendering.' };",
   'export const inputSchema = z.object({}).strict();',
   'export const resultSchema = z.object({ ok: z.boolean() }).strict();',
-  'export default async function Explode() {',
+  'export default defineTool({',
+  "  inputJsonSchema: {\"additionalProperties\":false,\"properties\":{},\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Throws before rendering.',",
+  '  inputSchema,',
+  '  resultSchema,',
+  '}, async () => {',
   "  throw new Error('lookup exploded');",
-  '}',
+  '});',
   '',
 ].join('\n');
 
@@ -67,7 +75,7 @@ const writeLayoutProject = async (root: string, layouts: Readonly<Record<string,
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
       'export default defineConfig({',
-      "  plugin: { description: 'Layout fixture.', name: 'layout-fixture', version: '1.0.0' },",
+      "  plugin: { description: 'Layout fixture.', name: 'layout-fixture' },",
       '  routes: { mcpCommands: true },',
       "  targets: ['portable'],",
       '});',

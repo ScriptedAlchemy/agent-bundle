@@ -1,19 +1,6 @@
+import { defineTool } from 'agent-bundle/routes';
 import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "note": {
-        "type": "string"
-      }
-    },
-    "type": "object"
-  },
-  description: 'Records and reads durable route-harness journal entries.',
-  title: 'Journal',
-};
 
 export const inputSchema = z.object({ note: z.string().optional() }).strict();
 
@@ -26,7 +13,7 @@ interface JournalState {
   readonly entries: readonly { readonly note: string }[];
 }
 
-export default async function Journal({ input }: { readonly input: z.infer<typeof inputSchema> }) {
+async function Journal({ input }: { readonly input: z.infer<typeof inputSchema> }) {
   const context = await agent();
   if (context.state === undefined) throw new TypeError('Journal state is unavailable.');
   if (input.note !== undefined) {
@@ -47,3 +34,19 @@ export default async function Journal({ input }: { readonly input: z.infer<typeo
     </Agent.Result>
   );
 }
+
+export default defineTool({
+inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "note": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  description: 'Records and reads durable route-harness journal entries.',
+  title: 'Journal',
+  inputSchema,
+  resultSchema,
+}, async (input) => Journal({ input }));

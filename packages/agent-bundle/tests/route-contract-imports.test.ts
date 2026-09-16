@@ -104,31 +104,40 @@ const cliRoute = (variant: FixtureVariant): string => variant === 'inline'
 
 const toolRoute = (variant: FixtureVariant): string => variant === 'inline'
   ? [
+      "import { defineTool } from 'agent-bundle/routes';",
       "import { Agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
       '',
-      "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' }, limit: { type: 'number', description: 'Recent rows' }, statuses: { type: 'array', items: { type: 'string', enum: ['requested', 'queued', 'running', 'done'] } }, tickets: { type: 'array', items: { type: 'string' } } } }, description: 'Show the queue.' };",
       `export const inputSchema = ${inlineInputSchema};`,
       "export const resultSchema = z.object({ filters: inputSchema, operation: z.literal('status') });",
-      'export default async function HaulerStatus({ input }: { input: z.infer<typeof inputSchema> }) {',
+      'export default defineTool({',
+      "  inputJsonSchema: { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' }, limit: { type: 'number', description: 'Recent rows' }, statuses: { type: 'array', items: { type: 'string', enum: ['requested', 'queued', 'running', 'done'] } }, tickets: { type: 'array', items: { type: 'string' } } } },",
+      "  description: 'Show the queue.',",
+      '  inputSchema,',
+      '  resultSchema,',
+      '}, async (input) => {',
       "  const result = { filters: input, operation: 'status' };",
       '  return <Agent.Result value={result}><Agent.Text>Queue status.</Agent.Text></Agent.Result>;',
-      '}',
+      '});',
       '',
     ].join('\n')
   : [
+      "import { defineTool } from 'agent-bundle/routes';",
       "import { Agent } from '@agent-bundle/runtime';",
-      "import type { z } from 'zod';",
       '',
       "import { statusInputSchema, statusResultSchema } from '../../../lib/protocol-schemas.js';",
       '',
-      "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' }, limit: { type: 'number', description: 'Recent rows' }, statuses: { type: 'array', items: { type: 'string', enum: ['requested', 'queued', 'running', 'done'] } }, tickets: { type: 'array', items: { type: 'string' } } } }, description: 'Show the queue.' };",
       'export const inputSchema = statusInputSchema;',
       'export const resultSchema = statusResultSchema;',
-      'export default async function HaulerStatus({ input }: { input: z.infer<typeof inputSchema> }) {',
+      'export default defineTool({',
+      "  inputJsonSchema: { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' }, limit: { type: 'number', description: 'Recent rows' }, statuses: { type: 'array', items: { type: 'string', enum: ['requested', 'queued', 'running', 'done'] } }, tickets: { type: 'array', items: { type: 'string' } } } },",
+      "  description: 'Show the queue.',",
+      '  inputSchema,',
+      '  resultSchema,',
+      '}, async (input) => {',
       "  const result = { filters: input, operation: 'status' };",
       '  return <Agent.Result value={result}><Agent.Text>Queue status.</Agent.Text></Agent.Result>;',
-      '}',
+      '});',
       '',
     ].join('\n');
 
@@ -155,7 +164,7 @@ const writeFixture = async (variant: FixtureVariant): Promise<string> => {
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
       'export default defineConfig({',
-      `  plugin: { description: 'Route contract fixture.', name: '${name}', version: '1.0.0' },`,
+      `  plugin: { description: 'Route contract fixture.', name: '${name}' },`,
       '  routes: { mcpCommands: true },',
       "  targets: ['portable'],",
       '});',
@@ -181,7 +190,7 @@ const writeFixture = async (variant: FixtureVariant): Promise<string> => {
 
 const routeGraph = async (root: string): Promise<RouteContractGraph> => {
   const graph = await compileRouteGraph(root, {
-    plugin: { name: 'route-contract-fixture', version: '1.0.0' },
+    plugin: { name: 'route-contract-fixture' },
     routes: { mcpCommands: true },
     targets: ['portable'],
   });
@@ -296,7 +305,7 @@ it('uses explicit metadata with imported runtime schemas and preserves generated
   expect(importedTypes).toEqual([]);
 
   const bareGraph = await compileRouteGraph(bareRoot, {
-    plugin: { name: 'route-contract-bare-fixture', version: '1.0.0' },
+    plugin: { name: 'route-contract-bare-fixture' },
     routes: { mcpCommands: true },
     targets: ['portable'],
   }) as RouteContractGraph;

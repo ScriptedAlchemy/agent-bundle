@@ -14,7 +14,7 @@ import { createProjectFixture, removeProjectFixture } from './helpers/project-fi
 
 const configSource = (options: { readonly payload?: string; readonly hooks?: string; readonly mcp?: string }): string => [
   'export default {',
-  "  plugin: { name: 'prebuilt-fixture', version: '1.0.0', description: 'Prebuilt payload fixture.' },",
+  "  plugin: { name: 'prebuilt-fixture', description: 'Prebuilt payload fixture.' },",
   "  targets: ['claude', 'codex', 'portable'],",
   ...(options.payload === undefined ? [] : [options.payload]),
   ...(options.hooks === undefined ? [] : [options.hooks]),

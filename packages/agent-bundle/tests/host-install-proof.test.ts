@@ -62,7 +62,6 @@ beforeAll(async () => {
           '  plugin: {',
           "    description: 'Proves an MCP-only installed host artifact.',",
           "    name: 'host-install-mcp-only-proof',",
-          "    version: '1.0.0',",
           '  },',
           '  routes: { mcpCommands: true },',
           "  targets: ['claude', 'codex', 'cursor'],",

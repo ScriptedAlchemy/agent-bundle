@@ -54,40 +54,7 @@ src/mcp/curator/
 路径提供身份：`src/mcp/curator/tools/status.tsx` 就是 `curator` 服务器的 `status` 工具。服务器的存在
 不需要任何声明。
 
-### 兼容格式：拆分工具导出
-
-旧工具仍可分别导出 `config`、schema 和 默认 Server Component。这是兼容格式；
-新工具请使用 `defineTool`。资源、提示和应用继续使用各自现有的契约。旧格式示例：
-
-```tsx
-// src/mcp/curator/tools/status.tsx
-import React from 'react';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
-import { Agent, agent } from '@agent-bundle/runtime';
-import { z } from 'zod';
-
-export const config = {
-  annotations: { readOnlyHint: true },
-  description: 'Read runtime status.',
-} satisfies ToolConfig;
-export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();
-export const resultSchema = z.object({ status: z.literal('ready') }).strict();
-
-export default async function Status(
-  { input, signal }: ToolRouteProps<typeof inputSchema>,
-) {
-  if (signal.aborted) throw new DOMException('aborted', 'AbortError');
-  if (input.verbose) await agent();
-  const result = { status: 'ready' as const };
-  return (
-    <Agent.Result value={result}>
-      <Agent.Text>Runtime is ready.</Agent.Text>
-    </Agent.Result>
-  );
-}
-```
-
-编译器静态读取 `config`，只把 schema 与实现导入生成的入口，装配 `runAgentRequest`，并从路由图推导出
+编译器静态读取 `defineTool` 选项，只把 schema 与实现导入生成的入口，装配 `runAgentRequest`，并从路由图推导出
 真实的 MCP 服务器。每次调用都经由一个常驻的内部 Flight 分发器渲染，并把最终的 Agent Document 降级为
 合法的 MCP 输出。Flight 是生成运行时内部的实现传输层——绝不是面向宿主的公开线上协议，原始 Flight
 字节也永远不会跨越 MCP 线路。
@@ -111,39 +78,12 @@ draft-07 校验器都接受每一个合法取值。zod 元组（`z.tuple([...])`
 `dependentRequired` 这样仅属于 2020-12 的关键字会被宽松模式的 draft-07 校验器忽略，而不会被错误地
 套用。
 
-运行时 schema 可以导入或由工厂构建。可选的字面量 `config.inputJsonSchema` 提供无需执行模块的表单和
-CLI flag 元数据；`tools/list` 和运行时校验仍使用真实 schema。参见
+运行时 schema 可以导入或由工厂构建。`defineTool` 中可选的字面量 `inputJsonSchema` 属性提供无需执行
+模块的表单和 CLI flag 元数据；`tools/list` 和运行时校验仍使用真实 schema。参见
 [输入元数据](./package-entries.mdx#在-mcp-与-cli-之间共享同一份-schema)。
 
-路由可以从另一个模块重新导出自己的组件与 schema。当同一个工具需要放在两个生成的服务器上、而两处
-只有 `config` 不同时，就用这种写法——例如 MCP App 的 `tools/call` 会到达提供该 widget 的那台服务器：
-
-```tsx
-// src/mcp/widgets/tools/status.tsx
-import type { ToolConfig } from 'agent-bundle';
-
-export const config = {
-  _meta: { ui: { resourceUri: 'ui://widgets/status.html' } },
-  annotations: { readOnlyHint: true },
-  description: 'Read runtime status.',
-} satisfies ToolConfig;
-
-export { default, inputSchema, resultSchema } from '../../curator/tools/status.tsx';
-```
-
-路由契约检查（`AB4810`）确认必要的导出已声明。打包器负责解析重新导出，
-运行时检查加载的组件是否可调用。同步和异步组件都受支持。
-
-`ToolConfig` 与 `ToolRouteProps` 都是公开类型：
-
-```ts twoslash
-import type { ToolConfig } from 'agent-bundle';
-
-export const config = {
-  annotations: { readOnlyHint: true },
-  description: 'Read runtime status.',
-} satisfies ToolConfig;
-```
+`ToolConfig` 描述 `defineTool` 接受的元数据与执行选项；`ToolRouteProps` 描述 `defineTool` 生成的组件。
+两者都是公开类型。
 
 只有在路由确实需要上下文时才调用 `await agent()`。该句柄暴露本次调用，以及 `host`、`session`、
 `actor`、`workspace`、`plugin` 五个身份轴。每个轴都是*被观察到的*：传输层知道时会发布一个 `available` 取值及
@@ -311,11 +251,12 @@ boundary 替换掉对应的回退。回退内容应使用 `Agent.Progress`——
 // src/mcp/curator/tools/search.tsx
 import React, { Suspense } from 'react';
 import { Agent } from '@agent-bundle/runtime';
+import { defineTool } from 'agent-bundle/routes';
 
-export default async function Search(
-  { input, signal }: ToolRouteProps<typeof inputSchema>,
-) {
-  return (
+export default defineTool({
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => (
     <Suspense
       fallback={
         <Agent.Progress completed={0} message={`Searching for ${input.query}`} />
@@ -323,8 +264,7 @@ export default async function Search(
     >
       <Results input={input} signal={signal} />
     </Suspense>
-  );
-}
+));
 ```
 
 在 MCP 上，投影器会从每个流式传输的 `shell` 与 `replace` 文档中读取 `Agent.Progress` 节点，并向请求携带了
@@ -352,20 +292,23 @@ route-unit 与 `mcp-in-memory` 两个测试层级无需宿主即可证明这一�
 
 每次调用都在一个受运行时默认上限约束的渲染会话中进行，其中挂钟上限是 60 秒
 （`DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs`）。一条合理工作时间超过这一上限的路由——等待一次构建、
-对守护进程长轮询——应在 `config.render` 中声明自己的预算，而不是截短自己的等待再让调用方反复轮询：
+对守护进程长轮询——应在 `defineTool` 的 `render` 选项中声明自己的预算，而不是截短自己的等待再让
+调用方反复轮询：
 
-```ts twoslash
-import type { ToolConfig } from 'agent-bundle';
+```ts
+import { defineTool } from 'agent-bundle/routes';
 
-export const config = {
+export default defineTool({
   annotations: { readOnlyHint: true },
   description: 'Wait for a ticket to settle.',
+  inputSchema,
   render: { maxElapsedMs: 7_200_000 },
-} satisfies ToolConfig;
+  resultSchema,
+}, handler);
 ```
 
 `maxElapsedMs` 是一个以毫秒计的正整数，上限为框架天花板 24 小时（从 `agent-bundle` 导出的
-`MAX_ROUTE_RENDER_ELAPSED_MS`）；其他任何值都会在构建时报 `AB4835`。编译器随 `config` 的其余部分静态读取
+`MAX_ROUTE_RENDER_ELAPSED_MS`）；其他任何值都会在构建时报 `AB4835`。编译器随 `defineTool` 的其余选项静态读取
 该值，因此生成式 MCP 服务器会在该路由的每次 `tools/call`、`resources/read` 与 `prompts/get` 上把它应用到
 渲染会话；该工具的 `routes.mcpCommands` 投影以及渲染式 `src/cli/**` 命令在编译后的命令上携带同一个键
 （`CliRouteConfig` 上的 `config.render`；纯 `.ts` 命令没有渲染会话，会拒绝它）。`renderRoute` 与
@@ -383,17 +326,19 @@ Claude Code 默认的单次调用挂钟约为 28 小时（`MCP_TOOL_TIMEOUT`，�
 
 渲染预算约束的是一次渲染最多能跑多久；它并不改变普通 `tools/call` 会一直阻塞客户端直到渲染结束这一点。
 MCP `2025-11-25` 的 Tasks 工具是与之互补的机制：请求任务增强执行的客户端会立刻拿到一个任务句柄，稍后再
-取结果，于是它自身的请求期限不再影响渲染。工具路由通过 `config.execution.taskSupport` 选择加入，这正是
+取结果，于是它自身的请求期限不再影响渲染。工具路由通过 `defineTool` 的 `execution.taskSupport` 选择加入，这正是
 `tools/list` 宣告的工具 `execution` 块：
 
-```ts twoslash
-import type { ToolConfig } from 'agent-bundle';
+```ts
+import { defineTool } from 'agent-bundle/routes';
 
-export const config = {
+export default defineTool({
   annotations: { readOnlyHint: true },
   description: 'Convert the selected audiobook.',
   execution: { taskSupport: 'optional' },
-} satisfies ToolConfig;
+  inputSchema,
+  resultSchema,
+}, handler);
 ```
 
 `taskSupport` 取 `'forbidden'`（省略该键时的线上默认值：每次调用都是普通请求）、`'optional'`（客户端
@@ -493,7 +438,9 @@ export default function Layout({ children, route }: AgentLayoutProps) {
 `[code] message` 文本都得以保留，线上结果携带 `isError: true`：
 
 ```tsx
-export default async function Lookup({ input }: ToolRouteProps<typeof inputSchema>) {
+import { defineTool } from 'agent-bundle/routes';
+
+export default defineTool({ inputSchema, resultSchema }, async (input) => {
   const hit = await catalog.find(input.id);
   if (hit === undefined) {
     return (
@@ -503,7 +450,7 @@ export default async function Lookup({ input }: ToolRouteProps<typeof inputSchem
     );
   }
   // …
-}
+});
 ```
 
 改为**抛出**异常的路由完全不会被 agent-bundle 投影——没有文档可投影——各个表面自己的默认行为生效。布局外壳

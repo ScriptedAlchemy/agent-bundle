@@ -59,41 +59,7 @@ src/mcp/curator/
 The path supplies identity: `src/mcp/curator/tools/status.tsx` is the `status` tool of the
 `curator` server. No declaration is needed for the server to exist.
 
-### Compatibility: split tool exports
-
-Existing tools can still export `config`, schemas, and a default Server Component
-separately. This is a compatibility format; use `defineTool` for new tools. Resources, prompts,
-and apps retain their existing contracts. A legacy tool looks like this:
-
-```tsx
-// src/mcp/curator/tools/status.tsx
-import React from 'react';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
-import { Agent, agent } from '@agent-bundle/runtime';
-import { z } from 'zod';
-
-export const config = {
-  annotations: { readOnlyHint: true },
-  description: 'Read runtime status.',
-} satisfies ToolConfig;
-export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();
-export const resultSchema = z.object({ status: z.literal('ready') }).strict();
-
-export default async function Status(
-  { input, signal }: ToolRouteProps<typeof inputSchema>,
-) {
-  if (signal.aborted) throw new DOMException('aborted', 'AbortError');
-  if (input.verbose) await agent();
-  const result = { status: 'ready' as const };
-  return (
-    <Agent.Result value={result}>
-      <Agent.Text>Runtime is ready.</Agent.Text>
-    </Agent.Result>
-  );
-}
-```
-
-The compiler statically reads `config`, imports schemas and implementations only into generated
+The compiler statically reads the `defineTool` options, imports schemas and implementations only into generated
 entries, installs `runAgentRequest`, and derives the real MCP server from the route graph. Each
 call renders through a warm internal Flight dispatcher and lowers the final Agent Document to
 legal MCP output. Flight is an implementation transport inside the generated runtime — never a
@@ -122,9 +88,10 @@ same way under both, `$defs` is reached through JSON-pointer `$ref`s under eithe
 2020-12-only keyword such as `unevaluatedProperties` or `dependentRequired` is ignored by a lax
 draft-07 validator rather than misapplied.
 
-Runtime schemas may be imported or built by factories. Optional literal `config.inputJsonSchema`
-provides execution-free forms and CLI flag metadata; `tools/list` and runtime validation use the
-actual schema. See [input metadata](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
+Runtime schemas may be imported or built by factories. The optional literal `inputJsonSchema`
+property in `defineTool` provides execution-free forms and CLI flag metadata; `tools/list` and
+runtime validation use the actual schema. See
+[input metadata](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
 A generated tool can also expose an idiomatic CLI command without a second route: a colocated
 `<tool>.cli.ts` projection module is a CLI surface projection of the same operation
 (`tool:<server>/<tool>`), never a route. A route observes `kind: 'cli'` whenever it runs from
@@ -132,37 +99,8 @@ the generated CLI executable, whichever projection mechanism produced the comman
 generated MCP server still passes `kind: 'tool'`. See
 [Project one tool as an idiomatic command](./package-entries.mdx#project-one-tool-as-an-idiomatic-command).
 
-A route may re-export its component and schemas from another module. This is how one tool is
-placed on two generated servers when only `config` differs between the placements — an MCP App
-`tools/call`, for example, reaches the server that served the widget:
-
-```tsx
-// src/mcp/widgets/tools/status.tsx
-import type { ToolConfig } from 'agent-bundle';
-
-export const config = {
-  _meta: { ui: { resourceUri: 'ui://widgets/status.html' } },
-  annotations: { readOnlyHint: true },
-  description: 'Read runtime status.',
-} satisfies ToolConfig;
-
-export { default, inputSchema, resultSchema } from '../../curator/tools/status.tsx';
-```
-
-The route contract check (`AB4810`) checks that the required exports are declared.
-The bundler resolves re-exports, and the runtime checks the loaded component is callable.
-Both sync and async components are accepted.
-
-`ToolConfig` and `ToolRouteProps` are public types:
-
-```ts twoslash
-import type { ToolConfig } from 'agent-bundle';
-
-export const config = {
-  annotations: { readOnlyHint: true },
-  description: 'Read runtime status.',
-} satisfies ToolConfig;
-```
+`ToolConfig` describes the metadata and execution options accepted by `defineTool`;
+`ToolRouteProps` describes the component that `defineTool` produces. Both are public types.
 
 Call `await agent()` only when the route needs context. The handle exposes the invocation plus
 the `host`, `session`, `actor`, `workspace`, and `plugin` identity axes. Each axis is *observed*: a
@@ -351,11 +289,12 @@ framework's streaming progress surface on MCP, in the rendered CLI, and in the W
 // src/mcp/curator/tools/search.tsx
 import React, { Suspense } from 'react';
 import { Agent } from '@agent-bundle/runtime';
+import { defineTool } from 'agent-bundle/routes';
 
-export default async function Search(
-  { input, signal }: ToolRouteProps<typeof inputSchema>,
-) {
-  return (
+export default defineTool({
+  inputSchema,
+  resultSchema,
+}, async (input, { signal }) => (
     <Suspense
       fallback={
         <Agent.Progress completed={0} message={`Searching for ${input.query}`} />
@@ -363,8 +302,7 @@ export default async function Search(
     >
       <Results input={input} signal={signal} />
     </Suspense>
-  );
-}
+));
 ```
 
 On MCP, the projector reads the `Agent.Progress` node out of each streamed `shell` and `replace`
@@ -398,21 +336,23 @@ that sets `_meta.progressToken` on `callTool` receives them over the real protoc
 Every call renders inside one render session bounded by the runtime's default limits, and the
 wall-clock one is 60 seconds (`DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs`). A route whose
 legitimate work outlives that — awaiting a build, long-polling a daemon — declares its own budget
-in `config.render` instead of clamping its waits and asking the caller to poll:
+in `defineTool`'s `render` option instead of clamping its waits and asking the caller to poll:
 
-```ts twoslash
-import type { ToolConfig } from 'agent-bundle';
+```ts
+import { defineTool } from 'agent-bundle/routes';
 
-export const config = {
+export default defineTool({
   annotations: { readOnlyHint: true },
   description: 'Wait for a ticket to settle.',
+  inputSchema,
   render: { maxElapsedMs: 7_200_000 },
-} satisfies ToolConfig;
+  resultSchema,
+}, handler);
 ```
 
 `maxElapsedMs` is a positive integer of milliseconds up to the framework ceiling of 24 hours
 (`MAX_ROUTE_RENDER_ELAPSED_MS`, exported from `agent-bundle`); anything else is `AB4835` at build
-time. The compiler reads the value statically with the rest of `config`, so the generated MCP
+time. The compiler reads the value statically with the rest of the `defineTool` options, so the generated MCP
 server applies it to that route's render session on every `tools/call`, `resources/read`, and
 `prompts/get`; a `routes.mcpCommands` projection of the tool and a rendered `src/cli/**` command
 carry the same key on the compiled command (`config.render` on `CliRouteConfig`; a plain `.ts`
@@ -435,17 +375,19 @@ The render budget bounds how long a render may run; it does not change that an o
 `tools/call` blocks the client until the render ends. The MCP `2025-11-25` Tasks utility is the
 complementary mechanism: a client that asks for task-augmented execution gets a task handle at
 once and collects the result later, so its own request deadline stops mattering for the render. A
-tool route opts in with `config.execution.taskSupport`, the tool's `execution` block as
+tool route opts in with `defineTool`'s `execution.taskSupport`, the tool's `execution` block as
 `tools/list` advertises it:
 
-```ts twoslash
-import type { ToolConfig } from 'agent-bundle';
+```ts
+import { defineTool } from 'agent-bundle/routes';
 
-export const config = {
+export default defineTool({
   annotations: { readOnlyHint: true },
   description: 'Convert the selected audiobook.',
   execution: { taskSupport: 'optional' },
-} satisfies ToolConfig;
+  inputSchema,
+  resultSchema,
+}, handler);
 ```
 
 `taskSupport` is `'forbidden'` (the wire default when the key is absent: every call is an
@@ -560,7 +502,9 @@ shell, `_meta`, `structuredContent`, and the `[code] message` text all survive, 
 carries `isError: true`:
 
 ```tsx
-export default async function Lookup({ input }: ToolRouteProps<typeof inputSchema>) {
+import { defineTool } from 'agent-bundle/routes';
+
+export default defineTool({ inputSchema, resultSchema }, async (input) => {
   const hit = await catalog.find(input.id);
   if (hit === undefined) {
     return (
@@ -570,7 +514,7 @@ export default async function Lookup({ input }: ToolRouteProps<typeof inputSchem
     );
   }
   // …
-}
+});
 ```
 
 A route that **throws** instead is not projected by agent-bundle at all — there is no document to

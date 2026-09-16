@@ -9,6 +9,7 @@ import {
   type AgentRenderEvent,
   type McpProgressNotificationParams,
 } from '../src/index.js';
+import { snapshotJsonValue } from '../src/lower-mcp.js';
 
 const document = (overrides: Partial<AgentDocument> = {}): AgentDocument =>
   createAgentDocument({
@@ -29,6 +30,19 @@ const eventsOf = (events: readonly AgentRenderEvent[]): ReadableStream<AgentRend
       controller.close();
     },
   });
+
+it('snapshots JSON with wire semantics and rejects invalid values', () => {
+  expect(snapshotJsonValue(
+    { items: [1, undefined], omitted: undefined },
+    'invalid JSON',
+  )).toEqual({ items: [1, null] });
+
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  expect(() => snapshotJsonValue(cyclic, 'invalid JSON')).toThrow('cyclic value at self');
+  expect(() => snapshotJsonValue({ value: Number.POSITIVE_INFINITY }, 'invalid JSON'))
+    .toThrow('non-finite number at value');
+});
 
 describe('projectMcpRenderStream', () => {
   it('emits notifications/progress only when the caller supplied a progress token', async () => {

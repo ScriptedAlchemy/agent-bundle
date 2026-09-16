@@ -18,16 +18,20 @@ const fixtureNodeModules = join(import.meta.dirname, '..', '..', '..', '..', 'ex
 
 export const devContractToolSource = (version: string, projectRoot: string): string => [
   `// fixture: ${projectRoot}`,
+  "import { defineTool } from 'agent-bundle/routes';",
   "import { createElement } from 'react';",
   "import { z } from 'zod';",
   '',
-  "export const config = { description: 'Reports the generated epoch version.' };",
   'export const inputSchema = z.object({ token: z.string() });',
   'export const resultSchema = z.object({ version: z.string() });',
   '',
-  'export default async function Version() {',
+  'export default defineTool({',
+  "  description: 'Reports the generated epoch version.',",
+  '  inputSchema,',
+  '  resultSchema,',
+  '}, async () => {',
   `  return createElement('agent-result', { value: { version: ${JSON.stringify(version)} } }, createElement('agent-text', null, ${JSON.stringify(version)}));`,
-  '}',
+  '});',
   '',
 ].join('\n');
 
@@ -68,7 +72,7 @@ export const writeDevContractProject = async (
       ...(options.contracts
         ? [`  dev: { contracts: { fixtures: './contract-fixtures.ts', server: ${JSON.stringify(DEV_CONTRACT_SERVER)} } },`]
         : []),
-      "  plugin: { name: 'dev-contract-gate', version: '1.0.0' },",
+      "  plugin: { name: 'dev-contract-gate' },",
       '  routes: { mcpCommands: true },',
       "  targets: ['portable'],",
       '};',

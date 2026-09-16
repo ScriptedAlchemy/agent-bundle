@@ -1876,7 +1876,7 @@ it('dispatches the public CLI install command to the native installer', async ()
   const terminal = captureCliTerminal();
   const calls: unknown[] = [];
   const code = await runCli(
-    ['install', 'claude', '--from', '/tmp/example bundle', '--scope', 'project', '--force', '--json'],
+    ['install', 'claude', '--from', '/tmp/example bundle', '--scope', 'project', '--replace', '--json'],
     terminal.output,
     {
       installBundle: async (options: unknown) => {

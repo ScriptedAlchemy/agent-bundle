@@ -25,20 +25,12 @@ const registry: NormalizationTargetRegistry = {
   supports: () => false,
 };
 
-/** `undeclared` omits `plugin.version` the way an inference-era config does. */
-const undeclared = Symbol('undeclared plugin.version');
-
-const config = (version: string | typeof undeclared = '1.0.0'): AgentBundleConfig => ({
-  plugin: version === undeclared
-    ? { name: 'identity-fixture' }
-    : { name: 'identity-fixture', version },
-});
+const config = (): AgentBundleConfig => ({ plugin: { name: 'identity-fixture' } });
 
 const loadedProject = (
   root: string,
-  pluginVersion: string | typeof undeclared = '1.0.0',
 ): LoadedConfig => ({
-  config: config(pluginVersion),
+  config: config(),
   configPath: join(root, 'agent-bundle.config.ts'),
   context: {
     command: 'build',
@@ -124,7 +116,7 @@ it('labels the development fallback distinctly from a release version', () => {
 
 it('carries the derived axes through the normalized model into the project context', async () => {
   await withProject(JSON.stringify({ name: '@scope/pkg', version: '2.3.4' }), async (root) => {
-    const loaded = loadedProject(root, '2.3.4');
+    const loaded = loadedProject(root);
     const model = await normalizeProject(loaded, { skills: [] }, registry);
     expect(model.metadata).toMatchObject({ packageName: '@scope/pkg', packageVersion: '2.3.4', version: '2.3.4' });
 
@@ -161,31 +153,6 @@ it('omits both axes from the model and context for unpackaged projects', async (
   });
 });
 
-it('warns with AB4008 when plugin.version differs from the package version', async () => {
-  await withProject(JSON.stringify({ name: '@scope/pkg', version: '2.0.0' }), async (root) => {
-    const diagnostics = validateSource(loadedProject(root, '1.0.0'), { skills: [] }, registry);
-    expect(diagnostics).toMatchObject([{
-      code: 'AB4008',
-      severity: 'warning',
-      sourcePath: join(root, 'agent-bundle.config.ts'),
-    }]);
-    expect(diagnostics[0]!.message).toContain('"1.0.0"');
-    expect(diagnostics[0]!.message).toContain('"2.0.0"');
-  });
-});
-
-it('stays silent when plugin.version matches the package version or no package version exists', async () => {
-  await withProject(JSON.stringify({ name: '@scope/pkg', version: '1.0.0' }), async (root) => {
-    expect(validateSource(loadedProject(root, '1.0.0'), { skills: [] }, registry)).toEqual([]);
-  });
-  await withProject(JSON.stringify({ name: '@scope/pkg' }), async (root) => {
-    expect(validateSource(loadedProject(root, '1.0.0'), { skills: [] }, registry)).toEqual([]);
-  });
-  await withProject(undefined, async (root) => {
-    expect(validateSource(loadedProject(root, '1.0.0'), { skills: [] }, registry)).toEqual([]);
-  });
-});
-
 it('warns with AB4009/AB4010/AB4011 for invalid package identity values', async () => {
   await withProject(JSON.stringify({ name: 'Not Valid!', version: 'one.two' }), async (root) => {
     expect(validateSource(loadedProject(root), { skills: [] }, registry)).toMatchObject([
@@ -218,7 +185,7 @@ it('ignores a package.json symlinked outside the project root', async () => {
 
 it('infers the plugin version from package.json when the config omits it', async () => {
   await withProject(JSON.stringify({ name: '@scope/pkg', version: '2.3.4' }), async (root) => {
-    const loaded = loadedProject(root, undeclared);
+    const loaded = loadedProject(root);
     expect(validateSource(loaded, { skills: [] }, registry, { release: true })).toEqual([]);
 
     const model = await normalizeProject(loaded, { skills: [] }, registry);
@@ -230,20 +197,29 @@ it('infers the plugin version from package.json when the config omits it', async
   });
 });
 
-it('rejects a declared plugin.version that is not a nonempty string', async () => {
+it('rejects the removed plugin.version key instead of silently ignoring it', async () => {
   await withProject(JSON.stringify({ name: '@scope/pkg', version: '2.3.4' }), async (root) => {
-    for (const declared of ['', '   ', 3 as unknown as string]) {
-      const loaded = loadedProject(root, declared);
-      expect(validateSource(loaded, { skills: [] }, registry)).toMatchObject([
-        { code: 'AB4001', severity: 'error', sourcePath: join(root, 'agent-bundle.config.ts') },
-      ]);
-    }
+    const loaded = loadedProject(root);
+    const withRemovedVersion: LoadedConfig = {
+      ...loaded,
+      config: {
+        plugin: { name: 'identity-fixture', version: '9.9.9' },
+      } as unknown as AgentBundleConfig,
+    };
+    expect(validateSource(withRemovedVersion, { skills: [] }, registry)).toMatchObject([
+      {
+        code: 'AB4001',
+        message: 'Plugin metadata no longer accepts version; declare the release version in package.json.',
+        severity: 'error',
+        sourcePath: loaded.configPath,
+      },
+    ]);
   });
 });
 
 it('keeps the development fallback for an unpackaged project with no declared version', async () => {
   await withProject(undefined, async (root) => {
-    const loaded = loadedProject(root, undeclared);
+    const loaded = loadedProject(root);
     // Development preparation reports nothing: this is a normal dev state.
     expect(validateSource(loaded, { skills: [] }, registry)).toEqual([]);
 
@@ -254,7 +230,7 @@ it('keeps the development fallback for an unpackaged project with no declared ve
 
 it('fails a release build closed when no source declares a release version', async () => {
   const releaseDiagnostics = (root: string) =>
-    validateSource(loadedProject(root, undeclared), { skills: [] }, registry, { release: true });
+    validateSource(loadedProject(root), { skills: [] }, registry, { release: true });
 
   await withProject(undefined, async (root) => {
     expect(releaseDiagnostics(root)).toMatchObject([
@@ -268,11 +244,6 @@ it('fails a release build closed when no source declares a release version', asy
       { code: 'AB4010', severity: 'warning' },
       { code: 'AB4013', severity: 'error' },
     ]);
-  });
-  // A declared plugin.version is a release version on its own.
-  await withProject(undefined, async (root) => {
-    expect(validateSource(loadedProject(root, '1.0.0'), { skills: [] }, registry, { release: true }))
-      .toEqual([]);
   });
 });
 
@@ -300,7 +271,7 @@ it('exposes the derived axes on the development source status', async () => {
   await withProject(JSON.stringify({ name: '@scope/pkg', version: '2.3.4' }), async (root) => {
     await writeFile(
       join(root, 'agent-bundle.config.ts'),
-      "export default { plugin: { name: 'identity-fixture', version: '2.3.4' }, targets: ['portable'] };\n",
+      "export default { plugin: { name: 'identity-fixture' }, targets: ['portable'] };\n",
     );
     const prepared = await new ProjectService({ root, targets: ['portable'] }).prepare('inspect');
     expect(prepared.source).toMatchObject({
@@ -313,7 +284,7 @@ it('exposes the derived axes on the development source status', async () => {
   await withProject(JSON.stringify({ name: '@scope/pkg' }), async (root) => {
     await writeFile(
       join(root, 'agent-bundle.config.ts'),
-      "export default { plugin: { name: 'identity-fixture', version: '1.0.0' }, targets: ['portable'] };\n",
+      "export default { plugin: { name: 'identity-fixture' }, targets: ['portable'] };\n",
     );
     const prepared = await new ProjectService({ root, targets: ['portable'] }).prepare('inspect');
     expect(prepared.source.packageName).toBe('@scope/pkg');

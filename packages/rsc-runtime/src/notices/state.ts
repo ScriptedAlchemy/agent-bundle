@@ -3,7 +3,6 @@ import { z } from 'zod';
 import {
   createAgentDocument,
   type AgentDocument,
-  type AgentDocumentSnapshot,
 } from '../agent-document.js';
 import type {
   AgentStateDefinition,
@@ -90,7 +89,7 @@ const principalSchema = z.object({
   workspace: observed(z.object({ root: z.string().min(1) }).strict()),
 }).strict();
 
-const documentSchema = z.custom<AgentDocumentSnapshot>((value) => {
+const documentSchema = z.custom<AgentDocument>((value) => {
   try {
     createAgentDocument(value as AgentDocument);
     return true;

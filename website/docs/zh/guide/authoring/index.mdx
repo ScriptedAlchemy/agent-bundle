@@ -28,10 +28,9 @@ export default defineConfig({
 | `name` | 宿主原生的插件 slug。绝不是 npm 包名。 |
 | `description` | 一句话说明，宿主会展示它，它也会写入生成的清单。 |
 | `logo` | 相对项目根目录的图片路径，会复制到支持该字段的宿主产物中。 |
-| `version` | **已废弃。** 发布版本号属于 `package.json`。 |
 
-`package.json` 对发布标识具有权威性。声明的 `plugin.version` 与之不一致时会报告 `AB4008` 警告；
-而任何地方都没有版本号的发布构建会被直接拒绝（`AB4013`），而不是打包开发期回退值。插件代码通过
+`package.json` 对发布标识具有权威性。没有有效包版本号的发布构建会被直接拒绝（`AB4013`），
+而不是打包开发期回退值。插件代码通过
 `agent-bundle/meta` 读取自身标识，而不是手工维护一个版本模块。
 
 ## Targets

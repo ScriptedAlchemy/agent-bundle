@@ -31,7 +31,6 @@ export interface LifecycleCommandOptions {
 }
 
 interface InstallCommandOptions {
-  readonly force?: boolean;
   readonly from?: string;
   readonly json?: boolean;
   readonly replace?: boolean;
@@ -107,7 +106,6 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
       'Replace an existing agent-bundle install of this plugin even when its version differs; ' +
         'same-version content drift is replaced automatically and foreign installs are always refused',
     )
-    .option('--force', 'Alias for --replace')
     .option('--mode <mode>', 'Cursor delivery mode: local (default) or marketplace', installMode)
     .option('--json', 'Write one machine-readable JSON document');
   installCommand.action(async (host: InstallHost, commandOptions: InstallCommandOptions) => {
@@ -115,7 +113,7 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
     const result = await install({
       from: pinned ?? commandOptions.from ?? process.cwd(),
       host,
-      replace: commandOptions.replace === true || commandOptions.force === true,
+      replace: commandOptions.replace === true,
       ...(commandOptions.mode === undefined ? {} : { mode: commandOptions.mode }),
       scope: installScope(commandOptions.scope),
     });

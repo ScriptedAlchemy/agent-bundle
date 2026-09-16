@@ -20,7 +20,6 @@ export default {
   plugin: {
     description: 'Exercises an installed Agent Bundle release without workspace sources.',
     name: 'packed-release-fixture',
-    version: '1.0.0',
   },
   scripts: {
     review: './src/review.ts',

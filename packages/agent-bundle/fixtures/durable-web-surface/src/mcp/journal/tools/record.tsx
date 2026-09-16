@@ -1,7 +1,19 @@
 import { Agent, agent } from '@agent-bundle/runtime';
+import { defineTool } from 'agent-bundle/routes';
 import { z } from 'zod';
 
-export const config = {
+export const inputSchema = z.object({ note: z.string().min(1) }).strict();
+
+export const resultSchema = z.object({
+  entries: z.array(z.object({ note: z.string() }).strict()),
+  revision: z.number().int().nonnegative(),
+}).strict();
+
+interface JournalState {
+  readonly entries: readonly { readonly note: string }[];
+}
+
+export default defineTool({
   inputJsonSchema: {
     "additionalProperties": false,
     "properties": {
@@ -16,21 +28,10 @@ export const config = {
   },
   _meta: { ui: { resourceUri: 'ui://durable-web-surface-fixture/status.html' } },
   description: 'Appends one note to the durable journal and reports every entry.',
+  inputSchema,
+  resultSchema,
   title: 'Record',
-};
-
-export const inputSchema = z.object({ note: z.string().min(1) }).strict();
-
-export const resultSchema = z.object({
-  entries: z.array(z.object({ note: z.string() }).strict()),
-  revision: z.number().int().nonnegative(),
-}).strict();
-
-interface JournalState {
-  readonly entries: readonly { readonly note: string }[];
-}
-
-export default async function Record({ input }: { readonly input: z.infer<typeof inputSchema> }) {
+}, async (input) => {
   const context = await agent();
   if (context.state === undefined) throw new TypeError('Journal state is unavailable.');
   // The note is the idempotency key: a replayed note is recorded once.
@@ -43,4 +44,4 @@ export default async function Record({ input }: { readonly input: z.infer<typeof
       <Agent.Text>{`recorded ${String(state.entries.length)} note(s)`}</Agent.Text>
     </Agent.Result>
   );
-}
+});

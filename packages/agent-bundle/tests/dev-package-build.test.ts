@@ -17,7 +17,7 @@ it('rebuilds the package build inside the dev loop when its entries change', asy
   const fixture = await createProjectFixture({
     config: [
       'export default {',
-      "  plugin: { name: 'dev-package-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'dev-package-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',

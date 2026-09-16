@@ -114,7 +114,7 @@ it.each([
 ])('normalizes target selection from $label', async (testCase) => {
   const loaded = loadedProject(
     {
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       targets: testCase.configTargets,
     },
     { selectedTargets: testCase.selectedTargets },
@@ -133,7 +133,7 @@ it('normalizes registered extensions and validates registered script and hook ta
     example: { nested: { enabled: true } },
     hooks: { sessionStart: { handler: './hooks/start.ts', targets: ['example'] } },
     ignored: { mustNotReachTheModel: true },
-    plugin: { name: 'extension-fixture', version: '1.0.0' },
+    plugin: { name: 'extension-fixture' },
     scripts: {
       run: {
         entry: './packages/agent-bundle/src/config/normalize.ts',
@@ -148,10 +148,7 @@ it('normalizes registered extensions and validates registered script and hook ta
     targetRegistry: NormalizationTargetRegistry,
   ) => Diagnostic[];
 
-  // This fixture is rooted at the workspace, whose package.json version
-  // (0.0.0) differs from the fixture's plugin.version, so the AB4008
-  // mismatch warning (#94) is the only expected diagnostic.
-  expect(sourceValidator(loaded, { skills: [] }, extensionRegistry).map(({ code }) => code)).toEqual(['AB4008']);
+  expect(sourceValidator(loaded, { skills: [] }, extensionRegistry).map(({ code }) => code)).toEqual([]);
 
   const model = await normalizeProject(loaded, { skills: [] }, extensionRegistry);
   const extensions = (model as unknown as {
@@ -188,7 +185,7 @@ it('enumerates lsp components with unambiguous ids for any server name (#100)', 
         '\uD800': { command: 'third-ls', extensionToLanguage: { '.c': 'c' } },
       },
     },
-    plugin: { name: 'claude-lsp-fixture', version: '1.0.0' },
+    plugin: { name: 'claude-lsp-fixture' },
     targets: ['claude', 'cursor'],
   }), { skills: [] }, createDefaultRegistry());
 
@@ -220,7 +217,7 @@ it('normalizes the typed Claude LSP source surface through the strict JSON exten
         },
       },
     },
-    plugin: { name: 'claude-lsp-fixture', version: '1.0.0' },
+    plugin: { name: 'claude-lsp-fixture' },
     targets: ['claude'],
   }), { skills: [] }, createDefaultRegistry());
   const extension = model.extensions.claude;
@@ -262,7 +259,7 @@ it('enumerates claude.bin relative to the config file into immutable executable 
   const loaded: LoadedConfig = {
     ...loadedProject({
       claude: { bin: '../tools' },
-      plugin: { name: 'claude-bin-fixture', version: '1.0.0' },
+      plugin: { name: 'claude-bin-fixture' },
       targets: ['claude'],
     }, { root }),
     configPath: join(configDir, 'agent-bundle.config.ts'),
@@ -323,7 +320,7 @@ it('enumerates Claude workflows and output styles relative to the config file in
         outputStyles: '../styles',
         workflows: '../workflows',
       },
-      plugin: { name: 'claude-payload-fixture', version: '1.0.0' },
+      plugin: { name: 'claude-payload-fixture' },
       targets: ['claude'],
     }, { root }),
     configPath: join(configDir, 'agent-bundle.config.ts'),
@@ -372,7 +369,7 @@ it.each([
   if (create) await mkdir(binRoot, { recursive: true });
   const loaded = loadedProject({
     claude: { bin: './tools' },
-    plugin: { name: 'claude-bin-diagnostic', version: '1.0.0' },
+    plugin: { name: 'claude-bin-diagnostic' },
     targets: ['claude'],
   }, { root });
 
@@ -404,7 +401,7 @@ it.each([
   if (issue === 'empty') await mkdir(sourceRoot, { recursive: true });
   const loaded = loadedProject({
     claude: { [field]: './payload' },
-    plugin: { name: 'claude-payload-diagnostic', version: '1.0.0' },
+    plugin: { name: 'claude-payload-diagnostic' },
     targets: ['claude'],
   }, { root });
 
@@ -428,7 +425,7 @@ it('rejects a Claude payload directory symlink that resolves outside the project
   await symlink(outside, linked, 'dir');
   const loaded = loadedProject({
     claude: { outputStyles: './styles' },
-    plugin: { name: 'claude-payload-symlink', version: '1.0.0' },
+    plugin: { name: 'claude-payload-symlink' },
     targets: ['claude'],
   }, { root });
 
@@ -480,7 +477,7 @@ it('rejects non-JSON values in registered config extensions before normalization
   for (const value of values) {
     await expect(normalizeProject(loadedProject({
       example: value,
-      plugin: { name: 'extension-json-fixture', version: '1.0.0' },
+      plugin: { name: 'extension-json-fixture' },
     }), { skills: [] }, extensionRegistry)).rejects.toThrow(
       'AB4500: A registered config extension must contain strict finite JSON data.',
     );
@@ -503,7 +500,7 @@ it('detaches and freezes strict JSON extension values with special own keys and 
   });
   const model = await normalizeProject(loadedProject({
     example: extension,
-    plugin: { name: 'extension-json-fixture', version: '1.0.0' },
+    plugin: { name: 'extension-json-fixture' },
   }), { skills: [] }, extensionRegistry);
   const value = model.extensions.example!.value as Record<string, { nested?: string[]; preserved?: boolean }>;
 
@@ -532,7 +529,7 @@ it('reports unknown hook and script targets through the target registry', () => 
   };
   const loaded = loadedProject({
     hooks: { stop: { handler: './hooks/stop.ts', targets: ['unknown'] } },
-    plugin: { name: 'registry-validation', version: '1.0.0' },
+    plugin: { name: 'registry-validation' },
     scripts: {
       run: {
         entry: './packages/agent-bundle/src/config/normalize.ts',
@@ -546,10 +543,7 @@ it('reports unknown hook and script targets through the target registry', () => 
     registry: NormalizationTargetRegistry,
   ) => Diagnostic[];
 
-  // The workspace root package.json version (0.0.0) differs from the
-  // fixture's plugin.version, adding the AB4008 mismatch warning (#94).
   expect(sourceValidator(loaded, { skills: [] }, targetRegistry).map(({ code }) => code)).toEqual([
-    'AB4008',
     'AB4203',
     'AB4406',
   ]);
@@ -563,7 +557,7 @@ it('validates native hook targets through the target registry', async () => {
     supports: (name, capability) => name === 'example' && capability === 'hooks',
   };
   const loaded = loadedProject({
-    plugin: { name: 'native-hook-targets', version: '1.0.0' },
+    plugin: { name: 'native-hook-targets' },
   });
   const model = await normalizeProject(loaded, { skills: [] }, targetRegistry);
   const nativeHooks = [
@@ -594,7 +588,7 @@ it('produces root-independent IDs, complete provenance, and deeply immutable out
   const leftRoot = '/workspace/left';
   const rightRoot = '/different/right';
   const config: AgentBundleConfig = {
-    plugin: { name: 'review-tools', version: '1.0.0' },
+    plugin: { name: 'review-tools' },
     skills: ['src/skills/review'],
   };
   const leftSkill = skill(leftRoot, 'review', 'review', {
@@ -656,7 +650,7 @@ it('reports stable source diagnostics for malformed and conflicting Skills', () 
     sourcePath: duplicate.source,
   });
   const loaded = loadedProject({
-    plugin: { name: 'review-tools', version: '1.0.0' },
+    plugin: { name: 'review-tools' },
   });
 
   const diagnostics = validateSource(loaded, { skills: [first, duplicate] }, registry);
@@ -681,7 +675,7 @@ it('maps pinned Agent Skills schema issues to stable source diagnostics without 
   document.frontmatter.unknown = true;
 
   expect(validateSource(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { skills: [document] },
     registry,
   )).toEqual([
@@ -719,7 +713,7 @@ it('validates raw optional portable Skill fields before sanitizing the Skill IR'
   document.frontmatter.compatibility = false;
 
   expect(validateSource(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { skills: [document] },
     registry,
   )).toEqual([
@@ -735,8 +729,6 @@ it('validates raw optional portable Skill fields before sanitizing the Skill IR'
 it('diagnoses a missing plugin object instead of throwing', () => {
   const loaded = loadedProject({} as AgentBundleConfig);
 
-  // Only the name is required: an omitted version is inferred from
-  // package.json, so AB4001 fires on a declared-but-invalid value alone.
   expect(validateSource(loaded, { skills: [] }, registry)).toMatchObject([
     { code: 'AB4000', sourcePath: loaded.configPath },
   ]);
@@ -761,7 +753,7 @@ it('validates reference-style links while ignoring Markdown code examples', () =
   });
 
   const diagnostics = validateSource(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { skills: [document] },
     registry,
   );
@@ -783,7 +775,7 @@ it('accepts decoded inline Skill resource paths that contain spaces', () => {
   });
 
   expect(validateSource(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { skills: [document] },
     registry,
   )).toEqual([]);
@@ -805,7 +797,7 @@ it('uses the first definition when validating shortcut Markdown references', () 
     resources: ['SKILL.md', 'references/existing.md'],
   });
   const loaded = loadedProject({
-    plugin: { name: 'review-tools', version: '1.0.0' },
+    plugin: { name: 'review-tools' },
   });
 
   expect(validateSource(loaded, { skills: [missing] }, registry)).toMatchObject([
@@ -832,7 +824,7 @@ it('does not treat definitions as uses and reserves an external first definition
     ].join('\n'),
   });
   const loaded = loadedProject({
-    plugin: { name: 'review-tools', version: '1.0.0' },
+    plugin: { name: 'review-tools' },
   });
 
   expect(validateSource(loaded, { skills: [unusedDefinition] }, registry)).toEqual([]);
@@ -849,7 +841,7 @@ it('normalizes explicit host-native hook tool selectors alongside canonical tool
           tools: ['shell', 'codex:view_image', 'claude:WebSearch', 'claude:WebSearch', 'portable:Nope'],
         },
       },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       targets: ['claude', 'codex'],
     }),
     { skills: [] },
@@ -865,7 +857,7 @@ it('normalizes explicit host-native hook tool selectors alongside canonical tool
   const withoutSelectors = await normalizeProject(
     loadedProject({
       hooks: { beforeTool: { handler: './hooks/guard.ts', tools: ['shell'] } },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       targets: ['claude', 'codex'],
     }),
     { skills: [] },
@@ -880,7 +872,7 @@ it('validates host-native hook tool selectors against the registry and hook targ
     validateSource(
       loadedProject({
         hooks: { beforeTool: { handler: './hooks/guard.ts', ...(targets === undefined ? {} : { targets: [...targets] }), tools: [...tools] } },
-        plugin: { name: 'review-tools', version: '1.0.0' },
+        plugin: { name: 'review-tools' },
       }),
       { skills: [] },
       registry,
@@ -890,7 +882,7 @@ it('validates host-native hook tool selectors against the registry and hook targ
   expect(validateSource(
     loadedProject({
       hooks: { beforeTool: { handler: './hooks/guard.ts', tools: ['claude:WebSearch'] } },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       targets: ['codex'],
     }),
     { skills: [] },
@@ -905,7 +897,7 @@ it('validates host-native hook tool selectors against the registry and hook targ
 
 it('normalizes output.sourceMap as a generated-executable opt-in', async () => {
   const defaulted = await normalizeProject(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { skills: [] },
     registry,
   );
@@ -914,7 +906,7 @@ it('normalizes output.sourceMap as a generated-executable opt-in', async () => {
   const optedIn = await normalizeProject(
     loadedProject({
       output: { sourceMap: true },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }),
     { skills: [] },
     registry,
@@ -924,7 +916,7 @@ it('normalizes output.sourceMap as a generated-executable opt-in', async () => {
   const optedOut = await normalizeProject(
     loadedProject({
       output: { distPath: 'artifact', sourceMap: false },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }),
     { skills: [] },
     registry,
@@ -934,7 +926,7 @@ it('normalizes output.sourceMap as a generated-executable opt-in', async () => {
 
 it('normalizes the generated-executable runtime floor and validates raises only', async () => {
   const defaulted = await normalizeProject(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { skills: [] },
     registry,
   );
@@ -942,7 +934,7 @@ it('normalizes the generated-executable runtime floor and validates raises only'
 
   const raised = await normalizeProject(
     loadedProject({
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       runtime: { node: '24.1' },
     }),
     { skills: [] },
@@ -952,7 +944,7 @@ it('normalizes the generated-executable runtime floor and validates raises only'
 
   const diagnosticsFor = (runtime: unknown): readonly string[] =>
     validateSource(
-      loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' }, runtime } as AgentBundleConfig),
+      loadedProject({ plugin: { name: 'review-tools' }, runtime } as AgentBundleConfig),
       { skills: [] },
       registry,
     ).map(({ code }) => code);
@@ -973,7 +965,7 @@ it('normalizes the generated-executable runtime floor and validates raises only'
 it('reports unknown targets, duplicate IDs, and portable output collisions', async () => {
   const root = '/workspace/project';
   const loaded = loadedProject({
-    plugin: { name: 'review-tools', version: '1.0.0' },
+    plugin: { name: 'review-tools' },
     targets: ['portable', 'future-host'],
   });
   const model = await normalizeProject(
@@ -1010,7 +1002,7 @@ it('rejects the retired plugin target as unknown (#555 acceptance 3)', async () 
   // The composite root is the only output shape; `plugin` is not a target
   // that selects anything inside it, so it fails like any other unknown name.
   const model = await normalizeProject(loadedProject({
-    plugin: { name: 'review-tools', version: '1.0.0' },
+    plugin: { name: 'review-tools' },
     targets: ['plugin'],
   }), { skills: [] }, registry);
 
@@ -1032,7 +1024,7 @@ it('normalizes discovered assets with stable IDs, provenance, and all selected t
     skills: [],
   };
   const conventional = await normalizeProject(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' }, targets: ['portable', 'claude'] }),
+    loadedProject({ plugin: { name: 'review-tools' }, targets: ['portable', 'claude'] }),
     discovered,
     registry,
   );
@@ -1059,14 +1051,14 @@ it('normalizes discovered assets with stable IDs, provenance, and all selected t
   ]);
 
   const explicit = await normalizeProject(
-    loadedProject({ assets: ['assets/logo.svg'], plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ assets: ['assets/logo.svg'], plugin: { name: 'review-tools' } }),
     discovered,
     registry,
   );
   expect(explicit.assets?.every((asset) => asset.provenance.kind === 'explicit')).toBe(true);
 
   const withoutAssets = await normalizeProject(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { skills: [] },
     registry,
   );
@@ -1075,7 +1067,7 @@ it('normalizes discovered assets with stable IDs, provenance, and all selected t
 
 it('reports duplicate asset destinations as duplicate IDs and output collisions', async () => {
   const model = await normalizeProject(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' }, targets: ['portable'] }),
+    loadedProject({ plugin: { name: 'review-tools' }, targets: ['portable'] }),
     {
       assets: [
         { bytes: 6, relativePath: 'logo.svg', source: '/workspace/project/assets/logo.svg' },
@@ -1099,7 +1091,7 @@ it('validates the assets configuration shape, containment, and literal existence
   const diagnosticsFor = (assets: unknown, root?: string): readonly string[] =>
     validateSource(
       loadedProject(
-        { assets, plugin: { name: 'review-tools', version: '1.0.0' } } as AgentBundleConfig,
+        { assets, plugin: { name: 'review-tools' } } as AgentBundleConfig,
         root === undefined ? {} : { root },
       ),
       { skills: [] },
@@ -1110,12 +1102,10 @@ it('validates the assets configuration shape, containment, and literal existence
   expect(diagnosticsFor('assets')).toEqual(['AB4600']);
   expect(diagnosticsFor([''])).toEqual(['AB4600']);
   expect(diagnosticsFor([42])).toEqual(['AB4600']);
-  // Fixtures rooted at the workspace also report the AB4008
-  // plugin.version/package version mismatch warning (#94).
-  expect(diagnosticsFor(['../outside'], process.cwd())).toEqual(['AB4601', 'AB4008']);
-  expect(diagnosticsFor(['definitely-missing-asset-entry'], process.cwd())).toEqual(['AB4602', 'AB4008']);
-  expect(diagnosticsFor(['definitely-missing/*.svg'], process.cwd())).toEqual(['AB4008']);
-  expect(diagnosticsFor(['package.json'], process.cwd())).toEqual(['AB4008']);
+  expect(diagnosticsFor(['../outside'], process.cwd())).toEqual(['AB4601']);
+  expect(diagnosticsFor(['definitely-missing-asset-entry'], process.cwd())).toEqual(['AB4602']);
+  expect(diagnosticsFor(['definitely-missing/*.svg'], process.cwd())).toEqual([]);
+  expect(diagnosticsFor(['package.json'], process.cwd())).toEqual([]);
 });
 
 const scriptRouteFixture = (root: string, relativePath: string): CompiledAgentRoute => {
@@ -1145,7 +1135,7 @@ const routeGraphWithScripts = (root: string, relativePaths: readonly string[]): 
 it('normalizes shippable conventional script routes through the explicit scripts pipeline', async () => {
   const root = '/workspace/project';
   const loaded = loadedProject({
-    plugin: { name: 'review-tools', version: '1.0.0' },
+    plugin: { name: 'review-tools' },
     scripts: { 'detect-risk': { entry: './src/tasks/detect-risk.ts', targets: ['claude'] } },
   });
   const discovered: DiscoveredProject = {
@@ -1193,7 +1183,7 @@ it('normalizes shippable conventional script routes through the explicit scripts
 it('normalizes conventional scripts when config declares none', async () => {
   const root = '/workspace/project';
   const model = await normalizeProject(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { routeGraph: routeGraphWithScripts(root, ['src/scripts/verify-release.ts']), skills: [] },
     registry,
   );
@@ -1213,7 +1203,7 @@ it('normalizes conventional scripts when config declares none', async () => {
 it('gates nested and conflicting conventional script routes as AB4808/AB4809 and ships rendered ones', () => {
   const root = '/workspace/project';
   const loaded = loadedProject({
-    plugin: { name: 'review-tools', version: '1.0.0' },
+    plugin: { name: 'review-tools' },
     scripts: { 'detect-risk': './src/tasks/detect-risk.ts' },
   });
   const discovered: DiscoveredProject = {
@@ -1258,7 +1248,7 @@ it('ships a bin-claimed plain conventional script as both surfaces and refuses a
       notes: { entry: './src/scripts/render-notes.tsx' },
       'notes-again': './src/scripts/render-notes.tsx',
     },
-    plugin: { name: 'review-tools', version: '1.0.0' },
+    plugin: { name: 'review-tools' },
   });
   const discovered: DiscoveredProject = {
     routeGraph: routeGraphWithScripts(root, ['src/scripts/hauler.ts', 'src/scripts/render-notes.tsx']),
@@ -1286,7 +1276,7 @@ it('ships a bin-claimed plain conventional script as both surfaces and refuses a
 it('normalizes rendered conventional script routes onto the renderer pipeline (#102 stage 3)', async () => {
   const root = '/workspace/project';
   const model = await normalizeProject(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { routeGraph: routeGraphWithScripts(root, ['src/scripts/render-notes.tsx']), skills: [] },
     registry,
   );
@@ -1307,7 +1297,7 @@ it('normalizes rendered conventional script routes onto the renderer pipeline (#
 it('keeps shippable conventional script routes free of stage-1 gate diagnostics', () => {
   const root = '/workspace/project';
   const diagnostics = validateSource(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { routeGraph: routeGraphWithScripts(root, ['src/scripts/verify-release.ts']), skills: [] },
     registry,
   );
@@ -1369,7 +1359,7 @@ it('carries event-route handler provenance and provider selection into normalize
 
   const model = await normalizeProject(
     loadedProject({
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       targets: ['claude'],
     }),
     { routeGraph, skills: [] },
@@ -1394,7 +1384,7 @@ it('normalizes generated MCP route servers without a handwritten server declarat
   const root = '/workspace/project';
   const graph = routeGraphWithGeneratedServer(root);
   const model = await normalizeProject(
-    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    loadedProject({ plugin: { name: 'review-tools' } }),
     { routeGraph: graph, skills: [] },
     registry,
   );

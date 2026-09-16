@@ -21,7 +21,6 @@ export default {
   plugin: {
     description: 'A workspace-durable plugin whose MCP App is exposed through web.apps and whose CLI reads the same state.',
     name: 'durable-web-surface-fixture',
-    version: '1.0.0',
   },
   targets: ['portable'],
   web: { apps: [{ allow: ['call-tool'], app: 'journal/status' }] },

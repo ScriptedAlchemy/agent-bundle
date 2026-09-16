@@ -59,7 +59,7 @@ describe('package build normalization', () => {
     const model = await normalizeProject(loadedProject({
       bin: { 'my-tool': './src/entry.ts', other: { entry: './src/entry.ts' } },
       lib: { dts: false, entry: './src/library.ts' },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root), { skills: [] }, registry);
 
     expect(model.packageBuild).toEqual({
@@ -91,7 +91,7 @@ describe('package build normalization', () => {
   it('defaults lib dts to true for the string form', async () => {
     const root = await projectRoot({ 'src/index.ts': 'export const a = 1;\n' });
     const packageBuild = normalizePackageBuild(
-      { lib: './src/index.ts', plugin: { name: 'p', version: '1.0.0' } },
+      { lib: './src/index.ts', plugin: { name: 'p' } },
       root,
       `${root}/agent-bundle.config.ts`,
     );
@@ -104,7 +104,7 @@ describe('package build normalization', () => {
       'src/index.ts': 'export const answer = 42;\n',
     });
     const model = await normalizeProject(loadedProject({
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root), { skills: [] }, registry);
 
     expect(model.packageBuild).toEqual({
@@ -134,7 +134,7 @@ describe('package build normalization', () => {
     const explicit = await normalizeProject(loadedProject({
       bin: { renamed: './src/other.ts' },
       lib: false,
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root), { skills: [] }, registry);
     expect(explicit.packageBuild?.bins.map((bin) => bin.name)).toEqual(['renamed']);
     expect(explicit.packageBuild?.lib).toBeUndefined();
@@ -142,7 +142,7 @@ describe('package build normalization', () => {
     const disabled = await normalizeProject(loadedProject({
       bin: false,
       lib: false,
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root), { skills: [] }, registry);
     expect(disabled.packageBuild).toBeUndefined();
   });
@@ -150,7 +150,7 @@ describe('package build normalization', () => {
   it('skips the bin convention when the plugin name is not a safe output name', async () => {
     const root = await projectRoot({ 'src/cli.ts': 'export const main = async () => 0;\n' });
     const model = await normalizeProject(loadedProject({
-      plugin: { name: '@scope/unsafe name', version: '1.0.0' },
+      plugin: { name: '@scope/unsafe name' },
     }, root), { skills: [] }, registry);
     expect(model.packageBuild).toBeUndefined();
   });
@@ -158,7 +158,7 @@ describe('package build normalization', () => {
   it('leaves projects without package entries untouched', async () => {
     const root = await projectRoot({});
     const model = await normalizeProject(loadedProject({
-      plugin: { name: 'plain', version: '1.0.0' },
+      plugin: { name: 'plain' },
     }, root), { skills: [] }, registry);
     expect(model.packageBuild).toBeUndefined();
   });
@@ -171,7 +171,7 @@ describe('conventional MCP entries', () => {
     });
     const loaded = loadedProject({
       mcp: { servers: { curator: {} } },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root);
 
     expect(validateSource(loaded, { skills: [] }, registry)).toEqual([]);
@@ -196,7 +196,7 @@ describe('conventional MCP entries', () => {
     });
     const model = await normalizeProject(loadedProject({
       mcp: { servers: { curator: { entry: './src/explicit.ts' } } },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root), { skills: [] }, registry);
     expect(model.mcpServers[0]).toMatchObject({
       provenance: { kind: 'config' },
@@ -208,7 +208,7 @@ describe('conventional MCP entries', () => {
     const root = await projectRoot({});
     const diagnostics = validateSource(loadedProject({
       mcp: { servers: { curator: {} } },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root), { skills: [] }, registry);
     expect(diagnostics).toEqual([expect.objectContaining({
       code: 'AB4304',
@@ -225,7 +225,7 @@ describe('bin, lib, and tools validation', () => {
     const root = await projectRoot(files);
     return validateSource(loadedProject({
       ...config,
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root), { skills: [] }, registry);
   };
 
@@ -460,7 +460,7 @@ describe('artifact output validation', () => {
     const root = await projectRoot({});
     return validateSource(loadedProject({
       output: output as never,
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root), { skills: [] }, registry);
   };
 
@@ -525,7 +525,7 @@ describe('migration nudges (AB473x)', () => {
     return {
       diagnostics: validateSource(loadedProject({
         ...config,
-        plugin: { name: 'review-tools', version: '1.0.0' },
+        plugin: { name: 'review-tools' },
       }, root), { skills: [] }, registry),
       root,
     };
@@ -680,7 +680,7 @@ describe('migration nudges (AB473x)', () => {
     const root = await projectRoot(files);
     const loaded = loadedProject({
       ...config,
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     }, root);
     const discovered = await discoverProject(root, loaded.config);
     return { diagnostics: validateSource(loaded, discovered, registry), root };
@@ -743,7 +743,7 @@ describe('migration nudges (AB473x)', () => {
     });
 
     const discovered = await discoverProject(root, {
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     });
 
     expect(discovered.skills).toMatchObject([{

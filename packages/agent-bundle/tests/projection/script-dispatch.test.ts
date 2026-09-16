@@ -454,8 +454,8 @@ describe('plain scripts at the script dispatch level', () => {
 
     expect(run.exitCode).toBe(0);
     expect(run.stderr).toBe('');
-    // The route-harness fixture declares plugin name/version and has no package.json.
-    expect(run.stdout).toBe('route-harness@1.0.0 - -\n');
+    // The route-harness fixture has a package version but no npm package name.
+    expect(run.stdout).toBe('route-harness@1.0.0 - 1.0.0\n');
 
     const compiled = testManifest();
     const packaged = await runScript('identity', [], {

@@ -5,7 +5,6 @@ import {
   detectProcessTerminal,
   type AgentTerminal,
   type ProbedTerminalSurface,
-  type TerminalStreamProbe,
 } from './terminal-capability.ts';
 
 export type { AgentTerminal } from './terminal-capability.ts';
@@ -317,24 +316,12 @@ export interface GeneratedCliRenderContext {
 /**
  * The terminal capability one shell invocation reports (#511): an explicit
  * value wins (the in-process harness supplies one), otherwise the process's
- * own streams are probed, with the legacy `isTty` knob standing in for
- * stdout's TTY-ness so callers that only override that still see a
- * consistent capability and output mode.
+ * own streams are probed.
  */
 const resolveTerminal = (
   hostSurface: ProbedTerminalSurface,
-  options: { readonly isTty?: () => boolean; readonly terminal?: AgentTerminal },
-): AgentTerminal => {
-  if (options.terminal !== undefined) return options.terminal;
-  if (options.isTty === undefined) return detectProcessTerminal(hostSurface);
-  const stdout: TerminalStreamProbe = {
-    columns: process.stdout.columns,
-    fd: 1,
-    isTTY: options.isTty(),
-    rows: process.stdout.rows,
-  };
-  return detectProcessTerminal(hostSurface, { stdout });
-};
+  options: { readonly terminal?: AgentTerminal },
+): AgentTerminal => options.terminal ?? detectProcessTerminal(hostSurface);
 
 export interface RunGeneratedCliOptions {
   readonly argv: readonly string[];
@@ -346,8 +333,6 @@ export interface RunGeneratedCliOptions {
     input: Readonly<Record<string, unknown>>,
     context: GeneratedCliExecuteContext,
   ) => Promise<unknown>;
-  /** Overrides stdout's TTY-ness only; rendered commands then update progress in place. Prefer `terminal`. */
-  readonly isTty?: () => boolean;
   readonly name: string;
   /** Opens one rendered run for a resolved `.tsx` command with parsed input. */
   readonly render?: (
@@ -1149,8 +1134,6 @@ export interface RunGeneratedRenderedScriptOptions {
     argv: readonly string[],
     context: { readonly signal: AbortSignal; readonly terminal: AgentTerminal },
   ) => GeneratedCliRenderSession;
-  /** Overrides stdout's TTY-ness only. Prefer `terminal`. */
-  readonly isTty?: () => boolean;
   readonly name: string;
   readonly signal?: AbortSignal;
   /** The terminal capability to report and select the output mode from (#511); probed from the process when omitted. */

@@ -117,7 +117,7 @@ export const seedEvalProject = async (
         ? ["  evals: { semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' } },"]
         : []),
       ...(options.marketplace === true ? ['  marketplace: true,'] : []),
-      "  plugin: { name: 'review', version: '1.0.0' },",
+      "  plugin: { name: 'review' },",
       "  skills: ['src/skills/review'],",
       `  targets: ${JSON.stringify(options.targets ?? ['portable'])},`,
       '});',

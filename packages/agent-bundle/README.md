@@ -135,7 +135,7 @@ manifests at files inside those payloads without compiling them. Payload files c
 | --- | --- |
 | `agent-bundle build` | Build a validated artifact from source, plus the declared `dist/` package build. |
 | `agent-bundle prepack` | Run the release build, dry-run npm packing without scripts, and verify packaged outputs, artifact hashes, bins, and versions (`--output` and `--json` supported). |
-| `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, `--replace`/`--force`, `--mode local\|marketplace` for Cursor, and `--json` supported). Same-version content drift of an agent-bundle-managed install is replaced automatically; identical reruns are a no-op. |
+| `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, `--replace`, `--mode local\|marketplace` for Cursor, and `--json` supported). Same-version content drift of an agent-bundle-managed install is replaced automatically; identical reruns are a no-op. |
 | `agent-bundle uninstall <host>` | Remove a receipt-owned install and nothing else: the receipt's files and directories, the host registrations it recorded (`claude plugin uninstall --keep-data` + `marketplace remove`, `codex plugin remove` + `marketplace remove`, the Cursor local directory or staged marketplace). `--plan` prints the exact paths without changing anything; the effective framework state root, web-data, and legacy `state/` are kept unless `--purge-data --confirm-purge`; a missing receipt or content mismatch is refused unless `--force`; a rerun is `not-installed`. |
 | `agent-bundle doctor` | Read-only host inspection: host probes, installed inventory, effective and legacy state roots with existence and writability, store receipts cross-checked against the host, and, with `--from`, the installed copy compared against the built artifact by version and content hash (`current`, `stale`, `version-mismatch`, `foreign`, `not-installed`) plus the lifecycle stage (placed → registered → enabled → active, unobservable stages typed `unavailable`). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
@@ -270,7 +270,7 @@ every host treats it differently. `agent-bundle install` and the emitted
   version-gated and a plain reinstall reports "already installed" while the
   cache stays stale. Codex replacement runs `codex plugin remove` before
   `marketplace add` + `add`, so files a rebuild removed do not linger.
-- **`--replace` (alias `--force`).** Also replaces an agent-bundle install of
+- **`--replace`.** Also replaces an agent-bundle install of
   the same plugin at a *different* version, and adopts a Cursor copy that was
   installed before receipts existed (recognised by its emitted `INSTALL.md` +
   `install.mjs` and matching manifest name). A legacy copy has no owned-file

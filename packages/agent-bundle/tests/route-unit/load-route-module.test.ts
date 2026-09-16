@@ -17,6 +17,12 @@ const rejection = async (load: Promise<unknown>): Promise<AgentTestError> => {
   throw new Error('The load resolved, so no harness diagnostic was produced.');
 };
 
+const configOf = (
+  module: Readonly<Record<string, unknown>>,
+  config: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> =>
+  Object.fromEntries(Object.keys(config).map((key) => [key, module[key]]));
+
 /**
  * `loadRouteModule` (#493) is the supported replacement for a hand-maintained
  * list of static route imports in a schema-identity suite: the evaluated
@@ -35,7 +41,8 @@ describe('loadRouteModule', () => {
     expect(module.resultSchema).toBeInstanceOf(z.ZodObject);
     expect(typeof module.default).toBe('function');
     // The static config the compiler extracted into the manifest is the module's.
-    expect(module.config).toEqual(testManifest().routes['tool:harness/catalog']!.config);
+    const config = testManifest().routes['tool:harness/catalog']!.config;
+    expect(configOf(module, config)).toEqual(config);
   });
 
   it('loads every renderable route id the manifest reports, including CLI commands and scripts', async () => {
@@ -51,8 +58,8 @@ describe('loadRouteModule', () => {
     for (const route of loadable) {
       const module = await loadRouteModule(route.id);
       expect(typeof module.default, route.id).toBe('function');
-      // The compiler records `{}` for a module that exports no static config.
-      expect(module.config ?? {}, route.id).toEqual(route.config);
+      expect(route.kind === 'tool' ? configOf(module, route.config) : module.config ?? {}, route.id)
+        .toEqual(route.config);
     }
 
     const report = await loadRouteModule('cli:report');
@@ -76,7 +83,9 @@ describe('loadRouteModule', () => {
       loadRouteModule('tool:harness/echo'),
       loadRouteModule('tool:harness/echo'),
     ]);
-    expect(first).toBe(second);
+    expect(first.default).toBe(second.default);
+    expect(first.inputSchema).toBe(second.inputSchema);
+    expect(first.resultSchema).toBe(second.resultSchema);
 
     // The rendered document's value parses through the very schema the loaded
     // module exports, so the harness and the consumer agree on one contract.

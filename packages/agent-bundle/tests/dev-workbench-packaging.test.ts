@@ -84,8 +84,8 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     await execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], { cwd: consumer, env: installedEnvironment() });
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
-      writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
-      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-workbench', version: '1.0.0' }, targets: ['portable'] };\n"),
+      writeFile(join(project, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
+      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-workbench' }, targets: ['portable'] };\n"),
       writeFile(join(project, 'skills', 'review', 'SKILL.md'), '---\nname: review\ndescription: Reviews changes\n---\n# Review\n'),
     ]);
 
@@ -136,19 +136,24 @@ it('packages both react-server render children and renders a route invocation fr
     await mkdir(join(project, 'src', 'mcp', 'status', 'tools'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
-      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-route-invocation', version: '1.0.0' }, targets: ['claude'] };\n"),
+      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-route-invocation' }, targets: ['claude'] };\n"),
       writeFile(join(project, 'src', 'mcp', 'status', 'tools', 'report.tsx'), [
+        "import { defineTool } from 'agent-bundle/routes';",
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
         '',
-        "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
         'export const inputSchema = z.object({ service: z.string().min(1) }).strict();',
         'export const resultSchema = z.object({ service: z.string() }).strict();',
         '',
-        'export default async function Report({ input }) {',
+        'export default defineTool({',
+        "  annotations: { readOnlyHint: true },",
+        "  description: 'Reports one service.',",
+        '  inputSchema,',
+        '  resultSchema,',
+        '}, async (input) => {',
         '  return createElement(Agent.Result, { value: { service: input.service } }, createElement(Agent.Text, null, `Service ${input.service}`));',
-        '}',
+        '});',
         '',
       ].join('\n')),
     ]);
@@ -200,7 +205,7 @@ it('runs the Agent API from an omit-dev installed tarball with its runtime MCP d
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
-      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-agent-api', version: '1.0.0' }, targets: ['portable'] };\n"),
+      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-agent-api' }, targets: ['portable'] };\n"),
       writeFile(join(project, 'skills', 'review', 'SKILL.md'), '---\nname: review\ndescription: Reviews changes\n---\n# Review\n'),
     ]);
     const port = await availablePort();

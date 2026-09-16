@@ -1,26 +1,7 @@
+import { defineTool } from 'agent-bundle/routes';
 import { Agent } from '@agent-bundle/runtime';
 import { Suspense } from 'react';
 import { z } from 'zod';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "mode": {
-        "enum": [
-          "ok",
-          "throw",
-          "reject-boundary"
-        ],
-        "type": "string",
-        "default": "ok"
-      }
-    },
-    "type": "object"
-  },
-  annotations: { readOnlyHint: true },
-  description: 'Throws from the route or from a nested Suspense boundary, for thrown-error projection proof.',
-};
 
 export const inputSchema = z.object({
   mode: z.enum(['ok', 'throw', 'reject-boundary']).default('ok'),
@@ -42,7 +23,7 @@ const Rejecting = async () => {
  * `reject-boundary` streams a shell whose nested Suspense child rejects.
  * Neither renders `Agent.Error` — that represented path is `unavailable.tsx`.
  */
-export default async function Fault({ input }: { readonly input: z.infer<typeof inputSchema> }) {
+async function Fault({ input }: { readonly input: z.infer<typeof inputSchema> }) {
   if (input.mode === 'throw') throw new Error('fault: route threw');
   return (
     <Agent.Result value={{ mode: input.mode, settled: true }}>
@@ -57,3 +38,25 @@ export default async function Fault({ input }: { readonly input: z.infer<typeof 
     </Agent.Result>
   );
 }
+
+export default defineTool({
+inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "enum": [
+          "ok",
+          "throw",
+          "reject-boundary"
+        ],
+        "type": "string",
+        "default": "ok"
+      }
+    },
+    "type": "object"
+  },
+  annotations: { readOnlyHint: true },
+  description: 'Throws from the route or from a nested Suspense boundary, for thrown-error projection proof.',
+  inputSchema,
+  resultSchema,
+}, async (input) => Fault({ input }));

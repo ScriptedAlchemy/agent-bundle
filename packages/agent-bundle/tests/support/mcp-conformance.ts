@@ -333,7 +333,7 @@ export const runMcpConformance = async (): Promise<McpConformanceReport> => {
       rm(join(project, 'src/state.ts'), { force: true }),
       writeFile(join(project, 'agent-bundle.config.ts'), [
         'export default {',
-        "  plugin: { name: 'route-harness', version: '1.0.0' },",
+        "  plugin: { name: 'route-harness' },",
         '  routes: { mcpCommands: true },',
         "  targets: ['claude'],",
         '};',
