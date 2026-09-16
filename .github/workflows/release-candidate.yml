@@ -54,3 +54,28 @@ jobs:
           path: .rstest/playwright-traces
           if-no-files-found: ignore
           retention-days: 7
+
+  # Same reason as ci.yml's candidate-status: a dispatch run is not a PR
+  # check, so surface the packed-release verdict on the candidate commit.
+  candidate-status:
+    if: always() && github.ref == 'refs/heads/changeset-release/main'
+    needs: packed-release
+    name: Candidate status
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Report the packed-release result on the candidate commit
+        env:
+          RESULT: ${{ needs.packed-release.result }}
+          CONTEXT: Release candidate (Version Packages candidate)
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          state=failure
+          [ "$RESULT" = success ] && state=success
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context="$CONTEXT" -f description="pnpm check:release: $RESULT" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          echo "$CONTEXT: $state"

@@ -75,8 +75,10 @@ The `Release packages` workflow records one of `version-maintenance-only`,
 stages. Qualification runs against the exact versioned candidate SHA, not the
 pre-version main commit. A successful Version Packages refresh — or a main push that neither
 refreshes that PR nor qualifies a versioned candidate — is
-`version-maintenance-only`. Disabled publication reports **NOT PUBLISHED**;
-registry verification runs only when publication is separately authorized.
+`version-maintenance-only`. A Version Packages merge, and every `main` push while
+publishing is enabled, must end with each publishable `package.json` version resolving on
+npm (`scripts/verify-registry-versions.sh`); otherwise the run is `failed` and
+**NOT PUBLISHED**.
 
 `pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release`, and
 `pnpm test:packed:release` — before publishing. `lint:release` runs `attw` with the `esm-only`

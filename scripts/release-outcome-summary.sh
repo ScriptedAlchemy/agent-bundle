@@ -16,7 +16,9 @@ if [ "$changesets_outcome" = failure ] || [ "$changesets_outcome" = cancelled ] 
   || [ "$registry_outcome" = failure ] || [ "$registry_outcome" = cancelled ] \
   || [ "$job_status" = failure ] || [ "$job_status" = cancelled ]; then
   outcome=failed
-elif [ "$published" = true ] && [ "$publish_enabled" = true ]; then
+# Registry verification is the publication proof; the action's `published`
+# flag only says whether its publish script printed tag lines.
+elif [ "$registry_outcome" = success ]; then
   outcome=published
 elif [ "$qualify_outcome" = success ]; then
   outcome=qualified-without-publish

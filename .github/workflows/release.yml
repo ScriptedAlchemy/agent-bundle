@@ -113,27 +113,22 @@ jobs:
           steps.changesets.outputs.has-changesets == 'false' &&
           startsWith(github.event.head_commit.message, 'Version Packages')
         run: pnpm check:release
-      # Registry proof is a separate authorized-publication step. Disabled
-      # publication is a supported outcome and must not call npm view.
+      # Green must mean published. Once no changesets are pending, every
+      # publishable package.json version must resolve on npm — whether this
+      # run published it or an earlier one did. Not gated on the action's
+      # `published` output: a publish script that prints no "New tag" lines
+      # leaves it false, and that silence is exactly what must turn red. Runs
+      # on every main push while publishing is enabled, and always for a
+      # Version Packages merge, so a disabled publish cannot pass one silently.
       - name: Verify published registry artifacts
         id: registry
-        if: env.PUBLISH_ENABLED == 'true' && steps.changesets.outputs.published == 'true'
+        if: >-
+          steps.changesets.outputs.has-changesets == 'false' &&
+          (env.PUBLISH_ENABLED == 'true' ||
+          startsWith(github.event.head_commit.message, 'Version Packages'))
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          for dir in \
-            packages/agent-bundle \
-            packages/rsc-runtime \
-            packages/rsc-markdown-stream \
-            packages/create-agent-bundle
-          do
-            name=$(node -p "JSON.parse(require('node:fs').readFileSync('$dir/package.json','utf8')).name")
-            version=$(node -p "JSON.parse(require('node:fs').readFileSync('$dir/package.json','utf8')).version")
-            published=$(npm view "$name@$version" version)
-            test "$published" = "$version"
-            echo "registry $name@$version"
-          done
+        run: bash scripts/verify-registry-versions.sh
       - name: Release outcome summary
         if: always()
         env:

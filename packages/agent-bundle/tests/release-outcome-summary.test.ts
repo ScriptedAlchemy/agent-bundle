@@ -101,6 +101,30 @@ it('reports cancelled qualification as failed', async () => {
   })).toContain('outcome: failed\n');
 });
 
+it('reports published from registry proof even when the action flag stayed false', async () => {
+  expect(await summarize({
+    PUBLISH_ENABLED: 'true',
+    HAS_CHANGESETS: 'false',
+    PUBLISHED: 'false',
+    QUALIFY_OUTCOME: 'skipped',
+    CHANGESETS_OUTCOME: 'success',
+    REGISTRY_OUTCOME: 'success',
+    JOB_STATUS: 'success',
+  })).toContain('outcome: published\n');
+});
+
+it('reports a Version Packages merge whose registry check failed as failed', async () => {
+  expect(await summarize({
+    PUBLISH_ENABLED: 'false',
+    HAS_CHANGESETS: 'false',
+    PUBLISHED: 'false',
+    QUALIFY_OUTCOME: 'success',
+    CHANGESETS_OUTCOME: 'success',
+    REGISTRY_OUTCOME: 'failure',
+    JOB_STATUS: 'failure',
+  })).toContain('outcome: failed\nworkflow_sha');
+});
+
 it('reports published only when publish is enabled and registry succeeded', async () => {
   expect(await summarize({
     PUBLISH_ENABLED: 'true',

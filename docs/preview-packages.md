@@ -93,18 +93,20 @@ Versioning is driven by Changesets (`.changeset/README.md`). Every PR that
 changes a publishable package carries a `.changeset/*.md`; on each push to
 `main`, `.github/workflows/release.yml` runs `changesets/action`, which keeps
 a machine-owned **Version Packages** pull request up to date with the pending
-bumps and `CHANGELOG.md` entries. Merging that PR versions the packages but,
-by default, publishes nothing: the workflow only runs the release gates
-(`pnpm check:release`) against that exact versioned candidate SHA and
-records `qualified-without-publish`. A push that only refreshes the Version
-Packages PR — or that neither refreshes it nor qualifies a versioned
-candidate — records `version-maintenance-only`. Publishing turns on when the
-repository variable `AGENT_BUNDLE_NPM_PUBLISH` is `true` *and* the
-`NPM_TOKEN` secret exists; the action then runs `pnpm release`
-(`pnpm check:release && changeset publish`) with npm provenance and records
-`published` after registry verification. Disabled publication reports
-**NOT PUBLISHED**. Until then, previews below are the only installable
-artifacts.
+bumps and `CHANGELOG.md` entries. Merging that PR versions the packages and
+must leave them on npm: the workflow runs the release gates
+(`pnpm check:release`) against that exact versioned candidate SHA and then
+`scripts/verify-registry-versions.sh`, which fails the job unless every
+publishable `package.json` version resolves with `npm view`. Publishing turns
+on when the repository variable `AGENT_BUNDLE_NPM_PUBLISH` is `true` *and*
+the `NPM_TOKEN` secret exists; the action then runs `pnpm release`
+(`pnpm check:release && changeset publish`) with npm provenance, and the
+registry check runs on every later `main` push too, so a silently failed
+publish is red at the next merge. With publishing disabled, a Version
+Packages merge fails the registry check (`outcome: failed`, **NOT
+PUBLISHED**) instead of reporting a green `qualified-without-publish`; a push
+that only refreshes the Version Packages PR records
+`version-maintenance-only`.
 
 ## Where previews come from
 
