@@ -45,12 +45,12 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
   'agent-bundle.config.ts': [
     'export default {',
     "  mcp: { servers: { echoer: {} } },",
-    "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+    "  plugin: { name: 'package-build-fixture' },",
     "  targets: ['portable'],",
     '};',
     '',
   ].join('\n'),
-  'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+  'package.json': '{"name":"package-build-fixture","type":"module","private":true,"version":"1.0.0"}\n',
   'node_modules/evidence-package/index.js': 'globalThis.__evidencePackageLoaded = true;\n',
   'node_modules/evidence-package/package.json': '{"name":"evidence-package","type":"module","version":"1.0.0"}\n',
   'tsconfig.json': JSON.stringify({
@@ -130,7 +130,7 @@ describe('framework-owned package build', () => {
     const root = await fixtureRoot({
       ...conventionFixture(),
       'AGENTS.md': '# Authored repository instructions\n',
-      'package.json': '{"name":"package-build-fixture","type":"module","private":true,"imports":{"#fixture":"./dist/index.js"},"scripts":{"prepack":"agent-bundle prepack","test":"rstest"}}\n',
+      'package.json': '{"name":"package-build-fixture","type":"module","private":true,"version":"1.0.0","imports":{"#fixture":"./dist/index.js"},"scripts":{"prepack":"agent-bundle prepack","test":"rstest"}}\n',
     });
     await installTypescriptToolchain(root);
     const result = await build({ output: 'artifact', packageOutputs: true, root });
@@ -195,6 +195,7 @@ describe('framework-owned package build', () => {
         private: true,
         scripts: { postinstall: 'node setup.js' },
         type: 'module',
+        version: '1.0.0',
       }),
     });
     await installTypescriptToolchain(root);
@@ -213,7 +214,7 @@ describe('framework-owned package build', () => {
       'agent-bundle.config.ts': [
         'export default {',
         "  bin: { hauler: './src/scripts/hauler.ts' },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -224,6 +225,7 @@ describe('framework-owned package build', () => {
         private: true,
         scripts: { postinstall: 'node ./dist/bin/hauler.js' },
         type: 'module',
+        version: '1.0.0',
       }),
       'src/scripts/hauler.ts': [
         'export const main = async (argv: readonly string[]): Promise<number> => {',
@@ -267,7 +269,7 @@ describe('framework-owned package build', () => {
         '    echoer: {},',
         "    plain: { entry: './src/plain.ts' },",
         '  } },',
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -299,7 +301,7 @@ describe('framework-owned package build', () => {
         'let sawAsyncChunks;',
         'export default {',
         '  lib: false,',
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '  tools: {',
         "    rsbuild: { source: { define: { __HATCH_DEFINE__: JSON.stringify('hatched') } } },",
@@ -336,7 +338,7 @@ describe('framework-owned package build', () => {
         'export default {',
         "  lib: { entry: './src/index.ts', dts: false },",
         "  mcp: { servers: { echoer: {} } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         "  tools: { rsbuild: { output: { externals: ['left-pad', 'right-pad'] } } },",
         '};',
@@ -377,7 +379,7 @@ describe('framework-owned package build', () => {
         'export default {',
         "  lib: { entry: './src/index.ts', dts: false },",
         "  mcp: { servers: { echoer: {} } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         rspackExternalsMutator(['left-pad', 'right-pad']),
         '};',
@@ -418,7 +420,7 @@ describe('framework-owned package build', () => {
         'export default {',
         '  lib: false,',
         "  mcp: { servers: { echoer: {} } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '  tools: {',
         '    rspack: (config) => {',
@@ -457,7 +459,7 @@ describe('framework-owned package build', () => {
         'export default {',
         '  lib: false,',
         "  mcp: { servers: { echoer: {} } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         rspackExternalsMutator(['left-pad'], ["      config.externalsType = 'node-commonjs';"]),
         '};',
@@ -489,7 +491,7 @@ describe('framework-owned package build', () => {
         'export default {',
         '  lib: false,',
         "  mcp: { servers: { echoer: {} } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -534,7 +536,7 @@ describe('framework-owned package build', () => {
         'export default {',
         "  lib: { entry: './src/index.ts', dts: false },",
         "  mcp: { servers: { echoer: {} } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -579,7 +581,7 @@ describe('framework-owned package build', () => {
         'export default {',
         '  lib: false,',
         "  mcp: { servers: { echoer: {} } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -614,7 +616,7 @@ describe('framework-owned package build', () => {
         'export default {',
         '  lib: false,',
         "  mcp: { servers: { echoer: {} } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -755,7 +757,7 @@ describe('mcp run', () => {
         "    SHARED: 'manifest',",
         "    STATE_DIR: 'agent-bundle:path:plugin-root/.runtime',",
         '  } } } },',
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['codex', 'portable'],",
         '};',
         '',
@@ -850,12 +852,12 @@ describe('mcp run', () => {
       'agent-bundle.config.ts': [
         'export default {',
         "  mcp: { servers: { pinner: { entry: './src/pin.ts' } } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
       ].join('\n'),
-      'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+      'package.json': '{"name":"package-build-fixture","type":"module","private":true,"version":"1.0.0"}\n',
       '.env': 'MCP_RUN_TRACKER_COOKIE=secret\n',
       // A consumer trusting the documented anchor exactly as PR #49 intends.
       'src/pin.ts': [
@@ -904,12 +906,12 @@ describe('mcp run', () => {
       'agent-bundle.config.ts': [
         'export default {',
         "  mcp: { servers: { exiter: { entry: './src/exit.ts' } } },",
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
       ].join('\n'),
-      'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+      'package.json': '{"name":"package-build-fixture","type":"module","private":true,"version":"1.0.0"}\n',
       'src/exit.ts': 'process.exitCode = 7;\nexport const marker = true;\n',
     });
     await build({ output: 'artifact', root });
@@ -940,12 +942,12 @@ describe('mcp run', () => {
         "    transport: 'streamable-http',",
         "    url: 'https://mcp.example.test/stream',",
         '  } } },',
-        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'package-build-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
       ].join('\n'),
-      'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+      'package.json': '{"name":"package-build-fixture","type":"module","private":true,"version":"1.0.0"}\n',
     });
     await build({ output: 'artifact', root });
     await expect(runMcp({

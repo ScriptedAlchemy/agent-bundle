@@ -197,7 +197,7 @@ it('lists source, build, contract-gate, catalog, host, and runtime problems, err
       state: 'stale',
     },
     runtimeDiagnostic: 'AB8200 — provider failed to load',
-    status: { ...gatedStatus, source: { ...gatedStatus.source, diagnostics: [{ code: 'AB4001', message: 'Description is missing.', severity: 'info', sourcePath: 'agent-bundle.config.ts' }] } },
+    status: { ...gatedStatus, source: { ...gatedStatus.source, diagnostics: [{ code: 'AB4002', message: 'Description is missing.', severity: 'info', sourcePath: 'agent-bundle.config.ts' }] } },
     tree: treeWith('src/scripts/sync.ts'),
   });
 
@@ -208,7 +208,7 @@ it('lists source, build, contract-gate, catalog, host, and runtime problems, err
     ['error', 'runtime', undefined],
     ['warning', 'route-catalog', 'AB5101'],
     ['warning', 'route-catalog', undefined],
-    ['info', 'source', 'AB4001'],
+    ['info', 'source', 'AB4002'],
   ]);
   const contractFailure = problems[1]!;
   expect(contractFailure.node).toEqual({ kind: 'tool', name: 'version', server: 'fixture' });

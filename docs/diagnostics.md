@@ -14,7 +14,7 @@ even when no error diagnostic was reported.
 | Family | Area |
 | --- | --- |
 | `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter), rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset), and the Skill IR (`AB3006`: unknown frontmatter field; `AB3008`–`AB3010`: per-host lowering of tokens and frontmatter); see below. |
-| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011` and `AB4013`: release identity; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project; `AB4014`/`AB4015`: the shared descriptive metadata every host projection reads); see below. |
+| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`: name; `AB4002`–`AB4007`: Skill fields; `AB4009`–`AB4011` and `AB4013`: release identity; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project; `AB4014`/`AB4015`: the shared descriptive metadata every host projection reads); see below. |
 | `AB41xx` | Normalized model invariants (`AB4100`–`AB4102`: unknown targets — the retired `plugin` name included — duplicate IDs and outputs; `AB4103`, `AB4105`, `AB4106`: the composite-root checks — same path with different bytes across selected projections, a host-scoped component leaking through conventional discovery, an advanced-registry adapter selected beside another target; see below). |
 | `AB42xx` | Hook configuration and native hook sources (`AB4200`–`AB4212`; see below). |
 | `AB43xx` | MCP server and MCP App configuration (`AB4300`–`AB4339`, see below; `AB4340`: a declaration for a route-generated server redeclares `entry`/`command`/`url`; `AB4341`: the `web` exposure/policy key; see below). |
@@ -97,7 +97,7 @@ is an optional project-relative image. Each discovered skill is checked
 against the pinned Agent Skills frontmatter schema
 (`schemas/agent-skills/frontmatter.schema.json`: `name` and `description`
 required, closed portable field shapes), its directory, its resources, and
-the other skills. `AB4001`, `AB4008`–`AB4011`, and `AB4013` are the release
+the other skills. `AB4009`–`AB4011` and `AB4013` are the release
 identity codes (see "Release identity" below). Every row is reported on the
 config file (`AB4000`, `AB4012`) or the skill source.
 
@@ -588,7 +588,7 @@ readable output.
 | `AB4771` | warning | One Rspack warning while compiling an App view that the framework's ignore list does not cover; `MCP App "<name>" produced a warning while compiling: <file>:<line>:<column>: <message>`. | Address the warning in the named file; a warning that is bundler noise inside the framework's own dependency graph belongs on the documented ignore list. |
 | `AB4772` | warning | The emitted App HTML is 1 MiB or larger in a production build, or larger than 2 MiB in any build; `MCP App "<name>" compiled to <size> (<gzip> gzip), above the … bound; largest modules: …`. In `agent-bundle dev`, a view whose readable output would exceed 2 MiB was recompiled with the production profile for the preview and that production build fits: `MCP App "<name>" readable development output compiled to <size>, above the 2 MiB bound …; the preview renders the production build (…) instead; largest modules: …` — the only size advisory that view receives; a production build that is itself over 2 MiB gets the ordinary over-bound message instead. | Trim the largest modules the message names — usually a dependency imported whole; a view over 2 MiB does not render in the Workbench or `serve-app` and must shrink before it ships. The development substitution costs only the readable source in the preview. |
 
-## Release identity (`AB4001`, `AB4008`–`AB4011`, `AB4013`)
+## Release identity (`AB4009`–`AB4011`, `AB4013`)
 
 `package.json` is authoritative for release identity (issue #94): its `name`
 and `version` become the `packageName` and `packageVersion` axes carried on
@@ -596,18 +596,8 @@ the project context, artifact manifests, `inspect` output, and dev status.
 `plugin.name` stays the host-native slug and is never derived from the npm
 package name.
 
-`plugin.version` is **deprecated and optional**. New projects declare the
-release version only in `package.json`; removal of the compatibility field
-follows the normal breaking-change policy rather than a fixed window. When it
-is omitted, the version every surface reports — manifests, host projections,
-dev status, and the `agent-bundle/meta` constant compiled into plugin code —
-is the `package.json` version. When it is declared, the declared value still
-wins so a legacy config never changes meaning mid-migration, and a
-disagreement reports the `AB4008` **warning**. Declaring it as anything but a
-nonempty string is an `AB4001` error.
-
-A project with neither an authored `plugin.version` nor a valid `package.json`
-version has no release identity. Development commands (`dev`, `inspect`,
+A project with no valid `package.json` version has no release identity.
+Development commands (`dev`, `inspect`,
 `validate`) keep running on the labeled `0.0.0-dev.<short-revision>` fallback,
 because an unpackaged scratch project is a normal development state. A
 development-only fallback can never produce a release artifact, so
@@ -615,12 +605,10 @@ development-only fallback can never produce a release artifact, so
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
-| `AB4001` | error | `plugin.version` is declared as something other than a nonempty string. Omit the field to derive the version from `package.json`. |
-| `AB4008` | warning | A declared `plugin.version` differs from the `package.json` version. Align the two, or drop `plugin.version`. |
 | `AB4009` | warning | `package.json` `name` is not a valid npm package name; the `packageName` axis is withheld. |
 | `AB4010` | warning | `package.json` `version` is not a valid semantic version; the `packageVersion` axis is withheld. |
 | `AB4011` | warning | `package.json` is unusable — unparsable, not a JSON object, or symlinked outside the project root. |
-| `AB4013` | error (build) | `agent-bundle build` refuses a project with no release version: `plugin.version` is omitted and `package.json` declares no valid semantic version. |
+| `AB4013` | error (build) | `agent-bundle build` refuses a project whose `package.json` declares no valid semantic version. |
 | `AB4014` | error | A `plugin.metadata` field is not the shape the shared descriptive layer accepts, or the block declares a field beyond `author`, `homepage`, `keywords`, `license`, and `repository`. The config declared it, so it is an error rather than a withheld value — a blank string or empty array included, where `null` is how a field is opted out. |
 | `AB4015` | warning | A `package.json` descriptive field cannot be shared with any host manifest — a `homepage`, `repository`, or `author.url` the pinned host schemas' `uri` format refuses, an `author.email` their `email` format refuses, or a `repository` in a form this compiler will not convert (`owner/repo` and `github:` shorthands, `git@`/`git://`/`git+ssh`/`git+http` URLs; only `http(s)` and the `git+https://…` URL npm writes, with or without a trailing `.git`, are read). An `author` with any malformed part is withheld whole. The field is withheld rather than guessed at; declare `plugin.metadata.<field>` to share an explicit value. A field the config already overrides is not reported. |
 
@@ -1033,12 +1021,9 @@ forms. A module without a `config` export compiles silently with an empty
 config.
 
 An MCP App route's `config.template` resolves **relative to the route
-module**, the way its imports do (`template: './dashboard.html'`). The older
-project-root-relative form (`'./src/mcp/<server>/apps/dashboard.html'`) is
-still accepted, without a diagnostic, while it is the only interpretation
-that names an existing file. When both interpretations name different
-existing files, or neither exists, `AB4827` names both candidate paths; the
-fix is to make the path route-relative. The IR keeps the authored path (so the
+module**, the way its imports do (`template: './dashboard.html'`). When that
+path names no existing file, `AB4827` names the resolved candidate. The IR
+keeps the authored path (so the
 graph digest stays machine-independent) and the normalized model carries the
 resolved absolute file. Config-declared Apps (`mcp.servers.<server>.apps`)
 keep resolving `entry` and `template` from the project root, where the config
@@ -1183,7 +1168,7 @@ projections; no static provider subset declaration is required.
 | `AB4807` | retired | The stage-1 rendered-script gate. Rendered script routes ship through the Agent renderer pipeline since #102 stage 3; the code is never reused. |
 | `AB4808` | error | A conventional `src/scripts/` route nests below the scripts root; conventional scripts ship as direct children only. Move it up, prefix a path segment with `_`, or declare it under `scripts` in config with a flat name. |
 | `AB4809` | error | A conventional `src/scripts/` route and a configured `scripts` entry share one script identity through different files. Point the config entry at the module to claim it, or rename one of the two. |
-| `AB4810` | error | A generated MCP route is missing named `inputSchema`/`resultSchema` declarations or its default export, an event route lacks a default export, or a helper definition is not a supported direct declaration. The bundler resolves explicit re-exports; the runtime checks callability. Sync and async handlers are accepted. |
+| `AB4810` | error | A tool route does not default-export a direct `defineTool({ inputSchema, resultSchema, ... }, handler)` call, another generated MCP route is missing named `inputSchema`/`resultSchema` declarations or its default export, an event route lacks a default export, or a helper definition is not a supported direct declaration. |
 | `AB4811` | error | A generated MCP route exports `execute` or `render`; route mode accepts only the default Server Component contract. |
 | `AB4812` | error | A generated MCP App route has no non-empty static `config.resourceUri`. |
 | `AB4813` | error | The command graph collides: a route is both a command module and a command group, an alias collides with a sibling command, group, or alias, an alias is unsafe or duplicated, or an explicit `bin` entry claims the generated CLI executable's name. |
@@ -1200,7 +1185,7 @@ projections; no static provider subset declaration is required.
 | `AB4824` | error | An event route selects an unknown target, requires an event the selected target does not support, or declares a capability row in `config.requires` that no selected host supports. An unmet requirement names the row and every selected host considered. |
 | `AB4825` | error | An event route declares both `config.targets` and `config.requires`, or either selector is not a nonempty array of nonempty target names or capability row ids. |
 | `AB4826` | error | A route's static `config` calls `appResourceUri('<app>')` with a reference that matches no App route of the route's own generated server with a static `config.resourceUri`: an unknown name, another server's App (a generated server registers only its own Apps), or a reference from a non-MCP route. The message names the cause and lists the server's known App route ids; reference the App as `'<app>'`, `'<server>/<app>'`, `'app:<server>/<app>'`, or a relative module path. |
-| `AB4827` | error | An MCP App route's `config.template` is ambiguous or missing: both the route-relative and the project-root-relative interpretation name different existing files, or neither exists. The message names both candidate paths; templates resolve relative to the route module, so rewrite the path as `'./<file>.html'` beside the route. |
+| `AB4827` | error | An MCP App route's route-relative `config.template` names no existing file. The message names the resolved candidate; point it at `'./<file>.html'` beside the route. |
 | `AB4828` | error | A generated MCP route advertises `_meta.ui.resourceUri` of an App on its server (through `appResourceUri()` or a literal) that is not built for every target the server ships to, because the App's `config.targets` (or a config-declared App's `targets`) is narrower. Widen the App's targets or restrict `mcp.servers.<server>.targets`. |
 | `AB4829` | error | Two distinct MCP App routes of one generated server declare the same static `config.resourceUri`. The message names both route files and the server; a generated server registers one App per resource URI and never picks a side. The same URI on App routes of *different* servers is not a collision — each server registers only its own Apps. Give each App route of the server a distinct `config.resourceUri`, or remove the duplicate module. |
 | `AB4830` | error | A conventional layout module (`src/layout.*`, `src/mcp/<server>/layout.*`) does not satisfy the layout contract: it has no default export, it exports the route-only `config`/`inputSchema`/`resultSchema`, or it exports `execute`/`render`. Default-export one component receiving `{ children, route, signal }` that renders `Agent.Result` around `children`. |
@@ -1373,7 +1358,7 @@ installed plugin from it; `AB7303` is emitted only when that listing is unusable
 the host owns those copies, so replacement runs `claude plugin uninstall
 --keep-data` + `install` or `codex plugin remove` + `add`.
 
-| Installed copy | `install` | `install --replace` (alias `--force`) | Doctor |
+| Installed copy | `install` | `install --replace` | Doctor |
 | --- | --- | --- | --- |
 | Identical content (receipt / host-managed) | `already-installed` no-op | `already-installed` no-op | `current` |
 | Identical content (legacy) | `already-installed` no-op | `adopted` — receipt written, no plugin file changes | `current` |

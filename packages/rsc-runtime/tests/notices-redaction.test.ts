@@ -26,7 +26,7 @@ import {
   type AgentNoticeSensitivity,
   type AgentNoticePrincipal,
 } from '../src/notices/index.js';
-import type { AgentDocumentSnapshot } from '../src/index.js';
+import type { AgentDocument } from '../src/index.js';
 import {
   DEFAULT_AGENT_RENDER_LIMITS,
   agent,
@@ -37,7 +37,7 @@ import {
 } from '../src/index.js';
 import { createMemoryStateDriver } from '../src/state/index.js';
 
-const document = (text: string): AgentDocumentSnapshot => ({
+const document = (text: string): AgentDocument => ({
   root: { kind: 'text' as const, text },
   status: 'success' as const,
   version: 1 as const,
@@ -151,7 +151,7 @@ describe('secret pass (flare-redact)', () => {
   });
 
   it('redacts every prose field of a document and nothing else', () => {
-    const snapshot: AgentDocumentSnapshot = {
+    const snapshot: AgentDocument = {
       root: {
         children: [
           { kind: 'markdown', text: 'password: p4ss' },

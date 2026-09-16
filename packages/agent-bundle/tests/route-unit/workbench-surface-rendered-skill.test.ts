@@ -38,13 +38,13 @@ it('inspects the Workbench surface of a project with a rendered skill under the 
       'src/mcp/demo/tools/ping.tsx': [
         "import React from 'react';",
         "import { Agent } from '@agent-bundle/runtime';",
+        "import { defineTool } from 'agent-bundle/routes';",
         "import { z } from 'zod';",
-        "export const config = { annotations: { readOnlyHint: true }, description: 'Ping.' };",
         'export const inputSchema = z.object({}).strict();',
         'export const resultSchema = z.object({ ok: z.literal(true) }).strict();',
-        'export default async function Ping() {',
+        "export default defineTool({ annotations: { readOnlyHint: true }, description: 'Ping.', inputSchema, resultSchema }, async () => {",
         '  return <Agent.Result value={{ ok: true }}><Agent.Text>pong</Agent.Text></Agent.Result>;',
-        '}',
+        '});',
         '',
       ].join('\n'),
       'src/skills/demo/SKILL.tsx': [

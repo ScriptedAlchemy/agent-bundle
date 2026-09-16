@@ -270,7 +270,7 @@ every host treats it differently. `agent-bundle install` and the emitted
   version-gated and a plain reinstall reports "already installed" while the
   cache stays stale. Codex replacement runs `codex plugin remove` before
   `marketplace add` + `add`, so files a rebuild removed do not linger.
-- **`--replace` (alias `--force`).** Also replaces an agent-bundle install of
+- **`--replace`.** Also replaces an agent-bundle install of
   the same plugin at a *different* version, and adopts a Cursor copy that was
   installed before receipts existed (recognised by its emitted `INSTALL.md` +
   `install.mjs` and matching manifest name). A legacy copy has no owned-file

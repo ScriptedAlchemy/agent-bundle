@@ -138,7 +138,7 @@ it('loads sync config objects from relative and absolute explicit paths', async 
     await mkdir(join(fixture.root, 'configs'), { recursive: true });
     await writeFile(
       absoluteConfigPath,
-      "export default { plugin: { name: 'sync', version: '1.0.0' } };\n",
+      "export default { plugin: { name: 'sync' } };\n",
     );
 
     const options = {
@@ -151,12 +151,12 @@ it('loads sync config objects from relative and absolute explicit paths', async 
     const absolute = await loadConfig({ ...options, configPath: absoluteConfigPath });
 
     expect(relative).toMatchObject({
-      config: { plugin: { name: 'sync', version: '1.0.0' } },
+      config: { plugin: { name: 'sync' } },
       configPath: absoluteConfigPath,
       context: { projectRoot: fixture.root, selectedTargets: ['codex'] },
     });
     expect(absolute).toMatchObject({
-      config: { plugin: { name: 'sync', version: '1.0.0' } },
+      config: { plugin: { name: 'sync' } },
       configPath: absoluteConfigPath,
       context: { projectRoot: fixture.root, selectedTargets: ['codex'] },
     });
@@ -180,7 +180,7 @@ it('loads a TypeScript config that imports an authored TSX application tree', as
       fixture.configPath,
       [
         "import { application } from './application.tsx';",
-        "export default { plugin: { name: application.props.name, version: '1.0.0' } };",
+        "export default { plugin: { name: application.props.name } };",
         '',
       ].join('\n'),
     );
@@ -190,7 +190,7 @@ it('loads a TypeScript config that imports an authored TSX application tree', as
       mode: 'production',
       root: fixture.root,
     })).resolves.toMatchObject({
-      config: { plugin: { name: 'tsx-application', version: '1.0.0' } },
+      config: { plugin: { name: 'tsx-application' } },
     });
   } finally {
     await removeProjectFixture(fixture.root);
@@ -256,21 +256,18 @@ it('reloads an edited native ESM config on each load', async () => {
     await mkdir(join(fixture.root, 'configs'), { recursive: true });
     await writeFile(
       configPath,
-      "export default { plugin: { name: 'fresh', version: '1.0.0' } };\n",
+      "export default { plugin: { name: 'fresh' } };\n",
     );
 
-    expect((await loadConfig(options)).config.plugin).toEqual({
-      name: 'fresh',
-      version: '1.0.0',
-    });
+    expect((await loadConfig(options)).config.plugin).toEqual({ name: 'fresh' });
 
     await writeFile(
       configPath,
-      "export default { plugin: { name: 'fresh', version: '2.0.0' } };\n",
+      "export default { plugin: { name: 'fresh' } };\n",
     );
 
     await expect(loadConfig(options)).resolves.toMatchObject({
-      config: { plugin: { name: 'fresh', version: '2.0.0' } },
+      config: { plugin: { name: 'fresh' } },
       configPath,
     });
   } finally {
@@ -289,30 +286,30 @@ it('reloads an overwritten static TypeScript default config', async () => {
 
   try {
     await expect(loadConfig(options)).resolves.toMatchObject({
-      config: { plugin: { name: 'review', version: '1.0.0' } },
+      config: { plugin: { name: 'review' } },
     });
     await writeFile(
       fixture.configPath,
       [
-        "enum Version { Current = '1.0.0' }",
-        "export default { plugin: { name: 'typescript-fresh', version: Version.Current } };",
+        "enum Name { Current = 'typescript-fresh' }",
+        'export default { plugin: { name: Name.Current } };',
         '',
       ].join('\n'),
     );
     await expect(loadConfig(options)).resolves.toMatchObject({
-      config: { plugin: { name: 'typescript-fresh', version: '1.0.0' } },
+      config: { plugin: { name: 'typescript-fresh' } },
     });
 
     await writeFile(
       fixture.configPath,
       [
-        "enum Version { Current = '2.0.0' }",
-        "export default { plugin: { name: 'typescript-fresh', version: Version.Current } };",
+        "enum Name { Current = 'typescript-fresher' }",
+        'export default { plugin: { name: Name.Current } };',
         '',
       ].join('\n'),
     );
     await expect(loadConfig(options)).resolves.toMatchObject({
-      config: { plugin: { name: 'typescript-fresh', version: '2.0.0' } },
+      config: { plugin: { name: 'typescript-fresher' } },
     });
   } finally {
     await removeProjectFixture(fixture.root);
@@ -331,7 +328,7 @@ it('discovers an explicit non-conventional skill path relative to the project ro
     );
 
     const discovered = await discoverProject(fixture.root, {
-      plugin: { name: 'review', version: '1.0.0' },
+      plugin: { name: 'review' },
       skills: ['custom/selected'],
     });
 
@@ -359,7 +356,7 @@ it('expands glob patterns in explicit skills entries and deduplicates overlappin
     );
 
     const discovered = await discoverProject(fixture.root, {
-      plugin: { name: 'review', version: '1.0.0' },
+      plugin: { name: 'review' },
       skills: ['src/skills/*', 'custom/*/SKILL.md', 'custom/selected'],
     });
 
@@ -380,7 +377,7 @@ it('discovers conventional root assets and strips the assets/ prefix from destin
     await writeFile(join(fixture.root, 'assets/fonts/mono.woff'), 'font');
 
     const discovered = await discoverProject(fixture.root, {
-      plugin: { name: 'review', version: '1.0.0' },
+      plugin: { name: 'review' },
     });
 
     expect(discovered.assets).toEqual([
@@ -406,7 +403,7 @@ it('expands explicit asset entries as files, directories, and globs while droppi
 
     const discovered = await discoverProject(fixture.root, {
       assets: ['assets/logo.svg', 'branding', 'docs/*.md', 'missing/logo.svg'],
-      plugin: { name: 'review', version: '1.0.0' },
+      plugin: { name: 'review' },
     });
 
     expect(discovered.assets).toEqual([
@@ -428,7 +425,7 @@ it('honors an explicit empty assets list instead of conventional discovery', asy
 
     const discovered = await discoverProject(fixture.root, {
       assets: [],
-      plugin: { name: 'review', version: '1.0.0' },
+      plugin: { name: 'review' },
     });
 
     expect(discovered.assets).toEqual([]);

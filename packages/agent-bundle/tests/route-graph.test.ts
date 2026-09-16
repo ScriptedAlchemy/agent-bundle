@@ -29,6 +29,15 @@ const createRoot = async (): Promise<string> => {
 };
 
 const moduleSource = 'export const inputSchema = {}; export const resultSchema = {}; export default async () => undefined;\n';
+const toolSource = (fields = '', imports: readonly string[] = []): string => [
+  ...imports,
+  "import { defineTool } from 'agent-bundle/routes';",
+  'export const inputSchema = {};',
+  'export const resultSchema = {};',
+  `export default defineTool({ ${fields}${fields.length === 0 ? '' : ', '}inputSchema, resultSchema }, async () => undefined);`,
+  '',
+].join('\n');
+const toolModuleSource = toolSource();
 
 const writeTree = async (root: string, files: Readonly<Record<string, string>>): Promise<void> => {
   for (const [path, contents] of Object.entries(files)) {
@@ -39,7 +48,7 @@ const writeTree = async (root: string, files: Readonly<Record<string, string>>):
 };
 
 const fixtureConfig = (extra: Readonly<Record<string, unknown>> = {}): AgentBundleConfig => ({
-  plugin: { name: 'routes-fixture', version: '1.0.0' },
+  plugin: { name: 'routes-fixture' },
   ...extra,
 });
 
@@ -63,7 +72,7 @@ const conventionalTree: Readonly<Record<string, string>> = {
   'src/mcp/curator/apps/dashboard.tsx': `export const config = { resourceUri: 'ui://curator/dashboard.html' }; ${moduleSource}`,
   'src/mcp/curator/prompts/curate.tsx': moduleSource,
   'src/mcp/curator/resources/catalog.ts': moduleSource,
-  'src/mcp/curator/tools/inspect.tsx': moduleSource,
+  'src/mcp/curator/tools/inspect.tsx': toolModuleSource,
   'src/providers/git-worktree.ts': moduleSource,
   'src/scripts/rebuild-index.ts': moduleSource,
 };
@@ -94,12 +103,12 @@ const createInspectProject = async (files: Readonly<Record<string, string>>): Pr
   await writeTree(root, {
     'agent-bundle.config.ts': [
       'export default {',
-      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'routes-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',
     ].join('\n'),
-    'package.json': '{"type":"module"}\n',
+    'package.json': '{"type":"module","version":"1.0.0"}\n',
     ...files,
   });
   return root;
@@ -139,12 +148,12 @@ it('compiles the conventional tree into one frozen graph with a machine-independ
     source: join(root, 'src/providers/git-worktree.ts'),
   }]);
 
-  // The IR is immutable and every route carries the shared frozen empty config.
+  // The IR is immutable and routes without authored metadata carry empty config.
   expect(Object.isFrozen(graph)).toBe(true);
   expect(Object.isFrozen(graph.servers)).toBe(true);
   expect(Object.isFrozen(curator!.routes[0])).toBe(true);
   expect(Object.isFrozen(graph.cli!.routes)).toBe(true);
-  expect(curator!.routes.filter((route) => route.kind !== 'app').every((route) => route.config === emptyRouteConfig)).toBe(true);
+  expect(curator!.routes.filter((route) => route.kind !== 'app').every((route) => Object.keys(route.config).length === 0)).toBe(true);
   expect(curator!.routes.find((route) => route.kind === 'app')?.config).toEqual({ resourceUri: 'ui://curator/dashboard.html' });
   expect(graph.events[0]!.config).toEqual({});
 
@@ -167,18 +176,26 @@ it('populates bounded input schemas for every route kind and includes them in th
     'export default async () => undefined;',
     '',
   ].join('\n');
+  const boundedTool = [
+    "import { defineTool } from 'agent-bundle/routes';",
+    `export const inputSchema = z.object({ count: z.number().optional(), root: z.string().describe('Project root.') }).strict();`,
+    'export const resultSchema = {};',
+    `export default defineTool({ inputJsonSchema: ${JSON.stringify(metadata)}, inputSchema, resultSchema }, async () => undefined);`,
+    '',
+  ].join('\n');
   const tree = {
     'src/cli/audit.ts': bounded(),
     'src/events/stop.ts': bounded(),
     'src/mcp/curator/apps/dashboard.tsx': bounded("export const config = { resourceUri: 'ui://curator/dashboard.html' };"),
     'src/mcp/curator/prompts/curate.ts': bounded(),
     'src/mcp/curator/resources/catalog.ts': bounded(),
-    'src/mcp/curator/tools/inspect.ts': bounded(),
+    'src/mcp/curator/tools/inspect.ts': boundedTool,
     'src/mcp/curator/tools/rich.ts': [
+      "import { defineTool } from 'agent-bundle/routes';",
       'const sharedSchema = z.object({ nested: z.object({ value: z.string() }) });',
       'export const inputSchema = sharedSchema;',
       'export const resultSchema = {};',
-      'export default async () => undefined;',
+      'export default defineTool({ inputSchema, resultSchema }, async () => undefined);',
       '',
     ].join('\n'),
     'src/scripts/rebuild.ts': bounded(),
@@ -208,7 +225,7 @@ it('populates bounded input schemas for every route kind and includes them in th
   const changedRoot = await createRoot();
   await writeTree(changedRoot, tree);
   const inspectPath = join(changedRoot, 'src/mcp/curator/tools/inspect.ts');
-  await writeFile(inspectPath, (await readFile(inspectPath, 'utf8')).replace('Project root.', 'Workspace root.'));
+  await writeFile(inspectPath, (await readFile(inspectPath, 'utf8')).replaceAll('Project root.', 'Workspace root.'));
   const changed = await compileRouteGraph(changedRoot, fixtureConfig());
   expect(changed.digest).not.toBe(graph.digest);
 
@@ -223,17 +240,20 @@ it('does not infer metadata by following imported runtime schemas', async () => 
     '}).strict();',
     '',
   ].join('\n');
-  const route = (specifier: string): string => [
+  const route = (specifier: string, tool = false): string => [
+    ...(tool ? ["import { defineTool } from 'agent-bundle/routes';"] : []),
     `import { statusInputSchema } from '${specifier}';`,
     'export const inputSchema = statusInputSchema;',
     'export const resultSchema = {};',
-    'export default async () => undefined;',
+    tool
+      ? 'export default defineTool({ inputSchema, resultSchema }, async () => undefined);'
+      : 'export default async () => undefined;',
     '',
   ].join('\n');
   await writeTree(root, {
     'src/cli/status.ts': route('../lib/protocol-schemas.js'),
     'src/lib/protocol-schemas.ts': schema,
-    'src/mcp/hauler/tools/hauler_status.tsx': route('../../../lib/protocol-schemas.js'),
+    'src/mcp/hauler/tools/hauler_status.tsx': route('../../../lib/protocol-schemas.js', true),
   });
   const graph = await compileRouteGraph(root, fixtureConfig());
   expect(graph.diagnostics).toEqual([]);
@@ -327,8 +347,8 @@ it('skips ignored paths, private segments, and declaration files', async () => {
   await writeTree(root, {
     '.gitignore': 'src/scripts/generated.ts\n',
     'src/events/.internal/probe.ts': moduleSource,
-    'src/mcp/curator/tools/_draft.ts': moduleSource,
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/_draft.ts': toolModuleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
     'src/mcp/curator/tools/types.d.ts': 'export type Probe = string;\n',
     'src/scripts/generated.ts': moduleSource,
   });
@@ -436,7 +456,7 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       "    tool: './src/scripts/render-tool.tsx',",
       "    typed: './src/scripts/render-typed.tsx',",
       '  },',
-      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'routes-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -524,7 +544,7 @@ it('gates a bin-claimed plain script with AB4738 only when its bin would run a d
       "    hauler: './src/scripts/hauler.ts',",
       "    plain: './src/scripts/plain.ts',",
       '  },',
-      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'routes-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -551,7 +571,7 @@ it('gates a bin-claimed plain script with AB4738 only when its bin would run a d
 
 it('errors with AB4800 when a declared entry, command, or url claims a routed server', async () => {
   const root = await createRoot();
-  await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': moduleSource });
+  await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': toolModuleSource });
   const graph = await compileRouteGraph(root, fixtureConfig({
     mcp: { servers: { curator: { url: 'https://example.test/mcp' } } },
   }));
@@ -564,7 +584,7 @@ it('errors with AB4800 when a declared entry, command, or url claims a routed se
 it('errors with AB4800 when an entry module and route modules claim one MCP server, and inspect turns invalid', async () => {
   const files = {
     'src/mcp/curator.ts': moduleSource,
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   };
   const root = await createRoot();
   await writeTree(root, files);
@@ -584,7 +604,7 @@ it('keeps routes and silences AB4800 under an explicit generated mode', async ()
   const root = await createRoot();
   await writeTree(root, {
     'src/mcp/curator.ts': moduleSource,
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
   const graph = await compileRouteGraph(root, fixtureConfig({
     routes: { servers: { curator: 'generated' } },
@@ -606,12 +626,12 @@ it('accepts a config declaration that augments a route-generated server with env
       "    targets: ['portable'],",
       "    transport: 'stdio',",
       '  } } },',
-      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'routes-fixture' },",
       "  targets: ['portable', 'claude'],",
       '};',
       '',
     ].join('\n'),
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
     'views/panel.ts': "document.body.textContent = 'panel';\n",
   });
 
@@ -641,14 +661,14 @@ it('errors with AB4340 when a declaration for a route-generated server redeclare
     'agent-bundle.config.ts': [
       'export default {',
       "  mcp: { servers: { curator: { entry: './src/mcp/curator.ts', env: { CURATOR_MODE: 'strict' } } } },",
-      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'routes-fixture' },",
       "  routes: { servers: { curator: 'generated' } },",
       "  targets: ['portable'],",
       '};',
       '',
     ].join('\n'),
     'src/mcp/curator.ts': moduleSource,
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
 
   const validation = await validate({ root: project });
@@ -664,14 +684,14 @@ it('checks an augmenting declaration\'s Apps against the route-declared Apps of 
   const configWithApps = (apps: string): string => [
     'export default {',
     `  mcp: { servers: { curator: { apps: { ${apps} } } } },`,
-    "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+    "  plugin: { name: 'routes-fixture' },",
     "  targets: ['portable'],",
     '};',
     '',
   ].join('\n');
   const routes = {
     'src/mcp/curator/apps/dashboard.tsx': `export const config = { resourceUri: 'ui://curator/dashboard.html' }; ${moduleSource}`,
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
     'views/panel.ts': "document.body.textContent = 'panel';\n",
   };
 
@@ -707,12 +727,12 @@ it('applies the local-entry field rules to an augmenting declaration', async () 
     'agent-bundle.config.ts': [
       'export default {',
       "  mcp: { servers: { curator: { cwd: './elsewhere', headers: { a: 'b' }, transport: 'streamable-http' } } },",
-      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'routes-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',
     ].join('\n'),
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
 
   const validation = await validate({ root: project });
@@ -727,7 +747,7 @@ it('omits a server\'s routes and silences AB4800 under an explicit custom mode',
   const root = await createRoot();
   await writeTree(root, {
     'src/mcp/curator.ts': moduleSource,
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
   const graph = await compileRouteGraph(root, fixtureConfig({
     mcp: { servers: { curator: { entry: './src/mcp/curator.ts' } } },
@@ -750,7 +770,7 @@ it('skips a server layout entirely when routes.servers pins that server to a non
     'src/mcp/curator.ts': moduleSource,
     'src/mcp/curator/layout.ts': 'export default { children: undefined };\n',
     'src/mcp/curator/layout.tsx': 'export default { children: undefined };\n',
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
     'src/mcp/relay/layout.tsx': 'export default ({ children }) => children;\n',
   });
   const graph = await compileRouteGraph(root, fixtureConfig({
@@ -793,8 +813,8 @@ it('errors with AB4801 when the conventional CLI entry and command routes both e
 it('errors with AB4802 when two route modules derive one id', async () => {
   const root = await createRoot();
   await writeTree(root, {
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
-    'src/mcp/curator/tools/inspect.tsx': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
+    'src/mcp/curator/tools/inspect.tsx': toolModuleSource,
   });
   const graph = await compileRouteGraph(root, fixtureConfig());
 
@@ -808,7 +828,7 @@ it('errors with AB4803 on unsafe identity segments', async () => {
   const root = await createRoot();
   await writeTree(root, {
     'src/cli/-doctor.ts': moduleSource,
-    'src/mcp/bad name/tools/inspect.ts': moduleSource,
+    'src/mcp/bad name/tools/inspect.ts': toolModuleSource,
   });
   const graph = await compileRouteGraph(root, fixtureConfig());
 
@@ -819,7 +839,7 @@ it('errors with AB4803 on unsafe identity segments', async () => {
 
 it('errors with AB4804 on invalid routes mode overrides', async () => {
   const root = await createRoot();
-  await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': moduleSource });
+  await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': toolModuleSource });
   const graph = await compileRouteGraph(root, fixtureConfig({
     routes: { cli: 42, servers: { curator: 'bogus' } },
   }));
@@ -859,7 +879,7 @@ it('serves the shared empty graph under the routes focus of a route-free project
 
 it('selects the compiled graph under the routes inspect focus', async () => {
   const root = await createInspectProject({
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
     'src/scripts/rebuild-index.ts': moduleSource,
   });
   const result = await inspect({ focus: 'routes', root });
@@ -877,18 +897,20 @@ it('shows projected MCP command provenance and safety in the routes inspect focu
   await writeTree(root, {
     'agent-bundle.config.ts': [
       'export default {',
-      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'routes-fixture' },",
       '  routes: { mcpCommands: true },',
       "  targets: ['portable'],",
       '};',
       '',
     ].join('\n'),
-    'package.json': '{"type":"module"}\n',
+    'package.json': '{"type":"module","version":"1.0.0"}\n',
     'src/mcp/curator/tools/read_item.tsx': [
-      "export const config = { annotations: { readOnlyHint: true }, description: 'Read one item.' };",
-      moduleSource,
+      "import { defineTool } from 'agent-bundle/routes';",
+      'export const inputSchema = {};',
+      'export const resultSchema = {};',
+      "export default defineTool({ annotations: { readOnlyHint: true }, description: 'Read one item.', inputSchema, resultSchema }, async () => undefined);",
     ].join('\n'),
-    'src/mcp/curator/tools/write_item.tsx': moduleSource,
+    'src/mcp/curator/tools/write_item.tsx': toolModuleSource,
   });
 
   const result = await inspect({ focus: 'routes', root });
@@ -916,7 +938,7 @@ it('shows projected MCP command provenance and safety in the routes inspect focu
 
 it('dumps the graph through the CLI --routes focus and rejects ambiguous focuses', async () => {
   const root = await createInspectProject({
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
   const terminal = captureCliTerminal();
   const code = await runCli(['inspect', '--root', root, '--routes', '--json'], terminal.output);
@@ -942,15 +964,15 @@ it('evaluates a stateful config factory once when inspecting the routes focus', 
       "  const path = join(ctx.projectRoot, 'config-load-count.txt');",
       "  writeFileSync(path, `${Number(readFileSync(path, 'utf8')) + 1}\\n`);",
       '  return {',
-      "    plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "    plugin: { name: 'routes-fixture' },",
       "    targets: ['portable'],",
       '  };',
       '};',
       '',
     ].join('\n'),
     'config-load-count.txt': '0\n',
-    'package.json': '{"type":"module"}\n',
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'package.json': '{"type":"module","version":"1.0.0"}\n',
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
 
   const result = await inspect({ focus: 'routes', root });
@@ -971,8 +993,10 @@ it('extracts each route module static config export into the graph', async () =>
   const root = await createRoot();
   await writeTree(root, {
     'src/mcp/curator/tools/search.ts': [
-      "export const config = { annotations: { readOnlyHint: true }, title: 'Search' } as const;",
-      moduleSource,
+      "import { defineTool } from 'agent-bundle/routes';",
+      'export const inputSchema = {};',
+      'export const resultSchema = {};',
+      "export default defineTool({ annotations: { readOnlyHint: true }, inputSchema, resultSchema, title: 'Search' }, async () => undefined);",
     ].join('\n'),
     'src/scripts/rebuild.ts': moduleSource,
   });
@@ -989,9 +1013,11 @@ it('compiles dynamic-config routes with an empty config beside the named error',
   const root = await createRoot();
   await writeTree(root, {
     'src/mcp/curator/tools/search.ts': [
+      "import { defineTool } from 'agent-bundle/routes';",
       'const title = process.env.TITLE;',
-      'export const config = { title };',
-      moduleSource,
+      'export const inputSchema = {};',
+      'export const resultSchema = {};',
+      'export default defineTool({ inputSchema, resultSchema, title }, async () => undefined);',
     ].join('\n'),
   });
 
@@ -1021,11 +1047,10 @@ it('resolves appResourceUri() references and local const strings to the App rout
       "export const config = { _meta: { ui: { resourceUri: URI } }, uri: 'catalog://books' };",
       moduleSource,
     ].join('\n'),
-    'src/mcp/curator/tools/inspect.ts': [
-      "import { appResourceUri as app } from 'agent-bundle/routes';",
-      "export const config = { _meta: { ui: { resourceUri: app('dashboard') } }, related: [app('../apps/dashboard'), app('curator/dashboard')] };",
-      moduleSource,
-    ].join('\n'),
+    'src/mcp/curator/tools/inspect.ts': toolSource(
+      "_meta: { ui: { resourceUri: app('dashboard') } }, related: [app('../apps/dashboard'), app('curator/dashboard')]",
+      ["import { appResourceUri as app } from 'agent-bundle/routes';"],
+    ),
   });
 
   const graph = await compileRouteGraph(root, fixtureConfig());
@@ -1047,11 +1072,10 @@ it('resolves appResourceUri() references and local const strings to the App rout
       "export const config = { resourceUri: 'ui://curator/panel.html' };",
       moduleSource,
     ].join('\n'),
-    'src/mcp/curator/tools/inspect.ts': [
-      "import { appResourceUri } from 'agent-bundle/routes';",
-      "export const config = { _meta: { ui: { resourceUri: appResourceUri('dashboard') } } };",
-      moduleSource,
-    ].join('\n'),
+    'src/mcp/curator/tools/inspect.ts': toolSource(
+      "_meta: { ui: { resourceUri: appResourceUri('dashboard') } }",
+      ["import { appResourceUri } from 'agent-bundle/routes';"],
+    ),
   });
   const renamedGraph = await compileRouteGraph(renamed, fixtureConfig());
   expect(renamedGraph.diagnostics).toEqual([]);
@@ -1066,16 +1090,14 @@ it('diagnoses an appResourceUri() reference to an unknown App with AB4826 and ke
       "export const config = { resourceUri: 'ui://curator/dashboard.html' };",
       moduleSource,
     ].join('\n'),
-    'src/mcp/curator/tools/inspect.ts': [
-      "import { appResourceUri } from 'agent-bundle/routes';",
-      "export const config = { _meta: { ui: { resourceUri: appResourceUri('panel') } } };",
-      moduleSource,
-    ].join('\n'),
-    'src/mcp/curator/tools/search.ts': [
-      "import { APP_RESOURCE_URI } from '../constants.ts';",
-      'export const config = { _meta: { ui: { resourceUri: APP_RESOURCE_URI } } };',
-      moduleSource,
-    ].join('\n'),
+    'src/mcp/curator/tools/inspect.ts': toolSource(
+      "_meta: { ui: { resourceUri: appResourceUri('panel') } }",
+      ["import { appResourceUri } from 'agent-bundle/routes';"],
+    ),
+    'src/mcp/curator/tools/search.ts': toolSource(
+      '_meta: { ui: { resourceUri: APP_RESOURCE_URI } }',
+      ["import { APP_RESOURCE_URI } from '../constants.ts';"],
+    ),
     'src/mcp/curator/constants.ts': "export const APP_RESOURCE_URI = process.env.APP_URI ?? 'ui://curator/dashboard.html';\n",
   });
 
@@ -1097,11 +1119,10 @@ it('diagnoses an appResourceUri() reference to an unknown App with AB4826 and ke
 
 it('resolves appResourceUri() references only against Apps of the same generated server', async () => {
   const app = "export const config = { resourceUri: 'ui://curator/dashboard.html' };\n" + moduleSource;
-  const referencing = (reference: string): string => [
-    "import { appResourceUri } from 'agent-bundle/routes';",
-    `export const config = { _meta: { ui: { resourceUri: appResourceUri('${reference}') } } };`,
-    moduleSource,
-  ].join('\n');
+  const referencing = (reference: string): string => toolSource(
+    `_meta: { ui: { resourceUri: appResourceUri('${reference}') } }`,
+    ["import { appResourceUri } from 'agent-bundle/routes';"],
+  );
 
   // A generated server registers only its own Apps, so a route on another
   // server can never serve this URI: the qualified form is rejected too.
@@ -1164,7 +1185,7 @@ it('resolves appResourceUri() references only against Apps of the same generated
     .toEqual({ _meta: { ui: { resourceUri: 'ui://curator/dashboard.html' } } });
 });
 
-it('resolves an App route template relative to the route module, accepting the legacy root-relative form only when unambiguous', async () => {
+it('resolves an App route template relative to the route module', async () => {
   const app = (template: string): string => [
     `export const config = { resourceUri: 'ui://curator/dashboard.html', template: '${template}' };`,
     moduleSource,
@@ -1182,37 +1203,12 @@ it('resolves an App route template relative to the route module, accepting the l
   expect(routeRelativeGraph.diagnostics).toEqual([]);
   expect(appOf(routeRelativeGraph).config).toEqual({ resourceUri: 'ui://curator/dashboard.html', template: './dashboard.html' });
 
-  // Legacy project-root-relative: still accepted while it is the only match, without a diagnostic.
-  const rootRelative = await createRoot();
-  await writeTree(rootRelative, {
-    'src/mcp/curator/apps/dashboard.tsx': app('./views/dashboard.html'),
-    'views/dashboard.html': html,
-  });
-  expect((await compileRouteGraph(rootRelative, fixtureConfig())).diagnostics).toEqual([]);
-
-  // Both interpretations name different existing files: AB4827 names both.
-  const ambiguous = await createRoot();
-  await writeTree(ambiguous, {
-    'src/mcp/curator/apps/dashboard.tsx': app('./views/dashboard.html'),
-    'src/mcp/curator/apps/views/dashboard.html': html,
-    'views/dashboard.html': html,
-  });
-  const ambiguousGraph = await compileRouteGraph(ambiguous, fixtureConfig());
-  expect(codesOf(ambiguousGraph.diagnostics)).toEqual(['AB4827']);
-  expect(ambiguousGraph.diagnostics[0]).toMatchObject({ severity: 'error', sourcePath: join(ambiguous, 'src/mcp/curator/apps/dashboard.tsx') });
-  expect(ambiguousGraph.diagnostics[0]!.message).toContain('names two different existing files');
-  expect(ambiguousGraph.diagnostics[0]!.message).toContain(`${join(ambiguous, 'src/mcp/curator/apps/views/dashboard.html')} (route-relative)`);
-  expect(ambiguousGraph.diagnostics[0]!.message).toContain(`${join(ambiguous, 'views/dashboard.html')} (project-root-relative)`);
-  expect(ambiguousGraph.diagnostics[0]!.recovery).toContain('relative to the route module');
-
-  // Neither exists: AB4827 names both candidates and the fix.
+  // A missing route-relative template reports the resolved candidate and fix.
   const missing = await createRoot();
   await writeTree(missing, { 'src/mcp/curator/apps/dashboard.tsx': app('./dashboard.html') });
   const missingGraph = await compileRouteGraph(missing, fixtureConfig());
   expect(codesOf(missingGraph.diagnostics)).toEqual(['AB4827']);
-  expect(missingGraph.diagnostics[0]!.message).toContain('but neither');
-  expect(missingGraph.diagnostics[0]!.message).toContain(`${join(missing, 'src/mcp/curator/apps/dashboard.html')} (route-relative)`);
-  expect(missingGraph.diagnostics[0]!.message).toContain(`${join(missing, 'dashboard.html')} (project-root-relative)`);
+  expect(missingGraph.diagnostics[0]!.message).toContain(`but ${join(missing, 'src/mcp/curator/apps/dashboard.html')} does not exist`);
 
   // An absolute template has a single candidate, which still has to exist.
   const absolute = await createRoot();
@@ -1238,15 +1234,13 @@ it('resolves an App route template relative to the route module, accepting the l
 });
 
 it('rejects a route that advertises an App the server does not build for every target with AB4828', async () => {
-  const tool = (resourceUri: string): string => [
-    `export const config = { _meta: { ui: { resourceUri: ${resourceUri} } } };`,
-    moduleSource,
-  ].join('\n');
+  const tool = (resourceUri: string, imports: readonly string[] = []): string =>
+    toolSource(`_meta: { ui: { resourceUri: ${resourceUri} } }`, imports);
   const restrictedApp = "export const config = { resourceUri: 'ui://curator/dashboard.html', targets: ['codex'] };\ndocument.body.textContent = 'dashboard';\n";
   const configWith = (lines: readonly string[]): string => [
     'export default {',
     ...lines,
-    "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+    "  plugin: { name: 'routes-fixture' },",
     "  targets: ['portable', 'codex'],",
     '};',
     '',
@@ -1256,7 +1250,7 @@ it('rejects a route that advertises an App the server does not build for every t
   const referenced = await createInspectProject({
     'agent-bundle.config.ts': configWith([]),
     'src/mcp/curator/apps/dashboard.tsx': restrictedApp,
-    'src/mcp/curator/tools/open.ts': tool("appResourceUri('dashboard')").replace('export const config', "import { appResourceUri } from 'agent-bundle/routes';\nexport const config"),
+    'src/mcp/curator/tools/open.ts': tool("appResourceUri('dashboard')", ["import { appResourceUri } from 'agent-bundle/routes';"]),
   });
   const referencedErrors = (await validate({ root: referenced })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
   expect(codesOf(referencedErrors)).toEqual(['AB4828']);
@@ -1276,7 +1270,7 @@ it('rejects a route that advertises an App the server does not build for every t
   const restrictedServer = await createInspectProject({
     'agent-bundle.config.ts': configWith(["  mcp: { servers: { curator: { targets: ['codex'] } } },"]),
     'src/mcp/curator/apps/dashboard.tsx': restrictedApp,
-    'src/mcp/curator/tools/open.ts': tool("appResourceUri('dashboard')").replace('export const config', "import { appResourceUri } from 'agent-bundle/routes';\nexport const config"),
+    'src/mcp/curator/tools/open.ts': tool("appResourceUri('dashboard')", ["import { appResourceUri } from 'agent-bundle/routes';"]),
   });
   expect((await validate({ root: restrictedServer })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
 
@@ -1302,7 +1296,7 @@ it('rejects two App routes of one server that declare the same resourceUri with 
   await writeTree(sameServer, {
     'src/mcp/curator/apps/dashboard.tsx': app('ui://curator/dashboard.html'),
     'src/mcp/curator/apps/panel.tsx': app('ui://curator/dashboard.html'),
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
   const sameServerGraph = await compileRouteGraph(sameServer, fixtureConfig());
   expect(codesOf(sameServerGraph.diagnostics)).toEqual(['AB4829']);
@@ -1338,9 +1332,9 @@ it('rejects two App routes of one server that declare the same resourceUri with 
   const acrossServers = await createRoot();
   await writeTree(acrossServers, {
     'src/mcp/archive/apps/dashboard.tsx': app('ui://shared/dashboard.html'),
-    'src/mcp/archive/tools/list.ts': moduleSource,
+    'src/mcp/archive/tools/list.ts': toolModuleSource,
     'src/mcp/curator/apps/dashboard.tsx': app('ui://shared/dashboard.html'),
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
   const acrossServersGraph = await compileRouteGraph(acrossServers, fixtureConfig());
   expect(acrossServersGraph.diagnostics).toEqual([]);
@@ -1358,7 +1352,7 @@ it('rejects two App routes of one server that declare the same resourceUri with 
   const project = await createInspectProject({
     'src/mcp/curator/apps/dashboard.tsx': app('ui://curator/dashboard.html'),
     'src/mcp/curator/apps/panel.tsx': app('ui://curator/dashboard.html'),
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
   const validation = await validate({ root: project });
   expect(codesOf(validation.diagnostics.filter((diagnostic) => diagnostic.severity === 'error'))).toEqual(['AB4829']);
@@ -1370,30 +1364,12 @@ it('normalizes the App route template to its resolved path for the build', async
   const routeRelative = await createInspectProject({
     'src/mcp/curator/apps/dashboard.html': html,
     'src/mcp/curator/apps/dashboard.tsx': "export const config = { resourceUri: 'ui://curator/dashboard.html', template: './dashboard.html' };\ndocument.body.textContent = 'dashboard';\n",
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': toolModuleSource,
   });
   const ready = (await inspect({ root: routeRelative })) as ReadyInspectResult;
   expect(ready.state).toBe('ready');
   expect(ready.model.mcpApps?.map((app) => app.template)).toEqual([join(routeRelative, 'src/mcp/curator/apps/dashboard.html')]);
 
-  const legacy = await createInspectProject({
-    'src/mcp/curator/apps/dashboard.tsx': "export const config = { resourceUri: 'ui://curator/dashboard.html', template: './views/dashboard.html' };\ndocument.body.textContent = 'dashboard';\n",
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
-    'views/dashboard.html': html,
-  });
-  const legacyReady = (await inspect({ root: legacy })) as ReadyInspectResult;
-  expect(legacyReady.state).toBe('ready');
-  expect(legacyReady.model.mcpApps?.map((app) => app.template)).toEqual([join(legacy, 'views/dashboard.html')]);
-
-  const ambiguous = await createInspectProject({
-    'src/mcp/curator/apps/dashboard.tsx': "export const config = { resourceUri: 'ui://curator/dashboard.html', template: './views/dashboard.html' };\ndocument.body.textContent = 'dashboard';\n",
-    'src/mcp/curator/apps/views/dashboard.html': html,
-    'src/mcp/curator/tools/inspect.ts': moduleSource,
-    'views/dashboard.html': html,
-  });
-  const validation = await validate({ root: ambiguous });
-  expect(codesOf(validation.diagnostics.filter((diagnostic) => diagnostic.severity === 'error'))).toEqual(['AB4827']);
-  expect((await inspect({ root: ambiguous })).state).toBe('invalid');
 });
 
 it('covers the route config in the graph digest', async () => {
@@ -1655,13 +1631,14 @@ it('resolves generated helper types for schema and event route contracts and the
       '',
     ].join('\n'),
     'src/mcp/curator/tools/inspect.ts': [
+      "import { defineTool } from 'agent-bundle/routes';",
       '// What a caller sends (`_input`: the limit is optional) versus what the component receives (`_output`).',
       'export interface InspectInput { readonly source: string; readonly limit?: number; }',
       'export interface InspectParsedInput { readonly source: string; readonly limit: number; }',
       'export interface InspectResult { readonly accepted: boolean; }',
       'export const inputSchema = {} as { readonly _input: InspectInput; readonly _output: InspectParsedInput };',
       'export const resultSchema = {} as { readonly _output: InspectResult };',
-      'export default async function Inspect() { return undefined; }',
+      'export default defineTool({ inputSchema, resultSchema }, async function Inspect() { return undefined; });',
       '',
     ].join('\n'),
   });
@@ -1685,8 +1662,9 @@ it('resolves generated helper types for schema and event route contracts and the
     'tool-free/routes.d.ts': routesModule.generateRouteTypes(toolFree),
     // Stand-ins for the runtime's empty `Register` and `agent-bundle/app`'s empty `AppRegister`, so each
     // augmentation has a declaration to merge into.
-    'runtime-stub.d.ts': 'export interface Register {}\n',
+    'runtime-stub.d.ts': 'export interface AgentRequestContext {}\nexport interface Register {}\n',
     'app-stub.d.ts': 'export interface AppRegister {}\n',
+    'routes-stub.d.ts': 'export declare const defineTool: (config: unknown, handler: (...args: never[]) => unknown) => unknown;\n',
     'assertions.ts': [
       "import type { Register } from '@agent-bundle/runtime';",
       "import type { AppRegister } from 'agent-bundle/app';",
@@ -1752,6 +1730,7 @@ it('resolves generated helper types for schema and event route contracts and the
       paths: {
         '@agent-bundle/runtime': [join(root, 'runtime-stub.d.ts')],
         'agent-bundle/app': [join(root, 'app-stub.d.ts')],
+        'agent-bundle/routes': [join(root, 'routes-stub.d.ts')],
       },
       skipLibCheck: false,
       strict: true,
@@ -1772,18 +1751,22 @@ it('validates the single async route-module authoring contract statically', asyn
   const root = await createRoot();
   await writeTree(root, {
     'src/mcp/curator/tools/valid.tsx': [
+      "import { defineTool } from 'agent-bundle/routes';",
       'export const inputSchema = {};',
       'export const resultSchema = {};',
-      'export default async function Valid() { return undefined; }',
+      'export default defineTool({ inputSchema, resultSchema }, async function Valid() { return undefined; });',
       '',
     ].join('\n'),
     'src/mcp/curator/tools/split.tsx': [
-      'export const resultSchema = {};',
-      'export const execute = async () => ({});',
-      'export const render = () => undefined;',
-      'export default function Split() { return undefined; }',
-      '',
-    ].join('\n'),
+    'src/mcp/curator/tools/split.tsx':   "import { defineTool } from 'agent-bundle/routes';",
+    'src/mcp/curator/tools/split.tsx':   "export const resultSchema = {};",
+    'src/mcp/curator/tools/split.tsx':   "export const execute = async () => ({});",
+    'src/mcp/curator/tools/split.tsx':   "export const render = () => undefined;",
+    'src/mcp/curator/tools/split.tsx':   "export default defineTool({",
+    'src/mcp/curator/tools/split.tsx':   "  inputSchema,",
+    'src/mcp/curator/tools/split.tsx':   "  resultSchema,",
+    'src/mcp/curator/tools/split.tsx':   "}, async () => { return undefined; });",
+    'src/mcp/curator/tools/split.tsx': ].join('\n'),
   });
 
   const graph = await compileRouteGraph(root, fixtureConfig());
@@ -1791,92 +1774,6 @@ it('validates the single async route-module authoring contract statically', asyn
   expect(graph.diagnostics.filter((diagnostic) => diagnostic.sourcePath?.endsWith('split.tsx')).map(({ code }) => code)).toEqual([
     'AB4810',
     'AB4811',
-  ]);
-});
-
-it('accepts explicit default re-exports when one tool is placed on two servers (#446)', async () => {
-  const root = await createRoot();
-  await writeTree(root, {
-    // The primary placement: a full route module.
-    'src/mcp/public/tools/search.tsx': [
-      "export const config = { description: 'Search.' };",
-      'export const inputSchema = {};',
-      'export const resultSchema = {};',
-      'export default async function Search() { return undefined; }',
-      '',
-    ].join('\n'),
-    // The second placement carries its own config and re-exports the rest.
-    'src/mcp/library/tools/search.tsx': [
-      "export const config = { description: 'Search from the widget server.' };",
-      "export { default, inputSchema, resultSchema } from '../../public/tools/search.tsx';",
-      '',
-    ].join('\n'),
-    // A named component aliased to default, through a shared page module.
-    'src/pages/download.tsx': 'export async function DownloadPage() { return undefined; }\n',
-    'src/mcp/library/tools/download.tsx': [
-      "export const config = { description: 'Download.' };",
-      "export { DownloadPage as default } from '../../../pages/download.tsx';",
-      "export { inputSchema, resultSchema } from '../../public/tools/search.tsx';",
-      '',
-    ].join('\n'),
-    // A chain: the shared module itself re-exports its default, and a
-    // `.js` specifier names the emitted extension of a `.tsx` source.
-    'src/pages/_delete-impl.tsx': 'export default async () => undefined;\n',
-    'src/pages/delete.tsx': "export { default } from './_delete-impl.js';\n",
-    'src/mcp/library/tools/delete.tsx': [
-      "export const config = { description: 'Delete.' };",
-      "export { default } from '../../../pages/delete.tsx';",
-      "export { inputSchema, resultSchema } from '../../public/tools/search.tsx';",
-      '',
-    ].join('\n'),
-    // A default from a package the scan cannot read is verified at run time.
-    'src/mcp/library/tools/external.tsx': [
-      "export const config = { description: 'External.' };",
-      'export const inputSchema = {};',
-      'export const resultSchema = {};',
-      "export { default } from '@shared/routes/external';",
-      '',
-    ].join('\n'),
-    // A synchronous component satisfies the same contract as an async component.
-    'src/pages/sync.tsx': 'export default function SyncPage() { return undefined; }\n',
-    'src/mcp/library/tools/sync.tsx': [
-      "export const config = { description: 'Sync.' };",
-      "export { default } from '../../../pages/sync.tsx';",
-      "export { inputSchema, resultSchema } from '../../public/tools/search.tsx';",
-      '',
-    ].join('\n'),
-    // A type-only default re-export emits no binding and never satisfies the contract.
-    'src/mcp/library/tools/typed.tsx': [
-      "export const config = { description: 'Typed.' };",
-      "export { type default } from '../../public/tools/search.tsx';",
-      "export { inputSchema, resultSchema } from '../../public/tools/search.tsx';",
-      '',
-    ].join('\n'),
-  });
-
-  const graph = await compileRouteGraph(root, fixtureConfig());
-
-  expect(graph.diagnostics.map(({ code, message, sourcePath }) => ({
-    code,
-    message,
-    source: sourcePath?.slice(root.length + 1).replaceAll('\\', '/'),
-  }))).toEqual([
-    {
-      code: 'AB4810',
-      message: 'Route module src/mcp/library/tools/typed.tsx does not satisfy the public route contract: missing default export.',
-      source: 'src/mcp/library/tools/typed.tsx',
-    },
-  ]);
-  expect(graph.servers.map((server) => [server.name, server.routes.map((route) => route.id)])).toEqual([
-    ['library', [
-      'tool:library/delete',
-      'tool:library/download',
-      'tool:library/external',
-      'tool:library/search',
-      'tool:library/sync',
-      'tool:library/typed',
-    ]],
-    ['public', ['tool:public/search']],
   ]);
 });
 
@@ -2100,7 +1997,7 @@ it('fails unavailable event routes before packaging while admitting supported ta
   const eventSource = 'export default async function WorkspaceOpen() { return undefined; }\n';
   const configSource = [
     'export default {',
-    "  plugin: { name: 'event-capability-fixture', version: '1.0.0' },",
+    "  plugin: { name: 'event-capability-fixture' },",
     "  targets: ['claude', 'cursor'],",
     '};',
     '',
@@ -2143,7 +2040,7 @@ it('selects event-route projections by required capability rows', async () => {
   await writeTree(root, {
     'agent-bundle.config.ts': [
       'export default {',
-      "  plugin: { name: 'event-requires-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'event-requires-fixture' },",
       "  targets: ['claude', 'codex', 'cursor', 'portable'],",
       '};',
       '',
@@ -2169,7 +2066,7 @@ it('rejects event routes that declare both targets and requires', async () => {
   await writeTree(root, {
     'agent-bundle.config.ts': [
       'export default {',
-      "  plugin: { name: 'event-selection-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'event-selection-fixture' },",
       "  targets: ['cursor'],",
       '};',
       '',
@@ -2196,7 +2093,7 @@ it('names every selected host and capability row when no projection satisfies a 
   await writeTree(root, {
     'agent-bundle.config.ts': [
       'export default {',
-      "  plugin: { name: 'event-requirement-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'event-requirement-fixture' },",
       "  targets: ['cursor', 'portable'],",
       '};',
       '',
@@ -2224,7 +2121,7 @@ it('rejects malformed event route targets with AB4825', async () => {
   await writeTree(root, {
     'agent-bundle.config.ts': [
       'export default {',
-      "  plugin: { name: 'event-targets-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'event-targets-fixture' },",
       "  targets: ['cursor'],",
       '};',
       '',
@@ -2250,7 +2147,7 @@ it('preserves sub-second event route timeout precision in the normalized model',
   await writeTree(root, {
     'agent-bundle.config.ts': [
       'export default {',
-      "  plugin: { name: 'event-timeout-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'event-timeout-fixture' },",
       "  targets: ['cursor'],",
       '};',
       '',
@@ -2276,7 +2173,7 @@ it('rejects explicit shared mode when no generated runtime can host an event rou
   await writeTree(root, {
     'agent-bundle.config.ts': [
       'export default {',
-      "  plugin: { name: 'event-runtime-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'event-runtime-fixture' },",
       "  targets: ['cursor'],",
       '};',
       '',

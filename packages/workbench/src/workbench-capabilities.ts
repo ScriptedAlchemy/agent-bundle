@@ -22,22 +22,6 @@ export interface WorkbenchRouteCatalog {
   readonly state: RouteCatalogState;
 }
 
-/**
- * Which optional surfaces this build declares. Navigation no longer derives
- * from these — the application tree does — but the shell still gates what it
- * wires: the runtime backend exists only for a project with a `devRuntime`
- * provider, and Advanced sections read the flags for their empty states.
- */
-export interface WorkbenchFeatures {
-  readonly evals: boolean;
-  readonly hooks: boolean;
-  readonly mcp: boolean;
-  /** The foreground owns a development Runtime controller (`ProjectStatus.runtime`). */
-  readonly runtime: boolean;
-  readonly scripts: boolean;
-  readonly skills: boolean;
-}
-
 export interface WorkbenchCapabilities {
   readonly buildId: string;
   readonly counts: Readonly<{
@@ -48,9 +32,10 @@ export interface WorkbenchCapabilities {
     readonly skills: number;
     readonly targets: number;
   }>;
-  readonly features: WorkbenchFeatures;
   readonly inspection: ArtifactInspection;
   readonly routes: WorkbenchRouteCatalog;
+  /** The foreground owns a development Runtime controller (`ProjectStatus.runtime`). */
+  readonly runtime: boolean;
   readonly skillTree: SkillDocumentTree;
 }
 
@@ -92,26 +77,6 @@ const routeCatalog = async (
   }
 };
 
-const manifestHas = (manifest: RouteManifest | undefined, select: (manifest: RouteManifest) => number): boolean =>
-  manifest !== undefined && select(manifest) > 0;
-
-/**
- * Feature detection unions the compiled route graph with the artifact catalog:
- * a project may declare a surface through either, and neither may hide the other.
- */
-const featuresFor = (
-  counts: WorkbenchCapabilities['counts'],
-  routes: WorkbenchRouteCatalog,
-  runtime: boolean,
-): WorkbenchFeatures => Object.freeze({
-  evals: counts.evalSuites > 0,
-  hooks: counts.hooks > 0 || manifestHas(routes.manifest, (manifest) => manifest.events.length),
-  mcp: counts.mcpServers > 0 || manifestHas(routes.manifest, (manifest) => manifest.servers.length),
-  runtime,
-  scripts: counts.scripts > 0 || manifestHas(routes.manifest, (manifest) => manifest.scripts.length),
-  skills: counts.skills > 0,
-});
-
 /** Composes existing strict route catalogs into one build-scoped Workbench view. */
 export const loadWorkbenchCapabilities = async ({
   artifactClient,
@@ -145,9 +110,9 @@ export const loadWorkbenchCapabilities = async ({
   return Object.freeze({
     buildId,
     counts,
-    features: featuresFor(counts, routes, runtime),
     inspection,
     routes,
+    runtime,
     skillTree,
   });
 };

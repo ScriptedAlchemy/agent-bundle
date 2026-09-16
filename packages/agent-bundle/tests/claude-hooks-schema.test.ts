@@ -238,7 +238,7 @@ it('plans a Claude native hooks document that uses every documented handler type
   const loaded: LoadedConfig = {
     config: {
       claude: { nativeHooks: './claude-hooks.json' },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       targets: ['claude'],
     },
     configPath: join(root, 'agent-bundle.config.ts'),

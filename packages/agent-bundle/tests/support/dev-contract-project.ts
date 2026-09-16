@@ -68,7 +68,7 @@ export const writeDevContractProject = async (
       ...(options.contracts
         ? [`  dev: { contracts: { fixtures: './contract-fixtures.ts', server: ${JSON.stringify(DEV_CONTRACT_SERVER)} } },`]
         : []),
-      "  plugin: { name: 'dev-contract-gate', version: '1.0.0' },",
+      "  plugin: { name: 'dev-contract-gate' },",
       '  routes: { mcpCommands: true },',
       "  targets: ['portable'],",
       '};',

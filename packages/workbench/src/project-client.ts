@@ -360,7 +360,6 @@ export class ProjectClient {
   #activity = activityFor([]);
   readonly #activityListeners = new Set<ProjectActivityListener>();
   #eventDrainPromise: Promise<void> | undefined;
-  #eventListener: ProjectEventListener | undefined;
   readonly #eventSubscribers = new Set<ProjectEventListener>();
   #eventQueue: QueuedProjectEvent[] = [];
   #eventSource: EventSourceLike | undefined;
@@ -415,12 +414,10 @@ export class ProjectClient {
   async connect(
     listener: (status: ProjectStatus) => void,
     onError?: ProjectClientErrorListener,
-    onEvent?: ProjectEventListener,
   ): Promise<ProjectStatus> {
     if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
     this.#listener = listener;
     this.#errorListener = onError;
-    this.#eventListener = onEvent;
     let snapshot;
     try {
       snapshot = await this.#foreground.sessionSnapshot();
@@ -521,7 +518,6 @@ export class ProjectClient {
     this.#recoveryVersion += 1;
     this.#statusGeneration += 1;
     this.#errorListener = undefined;
-    this.#eventListener = undefined;
     this.#eventSubscribers.clear();
     this.#listener = undefined;
   }
@@ -765,11 +761,7 @@ export class ProjectClient {
   }
 
   #publishEvent(event: ProjectEventMessage): void {
-    const listeners = [
-      ...(this.#eventListener === undefined ? [] : [this.#eventListener]),
-      ...this.#eventSubscribers,
-    ];
-    for (const listener of listeners) {
+    for (const listener of this.#eventSubscribers) {
       try {
         listener(event);
       } catch (error) {

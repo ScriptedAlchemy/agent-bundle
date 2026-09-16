@@ -109,7 +109,7 @@ it('types callers by schema input and components by schema output in a clean gen
     })),
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
-      "export default defineConfig({ plugin: { name: 'caller-input-types-fixture', version: '1.0.0' }, targets: ['portable'] });",
+      "export default defineConfig({ plugin: { name: 'caller-input-types-fixture' }, targets: ['portable'] });",
       '',
     ].join('\n')),
     // A defaulted field: optional to the caller, present for the component.

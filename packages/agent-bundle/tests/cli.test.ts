@@ -85,7 +85,7 @@ const createCliProject = async (
       join(root, 'agent-bundle.config.ts'),
       [
         'export default ({ command, mode, projectRoot, selectedTargets }) => ({',
-        "  plugin: { name: 'cli-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'cli-fixture' },",
         "  targets: selectedTargets.length === 0 ? ['portable', 'codex'] : selectedTargets,",
         '  fixtureContext: { command, mode, projectRoot, selectedTargets },',
         ...(mcpApp ? [
@@ -123,7 +123,7 @@ const createServiceProject = async (): Promise<string> => {
       join(root, 'agent-bundle.config.ts'),
       [
         'export default ({ selectedTargets }) => ({',
-        "  plugin: { name: 'service-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'service-fixture' },",
         "  targets: selectedTargets.length === 0 ? ['codex', 'claude'] : selectedTargets,",
         "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
         "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
@@ -933,7 +933,7 @@ it('dumps the lowered Rspack configuration of every output with inspect --bundle
       join(project.root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'cli-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'cli-fixture' },",
         "  targets: ['portable'],",
         "  scripts: { tool: './src/tool.ts' },",
         "  tools: { rspack: { resolve: { alias: { '@fixture': './src' } } } },",
@@ -1007,7 +1007,7 @@ it('reports source validation diagnostics on stderr before staging an artifact',
     await writeFile(join(output, 'sentinel.txt'), 'keep\n');
     await writeFile(
       join(project.root, 'agent-bundle.config.ts'),
-      "export default { plugin: { version: '1.0.0' } };\n",
+      'export default { plugin: {} };\n',
     );
 
     const result = await runCli(project.root, [

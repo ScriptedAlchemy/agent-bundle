@@ -1,5 +1,5 @@
 ---
-description: 'agent-bundle.config.ts 字段参考：每个顶层键、可接受的形态、默认值与校验规则，包括 web 暴露键（AB4341）与已废弃的 plugin.version 字段。'
+description: 'agent-bundle.config.ts 字段参考：每个顶层键、可接受的形态、默认值与校验规则，包括 web 暴露键（AB4341）。'
 ---
 
 # 配置
@@ -78,7 +78,6 @@ export default defineConfig({
 | `description` | 一句话，会写进生成的清单中。 |
 | `logo` | 项目相对的图片路径。缺失、不是文件或位于项目之外报告 `AB4012`；在已构建产物中缺失或逃逸出部署树报告 `AB6025`。 |
 | `metadata` | 共享描述层：`author`、`homepage`、`keywords`、`license`、`repository`。每个字段默认取 `package.json` 中的同名字段；此处的值会覆盖它，而 `null` 表示不共享。值格式错误报告 `AB4014`。 |
-| `version` | **已废弃。** |
 
 ### 共享描述元数据
 
@@ -112,9 +111,8 @@ export default defineConfig({
 Claude Code 的 `.claude-plugin/plugin.json` 不携带描述字段——其固定 schema 不允许——且其
 `author.name` 仍是生成的插件名。共享值经由 marketplace 条目到达 Claude Code。
 
-`package.json` 对发布标识具有权威性。发布版本只在那里声明：与 `package.json` 不一致的 `plugin.version`
-会报告 `AB4008` 警告，而任何地方都没有版本的发布构建会被 `AB4013` 拒绝，而不是交付
-`0.0.0-dev.<short-revision>` 这个开发期回退值。该字段仅为兼容而保留，并将按照正常的破坏性变更策略移除。
+`package.json` 对发布标识具有权威性。发布版本只在那里声明。若 `package.json` 没有有效版本，
+发布构建会被 `AB4013` 拒绝，而不是交付 `0.0.0-dev.<short-revision>` 这个开发期回退值。
 
 ## targets
 

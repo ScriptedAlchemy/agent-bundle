@@ -38,7 +38,7 @@ const header = (model: NormalizedPlugin): string[] => [
 const optionalCliReinstall = (host: 'claude' | 'codex'): string[] => [
   `With the optional \`agent-bundle\` CLI, \`agent-bundle install ${host} --from ./\` runs this sequence`,
   'automatically when the installed copy has the same version but a different content hash; `--replace`',
-  '(alias `--force`) forces it.',
+  'forces it.',
 ];
 
 /**
@@ -187,8 +187,8 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
   'node ./install.mjs --replace  # also replace a different installed version, or adopt a pre-receipt copy',
   '```',
   '',
-  '`--force` is an alias for `--replace`. A directory that is not an agent-bundle install of this',
-  'plugin is always refused with an installed-versus-artifact content-hash comparison; remove it',
+  'A directory that is not an agent-bundle install of this plugin is always refused with an',
+  'installed-versus-artifact content-hash comparison; remove it',
   'manually. The optional `agent-bundle` CLI applies the same policy through',
   '`agent-bundle install cursor --from ./ [--replace]`.',
   '',
@@ -414,7 +414,7 @@ const portableInstructions = (planned: readonly string[]): string[] => [
   '',
   `The installer records an install receipt (\`${installReceiptFile}\`) and replaces its owned files in`,
   'place when the same version was rebuilt with different content; runtime state (`state/`) is never',
-  'touched. Pass `--replace` (alias `--force`) to replace a different installed version or to adopt a',
+  'touched. Pass `--replace` to replace a different installed version or to adopt a',
   'copy installed before receipts existed. Foreign directories are refused with a content-hash',
   'comparison. For a client that manages its own copy, remove and re-add the plugin through that client',
   'when only content changed at the same version.',
@@ -956,7 +956,7 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
     "const pluginData = join(cursorRoot, 'agent-bundle', 'plugin-data', pluginName);",
     "const receiptsRoot = join(cursorRoot, 'agent-bundle', 'receipts');",
     'const marketplaceReceipt = join(receiptsRoot, `${pluginName}.marketplace.json`);',
-    "const usage = 'Usage: node install.mjs [--mode local|marketplace] [--replace|--force] [--help]\\n" +
+    "const usage = 'Usage: node install.mjs [--mode local|marketplace] [--replace] [--help]\\n" +
       "       node install.mjs --uninstall [--mode local|marketplace] [--keep-data | --purge-data --confirm-purge] [--force] [--plan]';",
     '',
     'let replace = false;',
@@ -970,7 +970,8 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
     'const argv = process.argv.slice(2);',
     'for (let index = 0; index < argv.length; index += 1) {',
     '  const argument = argv[index];',
-    "  if (argument === '--replace' || argument === '--force') { replace = true; force = argument === '--force'; continue; }",
+    "  if (argument === '--replace') { replace = true; continue; }",
+    "  if (argument === '--force') { force = true; continue; }",
     "  if (argument === '--uninstall') { uninstall = true; continue; }",
     "  if (argument === '--plan') { plan = true; continue; }",
     "  if (argument === '--keep-data') { keepData = true; continue; }",
@@ -986,6 +987,8 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
     '  console.error(`Unknown installer argument ${JSON.stringify(argument)}.\\n${usage}`);',
     '  process.exit(2);',
     '}',
+    'if (!uninstall && force) { console.error(`--force applies to --uninstall only. Use --replace to replace an install.\\n${usage}`); process.exit(2); }',
+    'if (uninstall && replace) { console.error(`--replace applies to installation only. Use --force to override uninstall ownership checks.\\n${usage}`); process.exit(2); }',
     'if (!uninstall && (plan || keepData || purgeData || confirmPurge)) {',
     "  console.error(`--plan, --keep-data, --purge-data, and --confirm-purge apply to --uninstall only.\\n${usage}`);",
     '  process.exit(2);',

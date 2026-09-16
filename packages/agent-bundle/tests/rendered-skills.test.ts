@@ -164,7 +164,7 @@ describe('rendered skill compilation', () => {
   });
 
   it('discovers rendered-only skill directories by convention and validates them cleanly', async () => {
-    const loaded = loadedProject({ plugin: { name: 'rendered', version: '1.0.0' } }, fixtureRoot);
+    const loaded = loadedProject({ plugin: { name: 'rendered' } }, fixtureRoot);
     const discovered = await discoverProject(fixtureRoot, loaded.config);
     expect(discovered.skills.map((skill) => skill.frontmatter.name)).toEqual(['deploy-checklist']);
     expect(validateSource(loaded, discovered, registry)).toEqual([]);
@@ -177,7 +177,7 @@ describe('rendered skill compilation', () => {
   });
 
   it('emits the compiled SKILL.md as a generated write entry in artifact plans', async () => {
-    const loaded = loadedProject({ plugin: { name: 'rendered', version: '1.0.0' } }, fixtureRoot);
+    const loaded = loadedProject({ plugin: { name: 'rendered' } }, fixtureRoot);
     const model = await normalizeProject(loaded, await discoverProject(fixtureRoot, loaded.config), registry);
     const plan = standardPluginArtifactPlan({
       diagnostics: [],
@@ -271,10 +271,6 @@ describe('rendered skill compilation', () => {
       packageVersion: '3.4.5',
       version: '3.4.5',
     });
-
-    // An authored plugin.version wins over package.json, for the skill too.
-    const authored = await discoverProject(root, { plugin: { name: 'identity-plugin', version: '9.0.0' } });
-    expect(authored.skills[0]?.body).toContain('Version `9.0.0`; package `@acme/identity-plugin@3.4.5`.');
 
     // Without a caller-supplied identity the reserved specifier is not aliased:
     // it resolves however the project resolves `agent-bundle` — here, not at all.

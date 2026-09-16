@@ -114,7 +114,7 @@ const baseConfig = (web: AgentBundleConfig['web']): AgentBundleConfig => ({
       },
     },
   },
-  plugin: { name: 'catalog-tools', version: '1.0.0' },
+  plugin: { name: 'catalog-tools' },
   web,
 });
 
@@ -227,7 +227,7 @@ it('skips static tool validation for hand-written MCP server factories', async (
         },
       },
     },
-    plugin: { name: 'catalog-tools', version: '1.0.0' },
+    plugin: { name: 'catalog-tools' },
     web: { apps: [{ app: 'catalog/details', tool: 'runtime-tool' }] },
   };
   const { diagnostics } = await webDiagnostics(config, discovered({ generated: false }));

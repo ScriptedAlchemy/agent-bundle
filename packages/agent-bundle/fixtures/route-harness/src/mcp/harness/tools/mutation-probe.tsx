@@ -1,21 +1,8 @@
+import { defineTool } from 'agent-bundle/routes';
 import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 let executions = 0;
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "marker": {
-        "type": "string"
-      }
-    },
-    "type": "object"
-  },
-  description: 'Records how many times the mutation probe executed.',
-  title: 'Mutation probe',
-};
 
 export const inputSchema = z.object({
   marker: z.string().optional(),
@@ -28,7 +15,7 @@ export const resultSchema = z.object({
   operationId: z.string(),
 }).strict();
 
-export default async function MutationProbe({
+async function MutationProbe({
   input,
 }: {
   readonly input: z.infer<typeof inputSchema>;
@@ -47,3 +34,19 @@ export default async function MutationProbe({
     </Agent.Result>
   );
 }
+
+export default defineTool({
+inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "marker": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  description: 'Records how many times the mutation probe executed.',
+  title: 'Mutation probe',
+  inputSchema,
+  resultSchema,
+}, async (input) => MutationProbe({ input }));

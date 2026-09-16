@@ -155,7 +155,7 @@ const writeFixture = async (variant: FixtureVariant): Promise<string> => {
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
       'export default defineConfig({',
-      `  plugin: { description: 'Route contract fixture.', name: '${name}', version: '1.0.0' },`,
+      `  plugin: { description: 'Route contract fixture.', name: '${name}' },`,
       '  routes: { mcpCommands: true },',
       "  targets: ['portable'],",
       '});',
@@ -181,7 +181,7 @@ const writeFixture = async (variant: FixtureVariant): Promise<string> => {
 
 const routeGraph = async (root: string): Promise<RouteContractGraph> => {
   const graph = await compileRouteGraph(root, {
-    plugin: { name: 'route-contract-fixture', version: '1.0.0' },
+    plugin: { name: 'route-contract-fixture' },
     routes: { mcpCommands: true },
     targets: ['portable'],
   });
@@ -296,7 +296,7 @@ it('uses explicit metadata with imported runtime schemas and preserves generated
   expect(importedTypes).toEqual([]);
 
   const bareGraph = await compileRouteGraph(bareRoot, {
-    plugin: { name: 'route-contract-bare-fixture', version: '1.0.0' },
+    plugin: { name: 'route-contract-bare-fixture' },
     routes: { mcpCommands: true },
     targets: ['portable'],
   }) as RouteContractGraph;

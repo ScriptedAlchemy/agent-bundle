@@ -29,7 +29,7 @@ class TrackingEpochStore extends EpochStore {
 const createProject = async (): Promise<string> => (await createProjectFixture({
   config: [
     'export default {',
-    "  plugin: { name: 'skill-document-fixture', version: '1.0.0' },",
+    "  plugin: { name: 'skill-document-fixture' },",
     "  targets: ['portable'],",
     '};',
     '',

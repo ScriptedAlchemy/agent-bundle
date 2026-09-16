@@ -24,7 +24,7 @@ import { createProjectFixture } from './helpers/project-fixture.ts';
 const createProject = async (): Promise<string> => (await createProjectFixture({
   config: [
     'export default {',
-    "  plugin: { name: 'dev-coordinator-fixture', version: '1.0.0' },",
+    "  plugin: { name: 'dev-coordinator-fixture' },",
     "  targets: ['portable'],",
     '};',
     '',
@@ -632,7 +632,7 @@ it('forwards prepared artifact and eval output roots to its watcher', async () =
   await writeFile(join(root, 'agent-bundle.config.ts'), [
     'export default {',
     "  output: { distPath: 'artifact-out' },",
-    "  plugin: { name: 'dev-coordinator-fixture', version: '1.0.0' },",
+    "  plugin: { name: 'dev-coordinator-fixture' },",
     "  targets: ['portable'],",
     '};',
     '',
@@ -699,7 +699,7 @@ it('adds recovered artifact and eval roots to the live watcher before generated 
       'export default {',
       "  evals: { runsDir: 'recorded-evals' },",
       "  output: { distPath: 'artifact-out' },",
-      "  plugin: { name: 'dev-coordinator-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'dev-coordinator-fixture' },",
       "  targets: ['portable'],",
       '};',
       '',

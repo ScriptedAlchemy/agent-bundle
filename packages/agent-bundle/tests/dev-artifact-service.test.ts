@@ -27,7 +27,7 @@ const createProject = async (): Promise<string> => {
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'artifact-service-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'artifact-service-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -44,6 +44,7 @@ const createProject = async (): Promise<string> => {
         '',
       ].join('\n'),
     ),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
   ]);
   return root;
 };
@@ -460,7 +461,7 @@ it('changes the canonical model digest when a registered extension changes', asy
     await Promise.all([
       writeFile(join(leftRoot, 'agent-bundle.config.ts'), [
         'export default {',
-        "  plugin: { name: 'extension-identity', version: '1.0.0' },",
+        "  plugin: { name: 'extension-identity' },",
         "  targets: ['portable'],",
         "  portable: { compatibility: 'v1' },",
         '};',
@@ -468,7 +469,7 @@ it('changes the canonical model digest when a registered extension changes', asy
       ].join('\n')),
       writeFile(join(rightRoot, 'agent-bundle.config.ts'), [
         'export default {',
-        "  plugin: { name: 'extension-identity', version: '1.0.0' },",
+        "  plugin: { name: 'extension-identity' },",
         "  targets: ['portable'],",
         "  portable: { compatibility: 'v2' },",
         '};',

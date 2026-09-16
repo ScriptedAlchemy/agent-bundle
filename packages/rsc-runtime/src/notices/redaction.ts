@@ -1,13 +1,13 @@
 import { RedactionLimitError, compilePolicy } from 'flare-redact';
 
 import { DEFAULT_AGENT_RENDER_LIMITS } from '../agent-document.js';
-import type { AgentDocumentNode, AgentDocumentSnapshot } from '../agent-document.js';
+import type { AgentDocumentNode, AgentDocument } from '../agent-document.js';
 import type { JsonValue } from '../lower-mcp.js';
 
 /**
  * Notice content redaction (#99 acceptance item 7).
  *
- * A notice's free text lives only in its detached `AgentDocumentSnapshot`
+ * A notice's free text lives only in its detached `AgentDocument`
  * (`text`, `markdown`, `context`, `progress.message`, `error.message`,
  * `resource.name`/`uri`, and every string inside `json.value`,
  * `result.metadata`, and the document `value`). Recipient, priority, dedupe
@@ -158,13 +158,13 @@ const redactNode = (node: AgentDocumentNode): AgentDocumentNode => {
  * The document a route hands out in place of content it may not disclose:
  * one text node carrying the mark, with the original status and version.
  */
-export const noticeRedactionPlaceholder = (snapshot: AgentDocumentSnapshot): AgentDocumentSnapshot => Object.freeze({
+export const noticeRedactionPlaceholder = (snapshot: AgentDocument): AgentDocument => Object.freeze({
   root: Object.freeze({ kind: 'text' as const, text: NOTICE_REDACTION_MARK }),
   status: snapshot.status,
   version: snapshot.version,
 });
 
-const documentBytes = (document: AgentDocumentSnapshot): number =>
+const documentBytes = (document: AgentDocument): number =>
   new TextEncoder().encode(JSON.stringify(document)).byteLength;
 
 /**
@@ -177,8 +177,8 @@ const documentBytes = (document: AgentDocumentSnapshot): number =>
  * out oversized: the bound is a promise to hosts, made at publish and kept on
  * egress.
  */
-export const redactNoticeDocument = (snapshot: AgentDocumentSnapshot): AgentDocumentSnapshot => {
-  const redacted: AgentDocumentSnapshot = Object.freeze({
+export const redactNoticeDocument = (snapshot: AgentDocument): AgentDocument => {
+  const redacted: AgentDocument = Object.freeze({
     ...snapshot,
     root: redactNode(snapshot.root),
     ...(snapshot.value === undefined ? {} : { value: redactJson(snapshot.value) }),
@@ -226,7 +226,7 @@ export const NOTICE_TITLE_MAX_LENGTH = 120;
  * {@link NOTICE_TITLE_MAX_LENGTH}. A document without prose has no title and
  * yields an empty string, which title-only routes treat as nothing to show.
  */
-export const noticeTitle = (snapshot: AgentDocumentSnapshot): string => {
+export const noticeTitle = (snapshot: AgentDocument): string => {
   const prose = firstProse(snapshot.root) ?? '';
   const line = prose.split(/\r?\n/u).map((part) => part.trim()).find((part) => part.length > 0) ?? '';
   return line.length <= NOTICE_TITLE_MAX_LENGTH ? line : `${line.slice(0, NOTICE_TITLE_MAX_LENGTH - 1)}…`;
@@ -255,9 +255,9 @@ export type AgentNoticeDisclosure =
  * `signal` route carries no content and gets `undefined`.
  */
 export const disclosedNoticeContent = (
-  content: AgentDocumentSnapshot,
+  content: AgentDocument,
   disclosure: Extract<AgentNoticeDisclosure, { readonly kind: 'disclosed' }>,
-): AgentDocumentSnapshot | undefined => {
+): AgentDocument | undefined => {
   switch (disclosure.shape) {
     case 'body':
       return disclosure.redacted ? redactNoticeDocument(content) : content;

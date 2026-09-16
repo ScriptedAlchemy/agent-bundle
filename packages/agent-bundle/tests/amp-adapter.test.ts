@@ -792,7 +792,7 @@ it('runs a relocated standalone event route with its worker inside the Amp plugi
   try {
     const registry = createDefaultRegistry();
     const routeGraph = await compileRouteGraph(projectRoot, {
-      plugin: { name: 'amp-review', version: '1.0.0' },
+      plugin: { name: 'amp-review' },
     });
     const built = await build({
       model,

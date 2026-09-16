@@ -41,7 +41,7 @@ it.each([
     config: [
       'export default {',
       configOutput.trimEnd(),
-      "  plugin: { name: 'host-discovery-dev-server', version: '1.0.0' },",
+      "  plugin: { name: 'host-discovery-dev-server' },",
       "  targets: ['claude'],",
       '};',
       '',

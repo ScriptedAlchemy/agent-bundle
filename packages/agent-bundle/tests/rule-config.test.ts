@@ -21,7 +21,7 @@ const loadedProject = (
   targets: readonly string[],
 ): LoadedConfig => ({
   config: {
-    plugin: { name: 'rule-fixture', version: '1.0.0' },
+    plugin: { name: 'rule-fixture' },
     targets: [...targets],
   },
   configPath: join(root, 'agent-bundle.config.ts'),
@@ -40,7 +40,7 @@ const withProject = async (
   try {
     await writeFile(
       join(root, 'agent-bundle.config.ts'),
-      "export default { plugin: { name: 'rule-fixture', version: '1.0.0' } };\n",
+      "export default { plugin: { name: 'rule-fixture' } };\n",
     );
     await run(root);
   } finally {
@@ -184,7 +184,7 @@ it('discovers flat non-ignored rules deterministically and omits the collection 
       writeFile(join(root, 'src', 'rules', 'ignored.mdc'), '# Ignored\n'),
     ]);
     const config: AgentBundleConfig = {
-      plugin: { name: 'rule-fixture', version: '1.0.0' },
+      plugin: { name: 'rule-fixture' },
     };
 
     const discovered = await discoverProject(root, config);

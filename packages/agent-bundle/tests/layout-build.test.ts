@@ -67,7 +67,7 @@ const writeLayoutProject = async (root: string, layouts: Readonly<Record<string,
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
       'export default defineConfig({',
-      "  plugin: { description: 'Layout fixture.', name: 'layout-fixture', version: '1.0.0' },",
+      "  plugin: { description: 'Layout fixture.', name: 'layout-fixture' },",
       '  routes: { mcpCommands: true },',
       "  targets: ['portable'],",
       '});',

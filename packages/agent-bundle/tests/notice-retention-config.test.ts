@@ -11,7 +11,7 @@ import type { AgentBundleConfig } from '../src/core/types.ts';
 
 const config = (notices: unknown): AgentBundleConfig => ({
   notices,
-  plugin: { name: 'fixture', version: '1.0.0' },
+  plugin: { name: 'fixture' },
 } as AgentBundleConfig);
 
 describe('notices.retention config (AB4833)', () => {
@@ -50,7 +50,7 @@ describe('notices.retention config (AB4833)', () => {
     expect(Object.isFrozen(result.retention)).toBe(true);
     expect(Object.isFrozen(result.retention?.resolved)).toBe(true);
     // No config at all, or `notices: {}`, means the runtime defaults and nothing to report.
-    expect(normalizeNoticeRetention({ plugin: { name: 'f', version: '1.0.0' } }, '/p/c.ts', true)).toEqual({ diagnostics: [] });
+    expect(normalizeNoticeRetention({ plugin: { name: 'f' } }, '/p/c.ts', true)).toEqual({ diagnostics: [] });
     expect(normalizeNoticeRetention(config({}), '/p/c.ts', false)).toEqual({ diagnostics: [] });
   });
 

@@ -6,8 +6,8 @@ import { isPlainRecord } from '../../core/strict-json.ts';
 
 import {
   MCP_APP_PROFILE_DESCRIPTORS,
-  type McpAppHostProfile,
   type McpAppProfileDescriptor,
+  type McpAppProfileId,
 } from '../mcp-app-profile-descriptors.ts';
 import {
   cloneMcpAppFiniteJson,
@@ -21,7 +21,7 @@ import type {
 } from '../../core/types.ts';
 
 export { MCP_APP_PROFILE_DESCRIPTORS } from '../mcp-app-profile-descriptors.ts';
-export type { McpAppHostProfile, McpAppProfileDescriptor, McpAppProfileId } from '../mcp-app-profile-descriptors.ts';
+export type { McpAppProfileDescriptor, McpAppProfileId } from '../mcp-app-profile-descriptors.ts';
 
 export type McpAppCapability = 'camera' | 'clipboardWrite' | 'geolocation' | 'microphone';
 
@@ -101,7 +101,7 @@ export interface ResolveMcpAppHostProfileOptions {
   readonly consentedCapabilities?: readonly string[];
   readonly declaredCapabilities?: readonly string[];
   readonly host: McpAppHostContextInput;
-  readonly profile: McpAppHostProfile;
+  readonly profile: McpAppProfileId;
   readonly resource?: McpAppResourceCandidate;
   /** Preserved as metadata evidence; it never selects a profile feature. */
   readonly toolMetadata?: unknown;
@@ -576,7 +576,7 @@ const resolvePermissions = (
 };
 
 const resourceFallback = (
-  profile: McpAppHostProfile,
+  profile: McpAppProfileId,
   configExtensions: McpAppConfigExtensionInspection,
   reason: McpAppFallbackHostProfile['reason'],
   warnings: readonly string[] = [],

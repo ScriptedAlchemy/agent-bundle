@@ -306,6 +306,7 @@ const Workbench = () => {
         scheduleRuntimeBootstrap();
       });
     };
+    const unsubscribeEvents = next.subscribeEvents((event) => { runtimeEvents.receive(event); });
     void next.connect(
       (nextStatus) => {
         if (!mounted) return;
@@ -321,7 +322,6 @@ const Workbench = () => {
       (reason) => {
         if (mounted) setConnectionError(connectionFailure(reason));
       },
-      (event) => { runtimeEvents.receive(event); },
     ).catch((reason: unknown) => {
       if (mounted) setConnectionError(connectionFailure(reason));
     });
@@ -330,6 +330,7 @@ const Workbench = () => {
       if (resetRuntimeInstance.current === resetRuntimeBootstrap) resetRuntimeInstance.current = () => undefined;
       if (runtimeRetry !== undefined) clearTimeout(runtimeRetry);
       runtimeEvents.close();
+      unsubscribeEvents();
       unsubscribeConnection();
       void (async () => {
         try {
@@ -402,9 +403,9 @@ const Workbench = () => {
     client: clients.invocationClient,
     events: { subscribe: (listener) => projectClient.subscribeEvents(listener) },
   }), [clients, projectClient]);
-  const runtimeBackend = useMemo(() => capabilities?.features.runtime === true && runtimeControllerState !== undefined
+  const runtimeBackend = useMemo(() => capabilities?.runtime === true && runtimeControllerState !== undefined
     ? createRuntimeBackend({ controller: runtimeControllerState, runtimeClient: clients.runtimeClient })
-    : undefined, [capabilities?.features.runtime, clients, runtimeControllerState]);
+    : undefined, [capabilities?.runtime, clients, runtimeControllerState]);
   const backends = useMemo<readonly InvocationBackend[]>(() => Object.freeze(
     runtimeBackend === undefined ? [devServerBackend] : [runtimeBackend, devServerBackend],
   ), [devServerBackend, runtimeBackend]);

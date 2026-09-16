@@ -379,7 +379,7 @@ ENOENT）或 `invalid`。
 
 ### 写入器发出的分节
 
-文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 5`）
+文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 6`）
 是消费者读取的部分。**编译器记录**（`compiler`，`recordVersion: 1`）是
 这次运行的操作性账目——生产者、项目摘要、来源、适配器修订、固定的
 schema、验证结果——它的变化不会推动 `manifestVersion`；消费者读取方
@@ -516,8 +516,8 @@ flag 元数据来自字面量 `config.inputJsonSchema`；编译后的可执行�
 | [#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) | 生成的类型化 App 客户端 + 共享桥接 |
 | [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) | 基于同一桥接的生产 `web` 表面 |
 
-第 3 步以版本 2 落地了权威的 `agent-bundle.manifest.json`；分发安装指针将其推进到版本 3，
-Amp 可执行入口指针把它推进到 4，JSON 输入的 CLI 投影模式（`routes.cli.commands[].projection.input`）再把当前契约推进到 `manifestVersion` 5。
+第 3 步以版本 2 落地了权威的 `agent-bundle.manifest.json`；后续的可执行、分发与路由契约字段
+把当前契约推进到 `manifestVersion` 6。
 字段契约见 [产物清单](../../reference/artifact-manifest.mdx)。#592
 会一直保持打开，直到该 issue 上剩余的验收标准落地。
 

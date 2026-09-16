@@ -890,10 +890,10 @@ const normalizeMcpApps = (
         : server.targets;
       const metadata = route.config['_meta'];
       const template = route.config['template'];
-      // Route-relative first, legacy project-root-relative when unambiguous;
-      // the route-graph compiler already reported AB4827 for the other cases.
+      // The route-graph compiler reports AB4827 when the route-relative
+      // template does not exist.
       const templatePath = typeof template === 'string'
-        ? appRouteTemplatePath(resolveAppRouteTemplate(loaded.context.projectRoot, route.source, template))
+        ? appRouteTemplatePath(resolveAppRouteTemplate(route.source, template))
         : undefined;
       apps.push({
         ...(isRecord(metadata) ? { _meta: structuredClone(metadata) } : {}),
@@ -1299,9 +1299,8 @@ export const normalizeProject = async (
   const description = loaded.config.plugin.description;
   const logo = normalizePluginLogo(loaded);
   // The npm package axes are derived, never authored in config: package.json
-  // is authoritative for release identity (issue #94), while plugin.version
-  // remains the host-facing declared version during the migration. The same
-  // derivation serves `agent-bundle/meta` to rendered skills at discovery.
+  // is authoritative for release identity (issue #94). The same derivation
+  // serves `agent-bundle/meta` to rendered skills at discovery.
   const identity = pluginIdentity(loaded.context.projectRoot, loaded.config);
   // The descriptive layer every host projection shares (issue #753): resolved
   // once here so `author`, `homepage`, `keywords`, `license`, and `repository`

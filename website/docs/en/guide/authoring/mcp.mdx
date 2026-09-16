@@ -59,41 +59,7 @@ src/mcp/curator/
 The path supplies identity: `src/mcp/curator/tools/status.tsx` is the `status` tool of the
 `curator` server. No declaration is needed for the server to exist.
 
-### Compatibility: split tool exports
-
-Existing tools can still export `config`, schemas, and a default Server Component
-separately. This is a compatibility format; use `defineTool` for new tools. Resources, prompts,
-and apps retain their existing contracts. A legacy tool looks like this:
-
-```tsx
-// src/mcp/curator/tools/status.tsx
-import React from 'react';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
-import { Agent, agent } from '@agent-bundle/runtime';
-import { z } from 'zod';
-
-export const config = {
-  annotations: { readOnlyHint: true },
-  description: 'Read runtime status.',
-} satisfies ToolConfig;
-export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();
-export const resultSchema = z.object({ status: z.literal('ready') }).strict();
-
-export default async function Status(
-  { input, signal }: ToolRouteProps<typeof inputSchema>,
-) {
-  if (signal.aborted) throw new DOMException('aborted', 'AbortError');
-  if (input.verbose) await agent();
-  const result = { status: 'ready' as const };
-  return (
-    <Agent.Result value={result}>
-      <Agent.Text>Runtime is ready.</Agent.Text>
-    </Agent.Result>
-  );
-}
-```
-
-The compiler statically reads `config`, imports schemas and implementations only into generated
+The compiler statically reads the `defineTool` options, imports schemas and implementations only into generated
 entries, installs `runAgentRequest`, and derives the real MCP server from the route graph. Each
 call renders through a warm internal Flight dispatcher and lowers the final Agent Document to
 legal MCP output. Flight is an implementation transport inside the generated runtime — never a
@@ -131,27 +97,6 @@ A generated tool can also expose an idiomatic CLI command without a second route
 the generated CLI executable, whichever projection mechanism produced the command; the
 generated MCP server still passes `kind: 'tool'`. See
 [Project one tool as an idiomatic command](./package-entries.mdx#project-one-tool-as-an-idiomatic-command).
-
-A route may re-export its component and schemas from another module. This is how one tool is
-placed on two generated servers when only `config` differs between the placements — an MCP App
-`tools/call`, for example, reaches the server that served the widget:
-
-```tsx
-// src/mcp/widgets/tools/status.tsx
-import type { ToolConfig } from 'agent-bundle';
-
-export const config = {
-  _meta: { ui: { resourceUri: 'ui://widgets/status.html' } },
-  annotations: { readOnlyHint: true },
-  description: 'Read runtime status.',
-} satisfies ToolConfig;
-
-export { default, inputSchema, resultSchema } from '../../curator/tools/status.tsx';
-```
-
-The route contract check (`AB4810`) checks that the required exports are declared.
-The bundler resolves re-exports, and the runtime checks the loaded component is callable.
-Both sync and async components are accepted.
 
 `ToolConfig` and `ToolRouteProps` are public types:
 

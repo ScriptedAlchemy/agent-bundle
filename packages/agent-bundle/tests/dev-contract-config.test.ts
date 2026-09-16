@@ -6,7 +6,7 @@ import { createProjectFixture, removeProjectFixture } from './helpers/project-fi
 const configSource = [
   'export default {',
   "  dev: { contracts: { fixtures: './contract-fixtures.ts', server: 'fixture' } },",
-  "  plugin: { name: 'dev-contract-fixture', version: '1.0.0' },",
+  "  plugin: { name: 'dev-contract-fixture' },",
   '};',
   '',
 ].join('\n');

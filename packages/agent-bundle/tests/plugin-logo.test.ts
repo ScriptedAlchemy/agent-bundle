@@ -71,7 +71,6 @@ it('rejects a missing or invalid plugin.logo with AB4012', async () => {
   const missing = await loadedProject({
     logo: 'docs/media/missing.svg',
     name: 'logo-fixture',
-    version: '1.0.0',
   });
   expect(validateSource(missing, { skills: [] }, registry).filter(({ code }) => code === 'AB4012')).toMatchObject([{
     code: 'AB4012',
@@ -82,7 +81,6 @@ it('rejects a missing or invalid plugin.logo with AB4012', async () => {
   const empty = await loadedProject({
     logo: '   ',
     name: 'logo-fixture',
-    version: '1.0.0',
   });
   expect(validateSource(empty, { skills: [] }, registry).filter(({ code }) => code === 'AB4012')).toMatchObject([{
     code: 'AB4012',
@@ -93,7 +91,6 @@ it('rejects a missing or invalid plugin.logo with AB4012', async () => {
   const directory = await loadedProject({
     logo: 'docs/media',
     name: 'logo-fixture',
-    version: '1.0.0',
   }, { 'docs/media/.keep': '' });
   expect(validateSource(directory, { skills: [] }, registry).filter(({ code }) => code === 'AB4012')).toMatchObject([{
     code: 'AB4012',
@@ -104,7 +101,6 @@ it('rejects a missing or invalid plugin.logo with AB4012', async () => {
   const outside = await loadedProject({
     logo: '../outside.svg',
     name: 'logo-fixture',
-    version: '1.0.0',
   });
   expect(validateSource(outside, { skills: [] }, registry).filter(({ code }) => code === 'AB4012')).toMatchObject([{
     code: 'AB4012',
@@ -118,7 +114,6 @@ it('accepts an existing in-project plugin.logo and normalizes it onto metadata',
     description: 'Logo fixture',
     logo: 'docs/media/logo.svg',
     name: 'logo-fixture',
-    version: '1.0.0',
   }, { 'docs/media/logo.svg': logoSvg });
 
   expect(validateSource(loaded, { skills: [] }, registry).filter(({ code }) => code === 'AB4012')).toEqual([]);
@@ -134,7 +129,6 @@ it('accepts an existing in-project plugin.logo and normalizes it onto metadata',
 it('omits logo from the normalized model when the field is absent', async () => {
   const loaded = await loadedProject({
     name: 'logo-fixture',
-    version: '1.0.0',
   });
   const model = await normalizeProject(loaded, { skills: [] }, registry);
   expect(model.metadata).not.toHaveProperty('logo');

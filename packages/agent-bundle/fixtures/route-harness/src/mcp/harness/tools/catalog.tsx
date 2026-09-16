@@ -1,22 +1,7 @@
+import { defineTool } from 'agent-bundle/routes';
 import { Agent } from '@agent-bundle/runtime';
 import { Suspense } from 'react';
 import { z } from 'zod';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "genre": {
-        "type": "string"
-      }
-    },
-    "type": "object"
-  },
-  description: 'Streams the harness catalog behind one Suspense boundary.',
-  // Its streamed Agent.Progress fallback is what a task reports through tasks/get (#369).
-  execution: { taskSupport: 'optional' },
-  title: 'Catalog',
-};
 
 export const inputSchema = z.object({ genre: z.string().optional() });
 
@@ -32,7 +17,7 @@ const Titles = async ({ genre }: { readonly genre: string }) => {
   return <Agent.Markdown>{`## ${genre}\n\n${titles.map((title) => `- ${title}`).join('\n')}`}</Agent.Markdown>;
 };
 
-export default async function Catalog({ input }: { readonly input: z.infer<typeof inputSchema> }) {
+async function Catalog({ input }: { readonly input: z.infer<typeof inputSchema> }) {
   const genre = input.genre ?? 'all';
   return (
     <Agent.Result value={{ genre, titles }}>
@@ -43,3 +28,21 @@ export default async function Catalog({ input }: { readonly input: z.infer<typeo
     </Agent.Result>
   );
 }
+
+export default defineTool({
+inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "genre": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  description: 'Streams the harness catalog behind one Suspense boundary.',
+  // Its streamed Agent.Progress fallback is what a task reports through tasks/get (#369).
+  execution: { taskSupport: 'optional' },
+  title: 'Catalog',
+  inputSchema,
+  resultSchema,
+}, async (input) => Catalog({ input }));

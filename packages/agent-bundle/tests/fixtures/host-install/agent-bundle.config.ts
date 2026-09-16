@@ -12,7 +12,6 @@ export default {
     description: 'Proves real host installation of Skills, Hooks, and MCP metadata.',
     logo: './docs/media/logo.svg',
     name: 'host-install-proof',
-    version: '1.0.0',
   },
   routes: {
     mcpCommands: true,

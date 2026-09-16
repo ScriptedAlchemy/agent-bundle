@@ -10,8 +10,8 @@ Agent Bundle has one newcomer model:
    static resources, and `agent-bundle.config.ts` stays at the project root.
 2. **One small flat config.** `agent-bundle.config.ts` holds project identity,
    targets, and policy that no route file can own. The release version is
-   not repeated there: `package.json` is the single version source
-   (`plugin.version` is deprecated; see [Diagnostics](diagnostics.md#release-identity-ab4001-ab4008ab4011-ab4013)).
+   not repeated there: `package.json` is the single version source; see
+   [Diagnostics](diagnostics.md#release-identity-ab4009ab4011-ab4013).
 3. **JSX = rendering.** An executable route is one async default Server
    Component. It does the work and returns `Agent.*`; there is no public
    `execute`/`render` split.
@@ -627,7 +627,7 @@ content, records an install receipt (`.agent-bundle-install.json`: plugin,
 version, content hash, owned files and directories), replaces a same-version stale copy of its
 own plugin in place (owned files only; legacy `state/` survives, while current builds keep
 framework state outside the plugin root), and accepts
-`--replace` (alias `--force`) to replace a different installed version or adopt
+`--replace` to replace a different installed version or adopt
 a pre-receipt copy. Foreign directories are refused with a content-hash
 comparison. It never invokes sudo or changes PATH. `agent-bundle install <host>
 [--replace]` applies the same policy for every host, and `agent-bundle doctor

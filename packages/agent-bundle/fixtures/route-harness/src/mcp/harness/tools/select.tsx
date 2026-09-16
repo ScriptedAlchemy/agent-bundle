@@ -1,11 +1,6 @@
+import { defineTool } from 'agent-bundle/routes';
 import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
-
-export const config = {
-  annotations: { readOnlyHint: false },
-  description: 'Selects catalog entries by id or by query, with nested filters no flag grammar can spell.',
-  title: 'Select',
-};
 
 // A discriminated union under a nested object: the bounded argv grammar has
 // no flag form for it, so the tool's CLI projection takes canonical JSON.
@@ -29,7 +24,7 @@ export const resultSchema = z.object({
   ]),
 });
 
-export default async function Select({ input }: { readonly input: z.infer<typeof inputSchema> }) {
+async function Select({ input }: { readonly input: z.infer<typeof inputSchema> }) {
   const context = await agent();
   const value = { filters: input.filters, invocation: context.invocation.kind as 'cli' | 'tool', selection: input.selection };
   return (
@@ -38,3 +33,11 @@ export default async function Select({ input }: { readonly input: z.infer<typeof
     </Agent.Result>
   );
 }
+
+export default defineTool({
+annotations: { readOnlyHint: false },
+  description: 'Selects catalog entries by id or by query, with nested filters no flag grammar can spell.',
+  title: 'Select',
+  inputSchema,
+  resultSchema,
+}, async (input) => Select({ input }));

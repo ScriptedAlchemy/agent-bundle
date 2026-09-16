@@ -44,18 +44,6 @@ export interface AgentBundlePluginConfig {
    */
   metadata?: AgentBundleSharedMetadata;
   name: string;
-  /**
-   * The host-facing declared version. Omit it to derive the version from the
-   * project's `package.json` (issue #94 stage 3): package.json is
-   * authoritative for release identity, and a declared value that disagrees
-   * with it reports the AB4008 warning.
-   *
-   * @deprecated Declare the release version only in `package.json`. This
-   * compatibility field will be removed through the normal breaking-change
-   * policy.
-   */
-  version?: string;
-  [key: string]: unknown;
 }
 
 export const canonicalHookEvents = Object.freeze([

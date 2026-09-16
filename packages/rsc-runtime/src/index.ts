@@ -1,4 +1,4 @@
-export { Agent, Hook, Mcp } from './elements.js';
+export { Agent } from './elements.js';
 export type {
   AgentErrorProps,
   AgentJsonProps,
@@ -10,10 +10,6 @@ export type {
   AgentResourceProps,
   AgentResultProps,
   AgentTextProps,
-  McpDataProps,
-  McpEmbeddedResourceProps,
-  McpResourceLinkProps,
-  McpResultProps,
 } from './elements.js';
 export {
   AGENT_DOCUMENT_VERSION,
@@ -28,7 +24,6 @@ export type {
   AgentContextNode,
   AgentDocument,
   AgentDocumentNode,
-  AgentDocumentSnapshot,
   AgentDocumentStatus,
   AgentErrorNode,
   AgentImageNode,
@@ -91,11 +86,7 @@ export type {
   MarkdownSerializer,
   MarkdownSerializerHelpers,
 } from './markdown-content.js';
-export { lowerHookResult } from './lower-hook.js';
-export type { NativePostToolUseOutput } from './lower-hook.js';
-export { lowerMcpResult } from './lower-mcp.js';
 export type { JsonObject, JsonValue, McpCallToolResult, McpContentBlock } from './lower-mcp.js';
-export { createRscRequestContext } from './request-context.js';
 export type { AgentRenderInvocation } from './agent-request.js';
 // Registry-free lineage helpers: what a payload proves on its own. The
 // registry itself ships behind the './lineage' subpath with the state kernel.
@@ -113,5 +104,4 @@ export type {
   AgentNoticesHandle,
   AgentRecipient,
 } from './notices/contract.js';
-export type { RscRequestContext } from './request-context.js';
 export * from './plugin.js';

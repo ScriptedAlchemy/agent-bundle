@@ -1,4 +1,4 @@
-import type { AgentDocumentSnapshot } from '../agent-document.js';
+import type { AgentDocument } from '../agent-document.js';
 import type {
   AgentActorIdentity,
   AgentHostIdentity,
@@ -181,7 +181,7 @@ export interface AgentNotice {
   readonly availability?: AgentNoticeAvailability;
   readonly availabilityReservation?: AgentNoticeAvailabilityReservation;
   /** The persisted snapshot as authored; routes disclose it per {@link AgentNotice.sensitivity}. */
-  readonly content: AgentDocumentSnapshot;
+  readonly content: AgentDocument;
   readonly createdAt: string;
   readonly dedupeKey?: string;
   readonly expiredAt?: string;
@@ -245,7 +245,7 @@ export interface AgentNoticeLedgerSnapshot {
 }
 
 export interface AgentNoticePublishInput {
-  readonly content: AgentDocumentSnapshot;
+  readonly content: AgentDocument;
   readonly dedupeKey?: string;
   readonly expiresAt?: string;
   readonly nextAttemptAt?: string;

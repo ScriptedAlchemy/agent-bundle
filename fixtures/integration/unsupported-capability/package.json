@@ -1,0 +1,6 @@
+{
+  "name": "agent-bundle-unsupported-capability-fixture",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0"
+}

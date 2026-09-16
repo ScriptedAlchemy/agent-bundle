@@ -485,15 +485,12 @@ it('delivers synchronous runtime events once in FIFO order and refreshes after a
     }),
   });
 
-  await client.connect(
-    () => undefined,
-    (reason) => errors.push(reason),
-    (event) => {
-      if (event.type !== 'runtime.event') return;
-      received.push(event.sequence);
-      frozen.push(Object.isFrozen(event) && Object.isFrozen(event.payload));
-    },
-  );
+  client.subscribeEvents((event) => {
+    if (event.type !== 'runtime.event') return;
+    received.push(event.sequence);
+    frozen.push(Object.isFrozen(event) && Object.isFrozen(event.payload));
+  });
+  await client.connect(() => undefined, (reason) => errors.push(reason));
   stream.emit('runtime.event', runtimeEvent(8));
   stream.emit('runtime.event', runtimeEvent(9));
   stream.emit('runtime.event', runtimeEvent(10));
@@ -529,7 +526,7 @@ it('delivers route.invocation events to subscribers without refreshing project s
       return Response.json({ status: status() });
     }),
   });
-  await client.connect(() => undefined, undefined, (event) => received.push(`legacy:${event.type}`));
+  await client.connect(() => undefined);
   client.subscribeEvents((event) => {
     if (event.type !== 'route.invocation') return;
     received.push(`${event.type}:${String(event.sequence)}:${event.payload.invocation.id}:${String(Object.isFrozen(event.payload.invocation))}`);
@@ -566,8 +563,8 @@ it('delivers route.invocation events to subscribers without refreshing project s
   await flushEvents();
 
   expect(received).toEqual([
-    'legacy:route.invocation', 'route.invocation:1:inv_1:true',
-    'legacy:route.invocation', 'route.invocation:2:inv_2:true',
+    'route.invocation:1:inv_1:true',
+    'route.invocation:2:inv_2:true',
   ]);
   expect(client.lastEventId).toBe(2);
   expect(requests).toEqual(['/api/project/status']);
@@ -586,11 +583,8 @@ it('preserves a synchronous runtime event after replay gap delivery', async () =
     }),
   });
 
-  await client.connect(
-    () => undefined,
-    undefined,
-    (event) => received.push(event.type === 'replay.gap' ? event.type : `${event.type}:${event.sequence}`),
-  );
+  client.subscribeEvents((event) => received.push(event.type === 'replay.gap' ? event.type : `${event.type}:${event.sequence}`));
+  await client.connect(() => undefined);
   stream.emit('replay.gap', {
     data: JSON.stringify({
       earliestAvailableSequence: 14,
@@ -617,15 +611,12 @@ it('reports a runtime listener exception and still delivers later queued runtime
     fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
 
-  await client.connect(
-    () => undefined,
-    (reason) => errors.push(reason),
-    (event) => {
-      if (event.type !== 'runtime.event') return;
-      received.push(event.sequence);
-      if (event.sequence === 8) throw new Error('listener failure');
-    },
-  );
+  client.subscribeEvents((event) => {
+    if (event.type !== 'runtime.event') return;
+    received.push(event.sequence);
+    if (event.sequence === 8) throw new Error('listener failure');
+  });
+  await client.connect(() => undefined, (reason) => errors.push(reason));
   stream.emit('runtime.event', runtimeEvent(8));
   stream.emit('runtime.event', runtimeEvent(9));
   await flushEvents();
@@ -644,13 +635,10 @@ it('clears queued runtime delivery and ignores late callbacks after close', asyn
     fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
 
-  await client.connect(
-    () => undefined,
-    undefined,
-    (event) => {
-      if (event.type === 'runtime.event') received.push(event.sequence);
-    },
-  );
+  client.subscribeEvents((event) => {
+    if (event.type === 'runtime.event') received.push(event.sequence);
+  });
+  await client.connect(() => undefined);
   stream.emit('runtime.event', runtimeEvent(8));
   client.close();
   stream.emit('runtime.event', runtimeEvent(9));
@@ -1087,7 +1075,6 @@ it('delivers subscribed replay and live events FIFO, exposing gaps before refres
   await client.connect(
     () => statuses.push('status'),
     (error) => errors.push(error),
-    (event) => received.push(`legacy:${eventName(event)}`),
   );
   received.length = 0;
   statuses.length = 0;
@@ -1098,9 +1085,9 @@ it('delivers subscribed replay and live events FIFO, exposing gaps before refres
   await flushEvents();
 
   expect(received).toEqual([
-    'legacy:runtime.event:1', 'first:runtime.event:1', 'third:runtime.event:1',
-    'legacy:gap:none', 'first:gap:none', 'third:gap:none',
-    'legacy:runtime.event:3', 'first:runtime.event:3', 'third:runtime.event:3',
+    'first:runtime.event:1', 'third:runtime.event:1',
+    'first:gap:none', 'third:gap:none',
+    'first:runtime.event:3', 'third:runtime.event:3',
   ]);
   expect(errors).toHaveLength(1);
   expect(errors[0]).toMatchObject({ message: 'subscriber failure' });

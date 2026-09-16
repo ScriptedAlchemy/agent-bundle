@@ -82,7 +82,7 @@ const createBuildProject = async (root: string): Promise<{ readonly output: stri
     writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
     writeFile(
       join(project, 'agent-bundle.config.ts'),
-      "export default { plugin: { name: 'manifest-version-fixture', version: '1.0.0' }, targets: ['portable'] };\n",
+      "export default { plugin: { name: 'manifest-version-fixture' }, targets: ['portable'] };\n",
     ),
     writeFile(
       join(project, 'src', 'skills', 'review', 'SKILL.md'),
@@ -405,7 +405,7 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       'const config: AgentBundleConfig = {',
       "  claude: { nativeHooks: './claude-hooks.json' },",
       "  codex: { nativeHooks: './codex-hooks.json' },",
-      "  plugin: { name: 'packed-root-types', version: '1.0.0' },",
+      "  plugin: { name: 'packed-root-types' },",
       "  portable: { compatibility: 'v1' },",
       '};',
       '',

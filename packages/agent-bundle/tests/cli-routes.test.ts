@@ -46,12 +46,19 @@ const writeTree = async (root: string, files: Readonly<Record<string, string>>):
 };
 
 const fixtureConfig = (extra: Readonly<Record<string, unknown>> = {}): AgentBundleConfig => ({
-  plugin: { name: 'cli-fixture', version: '1.0.0' },
+  plugin: { name: 'cli-fixture' },
   ...extra,
 });
 
 const codesOf = (diagnostics: readonly { readonly code: string }[]): string[] =>
   diagnostics.map((diagnostic) => diagnostic.code);
+
+const nonInteractiveTerminal = (hostSurface: 'cli' | 'script'): AgentTerminal => ({
+  hostSurface,
+  sharesTarget: false,
+  stderr: { color: 'none', kind: 'none' },
+  stdout: { color: 'none', kind: 'none' },
+});
 
 const extract = (schema: RouteInputSchema) => projectInputSchemaOptions(schema, 'src/cli/example.ts', '/project/src/cli/example.ts');
 
@@ -98,13 +105,16 @@ const plainCommandModule = (options: {
   '',
 ].join('\n');
 
-const toolModule = (config?: string): string => [
-  ...(config === undefined ? [] : [`export const config = ${config};`]),
-  'export const inputSchema = operation.inputSchema;',
-  'export const resultSchema = operation.resultSchema;',
-  'export default async function Tool() { return undefined; }',
-  '',
-].join('\n');
+const toolModule = (config = '{}'): string => {
+  const fields = config.slice(1, -1).trim();
+  return [
+    "import { defineTool } from 'agent-bundle/routes';",
+    'export const inputSchema = operation.inputSchema;',
+    'export const resultSchema = operation.resultSchema;',
+    `export default defineTool({ ${fields}${fields.length === 0 ? '' : ', '}inputSchema, resultSchema }, async function Tool() { return undefined; });`,
+    '',
+  ].join('\n');
+};
 
 describe('compiled command graph', () => {
   it('compiles nesting, aliases, positionals, and the exit-code policy into graph.cli.commands', async () => {
@@ -271,7 +281,7 @@ describe('compiled command graph', () => {
     const root = await createRoot();
     await writeTree(root, {
       'agent-bundle.config.ts': [
-        "export default { plugin: { name: 'cli-fixture', version: '1.0.0' }, targets: ['portable'] };",
+        "export default { plugin: { name: 'cli-fixture' }, targets: ['portable'] };",
         '',
       ].join('\n'),
       'package.json': '{"type":"module"}\n',
@@ -298,7 +308,7 @@ describe('compiled command graph', () => {
       'agent-bundle.config.ts': [
         'export default {',
         "  bin: { 'cli-fixture': './src/tool.ts' },",
-        "  plugin: { name: 'cli-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'cli-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -794,7 +804,6 @@ describe('generated CLI shell', () => {
       execute: async () => {
         throw new Error('plain execute must not run for an MCP command');
       },
-      isTty: () => false,
       name: 'curator',
       render: (command, input) => {
         calls.push({ command, input, json: argv.includes('--json') });
@@ -808,6 +817,7 @@ describe('generated CLI shell', () => {
           validate: (value) => value,
         };
       },
+      terminal: nonInteractiveTerminal('cli'),
       version: '1.2.3',
       writeErr: (text) => void stderr.push(text),
       writeOut: (text) => void stdout.push(text),
@@ -1253,7 +1263,7 @@ describe('rendered command projection (#102 stage 3)', () => {
     options: {
       readonly error?: Error;
       readonly events?: readonly CliRenderedEvent[];
-      readonly isTty?: boolean;
+      readonly terminal?: AgentTerminal;
       readonly validate?: (value: unknown) => unknown;
     } = {},
   ): Promise<RenderedRun> => {
@@ -1275,9 +1285,9 @@ describe('rendered command projection (#102 stage 3)', () => {
       execute: async () => {
         throw new Error('plain execute must not run for a rendered command');
       },
-      isTty: () => options.isTty ?? false,
       name: 'curator',
       render: () => session,
+      terminal: options.terminal ?? nonInteractiveTerminal('cli'),
       version: '1.2.3',
       writeErr: (text) => void stderr.push(text),
       writeOut: (text) => void stdout.push(text),
@@ -1294,7 +1304,14 @@ describe('rendered command projection (#102 stage 3)', () => {
   });
 
   it('updates progress in place on a TTY before the final document', async () => {
-    const tty = await runRendered(['report', '/library'], { isTty: true });
+    const tty = await runRendered(['report', '/library'], {
+      terminal: {
+        hostSurface: 'cli',
+        sharesTarget: true,
+        stderr: { color: 'none', kind: 'tty' },
+        stdout: { color: 'none', kind: 'tty' },
+      },
+    });
     expect(tty.code).toBe(0);
     expect(tty.stdout).toBe('\r\u001B[2Kauditing (1/2)\r\u001B[2KFound **2** books.\n');
   });
@@ -1347,24 +1364,6 @@ describe('rendered command projection (#102 stage 3)', () => {
     });
     expect(seen).toEqual([terminal]);
 
-    // The legacy `isTty` knob still shapes a consistent capability for stdout.
-    const legacy: AgentTerminal[] = [];
-    await runGeneratedCliEntry({
-      argv: ['report', '/library'],
-      commands: [renderedCommand],
-      execute: async () => undefined,
-      isTty: () => false,
-      name: 'curator',
-      render: (_command, _input, context) => {
-        legacy.push(context.terminal);
-        return { close: async () => undefined, events: () => eventStream(events), validate: (value) => value };
-      },
-      version: '1.2.3',
-      writeErr: () => undefined,
-      writeOut: () => undefined,
-    });
-    expect(legacy[0]?.hostSurface).toBe('cli');
-    expect(legacy[0]?.stdout.kind).not.toBe('tty');
   });
 
   it('emits the canonical validated final value under --json', async () => {
@@ -1451,8 +1450,8 @@ describe('rendered script projection (#102 stage 3)', () => {
           validate: (value) => value,
         };
       },
-      isTty: () => false,
       name: 'summarize',
+      terminal: nonInteractiveTerminal('script'),
       writeErr: () => undefined,
       writeOut: (text) => void stdout.push(text),
     });
@@ -1469,8 +1468,8 @@ describe('rendered script projection (#102 stage 3)', () => {
         events: () => eventStream([{ document: completeDocument('failed', undefined), sequence: 0, type: 'complete' }]),
         validate: (value) => value,
       }),
-      isTty: () => false,
       name: 'summarize',
+      terminal: nonInteractiveTerminal('script'),
       writeErr: () => undefined,
       writeOut: () => undefined,
     });

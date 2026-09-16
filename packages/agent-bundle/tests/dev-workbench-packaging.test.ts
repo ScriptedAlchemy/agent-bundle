@@ -85,7 +85,7 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
-      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-workbench', version: '1.0.0' }, targets: ['portable'] };\n"),
+      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-workbench' }, targets: ['portable'] };\n"),
       writeFile(join(project, 'skills', 'review', 'SKILL.md'), '---\nname: review\ndescription: Reviews changes\n---\n# Review\n'),
     ]);
 
@@ -136,7 +136,7 @@ it('packages both react-server render children and renders a route invocation fr
     await mkdir(join(project, 'src', 'mcp', 'status', 'tools'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
-      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-route-invocation', version: '1.0.0' }, targets: ['claude'] };\n"),
+      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-route-invocation' }, targets: ['claude'] };\n"),
       writeFile(join(project, 'src', 'mcp', 'status', 'tools', 'report.tsx'), [
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
@@ -200,7 +200,7 @@ it('runs the Agent API from an omit-dev installed tarball with its runtime MCP d
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
-      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-agent-api', version: '1.0.0' }, targets: ['portable'] };\n"),
+      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-agent-api' }, targets: ['portable'] };\n"),
       writeFile(join(project, 'skills', 'review', 'SKILL.md'), '---\nname: review\ndescription: Reviews changes\n---\n# Review\n'),
     ]);
     const port = await availablePort();
