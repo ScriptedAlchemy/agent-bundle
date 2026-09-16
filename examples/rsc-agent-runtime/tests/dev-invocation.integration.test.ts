@@ -177,14 +177,12 @@ const event = (eventId: string) => ({
   toolName: 'Write',
 });
 
-const oversizedMcpWorker = (payloadBytes: number): string => {
+const oversizedAgentDocumentWorker = (payloadBytes: number): string => {
   return `const { writeSync } = require('node:fs');
 const payload = 'x'.repeat(${payloadBytes});
-const model = ['$', 'mcp-result', null, {
-  _meta: '$undefined',
-  isError: '$undefined',
-  structuredContent: { payload, stateVersion: 0 },
-  children: [['$', 'mcp-text', null, { children: 'ok' }]],
+const model = ['$', 'agent-result', null, {
+  value: { payload, stateVersion: 0 },
+  children: [['$', 'agent-text', null, { children: 'ok' }]],
 }];
 writeSync(3, Buffer.from('{"stateVersion":0}'));
 process.stdout.end(\`0:\${JSON.stringify(model)}\\n\`);
@@ -553,7 +551,7 @@ test('caps inspection stdout independently after Flight leaves its response enve
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invoke-'));
   try {
     const entry = await buildInvocationEntry(compilerRoot);
-    await writeFile(join(compilerRoot, 'rsc', 'rsc', 'index.js'), oversizedMcpWorker(2_100_000));
+    await writeFile(join(compilerRoot, 'rsc', 'rsc', 'index.js'), oversizedAgentDocumentWorker(2_100_000));
     const result = await invoke(entry, {
       stateFile: join(compilerRoot, 'events.jsonl'),
       stateStoreId: 'fixture-state',

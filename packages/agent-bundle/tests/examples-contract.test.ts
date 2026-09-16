@@ -31,11 +31,11 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     });
     expect(inspection.diagnostics).toEqual([]);
     if (inspection.state !== 'ready') throw new Error('unreachable');
-    // Identity stages 1-2 (#94): no package.json version, so the release
-    // axis is absent and displays fall back to the labeled dev form.
+    // Release identity comes from package.json alone; the example declares no
+    // plugin.version, so the display label is the semantic version itself.
     expect(inspection.projectContext.packageName).toBe('@agent-bundle-example/skills-starter');
-    expect(inspection.projectContext.packageVersion).toBeUndefined();
-    expect(projectVersionLabel(inspection.projectContext)).toContain('development fallback');
+    expect(inspection.projectContext.packageVersion).toBe('1.0.0');
+    expect(projectVersionLabel(inspection.projectContext)).toBe('1.0.0');
     const built = await build({ output, root });
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
     expect(built.build.manifest.executables).toEqual({

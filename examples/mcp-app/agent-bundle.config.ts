@@ -8,7 +8,6 @@ export default defineConfig({
   plugin: {
     description: 'A unified service-readiness assistant with MCP, Skills, Hooks, scripts, and evaluation.',
     name: 'mcp-app-example',
-    version: '1.0.0',
   },
   scripts: {
     'check-service-fixture': './src/scripts/check-service-fixture.ts',

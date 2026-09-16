@@ -266,13 +266,13 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     expect(cliManifest.dependencies).toBeUndefined();
     expect(cliManifest.devDependencies['@agent-bundle/runtime'])
       .toBe(runtimeSpecForFramework(cliTool.frameworkSpec, testPairing));
-    expect(cliManifest.devDependencies['react-dom']).toBe('19.2.8');
-    expect(cliManifest.devDependencies['zod']).toBeDefined();
+    expect(cliManifest.devDependencies['react-dom']).toBe('19.3.0');
+    expect(cliManifest.devDependencies['zod']).toBe('4.5.4');
 
     const mcpManifest = yield* readJson<{
       readonly devDependencies: Record<string, string>;
     }>(path.join(mcpServer.root, 'package.json'));
-    expect(mcpManifest.devDependencies['react-dom']).toBe('19.2.8');
+    expect(mcpManifest.devDependencies['react-dom']).toBe('19.3.0');
   }));
 
   it.effect('replaces every placeholder and pins the framework spec', () => Effect.gen(function* () {

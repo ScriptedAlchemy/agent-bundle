@@ -126,7 +126,7 @@ it('keeps packed static and plain-hook plugins free of undeclared runtimes', asy
       }),
     ]);
     await Promise.all([staticRoot, hookRoot].map((root) =>
-      writeFile(join(root, 'package.json'), JSON.stringify({ private: true, type: 'module' }))));
+      writeFile(join(root, 'package.json'), JSON.stringify({ private: true, type: 'module', version: '1.0.0' }))));
     await mkdir(join(hookRoot, 'src', 'hooks'), { recursive: true });
     await Promise.all([
       cp(

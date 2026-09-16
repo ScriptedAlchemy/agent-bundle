@@ -1,6 +1,8 @@
-import { requestAgentDocumentWithFlight, requestFlightRenderWithFlight } from '../flight/request-render.js';
 import { writeSync } from 'node:fs';
-import { lowerMcpResult } from '@agent-bundle/runtime';
+
+import { documentToCallToolResult } from '@agent-bundle/runtime';
+
+import { requestAgentDocumentWithFlight } from '../flight/request-render.js';
 import type {
   DevRuntimeInspectionRequest,
   DevRuntimeInspectionResponse,
@@ -188,11 +190,11 @@ const invoke = async (signal?: AbortSignal): Promise<InvocationOutput> => {
     });
   }
 
-  const rendered = await requestFlightRenderWithFlight(renderRequest, {
+  const rendered = await requestAgentDocumentWithFlight(renderRequest, {
     maximumFlightBytes: maximumInvocationFlightBytes,
     signal,
   });
-  const protocol = lowerMcpResult(rendered.node);
+  const protocol = documentToCallToolResult(rendered.document);
   return Object.freeze({
     flight: Buffer.from(rendered.flight),
     response: Object.freeze({

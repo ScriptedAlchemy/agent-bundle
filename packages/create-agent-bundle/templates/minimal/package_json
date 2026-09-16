@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@rstest/core": "0.11.12",
-    "@types/node": "26.4.0",
+    "@types/node": "26.5.1",
     "agent-bundle": "workspace:*",
     "typescript": "7.0.2"
   }

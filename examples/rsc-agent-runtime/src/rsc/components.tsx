@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 
-import { Agent, Mcp, agent } from '@agent-bundle/runtime';
+import { Agent, agent } from '@agent-bundle/runtime';
 import type { CanonicalPostToolUse, RuntimeSnapshot } from '../runtime/contracts.js';
 
 const hookServices = async (): Promise<{ edit: CanonicalPostToolUse; snapshot: RuntimeSnapshot }> => {
@@ -31,9 +31,9 @@ export const AfterFileEdit = async () => {
 };
 
 export const RenderEditTimeline = ({ snapshot }: { snapshot: RuntimeSnapshot }) => (
-  <Mcp.Result structuredContent={{ edits: snapshot.edits, stateVersion: snapshot.stateVersion }}>
-    <Mcp.Text>{`Showing ${snapshot.edits.length} recorded edits.`}</Mcp.Text>
-  </Mcp.Result>
+  <Agent.Result value={{ edits: snapshot.edits.map((edit) => ({ ...edit })), stateVersion: snapshot.stateVersion }}>
+    <Agent.Text>{`Showing ${snapshot.edits.length} recorded edits.`}</Agent.Text>
+  </Agent.Result>
 );
 
 const STATUS_PNG_BASE64 =
@@ -44,9 +44,9 @@ export const RuntimeStatus = ({ snapshot }: { snapshot: RuntimeSnapshot }) => {
   const editNoun = editCount === 1 ? 'edit' : 'edits';
 
   return (
-    <Mcp.Result structuredContent={{ editCount, stateVersion: snapshot.stateVersion }}>
-      <Mcp.Text>{`Runtime state contains ${editCount} ${editNoun}.`}</Mcp.Text>
-      <Mcp.Image data={STATUS_PNG_BASE64} mimeType="image/png" />
-    </Mcp.Result>
+    <Agent.Result value={{ editCount, stateVersion: snapshot.stateVersion }}>
+      <Agent.Text>{`Runtime state contains ${editCount} ${editNoun}.`}</Agent.Text>
+      <Agent.Image data={STATUS_PNG_BASE64} mimeType="image/png" />
+    </Agent.Result>
   );
 };
