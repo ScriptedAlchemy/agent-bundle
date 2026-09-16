@@ -17,11 +17,11 @@ if [ "$changesets_outcome" = failure ] || [ "$changesets_outcome" = cancelled ] 
   || [ "$job_status" = failure ] || [ "$job_status" = cancelled ]; then
   outcome=failed
 # Registry verification is the publication proof; the action's `published`
-# flag only says whether its publish script printed tag lines.
+# flag only says whether its publish script printed tag lines. A qualified
+# candidate that is not on npm is a failed registry step, never a green
+# "qualified-without-publish".
 elif [ "$registry_outcome" = success ]; then
   outcome=published
-elif [ "$qualify_outcome" = success ]; then
-  outcome=qualified-without-publish
 else
   outcome=version-maintenance-only
 fi
@@ -42,6 +42,8 @@ fi
 
 if [ "$published" = true ]; then
   publication=executed
+elif [ "$registry_outcome" = success ]; then
+  publication=already-on-registry
 else
   publication=skipped
 fi

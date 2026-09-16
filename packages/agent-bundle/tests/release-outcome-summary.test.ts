@@ -41,7 +41,7 @@ it('reports version-maintenance-only as NOT PUBLISHED with skipped qualification
   ].join('\n'));
 });
 
-it('reports qualified-without-publish with pack evidence and pending follow-ups', async () => {
+it('reports a registry-verified candidate as published with pack evidence and pending follow-ups', async () => {
   const evidenceFile = join(await mkdtemp(join(tmpdir(), 'release-outcome-')), 'evidence.json');
   await writeFile(evidenceFile, `${JSON.stringify({
     executedBins: ['agent-bundle'],
@@ -66,21 +66,21 @@ it('reports qualified-without-publish with pack evidence and pending follow-ups'
     PUBLISHED: 'false',
     QUALIFY_OUTCOME: 'success',
     CHANGESETS_OUTCOME: 'success',
-    REGISTRY_OUTCOME: 'skipped',
+    REGISTRY_OUTCOME: 'success',
     JOB_STATUS: 'success',
     EVIDENCE_FILE: evidenceFile,
   });
   expect(stdout).toContain([
-    'outcome: qualified-without-publish',
+    'outcome: published',
     `workflow_sha: ${candidateSha}`,
     `candidate_sha: ${candidateSha}`,
-    'publication: NOT PUBLISHED',
+    'publication: published',
     '',
     'stages:',
     '- version-maintenance: skipped',
     '- qualification: executed',
-    '- publication: skipped',
-    '- registry-verification: skipped',
+    '- publication: already-on-registry',
+    '- registry-verification: executed',
   ].join('\n'));
   expect(stdout).toContain('- agent-bundle@0.1.0 agent-bundle-0.1.0.tgz sha256:deadbeef');
   expect(stdout).toContain('- @agent-bundle/runtime dependencies rsc-markdown-stream: ^0.1.0');
@@ -110,7 +110,30 @@ it('reports published from registry proof even when the action flag stayed false
     CHANGESETS_OUTCOME: 'success',
     REGISTRY_OUTCOME: 'success',
     JOB_STATUS: 'success',
-  })).toContain('outcome: published\n');
+  })).toContain([
+    'outcome: published',
+    `workflow_sha: ${candidateSha}`,
+    `candidate_sha: ${candidateSha}`,
+    'publication: published',
+    '',
+    'stages:',
+    '- version-maintenance: skipped',
+    '- qualification: skipped',
+    '- publication: already-on-registry',
+    '- registry-verification: executed',
+  ].join('\n'));
+});
+
+it('never reports a qualified candidate that is missing from npm as green', async () => {
+  expect(await summarize({
+    PUBLISH_ENABLED: 'false',
+    HAS_CHANGESETS: 'false',
+    PUBLISHED: 'false',
+    QUALIFY_OUTCOME: 'success',
+    CHANGESETS_OUTCOME: 'success',
+    REGISTRY_OUTCOME: 'skipped',
+    JOB_STATUS: 'success',
+  })).not.toContain('qualified');
 });
 
 it('reports a Version Packages merge whose registry check failed as failed', async () => {

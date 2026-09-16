@@ -104,9 +104,8 @@ the `NPM_TOKEN` secret exists; the action then runs `pnpm release`
 registry check runs on every later `main` push too, so a silently failed
 publish is red at the next merge. With publishing disabled, a Version
 Packages merge fails the registry check (`outcome: failed`, **NOT
-PUBLISHED**) instead of reporting a green `qualified-without-publish`; a push
-that only refreshes the Version Packages PR records
-`version-maintenance-only`.
+PUBLISHED**) instead of reporting green; a push that only refreshes the
+Version Packages PR records `version-maintenance-only`.
 
 ## Where previews come from
 

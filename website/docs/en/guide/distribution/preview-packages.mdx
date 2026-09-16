@@ -71,8 +71,7 @@ and license, and the repository-wide `"access": "restricted"` policy for `agent-
 not currently overridden with `publishConfig.access`.
 
 The `Release packages` workflow records one of `version-maintenance-only`,
-`qualified-without-publish`, `published`, or `failed`, with executed and skipped
-stages. Qualification runs against the exact versioned candidate SHA, not the
+`published`, or `failed`, with executed and skipped stages. Qualification runs against the exact versioned candidate SHA, not the
 pre-version main commit. A successful Version Packages refresh — or a main push that neither
 refreshes that PR nor qualifies a versioned candidate — is
 `version-maintenance-only`. A Version Packages merge, and every `main` push while

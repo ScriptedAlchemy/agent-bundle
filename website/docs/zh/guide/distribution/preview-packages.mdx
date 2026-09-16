@@ -60,8 +60,8 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 在启用这条路径之前，发布负责人必须解决两件事：最终的包名与许可证，以及 `agent-bundle` 仓库层面的
 `"access": "restricted"` 策略——目前它并没有被 `publishConfig.access` 覆盖。
 
-`Release packages` 工作流会记录 `version-maintenance-only`、`qualified-without-publish`、
-`published` 或 `failed` 之一，并列出已执行与已跳过的阶段。资格认定针对精确的版本化候选
+`Release packages` 工作流会记录 `version-maintenance-only`、`published` 或 `failed` 之一，
+并列出已执行与已跳过的阶段。资格认定针对精确的版本化候选
 SHA，而不是预版本的 main 提交。成功刷新 Version Packages PR，或既没有刷新该 PR 也没有对版本化候选做资格认定的
 `main` 推送，结果都是 `version-maintenance-only`。合并 Version Packages 之后，以及启用发布期间的每次 `main`
 推送，都必须以每个可发布包的 `package.json` 版本在 npm 上可解析结束（`scripts/verify-registry-versions.sh`）；

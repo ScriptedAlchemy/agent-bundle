@@ -113,18 +113,19 @@ jobs:
           steps.changesets.outputs.has-changesets == 'false' &&
           startsWith(github.event.head_commit.message, 'Version Packages')
         run: pnpm check:release
-      # Green must mean published. Once no changesets are pending, every
-      # publishable package.json version must resolve on npm — whether this
-      # run published it or an earlier one did. Not gated on the action's
-      # `published` output: a publish script that prints no "New tag" lines
-      # leaves it false, and that silence is exactly what must turn red. Runs
-      # on every main push while publishing is enabled, and always for a
-      # Version Packages merge, so a disabled publish cannot pass one silently.
+      # Green must mean published. Every publishable package.json version on
+      # main must resolve on npm — whether this run published it or an earlier
+      # one did — so this runs on every main push while publishing is enabled
+      # (versions only move through Version Packages merges, which publish),
+      # and always for a Version Packages merge so a disabled publish cannot
+      # pass one silently. Not gated on the action's `published` output: a
+      # publish script that prints no "New tag" lines leaves it false, and
+      # that silence is exactly what must turn red.
       - name: Verify published registry artifacts
         id: registry
         if: >-
-          steps.changesets.outputs.has-changesets == 'false' &&
-          (env.PUBLISH_ENABLED == 'true' ||
+          env.PUBLISH_ENABLED == 'true' ||
+          (steps.changesets.outputs.has-changesets == 'false' &&
           startsWith(github.event.head_commit.message, 'Version Packages'))
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
