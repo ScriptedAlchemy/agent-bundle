@@ -457,6 +457,8 @@ export interface ToolExecutionConfig {
 }
 
 export interface ToolConfig {
+  /** Case-insensitive negotiated MCP client-name prefixes where this tool is unavailable. Unknown clients retain tools; this is presentation, not authorization. */
+  readonly excludeClients?: readonly string[];
   /** Execution-free input metadata for forms and CLI flags; the original schema owns validation. */
   readonly inputJsonSchema?: RouteInputSchema;
   readonly _meta?: RouteMeta;

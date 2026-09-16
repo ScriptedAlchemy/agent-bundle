@@ -399,9 +399,15 @@ export const registerGeneratedRoutes = (
   artifactEpoch: string,
   options: RegisterGeneratedRoutesOptions = {},
 ): void => {
+  const clientTools: { readonly prefixes: readonly string[]; readonly disable: () => void }[] = [];
   for (const route of Object.values(routes)) {
     switch (route.kind) {
       case 'tool': {
+        const excluded = route.config['excludeClients'];
+        if (excluded !== undefined && (!Array.isArray(excluded) || excluded.some(prefix =>
+          typeof prefix !== 'string' || prefix.trim() === '' || prefix.length > 128))) {
+          throw new TypeError(`Tool ${JSON.stringify(route.name)} excludeClients must contain non-empty client-name prefixes up to 128 characters.`);
+        }
         const outputSchema = advertisedOutputSchema(route.module.resultSchema);
         const registered = server.registerTool(route.name, {
           ...selectedConfig(route.config, ['_meta', 'annotations', 'description', 'icons', 'title']),
@@ -425,6 +431,9 @@ export const registerGeneratedRoutes = (
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
         }, options.afterRender)) as never);
         options.tasks?.declareTool(registered, route.name, routeTaskSupport(route.config));
+        if (Array.isArray(excluded) && excluded.length > 0) {
+          clientTools.push({ prefixes: excluded.map(prefix => String(prefix).toLowerCase()), disable: () => registered.disable() });
+        }
         break;
       }
       case 'resource': {
@@ -472,6 +481,16 @@ export const registerGeneratedRoutes = (
         throw new TypeError(`Unsupported generated MCP route kind ${String(unreachable)}.`);
       }
     }
+  }
+  if (clientTools.length > 0) {
+    const initialized = server.server.oninitialized;
+    server.server.oninitialized = () => {
+      const name = server.server.getClientVersion()?.name.toLowerCase();
+      if (name !== undefined) for (const tool of clientTools) {
+        if (tool.prefixes.some(prefix => name.startsWith(prefix))) tool.disable();
+      }
+      initialized?.();
+    };
   }
 };
 
