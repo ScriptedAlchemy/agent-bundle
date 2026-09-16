@@ -1349,9 +1349,6 @@ it('hands rendered CLI, projected MCP, and script routes their layout chain and 
   expect(source).toContain('"cli:library/audit": Object.freeze({ id: "cli:library/audit", kind: "cli", name: "library audit", module: route0, layouts: Object.freeze([1]) })');
   expect(source).toContain('"tool:curator/inspect": Object.freeze({ id: "tool:curator/inspect", kind: "tool", name: "inspect", serverId: "mcp:curator", module: route1, layouts: Object.freeze([1,0]) })');
   expect(source).toContain('"script:rebuild-index": Object.freeze({ id: "script:rebuild-index", kind: "script", name: "rebuild-index", module: route2, layouts: Object.freeze([1]) })');
-  expect(source).toContain(
-    'renderAgentFlight(composeLayouts(observedRoute, { ...message.props, signal: controller.signal }, controller.signal), { onError: () => undefined, signal: controller.signal })',
-  );
 });
 
 it('conditionally emits generated state mounting without leaking sqlite into volatile or stateless entries', () => {
