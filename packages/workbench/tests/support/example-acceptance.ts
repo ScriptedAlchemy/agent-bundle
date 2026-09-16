@@ -56,8 +56,9 @@ export const copyExample = async (name: ExampleName): Promise<{ readonly release
     recursive: true,
   });
   await symlink(join(exampleSource, 'node_modules'), join(root, 'node_modules'), 'dir');
-  // Teardown races the dev server's trailing writes under `<root>/.agent-bundle`
-  // (ENOTEMPTY on rmdir); retry like playground/mcp-probe-service.ts does.
+  // Teardown intermittently hits ENOTEMPTY on rmdir of `<root>/.agent-bundle`
+  // (a late write landing after server.close()); retry like
+  // playground/mcp-probe-service.ts does.
   return { release: () => rm(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 50 }), root };
 };
 
