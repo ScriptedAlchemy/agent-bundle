@@ -112,7 +112,8 @@ Claude Code 的 `.claude-plugin/plugin.json` 不携带描述字段——其固�
 `author.name` 仍是生成的插件名。共享值经由 marketplace 条目到达 Claude Code。
 
 `package.json` 对发布标识具有权威性。发布版本只在那里声明。若 `package.json` 没有有效版本，
-发布构建会被 `AB4013` 拒绝，而不是交付 `0.0.0-dev.<short-revision>` 这个开发期回退值。
+发布构建会被 `AB4013` 拒绝，而不是交付 `0.0.0-dev.<short-revision>` 这个开发期回退值。已退役的
+`plugin.version` 键会被 `AB4001` 拒绝，避免未经过类型检查的配置悄悄忽略它。
 
 ## targets
 

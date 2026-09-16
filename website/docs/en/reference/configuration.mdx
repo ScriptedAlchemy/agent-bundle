@@ -125,7 +125,8 @@ Claude Code through the marketplace entry.
 
 `package.json` is authoritative for release identity. Declare the release version there. A
 release build with no valid `package.json` version is refused with `AB4013` rather than shipping
-the `0.0.0-dev.<short-revision>` development fallback.
+the `0.0.0-dev.<short-revision>` development fallback. The retired `plugin.version` key is
+rejected with `AB4001` so an un-typechecked config cannot silently ignore it.
 
 ## targets
 

@@ -14,7 +14,7 @@ even when no error diagnostic was reported.
 | Family | Area |
 | --- | --- |
 | `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter), rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset), and the Skill IR (`AB3006`: unknown frontmatter field; `AB3008`–`AB3010`: per-host lowering of tokens and frontmatter); see below. |
-| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`: name; `AB4002`–`AB4007`: Skill fields; `AB4009`–`AB4011` and `AB4013`: release identity; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project; `AB4014`/`AB4015`: the shared descriptive metadata every host projection reads); see below. |
+| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`: name; `AB4001`: retired `plugin.version`; `AB4002`–`AB4007`: Skill fields; `AB4009`–`AB4011` and `AB4013`: release identity; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project; `AB4014`/`AB4015`: the shared descriptive metadata every host projection reads); see below. |
 | `AB41xx` | Normalized model invariants (`AB4100`–`AB4102`: unknown targets — the retired `plugin` name included — duplicate IDs and outputs; `AB4103`, `AB4105`, `AB4106`: the composite-root checks — same path with different bytes across selected projections, a host-scoped component leaking through conventional discovery, an advanced-registry adapter selected beside another target; see below). |
 | `AB42xx` | Hook configuration and native hook sources (`AB4200`–`AB4212`; see below). |
 | `AB43xx` | MCP server and MCP App configuration (`AB4300`–`AB4339`, see below; `AB4340`: a declaration for a route-generated server redeclares `entry`/`command`/`url`; `AB4341`: the `web` exposure/policy key; see below). |
@@ -92,18 +92,20 @@ and is never lowered. `AB3007` is not assigned.
 
 ## Plugin metadata and Skill source validation (`AB4000`–`AB4007`, `AB4012`)
 
-`plugin.name` is the host-native slug every manifest carries; `plugin.logo`
-is an optional project-relative image. Each discovered skill is checked
+`plugin.name` is the host-native slug every manifest carries; `plugin.version`
+is retired and rejected because `package.json` is the sole release-version
+source; `plugin.logo` is an optional project-relative image. Each discovered skill is checked
 against the pinned Agent Skills frontmatter schema
 (`schemas/agent-skills/frontmatter.schema.json`: `name` and `description`
 required, closed portable field shapes), its directory, its resources, and
 the other skills. `AB4009`–`AB4011` and `AB4013` are the release
 identity codes (see "Release identity" below). Every row is reported on the
-config file (`AB4000`, `AB4012`) or the skill source.
+config file (`AB4000`, `AB4001`, `AB4012`) or the skill source.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB4000` | error | `plugin.name` is missing or is not a nonempty string. | Declare `plugin: { name: '<slug>' }`. |
+| `AB4001` | error | The retired `plugin.version` key is present. Config loading does not run `tsc`, so accepting it as an unknown key would silently ignore the value and stamp `package.json.version` instead. | Remove `plugin.version` and declare the release version only in `package.json`. |
 | `AB4002` | error | Skill frontmatter `name` fails the pinned schema: missing, not a string, empty, longer than 64 characters, or not lowercase kebab-case (`^[a-z0-9]+(?:-[a-z0-9]+)*$`): `Skill frontmatter name <message>.` | Declare a kebab-case `name` of at most 64 characters. |
 | `AB4003` | error | Skill frontmatter `description` fails the pinned schema: missing, not a string, blank, or longer than 1024 characters. | Declare a nonblank `description` of at most 1024 characters. |
 | `AB4004` | error | Skill frontmatter `name` differs from the skill directory's name: `Skill name "<name>" must match directory "<dir>".` | Rename the directory or the `name` so they agree. |

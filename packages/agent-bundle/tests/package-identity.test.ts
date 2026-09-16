@@ -197,6 +197,26 @@ it('infers the plugin version from package.json when the config omits it', async
   });
 });
 
+it('rejects the removed plugin.version key instead of silently ignoring it', async () => {
+  await withProject(JSON.stringify({ name: '@scope/pkg', version: '2.3.4' }), async (root) => {
+    const loaded = loadedProject(root);
+    const withRemovedVersion: LoadedConfig = {
+      ...loaded,
+      config: {
+        plugin: { name: 'identity-fixture', version: '9.9.9' },
+      } as unknown as AgentBundleConfig,
+    };
+    expect(validateSource(withRemovedVersion, { skills: [] }, registry)).toMatchObject([
+      {
+        code: 'AB4001',
+        message: 'Plugin metadata no longer accepts version; declare the release version in package.json.',
+        severity: 'error',
+        sourcePath: loaded.configPath,
+      },
+    ]);
+  });
+});
+
 it('keeps the development fallback for an unpackaged project with no declared version', async () => {
   await withProject(undefined, async (root) => {
     const loaded = loadedProject(root);

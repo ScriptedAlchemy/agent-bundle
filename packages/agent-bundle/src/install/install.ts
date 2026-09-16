@@ -87,7 +87,7 @@ export interface InstallBundleOptions {
   readonly host: InstallHost;
   /**
    * Replace an existing agent-bundle install of this plugin even when its
-   * version differs (`--replace` / `--force`). Same-version content drift is
+   * version differs (`--replace`). Same-version content drift is
    * replaced automatically; foreign directories are always refused.
    */
   readonly replace?: boolean;

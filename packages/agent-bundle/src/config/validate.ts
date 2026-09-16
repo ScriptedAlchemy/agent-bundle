@@ -2416,6 +2416,15 @@ export const validateSource = (
       sourceDiagnostic('AB4000', 'Plugin metadata must define a nonempty name.', loaded.configPath),
     );
   }
+  if (pluginRecord !== undefined && Object.hasOwn(pluginRecord, 'version')) {
+    diagnostics.push(
+      sourceDiagnostic(
+        'AB4001',
+        'Plugin metadata no longer accepts version; declare the release version in package.json.',
+        loaded.configPath,
+      ),
+    );
+  }
   diagnostics.push(...validatePluginLogo(loaded, pluginRecord));
 
   const skillNames = new Map<string, string>();
