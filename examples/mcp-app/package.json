@@ -4,7 +4,6 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
-  "version": "1.0.0",
   "scripts": {
     "build": "agent-bundle build",
     "check": "pnpm validate && pnpm build && pnpm typecheck",
