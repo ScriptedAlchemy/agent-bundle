@@ -1758,15 +1758,11 @@ it('validates the single async route-module authoring contract statically', asyn
       '',
     ].join('\n'),
     'src/mcp/curator/tools/split.tsx': [
-    'src/mcp/curator/tools/split.tsx':   "import { defineTool } from 'agent-bundle/routes';",
-    'src/mcp/curator/tools/split.tsx':   "export const resultSchema = {};",
-    'src/mcp/curator/tools/split.tsx':   "export const execute = async () => ({});",
-    'src/mcp/curator/tools/split.tsx':   "export const render = () => undefined;",
-    'src/mcp/curator/tools/split.tsx':   "export default defineTool({",
-    'src/mcp/curator/tools/split.tsx':   "  inputSchema,",
-    'src/mcp/curator/tools/split.tsx':   "  resultSchema,",
-    'src/mcp/curator/tools/split.tsx':   "}, async () => { return undefined; });",
-    'src/mcp/curator/tools/split.tsx': ].join('\n'),
+    "export const resultSchema = {};",
+    "export const execute = async () => ({});",
+    "export const render = () => undefined;",
+    "export default function Split() { return undefined; }",
+    ].join('\n'),
   });
 
   const graph = await compileRouteGraph(root, fixtureConfig());
