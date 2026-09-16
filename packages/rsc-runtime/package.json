@@ -108,6 +108,6 @@
     "micromark-extension-gfm": "3.0.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "zod": "4.5.4"
+    "zod": "4.6.4"
   }
 }

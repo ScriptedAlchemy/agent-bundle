@@ -22,7 +22,7 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-server-dom-rspack": "0.1.0",
-    "zod": "4.5.4"
+    "zod": "4.6.4"
   },
   "devDependencies": {
     "@rsbuild/core": "2.2.5",
