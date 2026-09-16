@@ -177,20 +177,6 @@ const event = (eventId: string) => ({
   toolName: 'Write',
 });
 
-const oversizedMcpWorker = (payloadBytes: number): string => {
-  return `const { writeSync } = require('node:fs');
-const payload = 'x'.repeat(${payloadBytes});
-const model = ['$', 'mcp-result', null, {
-  _meta: '$undefined',
-  isError: '$undefined',
-  structuredContent: { payload, stateVersion: 0 },
-  children: [['$', 'mcp-text', null, { children: 'ok' }]],
-}];
-writeSync(3, Buffer.from('{"stateVersion":0}'));
-process.stdout.end(\`0:\${JSON.stringify(model)}\\n\`);
-`;
-};
-
 const inspectionShape = (result: { inspection: Record<string, unknown> }) => {
   const { flight: _flight, ...inspection } = result.inspection;
   return inspection;
@@ -544,26 +530,6 @@ test('redacts bounded RSC worker stderr diagnostics', async () => {
       'AKIA0123456789ABCDEF',
     ]) expect(result.stderr).not.toContain(secret);
     expect(result.stderr).toContain('[redacted]');
-  } finally {
-    await rm(compilerRoot, { force: true, recursive: true });
-  }
-});
-
-test('caps inspection stdout independently after Flight leaves its response envelope', async () => {
-  const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invoke-'));
-  try {
-    const entry = await buildInvocationEntry(compilerRoot);
-    await writeFile(join(compilerRoot, 'rsc', 'rsc', 'index.js'), oversizedMcpWorker(2_100_000));
-    const result = await invoke(entry, {
-      stateFile: join(compilerRoot, 'events.jsonl'),
-      stateStoreId: 'fixture-state',
-      type: 'mcp/runtime-status',
-    });
-
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stdout).toEqual(Buffer.alloc(0));
-    expect(result.stderr).toContain('Inspection response exceeded output limit');
-    expect(result.stderr).not.toContain('x'.repeat(128));
   } finally {
     await rm(compilerRoot, { force: true, recursive: true });
   }

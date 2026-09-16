@@ -8,7 +8,7 @@ This private, opt-in example shows one React Server Components (RSC) runtime sha
 | --- | --- | --- |
 | Definition | Static hook matchers, tool schemas, resource URIs, and metadata | Build/startup |
 | Kernel | Framework state kernel (#98): typed events, monotonic revisions, workspace-durable `node:sqlite` storage | Cross-process |
-| RSC render | Hook and MCP result component trees, lowered from Flight | One request |
+| RSC render | Agent Document component trees projected from Flight | One request |
 | MCP App UI | Mounted timeline, Refresh, and recoverable row selection | One UI instance |
 
 Native hooks are fresh requests: the compiler-generated client validates one host event, invokes `src/events/tool/after.tsx` in its explicit standalone mode, projects the final Agent Document, and exits. The durable kernel—not a Node module cache or React state—connects later hook processes and MCP calls.
@@ -32,14 +32,14 @@ export default async function AfterFileEdit({ canonical }: AgentEventRouteProps<
 ```
 
 ```tsx
-// An MCP JSX route describes protocol blocks, not browser HTML.
-import { Mcp } from '@agent-bundle/runtime';
+// An Agent Document route describes protocol-neutral output, not browser HTML.
+import { Agent } from '@agent-bundle/runtime';
 
 export function RenderTimeline({ snapshot }: { snapshot: { edits: unknown[]; stateVersion: number } }) {
   return (
-    <Mcp.Result structuredContent={snapshot}>
-      <Mcp.Text>{`Showing ${snapshot.edits.length} edits.`}</Mcp.Text>
-    </Mcp.Result>
+    <Agent.Result value={snapshot}>
+      <Agent.Text>{`Showing ${snapshot.edits.length} edits.`}</Agent.Text>
+    </Agent.Result>
   );
 }
 ```
@@ -150,11 +150,9 @@ AGENT_RUNTIME_STATE_FILE=/tmp/rsc-agent-state.sqlite PORT=3000 \
 | Static surface | Result |
 | --- | --- |
 | `recent_edits` | Text plus `structuredContent` snapshot |
-| `render_edit_timeline` | RSC-lowered text and snapshot; links the versioned timeline resource |
-| `runtime_status` | RSC-lowered text, image, and structured status |
+| `render_edit_timeline` | Agent Document text and snapshot; links the versioned timeline resource |
+| `runtime_status` | Agent Document text, image, and structured status |
 | `ui://rsc-agent-runtime/edit-timeline-v1.html` | `text/html;profile=mcp-app` self-contained React timeline |
-
-`Mcp.Text`, `Mcp.Image`, `Mcp.Audio`, `Mcp.ResourceLink`, and `Mcp.EmbeddedResource` lower to their matching MCP content blocks. `Mcp.Result` supplies ordered `content`, optional `structuredContent`, optional `isError`, and optional serializable `_meta`.
 
 ## Native packages and evaluation
 

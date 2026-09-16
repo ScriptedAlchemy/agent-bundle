@@ -11,24 +11,24 @@ import { createAgentRenderDispatcher, type AgentDocument, type AgentRenderInvoca
 import type { RenderRequest } from '../runtime/contracts.js';
 import { redactInspectionDiagnostics } from '../dev/inspection-security.js';
 
-export const maximumFlightRenderBytes = 4 * 1024 * 1024;
-export const maximumFlightRenderStderrBytes = 256 * 1024;
-export const maximumFlightRenderMetadataBytes = 128;
+const maximumFlightRenderBytes = 4 * 1024 * 1024;
+const maximumFlightRenderStderrBytes = 256 * 1024;
+const maximumFlightRenderMetadataBytes = 128;
 
 const terminationGraceMs = 100;
 
-export interface FlightRenderResult {
+interface FlightRenderResult {
   readonly flight: Uint8Array;
   readonly node: ReactNode;
   /** Exact durable state identity captured by the render worker; never user-visible. */
   readonly stateVersion: number;
 }
 
-export interface AgentDocumentFlightRenderResult extends FlightRenderResult {
+interface AgentDocumentFlightRenderResult extends FlightRenderResult {
   readonly document: AgentDocument;
 }
 
-export interface FlightRenderOptions {
+interface FlightRenderOptions {
   readonly maximumFlightBytes?: number;
   readonly signal?: AbortSignal;
 }
@@ -71,7 +71,7 @@ const parseSnapshotMetadata = (metadata: Buffer): number => {
   return stateVersion;
 };
 
-export const requestFlightRenderWithFlight = async (
+const requestFlightRenderWithFlight = async (
   request: RenderRequest,
   options: FlightRenderOptions = {},
 ): Promise<FlightRenderResult> => {
@@ -187,9 +187,6 @@ export const requestFlightRenderWithFlight = async (
     }
   });
 };
-
-export const requestFlightRender = async (request: RenderRequest): Promise<ReactNode> =>
-  (await requestFlightRenderWithFlight(request)).node;
 
 const renderInvocationFor = (request: RenderRequest): AgentRenderInvocation => {
   switch (request.type) {

@@ -1,6 +1,13 @@
-import type { AgentDocument, NativePostToolUseOutput } from '@agent-bundle/runtime';
+import type { AgentDocument } from '@agent-bundle/runtime';
 
-export const projectHookDocument = (document: AgentDocument): NativePostToolUseOutput => {
+interface ProjectedPostToolUseOutput {
+  readonly hookSpecificOutput: {
+    readonly additionalContext: string;
+    readonly hookEventName: 'PostToolUse';
+  };
+}
+
+export const projectHookDocument = (document: AgentDocument): ProjectedPostToolUseOutput => {
   if (document.status === 'failed' || document.root.kind !== 'result') {
     throw new Error('Hook render requires a successful Agent.Result document');
   }

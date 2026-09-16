@@ -1,7 +1,8 @@
-import { createFileRuntimeKernel } from '../runtime/state-file.js';
-import { lowerMcpResult } from '@agent-bundle/runtime';
-import { requestFlightRender } from '../flight/request-render.js';
+import { documentToCallToolResult } from '@agent-bundle/runtime';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+
+import { createFileRuntimeKernel } from '../runtime/state-file.js';
+import { requestAgentDocument } from '../flight/request-render.js';
 
 import { resolveStateFile, type McpRequestExtra, type ResolveStateOptions } from './resolve-state.js';
 
@@ -22,12 +23,12 @@ export const createMcpHandlers = (options: ResolveStateOptions): Record<string, 
   render_edit_timeline: async (input, extra) => {
     const stateFile = await resolveStateFile(options, extra);
     const snapshot = await createFileRuntimeKernel({ stateFile }).readSnapshot({ limit: input.limit });
-    return lowerMcpResult(
-      await requestFlightRender({ snapshot, stateFile, type: 'mcp/render-timeline' }),
+    return documentToCallToolResult(
+      await requestAgentDocument({ snapshot, stateFile, type: 'mcp/render-timeline' }),
     );
   },
   runtime_status: async (_input, extra) => {
     const stateFile = await resolveStateFile(options, extra);
-    return lowerMcpResult(await requestFlightRender({ stateFile, type: 'mcp/runtime-status' }));
+    return documentToCallToolResult(await requestAgentDocument({ stateFile, type: 'mcp/runtime-status' }));
   },
 });

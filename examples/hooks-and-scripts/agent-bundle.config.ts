@@ -8,7 +8,6 @@ export default defineConfig({
   plugin: {
     description: 'Hook simulation, script traces, logs, and recovery.',
     name: 'hooks-and-scripts',
-    version: '1.0.0',
   },
   // verify-release ships by convention: unclaimed plain scripts under
   // src/scripts/ are discovered. detect-risk stays explicitly configured
