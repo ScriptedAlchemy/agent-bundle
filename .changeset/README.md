@@ -129,14 +129,20 @@ because they change no publishable package.
    `pnpm check:release:ci`) and `release-candidate.yml` (the packed-release
    boundary, `pnpm check:release`) on the generated `changeset-release/main`
    branch after confirming the Version Packages PR exists, so no
-   close/reopen is needed. When a `CHANGESETS_GITHUB_TOKEN` is configured,
-   that token's push to `changeset-release/main` starts
-   `release-candidate.yml` directly.
+   close/reopen is needed. Each dispatched run posts its verdict as a commit
+   status on the candidate head (`CI (Version Packages candidate)`,
+   `Release candidate (Version Packages candidate)`), so the PR page and
+   `gh pr checks` show the gate; do not merge a candidate whose statuses are
+   missing or red. When a `CHANGESETS_GITHUB_TOKEN` is configured, that
+   token's push to `changeset-release/main` starts `release-candidate.yml`
+   directly.
 
 3. Merging Version Packages pushes a `Version Packages` commit to `main`
-   with no pending changesets. With publishing disabled (the default) the
-   workflow then runs the release gates (`pnpm check:release`) and stops;
-   nothing reaches npm.
+   with no pending changesets. The workflow runs the release gates
+   (`pnpm check:release`) and then `scripts/verify-registry-versions.sh`,
+   which fails the job unless every publishable `package.json` version
+   resolves on npm. With publishing disabled that step is red by design:
+   green means published, never "versioned but not shipped".
 4. Publishing is opt-in: set the repository variable
    `AGENT_BUNDLE_NPM_PUBLISH=true` and the `NPM_TOKEN` secret. The action
    then runs `pnpm release` (`pnpm check:release && changeset publish`) with

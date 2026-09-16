@@ -76,10 +76,11 @@ workspace packages, including the examples and this site, are not versioned or t
 Nothing is published to npm yet. The current release channel is the pkg.pr.new preview
 tarballs described in [Preview packages](../guide/distribution/preview-packages.mdx).
 Each `Release packages` run writes an explicit outcome to the workflow summary:
-`version-maintenance-only` (Version Packages PR refreshed), `qualified-without-publish`
-(the exact versioned candidate passed `pnpm check:release`), `published`, or `failed`.
-Disabled publication reports **NOT PUBLISHED**; registry verification runs only when
-publication is separately authorized.
+`version-maintenance-only` (Version Packages PR refreshed), `published` (every publishable
+`package.json` version resolved on npm; the stage list says whether this run published or
+the versions were already on the registry), or `failed`. A Version Packages merge whose versions
+are not on npm — publishing disabled, token missing, or a silent `changeset publish`
+failure — is `failed` and **NOT PUBLISHED**, never a green qualification.
 
 ## Native host smokes are opt-in
 
