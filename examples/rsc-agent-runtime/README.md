@@ -35,7 +35,7 @@ export default async function AfterFileEdit({ canonical }: AgentEventRouteProps<
 // An Agent Document route describes protocol-neutral output, not browser HTML.
 import { Agent } from '@agent-bundle/runtime';
 
-export function RenderTimeline({ snapshot }: { snapshot: { edits: unknown[]; stateVersion: number } }) {
+export function RenderTimeline({ snapshot }: { snapshot: { edits: Array<Record<string, string>>; stateVersion: number } }) {
   return (
     <Agent.Result value={snapshot}>
       <Agent.Text>{`Showing ${snapshot.edits.length} edits.`}</Agent.Text>
@@ -183,7 +183,7 @@ through the compiled `src/events/tool/after.tsx` route (Agent Document projectio
 state-kernel commit), replays the same native tool id from a second hook
 process to prove cross-process idempotency, then connects a real stdio MCP
 client to the built server over the same state file and asserts the
-RSC-lowered `render_edit_timeline` result, the shared edit snapshot, and the
+Agent Document `render_edit_timeline` result, the shared edit snapshot, and the
 linked MCP App resource. It contacts no real host and needs no credentials.
 
 To exercise the Claude package manually when an external host run is separately

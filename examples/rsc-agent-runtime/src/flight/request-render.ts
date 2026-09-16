@@ -236,6 +236,11 @@ export const requestAgentDocumentWithFlight = async (
       rendered = await requestFlightRenderWithFlight(request, { ...options, signal: dispatch.signal });
       return Readable.toWeb(Readable.from([rendered.flight])) as ReadableStream<Uint8Array>;
     },
+  }, {
+    limits: {
+      maxDocumentBytes: maximumFlightRenderBytes,
+      maxEventBytes: maximumFlightRenderBytes + 1_024,
+    },
   });
   const document = await dispatcher.dispatch({ invocation: renderInvocationFor(request), signal });
   if (rendered === undefined) throw new Error('Flight execution host returned no render result');
