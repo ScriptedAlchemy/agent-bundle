@@ -1076,6 +1076,130 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
   }
 }, 60_000);
 
+it('emitted install.mjs refuses a foreign destination that lacks artifact-manifest paths', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-foreign-manifest-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  const installer = join(bundle, 'install.mjs');
+  const foreignReceipt = join(destination, '.plugin-library-install.json');
+  try {
+    const writes = writesFor('cursor');
+    await mkdir(join(bundle, '.cursor-plugin'), { recursive: true });
+    await mkdir(join(destination, 'skills'), { recursive: true });
+    await Promise.all([
+      writeFile(installer, writes.get('install.mjs') ?? ''),
+      writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
+      writeFile(join(bundle, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
+      writeFile(join(bundle, 'payload.txt'), 'payload\n'),
+      writeFile(join(bundle, 'agent-bundle.compile-evidence.json'), '{}\n'),
+      writeFile(join(bundle, 'agent-bundle.manifest.json'), `${JSON.stringify({
+        files: [{ path: 'agent-bundle.compile-evidence.json' }, { path: 'payload.txt' }],
+        projections: [{ builtInHost: 'cursor', documents: { plugin: '.cursor-plugin/plugin.json' } }],
+      })}\n`),
+      writeFile(foreignReceipt, '{ "installer": "plugin-library" }\n'),
+      writeFile(join(destination, 'skills', 'SKILL.md'), '# kept\n'),
+    ]);
+
+    const refused = await run(installer, [], home);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain('Refusing foreign install');
+    expect(refused.stderr).not.toContain('ENOENT');
+    expect(await readFile(foreignReceipt, 'utf8')).toBe('{ "installer": "plugin-library" }\n');
+    expect(await readFile(join(destination, 'skills', 'SKILL.md'), 'utf8')).toBe('# kept\n');
+
+    const replaced = await run(installer, ['--replace'], home);
+    expect(replaced.code).toBe(1);
+    expect(replaced.stderr).toContain('Refusing foreign install');
+    expect(replaced.stderr).toContain('--replace does not apply');
+    expect(await readFile(join(destination, 'skills', 'SKILL.md'), 'utf8')).toBe('# kept\n');
+
+    await rm(join(bundle, 'agent-bundle.compile-evidence.json'));
+    const broken = await run(installer, [], home);
+    expect(broken.code).toBe(1);
+    expect(broken.stderr).toContain('bundle does not match its manifest: agent-bundle.compile-evidence.json is missing.');
+    expect(broken.stderr).not.toContain('lstat');
+    expect(await readFile(foreignReceipt, 'utf8')).toBe('{ "installer": "plugin-library" }\n');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('emitted install.mjs refuses a marketplace restage whose staged plugin lacks a newly declared path', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-marketplace-restage-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const installer = join(bundle, 'install.mjs');
+  const stagedPlugin = join(home, '.cursor', 'agent-bundle', 'marketplaces', 'install-fixture', 'plugins', 'install-fixture');
+  const manifest = (extra: readonly string[]) => `${JSON.stringify({
+    files: [{ path: 'payload.txt' }, ...extra.map((path) => ({ path }))],
+    projections: [{ builtInHost: 'cursor', documents: { plugin: '.cursor-plugin/plugin.json' } }],
+  })}\n`;
+  try {
+    const writes = writesFor('cursor');
+    await mkdir(join(bundle, '.cursor-plugin'), { recursive: true });
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    await Promise.all([
+      writeFile(installer, writes.get('install.mjs') ?? ''),
+      writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
+      writeFile(join(bundle, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
+      writeFile(join(bundle, 'payload.txt'), 'payload\n'),
+      writeFile(join(bundle, 'agent-bundle.manifest.json'), manifest([])),
+    ]);
+
+    const staged = await run(installer, ['--mode', 'marketplace'], home);
+    expect(staged).toMatchObject({ code: 0, stderr: '' });
+    expect(await readFile(join(stagedPlugin, 'payload.txt'), 'utf8')).toBe('payload\n');
+
+    await writeFile(join(bundle, 'extra.txt'), 'extra\n');
+    await writeFile(join(bundle, 'agent-bundle.manifest.json'), manifest(['extra.txt']));
+    const restaged = await run(installer, ['--mode', 'marketplace'], home);
+    expect(restaged.code).toBe(1);
+    expect(restaged.stderr).toContain('Refusing content collision');
+    expect(restaged.stderr).not.toContain('ENOENT');
+    expect(await readFile(join(stagedPlugin, 'payload.txt'), 'utf8')).toBe('payload\n');
+    await expect(readFile(join(stagedPlugin, 'extra.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('emitted install.mjs --uninstall --force removes present files from a pre-receipt copy and keeps state/', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-legacy-uninstall-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  const installer = join(bundle, 'install.mjs');
+  try {
+    const writes = writesFor('cursor');
+    await mkdir(join(bundle, '.cursor-plugin'), { recursive: true });
+    await mkdir(join(destination, '.cursor-plugin'), { recursive: true });
+    await mkdir(join(destination, 'state'), { recursive: true });
+    await Promise.all([
+      writeFile(installer, writes.get('install.mjs') ?? ''),
+      writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
+      writeFile(join(bundle, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
+      writeFile(join(bundle, 'payload.txt'), 'payload\n'),
+      writeFile(join(bundle, 'agent-bundle.manifest.json'), `${JSON.stringify({
+        files: [{ path: 'payload.txt' }],
+        projections: [{ builtInHost: 'cursor', documents: { plugin: '.cursor-plugin/plugin.json' } }],
+      })}\n`),
+      writeFile(join(destination, 'INSTALL.md'), 'legacy\n'),
+      writeFile(join(destination, 'install.mjs'), 'legacy\n'),
+      writeFile(join(destination, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
+      writeFile(join(destination, 'operator.txt'), 'operator\n'),
+      writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n'),
+    ]);
+
+    const removed = await run(installer, ['--uninstall', '--force'], home);
+    expect(removed).toMatchObject({ code: 0, stderr: '' });
+    await expect(readFile(join(destination, 'operator.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('emitted install.mjs marks new explicit state roots and retains pre-existing ones', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-state-ownership-mjs-'));
   const bundle = join(root, 'bundle');
