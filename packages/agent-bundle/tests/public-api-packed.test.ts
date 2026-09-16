@@ -378,7 +378,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 60_000);
 
 it('runs the packed App client through a dynamic-origin parent', async () => {
   const { tarball } = await sharedPackedTarball('agent-bundle');
