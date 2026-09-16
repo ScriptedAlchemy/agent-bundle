@@ -362,15 +362,19 @@ const generatedAppClientHtml = '<!doctype html><html><body><pre id="state">waiti
 
 const generatedPingTool = [
   "import { Agent } from '@agent-bundle/runtime';",
-  "import { appResourceUri } from 'agent-bundle/routes';",
+  "import { appResourceUri, defineTool } from 'agent-bundle/routes';",
   "import { createElement } from 'react';",
   "import { z } from 'zod';",
-  "export const config = { _meta: { ui: { resourceUri: appResourceUri('dashboard') } }, description: 'Ping from the App.' };",
   'export const inputSchema = z.object({ note: z.string() }).strict();',
   'export const resultSchema = z.object({ note: z.string() }).strict();',
-  'export default async function Ping({ input }: { input: z.infer<typeof inputSchema> }) {',
+  'export default defineTool({',
+  "  _meta: { ui: { resourceUri: appResourceUri('dashboard') } },",
+  "  description: 'Ping from the App.',",
+  '  inputSchema,',
+  '  resultSchema,',
+  '}, async (input) => {',
   "  return createElement(Agent.Result, { value: { note: input.note } }, createElement(Agent.Text, null, input.note));",
-  '}',
+  '});',
   '',
 ].join('\n');
 
@@ -962,14 +966,25 @@ it('streams an authored Suspense fallback to the stdio client before the render 
 it('projects thrown route errors as the SDK tool error or a JSON-RPC error, never as a layout-wrapped document', { retry: 2, timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-thrown-'));
   roots.push(root);
-  const throwing = (kind: string) => [
-    "import { z } from 'zod';",
-    `export const config = ${kind === 'resource' ? "{ mimeType: 'text/plain', uri: 'curator://broken' }" : "{ description: 'Throws.' }"};`,
-    `export const inputSchema = ${kind === 'resource' ? 'z.object({ uri: z.string() })' : 'z.object({}).strict()'};`,
-    'export const resultSchema = z.object({}).passthrough();',
-    `export default async function Broken() { throw new Error('${kind} route threw'); }`,
-    '',
-  ].join('\n');
+  const throwing = (kind: string) => kind === 'tool'
+    ? [
+        "import { defineTool } from 'agent-bundle/routes';",
+        "import { z } from 'zod';",
+        'export const inputSchema = z.object({}).strict();',
+        'export const resultSchema = z.object({}).passthrough();',
+        "export default defineTool({ description: 'Throws.', inputSchema, resultSchema }, async () => {",
+        "  throw new Error('tool route threw');",
+        '});',
+        '',
+      ].join('\n')
+    : [
+        "import { z } from 'zod';",
+        `export const config = ${kind === 'resource' ? "{ mimeType: 'text/plain', uri: 'curator://broken' }" : "{ description: 'Throws.' }"};`,
+        `export const inputSchema = ${kind === 'resource' ? 'z.object({ uri: z.string() })' : 'z.object({}).strict()'};`,
+        'export const resultSchema = z.object({}).passthrough();',
+        `export default async function Broken() { throw new Error('${kind} route threw'); }`,
+        '',
+      ].join('\n');
   await writeGeneratedProject(root, {
     // A layout that would stamp `_meta` on every document, to show it is absent when the route throws.
     'src/layout.tsx': [

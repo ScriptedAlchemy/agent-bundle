@@ -24,7 +24,7 @@ import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { gatedRouteFiles } from './helpers/gated-routes.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
-import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { exampleNodeModules } from './helpers/workspace-paths.ts';
 import { replaceWatchedSourceAndAwaitRebuild } from './support/watched-files.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 
@@ -461,7 +461,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   await mkdir(assetsRoot, { recursive: true });
   await Promise.all([
-    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir'),
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route invocation</title>'),
   ]);
   try {
@@ -1394,20 +1394,25 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       project.root,
       reportRoutePath,
       [
+        "import { defineTool } from 'agent-bundle/routes';",
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
         "import './missing.js';",
         '',
-        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"}},\"required\":[\"service\"],\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
-        "export const config = { inputJsonSchema: { type: 'object', additionalProperties: false, properties: { service: { type: 'string' } }, required: ['service'] } };",
         "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
         'export const resultSchema = z.object({ service: z.string() }).strict();',
         '',
-        'export default async function Report({ input }) {',
+        'export default defineTool({',
+        "  inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"}},\"required\":[\"service\"],\"type\":\"object\"},",
+        "  annotations: { readOnlyHint: true },",
+        "  description: 'Reports one service.',",
+        '  inputSchema,',
+        '  resultSchema,',
+        '}, async (input) => {',
         '  const service = `rebuilt-${input.service}`;',
         '  return createElement(Agent.Result, { value: { service } }, createElement(Agent.Text, null, `Service ${service}`));',
-        '}',
+        '});',
         '',
       ].join('\n'),
       { timeoutMs: 20_000 },
@@ -1439,18 +1444,24 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       project.root,
       reportRoutePath,
       [
+        "import { defineTool } from 'agent-bundle/routes';",
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
         '',
-        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"},\"source\":{\"type\":\"string\"}},\"required\":[\"service\"],\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
         "export const inputSchema = z.object({ service: z.string().min(1), source: z.string().optional() }).strict();",
         'export const resultSchema = z.object({ service: z.string() }).strict();',
         '',
-        'export default async function Report({ input }) {',
+        'export default defineTool({',
+        "  inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"},\"source\":{\"type\":\"string\"}},\"required\":[\"service\"],\"type\":\"object\"},",
+        "  annotations: { readOnlyHint: true },",
+        "  description: 'Reports one service.',",
+        '  inputSchema,',
+        '  resultSchema,',
+        '}, async (input) => {',
         '  const service = `rebuilt-${input.service}`;',
         '  return createElement(Agent.Result, { value: { service } }, createElement(Agent.Text, null, `Service ${service}`));',
-        '}',
+        '});',
         '',
       ].join('\n'),
       { timeoutMs: 20_000 },
@@ -1509,7 +1520,7 @@ it('fails closed when a valid host is ineligible for the compiled event route', 
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   await mkdir(assetsRoot, { recursive: true });
   await Promise.all([
-    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir'),
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route invocation host binding</title>'),
   ]);
   try {
@@ -1628,7 +1639,7 @@ it('enforces compiled handler, MCP schemas, and operator env across production s
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   await mkdir(assetsRoot, { recursive: true });
   await Promise.all([
-    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir'),
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route parity</title>'),
   ]);
   try {
@@ -1761,7 +1772,7 @@ it('publishes invocation routes only after a successful initial or recovered bui
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   await mkdir(assetsRoot, { recursive: true });
   await Promise.all([
-    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir'),
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route publication gate</title>'),
   ]);
   try {
@@ -1805,6 +1816,7 @@ it('publishes invocation routes only after a successful initial or recovered bui
       project.root,
       reportRoutePath,
       [
+        "import { defineTool } from 'agent-bundle/routes';",
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
@@ -1812,9 +1824,9 @@ it('publishes invocation routes only after a successful initial or recovered bui
         'export const inputSchema = z.object({}).strict();',
         'export const resultSchema = z.object({ version: z.string() }).strict();',
         '',
-        'export default async function Report() {',
+        'export default defineTool({ inputSchema, resultSchema }, async () => {',
         "  return createElement(Agent.Result, { value: { version: 'published' } }, createElement(Agent.Text, null, 'Published route.'));",
-        '}',
+        '});',
         '',
       ].join('\n'),
       { timeoutMs: 10_000 },
@@ -1835,6 +1847,7 @@ it('publishes invocation routes only after a successful initial or recovered bui
     await server.close();
     server = undefined;
     await writeFile(reportRoutePath, [
+      "import { defineTool } from 'agent-bundle/routes';",
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
       "import { z } from 'zod';",
@@ -1843,9 +1856,9 @@ it('publishes invocation routes only after a successful initial or recovered bui
       'export const inputSchema = z.object({}).strict();',
       'export const resultSchema = z.object({ version: z.string() }).strict();',
       '',
-      'export default async function Report() {',
+      'export default defineTool({ inputSchema, resultSchema }, async () => {',
       "  return createElement(Agent.Result, { value: { version: 'unpublished' } }, createElement(Agent.Text, null, 'Unpublished route.'));",
-      '}',
+      '});',
       '',
     ].join('\n'));
     server = await startDevServer({
@@ -1941,7 +1954,7 @@ it('bounds the render history a compiled child produces by count and bytes acros
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   await mkdir(assetsRoot, { recursive: true });
   await Promise.all([
-    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir'),
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route invocation retention</title>'),
   ]);
   try {

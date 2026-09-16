@@ -80,7 +80,7 @@ const createCliProject = async (
   await mkdir(join(root, 'src', 'skills', 'review'), { recursive: true });
   if (mcpApp) await mkdir(join(root, 'views'), { recursive: true });
   await Promise.all([
-    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(
       join(root, 'agent-bundle.config.ts'),
       [
@@ -118,7 +118,7 @@ const createServiceProject = async (): Promise<string> => {
   const root = join(parent, 'project with spaces');
   await mkdir(join(root, 'src'), { recursive: true });
   await Promise.all([
-    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(
       join(root, 'agent-bundle.config.ts'),
       [

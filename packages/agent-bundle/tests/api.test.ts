@@ -1553,6 +1553,7 @@ it('returns an output-independent project context without absolute project paths
       'configDigest',
       'configPath',
       'modelDigest',
+      'packageVersion',
       'revision',
       'sourceInputs',
     ]);
@@ -1840,6 +1841,7 @@ it('builds conventional src/scripts modules beside explicit entries', async () =
   const root = join(parent, 'project with spaces');
   await mkdir(join(root, 'src', 'scripts'), { recursive: true });
   await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(
       join(root, 'agent-bundle.config.ts'),
       [
@@ -1940,6 +1942,7 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
   const output = join(root, 'artifact');
   await mkdir(join(root, 'src'), { recursive: true });
   await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(
       join(root, 'agent-bundle.config.ts'),
       [
@@ -2039,6 +2042,7 @@ it('canonicalizes copied script extensions in emitted artifact paths', async () 
   const output = join(root, 'artifact');
   await mkdir(join(root, 'src'), { recursive: true });
   await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  plugin: { name: 'uppercase-script-fixture' },",

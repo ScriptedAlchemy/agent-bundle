@@ -99,7 +99,7 @@ it('types every route-aware public surface from the generated route registration
     "export default defineTool({",
     "  inputSchema,",
     "  resultSchema,",
-    "}, async () => { return { status: 'ready' as const }; });",
+    "}, async () => undefined);",
     ].join('\n')),
     writeProjectFile(root, 'src/mcp/curator/tools/find.ts', [
     "import { defineTool } from 'agent-bundle/routes';",
@@ -109,7 +109,7 @@ it('types every route-aware public surface from the generated route registration
     "export default defineTool({",
     "  inputSchema,",
     "  resultSchema,",
-    "}, async () => { return { hits: 1 }; });",
+    "}, async () => undefined);",
     ].join('\n')),
     // A second server registering the same tool name: the wire helpers see the union of both inputs.
     writeProjectFile(root, 'src/mcp/shelf/tools/find.ts', [
@@ -120,7 +120,7 @@ it('types every route-aware public surface from the generated route registration
     "export default defineTool({",
     "  inputSchema,",
     "  resultSchema,",
-    "}, async () => { return { shelved: true }; });",
+    "}, async () => undefined);",
     ].join('\n')),
     writeProjectFile(root, 'src/mcp/curator/prompts/brief.ts', [
       "import { z } from 'zod';",

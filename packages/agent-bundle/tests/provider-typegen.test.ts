@@ -95,7 +95,7 @@ it('types await context.provider(key) from the generated provider declarations',
     "export default defineTool({",
     "  inputSchema,",
     "  resultSchema,",
-    "}, async () => { return { status: 'ready' as const }; });",
+    "}, async () => undefined);",
     ].join('\n')),
     writeProjectFile(root, 'assertions.ts', [
       "import { agent } from '@agent-bundle/runtime';",

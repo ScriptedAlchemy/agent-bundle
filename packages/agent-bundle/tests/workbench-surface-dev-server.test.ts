@@ -9,7 +9,7 @@ import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { inspectWorkbenchSurface, workbenchLeafPath } from '../src/test/index.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
-import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { exampleNodeModules } from './helpers/workspace-paths.ts';
 
 /**
  * The workbench-surface level claims to hand a consumer exactly what the dev
@@ -79,7 +79,7 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   await mkdir(assetsRoot, { recursive: true });
   await Promise.all([
-    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir'),
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Workbench surface</title>'),
   ]);
   try {

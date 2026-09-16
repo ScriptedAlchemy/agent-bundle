@@ -11,7 +11,7 @@ import type { EventTraceReceipt } from '../src/events/trace-receipt.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
-import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { exampleNodeModules } from './helpers/workspace-paths.ts';
 import { replaceWatchedSourceAndAwaitRebuild } from './support/watched-files.ts';
 
 const runHook = (
@@ -74,7 +74,7 @@ it('serves replay and live trace entries and lowers build failures', { timeout: 
   let trace: TraceHub | undefined;
   await mkdir(assetsRoot, { recursive: true });
   await Promise.all([
-    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir'),
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Trace</title>'),
   ]);
   try {

@@ -588,7 +588,13 @@ it('publishes routes created and deleted below source roots absent at startup', 
     await mkdir(join(project.root, 'src', 'mcp', 'probe', 'tools'), { recursive: true });
     await writeFile(
       toolPath,
-      'export const inputSchema = {}; export const resultSchema = {}; export default async () => undefined;\n',
+      [
+        "import { defineTool } from 'agent-bundle/routes';",
+        'export const inputSchema = {};',
+        'export const resultSchema = {};',
+        'export default defineTool({ inputSchema, resultSchema }, async () => undefined);',
+        '',
+      ].join('\n'),
     );
     await publication(3);
     const withTool = await activeManifest();

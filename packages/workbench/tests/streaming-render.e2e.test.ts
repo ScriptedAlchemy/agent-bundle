@@ -7,7 +7,7 @@ import { expect } from '@rstest/playwright';
 import { inspectWorkbenchSurface } from '../../agent-bundle/src/test/index.ts';
 import { gatedRouteFiles } from '../../agent-bundle/tests/helpers/gated-routes.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { agentBundleNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
+import { exampleNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { applicationLeafForRouteId } from '../src/application/application-tree-model.ts';
 import {
@@ -47,7 +47,7 @@ e2e('renders a compiled MCP tool\'s Suspense fallback before its gated child rel
     dispose: (project) => removeProjectFixture(project.root),
     setup: async (project) => {
       await mkdir(join(project.root, '.agent-bundle'), { recursive: true });
-      await symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir');
+      await symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir');
     },
     start: (project) => startWorkbenchDevServer(project),
   }, async (server, project) => {
