@@ -851,7 +851,7 @@ it('fails Codex replace closed for disabled or unknown enablement before any mut
     expect((disabledError as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'codex' });
     expect((disabledError as DiagnosticError).diagnostics[0]?.message).toContain('enabled: false');
     expect((disabledError as DiagnosticError).diagnostics[0]?.message)
-      .toContain('no settings-preserving update API');
+      .toContain('no qualified settings-preserving update API');
     expect(disabled.calls.map((call) => call.args.join(' '))).toEqual(['plugin list --json']);
     expect(await readFile(join(codexHome, 'config.toml'), 'utf8')).toBe(prior);
 
