@@ -762,7 +762,13 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
 
   const codex = writesFor('codex').get('INSTALL.md') ?? '';
   expect(codex).toContain('Reinstall after a same-version rebuild');
-  expect(codex).toContain('codex plugin remove install-fixture@install-fixture-marketplace');
+  expect(codex).toContain('codex plugin marketplace add ./');
+  expect(codex).toContain('codex plugin add install-fixture@install-fixture-marketplace');
+  const reinstall = (codex.split('### Reinstall after a same-version rebuild')[1] ?? '').split('### Uninstall')[0] ?? '';
+  const reinstallBlocks = [...reinstall.matchAll(/```sh\n([\s\S]*?)```/gu)].map((match) => match[1]!);
+  expect(reinstallBlocks.join('\n')).not.toContain('codex plugin remove');
+  expect(codex).toContain('no qualified settings-preserving update API');
+  expect(codex).toContain('AB7004');
   expect(codex).toContain('--replace');
 
   for (const target of ['cursor', 'portable']) {

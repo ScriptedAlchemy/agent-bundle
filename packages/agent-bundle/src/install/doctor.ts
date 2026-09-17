@@ -1749,7 +1749,9 @@ const publicHostReplaceRecipe = (host: Exclude<DoctorHost, 'cursor'>, scopeArgum
   ? `Rerun \`agent-bundle install claude --from <bundle-dir>${scopeArguments}\`; same-version content drift is replaced through ` +
     '`claude plugin uninstall --keep-data` + `claude plugin install` because Claude\'s `plugin update` is version-gated.'
   : 'Rerun `agent-bundle install codex --from <bundle-dir>`; same-version content drift is replaced through ' +
-    '`codex plugin remove` + `codex plugin add`.';
+    '`codex plugin add` so plugin settings and nested MCP overrides in config.toml survive. ' +
+    'Replacement is refused (`AB7004`) when plugin list reports `enabled: false` or omits `enabled`, ' +
+    'because the native plugin CLI has no qualified settings-preserving update API.';
 
 /**
  * `AB7325`: the host lists the plugin but refused to load it. The message
