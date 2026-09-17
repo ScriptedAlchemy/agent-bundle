@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ import { chromium, type Page } from 'playwright';
 import { closeServer } from './support/http.ts';
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { browserLaunchOptions } from './support/workbench-e2e.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const pageComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-page.tsx');
@@ -171,7 +172,7 @@ const mountedPageFixture = async (mode: 'artifact' | 'runtime' | 'runtime-direct
     close: async () => {
       await closeServer(outer);
       await closeServer(sandbox);
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     },
     /**
      * Resolves with the next sandbox document request the server accepts.

@@ -11,6 +11,7 @@ import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const cliEntry = join(import.meta.dirname, '..', 'bin', 'agent-bundle.js');
 
@@ -179,7 +180,7 @@ it('fails the connected host session closed with AB8024 when its active epoch is
     const artifact = server.status().artifact;
     if (artifact.state !== 'active') throw new Error('Expected an active epoch.');
     const epochId = artifact.activeEpoch.id;
-    await rm(join(project.root, '.agent-bundle', 'epochs', epochId), { force: true, recursive: true });
+    await removeTree(join(project.root, '.agent-bundle', 'epochs', epochId));
     await rm(join(project.root, '.agent-bundle', 'epochs', '.metadata', `${epochId}.json`), { force: true });
 
     await expect(client.listTools()).rejects.toMatchObject({

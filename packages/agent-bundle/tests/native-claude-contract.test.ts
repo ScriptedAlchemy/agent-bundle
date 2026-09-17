@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from '@rstest/core';
+import { removeTree } from './support/remove-tree.ts';
 
 const loadNativeClaudeContract = async () => import('./support/native-claude-smoke.ts').catch(() => undefined);
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE === '1' ? it : it.skip;
@@ -23,7 +24,7 @@ const withIsolatedHome = async <T>(run: (homeDirectory: string) => Promise<T>): 
   try {
     return await run(homeDirectory);
   } finally {
-    await rm(homeDirectory, { force: true, recursive: true });
+    await removeTree(homeDirectory);
   }
 };
 
@@ -305,7 +306,7 @@ it('proves the normal Claude config, settings, and plugins stay unchanged withou
       'claude-native.normal-home.changed',
     ]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -360,7 +361,7 @@ describe('the default sibling Claude state file', () => {
       if (initialState !== undefined) await writeFile(join(defaultHome, '.claude.json'), initialState);
       await operation(defaultHome);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   };
 
@@ -762,6 +763,6 @@ nativeIt('runs the checked-in candidate with the existing signed-in Claude subsc
 
     expect(report.status).toBe('passed');
   } finally {
-    await rm(fixture, { force: true, recursive: true });
+    await removeTree(fixture);
   }
 }, 120_000);

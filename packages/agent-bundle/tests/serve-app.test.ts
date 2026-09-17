@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +16,7 @@ import {
 import { MCP_APP_PROTOCOL_VERSION } from '../src/dev/mcp-apps/mcp-app-bridge.ts';
 import { WEB_HOST_TOKEN_HEADER } from '../src/web-host/page.ts';
 import { timeScale } from './support/time-scale.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * `agent-bundle serve-app` end to end over a real packed server: build the
@@ -92,7 +93,7 @@ beforeAll(async () => {
 }, 180_000 * timeScale);
 
 afterAll(async () => {
-  await rm(fixtureRoot, { force: true, recursive: true });
+  await removeTree(fixtureRoot);
 });
 
 /** Sends one request with an explicit `Host` header, which `fetch` would overwrite. */

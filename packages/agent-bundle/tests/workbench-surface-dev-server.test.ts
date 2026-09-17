@@ -1,4 +1,4 @@
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -10,6 +10,7 @@ import { startDevServer } from '../src/dev/workbench-server.ts';
 import { inspectWorkbenchSurface, workbenchLeafPath } from '../src/test/index.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * The workbench-surface level claims to hand a consumer exactly what the dev
@@ -146,6 +147,6 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
     expect(surface.advanced).toEqual(['artifact', 'protocol', 'hosts', 'logs']);
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });

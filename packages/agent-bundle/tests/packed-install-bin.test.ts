@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -19,6 +19,7 @@ import {
   sharedPackedTarball,
 } from './support/shared-pack.ts';
 import { timeScale } from './support/time-scale.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const packageName = 'install-bin-fixture';
@@ -167,11 +168,11 @@ beforeAll(async () => {
   // `packed-deleted-source`: the source project, its build, and its node_modules
   // (the only `agent-bundle` on disk) are gone before the bin runs.
   await removeProjectSource({ projectRoot: project });
-  await rm(project, { force: true, recursive: true });
+  await removeTree(project);
 }, 300_000);
 
 afterAll(async () => {
-  if (consumer.length > 0) await rm(consumer, { force: true, recursive: true });
+  if (consumer.length > 0) await removeTree(consumer);
 });
 
 it('ships a self-contained installer bin that binds its own npm root', async () => {

@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,6 +29,7 @@ import type {
 } from '../src/host-contracts/native-claude-contract.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
 import { deepFreeze } from '../src/core/freeze.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE === '1' ? it : it.skip;
@@ -143,8 +144,8 @@ const withClaudeContext = async (
       await writer.close();
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(root);
+    await removeTree(project.root);
   }
 };
 
@@ -708,7 +709,7 @@ it('cancels a running child process and leaves no live process behind', async ()
     expect(outcome.failure).toBeUndefined();
     expect(() => process.kill(Number(pid), 0)).toThrow();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

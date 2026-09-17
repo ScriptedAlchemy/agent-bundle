@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import type { AgentBundleConfig, NormalizationTargetRegistry } from '../src/core
 import type { DiscoveredProject } from '../src/config/discover.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { CompiledAgentRoute, CompiledRouteGraph } from '../src/routes/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const root = '/workspace/web-config';
 const configPath = `${root}/agent-bundle.config.ts`;
@@ -290,7 +291,7 @@ it('keeps a conventional src/cli.ts executable when only web is configured', asy
       recovery: 'Move that executable\'s commands under src/cli/** so the framework generates the bin, or remove web.apps.',
     }]);
   } finally {
-    await rm(fixtureRoot, { force: true, recursive: true });
+    await removeTree(fixtureRoot);
   }
 });
 

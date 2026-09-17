@@ -35,6 +35,7 @@ import { toPosixPath } from '../src/core/paths.ts';
 import { runCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface CommandCall {
   readonly args: readonly string[];
@@ -350,7 +351,7 @@ it.each([
     // (plugin first, then the marketplace this run created), so nothing stays registered without a receipt.
     // Inject the write failure after host verbs: chmod on the store is a no-op
     // on Windows and as root, and occupying the path breaks the pre-write read.
-    await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
+    await removeTree(join(hostRoot, 'agent-bundle'));
     const writeReceipt = rs.spyOn(installReceipt, 'writeStoredInstallReceipt')
       .mockRejectedValueOnce(new Error('receipt write failed'));
     const unwritable: CommandCall[] = [];
@@ -378,7 +379,7 @@ it.each([
       writeReceipt.mockRestore();
     }
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -475,7 +476,7 @@ it('replaces a stale same-version Claude install through uninstall + install and
       expect(malformed.calls).toHaveLength(1);
     }
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -542,7 +543,7 @@ it('fails a Claude install (AB7006) when plugin list --json reports load errors 
     await expect(installBundle({ ...isolated(fixture), commandRunner: healthy.runner, from: fixture.from, host: 'claude', scope: 'user' }))
       .resolves.toMatchObject({ state: 'already-installed' });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -688,7 +689,7 @@ it('honours --replace for Codex through add-only and fails closed without a usab
       expect(unusable.calls).toHaveLength(1);
     }
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -734,7 +735,7 @@ it('preserves Codex nested MCP overrides and concurrent config edits across enab
     expect(config).toContain('model = "changed-by-add"');
     expect(config).not.toContain('model = "keep-me"');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -777,7 +778,7 @@ it('keeps Codex plugin settings when add fails during enabled replace', async ()
     expect(config).toContain(`${codexPluginNestedMcp}\nenabled = false`);
     expect(config).toContain('model = "changed-by-add"');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -825,7 +826,7 @@ it('does not plugin-remove after a failed Codex replace receipt write', async ()
     expect(config).not.toBe(prior);
   } finally {
     writeReceipt.mockRestore();
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -888,7 +889,7 @@ it('fails Codex replace closed for disabled or unknown enablement before any mut
     expect(unreadable.calls.map((call) => call.args.join(' '))).toEqual(['plugin list --json']);
     expect((await stat(join(codexHome, 'config.toml'))).isDirectory()).toBe(true);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -917,7 +918,7 @@ it.each(['claude', 'codex', 'cursor'] as const)(
       });
       expect(calls).toEqual([]);
     } finally {
-      await rm(fixture.cleanupRoot, { force: true, recursive: true });
+      await removeTree(fixture.cleanupRoot);
     }
   },
 );
@@ -935,7 +936,7 @@ it('reads application identity from the manifest instead of the host plugin docu
       version: '1.2.3',
     });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -954,7 +955,7 @@ it('reports a non-canonical artifact manifest as AB7001', async () => {
       target: 'cursor',
     }]);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -975,7 +976,7 @@ it('reports a host absent from manifest projections as AB7001', async () => {
       })],
     });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -997,7 +998,7 @@ it('selects the host projection by adapter identity, not by the selected name', 
       })],
     });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1013,7 +1014,7 @@ it('reports a manifest marketplace pointer at a missing document as AB7001', asy
       })],
     });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1031,7 +1032,7 @@ it('distinguishes an unreadable manifest from an absent one: a directory in its 
       target: 'cursor',
     }]);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1060,7 +1061,7 @@ it('fails with a typed diagnostic when the public host CLI is missing', async ()
       target: 'codex',
     }]);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1078,7 +1079,7 @@ it('rejects scopes the selected host does not support', async () => {
     expect(error).toBeInstanceOf(DiagnosticError);
     expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7003', target: 'codex' }]);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1127,8 +1128,8 @@ it('copies a Cursor bundle into a fake home and is idempotent', async () => {
     ]);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1141,7 +1142,7 @@ it('matches manifest inventory to the walk inventory for a built root', async ()
     const indexed = await manifestInventory(fixture.bundleRoot, identity.manifest);
     expect(indexed).toEqual(walked);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1160,8 +1161,8 @@ it('refuses a copy whose landed bytes are not the verified inventory', async () 
       .rejects.toThrow(/^--from root changed while it was being copied: copied content [0-9a-f]{12} differs from verified content [0-9a-f]{12}\.$/u);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(staging, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(staging),
     ]);
   }
 });
@@ -1181,8 +1182,8 @@ it('installs only manifest-indexed files and records the installed-copy hash', a
     expect(installed.contentHash).toBe(receipt?.contentHash);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1204,8 +1205,8 @@ it('reports manifest-indexed byte drift as AB7001 with the path', async () => {
     }]);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1227,8 +1228,8 @@ posixPermissionIt('reports manifest-indexed mode drift as AB7001', async () => {
     }]);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1313,7 +1314,7 @@ posixPermissionIt('accepts npm normalization while preserving executable-bit tam
     await chmod(join(installedRoot, 'executable.mjs'), 0o644);
     expect((await installedBundleInventory(installedRoot, 'cursor')).hash).not.toBe(current.hash);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1331,8 +1332,8 @@ it('copies and hashes an operator .env beside the artifact', async () => {
     expect((await readInstallReceipt(destination))?.files).toContain('.env');
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1396,15 +1397,15 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect((await readInstallReceipt(destination))?.directories).toEqual(['.cursor-plugin', 'skills', 'skills/new']);
-    await rm(join(fixture.bundleRoot, 'operator-dir'), { recursive: true });
-    await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+    await removeTree(join(fixture.bundleRoot, 'operator-dir'));
+    await removeTree(join(fixture.bundleRoot, 'skills'));
     await refreshCursorBundle(fixture);
     expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })).toMatchObject({ state: 'replaced' });
     expect((await stat(join(destination, 'operator-dir'))).isDirectory()).toBe(true);
     expect(await readdir(join(destination, 'operator-dir'))).toEqual([]);
     await expect(access(join(destination, 'skills'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await readInstallReceipt(destination))?.directories).toEqual(['.cursor-plugin']);
-    await rm(join(destination, 'operator-dir'), { recursive: true });
+    await removeTree(join(destination, 'operator-dir'));
     await mkdir(join(fixture.bundleRoot, 'skills', 'new'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'skills', 'new', 'SKILL.md'), '# new\n');
     await refreshCursorBundle(fixture);
@@ -1425,8 +1426,8 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     expect(await readInstallReceipt(destination)).toMatchObject({ contentHash: artifact.hash });
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1485,8 +1486,8 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
     expect(await readFile(join(destination, 'dropped-by-rebuild.txt'), 'utf8')).toBe('old artifact file\n');
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1509,8 +1510,8 @@ it('fails closed when Cursor is not detected in the selected home', async () => 
     }]);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1542,8 +1543,8 @@ it('reports a Cursor home it cannot inspect as AB7004 for the cursor host, like 
   } finally {
     await chmod(home, 0o755);
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(parent, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(parent),
     ]);
   }
 });
@@ -1579,8 +1580,8 @@ it('removes the staging parent after a failed replacement and re-raises the refu
     await expect(readFile(join(destination, 'skills', 'new', 'SKILL.md'), 'utf8')).resolves.toBe('# operator-owned\n');
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1627,7 +1628,7 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
       'agent-bundle.manifest.json',
       'payload.txt/nested.md',
     ]);
-    await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
+    await removeTree(join(fixture.bundleRoot, 'payload.txt'));
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat again\n');
     await refreshCursorBundle(fixture);
     const toFile = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
@@ -1654,7 +1655,7 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     expect(replacedBesideState).toMatchObject({ state: 'replaced' });
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
     expect((await readInstallReceipt(destination))?.files.some((file) => file.startsWith('state/'))).toBe(false);
-    await rm(join(fixture.bundleRoot, 'state'), { recursive: true });
+    await removeTree(join(fixture.bundleRoot, 'state'));
 
     // Flipping only the executable bit is a content change: the installed copy must receive it.
     // Windows stores no Unix execute bits; chmod 0755 is a no-op there.
@@ -1692,7 +1693,7 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     expect((emptyCollision as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
     expect((emptyCollision as DiagnosticError).diagnostics[0]?.message).toContain('empty-dir');
     await rm(join(fixture.bundleRoot, 'empty-dir'));
-    await rm(join(destination, 'empty-dir'), { recursive: true });
+    await removeTree(join(destination, 'empty-dir'));
 
     // An owned directory that also holds an unowned empty subdirectory is a collision, not a restructure.
     await rm(join(fixture.bundleRoot, 'payload.txt'));
@@ -1701,14 +1702,14 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     await mkdir(join(destination, 'payload.txt', 'scratch'));
-    await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
+    await removeTree(join(fixture.bundleRoot, 'payload.txt'));
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat\n');
     await refreshCursorBundle(fixture);
     const emptyNested = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect((emptyNested as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
     expect(await readFile(join(destination, 'payload.txt', 'nested.md'), 'utf8')).toBe('# nested\n');
-    await rm(join(destination, 'payload.txt', 'scratch'), { recursive: true });
+    await removeTree(join(destination, 'payload.txt', 'scratch'));
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
 
     // A directory that also holds an unowned file is a collision, not a restructure.
@@ -1718,7 +1719,7 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     await refreshCursorBundle(fixture);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     await writeFile(join(destination, 'payload.txt', 'operator.md'), 'mine\n');
-    await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
+    await removeTree(join(fixture.bundleRoot, 'payload.txt'));
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat\n');
     await refreshCursorBundle(fixture);
     const collision = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
@@ -1727,8 +1728,8 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     expect(await readFile(join(destination, 'payload.txt', 'operator.md'), 'utf8')).toBe('mine\n');
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1757,7 +1758,7 @@ it('refuses to hash or write through a symlinked directory inside a receipt-mana
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
 
     await rm(join(destination, 'skills'));
-    await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+    await removeTree(join(fixture.bundleRoot, 'skills'));
     await refreshCursorBundle(fixture);
 
     // A symlinked receipt is never deletion authority.
@@ -1780,13 +1781,13 @@ it('refuses to hash or write through a symlinked directory inside a receipt-mana
       `Refusing unsupported filesystem entry "${installReceiptFile}"`,
     );
     await rm(join(elsewhere, 'receipt.json'));
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
     expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' }))
       .toMatchObject({ state: 'installed' });
 
     // An owned path whose ancestor became a symlink (development installs re-point top-level directories).
     await cp(join(destination, '.cursor-plugin'), join(destination, '.real-manifest'), { recursive: true });
-    await rm(join(destination, '.cursor-plugin'), { recursive: true });
+    await removeTree(join(destination, '.cursor-plugin'));
     await symlink(join(destination, '.real-manifest'), join(destination, '.cursor-plugin'));
     const owned = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
       .catch((failure: unknown) => failure);
@@ -1794,9 +1795,9 @@ it('refuses to hash or write through a symlinked directory inside a receipt-mana
     expect((owned as DiagnosticError).diagnostics[0]?.message).toContain('Refusing unsupported filesystem entry ".cursor-plugin"');
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
-      rm(elsewhere, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
+      removeTree(elsewhere),
     ]);
   }
 });
@@ -1893,7 +1894,7 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
     await writeJson(join(root, installReceiptFile), current);
     expect(await readInstallReceipt(root)).toEqual(current);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1916,19 +1917,19 @@ posixPermissionIt('tree inventory refuses paths that could not round-trip throug
     await mkdir(join(fixture.bundleRoot, 'skills', 'odd.'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'skills', 'odd.', 'SKILL.md'), '# odd\n');
     await expect(treeInventory(fixture.bundleRoot)).rejects.toThrow('Refusing unsupported filesystem entry "skills/odd./SKILL.md"');
-    await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+    await removeTree(join(fixture.bundleRoot, 'skills'));
     // So is a directory spelled like the receipt: on a case-insensitive filesystem it is the receipt's path.
     await mkdir(join(fixture.bundleRoot, '.Agent-Bundle-Install.json'));
     await writeFile(join(fixture.bundleRoot, '.Agent-Bundle-Install.json', 'payload'), 'odd\n');
     await expect(treeInventory(fixture.bundleRoot)).rejects.toThrow(
       'Refusing unsupported filesystem entry ".Agent-Bundle-Install.json/payload"',
     );
-    await rm(join(fixture.bundleRoot, '.Agent-Bundle-Install.json'), { recursive: true });
+    await removeTree(join(fixture.bundleRoot, '.Agent-Bundle-Install.json'));
     expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })).toMatchObject({ state: 'installed' });
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -1971,8 +1972,8 @@ it('never lets a receipt claim runtime state: a receipt owning state/ reads as l
     expect((await readInstallReceipt(destination))?.files.some((file) => file.startsWith('state/'))).toBe(false);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2009,8 +2010,8 @@ posixPermissionIt('refuses a receipt that is not a regular file before reading i
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2038,7 +2039,7 @@ it('refuses foreign Cursor directories even with --replace and gates version col
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('someone else\n');
 
     // A different plugin's receipt-managed install at this path is foreign as well, even byte-identical.
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     const receipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
     await writeJson(join(destination, installReceiptFile), { ...receipt, plugin: 'other-plugin' });
@@ -2053,7 +2054,7 @@ it('refuses foreign Cursor directories even with --replace and gates version col
     expect((otherError as DiagnosticError).diagnostics[0]?.message).toContain('installed other-plugin@1.2.3');
 
     // A receipt-managed install of this plugin at another version needs --replace.
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     await writeJson(join(destination, '.cursor-plugin/plugin.json'), { name: 'install-fixture', version: '9.0.0' });
     const versionError = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
@@ -2069,8 +2070,8 @@ it('refuses foreign Cursor directories even with --replace and gates version col
     });
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2099,8 +2100,8 @@ it('refuses symlinks in a Cursor source bundle', async () => {
     }]);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2127,8 +2128,8 @@ it('refuses a symlinked Cursor install destination even when its content matches
     );
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2154,8 +2155,8 @@ it('rejects a Cursor plugin name that could escape the local install root', asyn
     await expect(access(join(home, '.cursor', 'plugins', 'escape'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2254,8 +2255,8 @@ it('stages a committed local marketplace repository for Cursor in marketplace mo
     await expect(access(join(home, '.cursor', 'plugins', 'local', 'install-fixture'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2339,8 +2340,8 @@ it('re-runs marketplace mode idempotently with real git and refuses collisions',
     expect((versionError as DiagnosticError).diagnostics[0]?.message).toContain('version collision');
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2365,8 +2366,8 @@ it('fails closed without git in marketplace mode and leaves no staged repository
     await expect(access(marketplaceRepo(home))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2377,7 +2378,7 @@ it('refuses marketplace mode when the manifest points at a missing Cursor plugin
   await mkdir(join(home, '.cursor'));
   const { calls, runner } = recordingRunner();
   try {
-    await rm(join(fixture.bundleRoot, '.cursor-plugin'), { recursive: true });
+    await removeTree(join(fixture.bundleRoot, '.cursor-plugin'));
     await writeJson(join(fixture.bundleRoot, 'plugin.json'), { name: 'install-fixture', version: '1.2.3' });
     const error = await installBundle({
       commandRunner: runner,
@@ -2408,8 +2409,8 @@ it('refuses marketplace mode when the manifest points at a missing Cursor plugin
     expect(calls).toEqual([]);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2438,8 +2439,8 @@ it('refuses marketplace mode for a bundle that contains nested Git metadata', as
     await expect(access(join(home, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2460,8 +2461,8 @@ it('fails closed when the committed tree does not hold the staged bytes', async 
     expect(await readdir(join(home, '.cursor', 'agent-bundle', 'marketplaces'))).toEqual([]);
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(home, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(home),
     ]);
   }
 });
@@ -2480,7 +2481,7 @@ it('rejects an install mode for hosts other than Cursor', async () => {
     expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7003', target: 'claude' }]);
     expect(calls).toEqual([]);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 

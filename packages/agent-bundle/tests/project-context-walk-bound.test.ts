@@ -1,11 +1,12 @@
 import { realpathSync } from 'node:fs';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it, rs } from '@rstest/core';
 
 import { createProjectContext, ProjectService } from '../src/dev/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const createProject = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-walk-bound-'));
@@ -72,6 +73,6 @@ it('bounds filesystem probes for deep missing payload paths', async () => {
     expect(depth14).toBeLessThan(depth6 * 4);
   } finally {
     realpathNative.mockRestore();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

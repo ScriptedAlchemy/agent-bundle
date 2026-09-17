@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -28,6 +28,7 @@ import {
   routeHarnessContractFixtures,
   routeHarnessLifecycleWithoutLiveProgress,
 } from '../support/contract-matrix-fixtures.ts';
+import { removeTree } from '../support/remove-tree.ts';
 
 const proofLabel = proofLevelLabel(MCP_IN_MEMORY_PROOF_LEVEL);
 const fixtureRoot = resolve(import.meta.dirname, '../../fixtures/route-harness');
@@ -58,7 +59,7 @@ const withStatefulMatrix = async <T>(
     return await body(options);
   } finally {
     await restarted?.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -165,7 +166,7 @@ const withPackedShapedSession = async <T>(
     return await body(packedSession, manifest);
   } finally {
     await session.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -309,7 +310,7 @@ describe('the generated-plugin contract matrix', () => {
     } finally {
       await session.close();
       await runtime.close();
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 30_000);
 
@@ -369,7 +370,7 @@ describe('the generated-plugin contract matrix', () => {
     } finally {
       await session.close();
       await runtime.close();
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 30_000);
 
@@ -417,7 +418,7 @@ describe('the generated-plugin contract matrix', () => {
       });
     } finally {
       await session.close();
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 30_000);
 
@@ -504,7 +505,7 @@ describe('the generated-plugin contract matrix', () => {
     } finally {
       await session.close();
       await runtime.close();
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 30_000);
 

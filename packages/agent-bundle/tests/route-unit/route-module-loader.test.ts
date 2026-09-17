@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,7 @@ import { createRouteModuleLoader } from '../../src/dev/routes/route-module-loade
 import { expectDocument } from '../../src/test/matchers.ts';
 import { renderRouteEvents } from '../../src/test/render.ts';
 import type { AgentRouteModule } from '../../src/test/types.ts';
+import { removeTree } from '../support/remove-tree.ts';
 
 const files: Readonly<Record<string, string>> = {
   'count.ts': "export const count = 'from count.ts';\n",
@@ -61,7 +62,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(root, { force: true, recursive: true });
+  await removeTree(root);
 });
 
 it('resolves a `.js` import whose source is a `.tsx` component and renders the module', async () => {

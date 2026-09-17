@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { acquireDevLock, discoverDevServerUrl, type DevLockStorage } from '../src/dev/dev-lock.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const lockPathFor = (root: string): string => join(root, '.agent-bundle', 'dev.lock');
 const recoveryPathFor = (root: string): string => `${lockPathFor(root)}.recovery`;
@@ -21,7 +22,7 @@ it('discovers only a URL published by a live development lock owner', async () =
     })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
   } finally {
     await lock.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -68,7 +69,7 @@ it('rejects a second writer with the live owning process URL', async () => {
     await first.close();
     await expect(readFile(lockPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -103,7 +104,7 @@ it('does not overwrite a replacement lock while publishing the server URL', asyn
     expect(published.nonce).toBe(replacement?.owner.nonce);
   } finally {
     await Promise.allSettled([first.close(), replacement?.close()]);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -137,7 +138,7 @@ it('recovers a dead lock only after probing its recorded pid', async () => {
     expect(typeof published.nonce).toBe('string');
     await recovered.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -194,7 +195,7 @@ it('recovers an abandoned recovery gate and serializes eight stale-lock contende
 
     await acquired[0]!.lock.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -243,7 +244,7 @@ for (const [label, tmpPrefix, corruptPayload] of CORRUPT_CURRENT_LOCK_CASES) {
         projectRoot: root,
       })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 }
@@ -267,7 +268,7 @@ it('rejects a versioned recovery gate instead of accepting an obsolete record sh
       projectRoot: root,
     })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -285,7 +286,7 @@ it('does not let an old handle remove a lock acquired after its record disappear
     await expect(readFile(lockPathFor(root), 'utf8')).resolves.toBe(replacementRecord);
     await replacement.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -314,7 +315,7 @@ it('makes concurrent close callers wait for the same cleanup operation', async (
     await expect(readFile(lockPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     recoveryGateHeld = false;
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -331,7 +332,7 @@ it('allows close to retry after cleanup fails', async () => {
 
     await expect(readFile(lockPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -347,8 +348,8 @@ it('rejects a symlinked agent-bundle directory without writing outside the proje
     });
     await expect(readFile(join(outside, 'dev.lock'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
-    await rm(outside, { force: true, recursive: true });
+    await removeTree(root);
+    await removeTree(outside);
   }
 });
 
@@ -370,7 +371,7 @@ it('rejects duplicate keys in a recovery gate record', async () => {
       projectRoot: root,
     })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -408,7 +409,7 @@ it('syncs candidate contents and the containing directory before acquisition res
     expect(syncBoundaries).toEqual(['candidate', 'directory']);
     await lock.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -452,7 +453,7 @@ it('unpublishes the lock and fails loudly when candidate cleanup fails after pub
     const lock = await acquireDevLock({ projectRoot: root });
     await lock.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -477,6 +478,6 @@ it('removes an abandoned candidate hardlink while recovering its stale owner', a
     await expect(readFile(candidatePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await recovered.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

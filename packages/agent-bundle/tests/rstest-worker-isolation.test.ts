@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
@@ -17,6 +17,7 @@ import {
   rstestWorkerRootOwner,
   rstestWorkerRootPath,
 } from '../../../rstest.worker-isolation.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('keeps Doctor socket fixtures below the Linux AF_UNIX pathname cap', () => {
   const longLocalCiRoot = join(
@@ -135,6 +136,6 @@ it('removes only the finished roots owned by one host temporary root', async () 
     await expect(removeOwnedRstestWorkerRoots({ parent: join(parent, 'missing'), temporaryRoot: legTmp }))
       .resolves.toEqual({ removed: [], retained: [] });
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });

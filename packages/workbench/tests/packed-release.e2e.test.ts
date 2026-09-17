@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative } from 'node:path';
@@ -33,6 +33,7 @@ import { replaceWatchedSource } from './support/watched-files.ts';
 import { browserLaunchOptions, browserTrace, waitForWorkbenchIdle, workbenchUrl } from './support/workbench-e2e.ts';
 import { deepFreeze } from '../src/freeze.ts';
 import { expectHeading } from './support/workbench-acceptance.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
 const browserTimeout = 12_000 * timeScale;
@@ -984,7 +985,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       try { await closeChild(child); }
       catch (error) { cleanupFailures.push(error); }
     }
-    try { await rm(consumer, { force: true, recursive: true }); }
+    try { await removeTree(consumer); }
     catch (error) { cleanupFailures.push(error); }
     try { await access(consumer); cleanupFailures.push(new Error(`Packed consumer temporary directory still exists: ${consumer}`)); }
     catch (error) {

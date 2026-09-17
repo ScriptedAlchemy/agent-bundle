@@ -25,6 +25,7 @@ import {
   type RuntimeGenerationMetadataCodec,
   type RuntimeGenerationValidationInput,
 } from '../src/dev/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface TestMetadata {
   readonly label: string;
@@ -293,7 +294,7 @@ it('prepares an opaque validated generation without publishing it before synchro
     expect(store.active()).toMatchObject({ id: 'g1' });
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -369,14 +370,14 @@ it('rejects incomplete, altered, unsafe, and invalid candidate inputs', async ()
         .rejects.toMatchObject({ code: 'RUNTIME_GENERATION_INVALID' });
     } finally {
       await malformedStore.store.close().catch(() => undefined);
-      await rm(malformedStore.root, { force: true, recursive: true });
+      await removeTree(malformedStore.root);
     }
     await expect(store.prepare(malformedCandidate, malformed.manifest, {
       guard: { check: () => false, wait: async () => undefined },
     })).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_SUPERSEDED' });
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -394,7 +395,7 @@ it('rejects a provider metadata validator failure without publishing the candida
     expect(store.active()).toBeUndefined();
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -446,7 +447,7 @@ it('revalidates reopened metadata before accepting a required entry redirected t
     expect(store.active()).toBeUndefined();
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -498,7 +499,7 @@ it('revalidates reopened metadata before accepting internally inconsistent descr
     expect(store.active()).toBeUndefined();
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -525,7 +526,7 @@ it('fences superseded candidates and keeps the last good active generation after
     expect(store.active()?.id).toBe('g3');
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -551,7 +552,7 @@ it('serializes concurrent begins into distinct monotonic candidate sequences', a
     expect(store.active()?.id).toBe('g2');
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -571,7 +572,7 @@ it('pins explicit leases to committed generations, defaults implicit leases to a
     await implicit.release();
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -593,7 +594,7 @@ it('retains active plus five newest inactive generations and defers a leased pru
     }
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -606,11 +607,11 @@ it('does not admit an explicit lease after pruning has synchronously reserved it
       if (path.endsWith('/g1')) {
         removalStarted.resolve();
         await allowRemoval.promise;
-        await rm(path, { force: true, recursive: true });
+        await removeTree(path);
         removalFinished.resolve();
         return;
       }
-      await rm(path, { force: true, recursive: true });
+      await removeTree(path);
     },
     retainInactive: 5,
   });
@@ -628,7 +629,7 @@ it('does not admit an explicit lease after pruning has synchronously reserved it
   } finally {
     allowRemoval.resolve();
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -657,7 +658,7 @@ it('aborts prepared roots, removes abandoned session roots on reopen, and report
     await reopened.close();
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 
   const failedRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-generations-close-'));
@@ -665,7 +666,7 @@ it('aborts prepared roots, removes abandoned session roots on reopen, and report
     metadataCodec,
     remove: async (path) => {
       if (path.endsWith('/prepared')) throw new Error('cleanup refused');
-      await rm(path, { force: true, recursive: true });
+      await removeTree(path);
     },
     storageRoot: failedRoot,
     validateMetadata: (input) => input.metadata,
@@ -683,7 +684,7 @@ it('aborts prepared roots, removes abandoned session roots on reopen, and report
       .rejects.toMatchObject({ code: 'RUNTIME_GENERATION_CLOSED' });
     await expect(failingStore.lease()).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_CLOSED' });
   } finally {
-    await rm(failedRoot, { force: true, recursive: true });
+    await removeTree(failedRoot);
   }
 });
 
@@ -705,7 +706,7 @@ it('drains an in-flight abort cleanup before the same close aggregates its failu
         await releaseAbortRemoval.promise;
         throw new Error('abort cleanup refused');
       }
-      await rm(path, { force: true, recursive: true });
+      await removeTree(path);
     },
     storageRoot: root,
     validateMetadata: (input) => input.metadata,
@@ -739,7 +740,7 @@ it('drains an in-flight abort cleanup before the same close aggregates its failu
     releaseAbortRemoval.resolve();
     await abort?.catch(() => undefined);
     await close?.catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -767,7 +768,7 @@ it('runs synchronous guard checks directly after both asynchronous guard waits',
     await expectMissing(join(root, 'generations', 'guarded'));
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -792,7 +793,7 @@ it('keeps a candidate non-public when the pre-rename guard changes in its wait/c
     await expect(store.lease('pre-guard-race')).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_NOT_FOUND' });
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -820,7 +821,7 @@ it('keeps a candidate non-public when the post-rename guard changes in its wait/
     await expectMissing(join(root, 'generations', 'post-guard-race'));
   } finally {
     await store.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -832,7 +833,7 @@ it('drains an admitted post-rename prepare before close removes its owned roots'
   const created = await createStore({
     remove: async (path) => {
       if (closing) closeRemovals.push(path);
-      await rm(path, { force: true, recursive: true });
+      await removeTree(path);
     },
   });
   const { root, store } = created;
@@ -880,7 +881,7 @@ it('drains an admitted post-rename prepare before close removes its owned roots'
     releasePrepare.resolve();
     await prepare?.catch(() => undefined);
     await close?.catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -895,7 +896,7 @@ it('reports a late post-rename prepare cleanup failure from the close that drain
     remove: async (path) => {
       if (closing) closeRemovals.push(path);
       if (path === join(root, 'generations', 'late-failure')) throw new Error('late cleanup refused');
-      await rm(path, { force: true, recursive: true });
+      await removeTree(path);
     },
     storageRoot: root,
     validateMetadata: (input) => input.metadata,
@@ -934,7 +935,7 @@ it('reports a late post-rename prepare cleanup failure from the close that drain
     releasePrepare.resolve();
     await prepare?.catch(() => undefined);
     await close?.catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -950,7 +951,7 @@ it('shares one in-flight close failure across concurrent callers and remains ide
         await allowFailure.promise;
         throw new Error('deferred cleanup refused');
       }
-      await rm(path, { force: true, recursive: true });
+      await removeTree(path);
     },
     storageRoot: root,
     validateMetadata: (input) => input.metadata,
@@ -975,7 +976,7 @@ it('shares one in-flight close failure across concurrent callers and remains ide
     await expect(store.close()).resolves.toBeUndefined();
   } finally {
     allowFailure.resolve();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { execFile as executeFile, spawn } from 'node:child_process';
-import { cp, mkdtemp, mkdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,6 +10,7 @@ import { afterAll, beforeAll, expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
 import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const exampleRoot = resolve(import.meta.dirname, '../../../examples/worktree-proximity');
@@ -293,7 +294,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await liveSession?.stop();
   if (fixture !== undefined) {
-    await rm(fixture.tempRoot, { force: true, recursive: true });
+    await removeTree(fixture.tempRoot);
   }
 });
 

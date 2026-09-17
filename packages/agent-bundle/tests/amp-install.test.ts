@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,6 +9,7 @@ import { installBundle, type InstallCommandRunner } from '../src/install/install
 import { readInstallReceipt } from '../src/install/receipt.ts';
 import { uninstallBundle } from '../src/install/uninstall.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const isolatedEnvironment: Readonly<NodeJS.ProcessEnv> = {};
 const pluginName = 'amp-install-fixture';
@@ -138,7 +139,7 @@ it('installs, replaces, and uninstalls only the receipt-owned Amp directory', as
     await expect(readFile(join(destination, 'disabled-state.json'), 'utf8')).resolves.toBe('{"disabled":true}\n');
     await expect(readFile(settings, 'utf8')).resolves.toBe('{"amp.plugins.disabled":["amp-install-fixture"]}\n');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -185,7 +186,7 @@ it('uses the documented XDG system and project plugin roots without touching Amp
     expect(uninstalled.state).toBe('uninstalled');
     await expect(readFile(join(projectRoot, '.amp', 'settings.json'), 'utf8')).resolves.toBe('{"trusted":false}\n');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -208,7 +209,7 @@ it('installs a mixed-case portable plugin name accepted by the Amp planner', asy
     });
     expect(installed.destination).toBe(join(home, '.config', 'amp', 'plugins', name));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -236,7 +237,7 @@ it('rejects an Amp manifest name that could escape the plugin root', async () =>
     })).rejects.toThrow('not a safe local plugin name');
     await expect(readFile(join(home, '.config', 'escape', 'index.js'), 'utf8')).rejects.toThrow();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -261,7 +262,7 @@ it('refuses to replace a foreign Amp directory even with --replace', async () =>
     })).rejects.toThrow('foreign install');
     await expect(readFile(join(destination, 'index.js'), 'utf8')).resolves.toContain('foreign');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -287,7 +288,7 @@ it('refuses a symlinked Amp plugin ancestor before writing outside the host root
     })).rejects.toThrow('unsupported filesystem entry');
     expect(await readdir(outside)).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -309,6 +310,6 @@ it('refuses modified or unlisted files inside the generated Amp directory', asyn
       scope: 'user',
     })).rejects.toThrow('does not match its manifest-owned directory');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

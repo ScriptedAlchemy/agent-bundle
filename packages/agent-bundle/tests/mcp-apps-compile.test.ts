@@ -14,11 +14,12 @@ import { MAX_APP_HTML_BYTES } from '../src/core/mcp-app-limits.ts';
 import type { AgentBundleToolsConfig, NormalizedMcpApp } from '../src/core/types.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { agentBundlePackageRoot, workbenchNodeModules } from './helpers/workspace-paths.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const meta: AgentBundleMeta = Object.freeze({

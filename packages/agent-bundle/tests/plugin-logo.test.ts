@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -9,13 +9,14 @@ import { cursorAdapter, cursorPluginValidator } from '../src/adapters/cursor.ts'
 import { normalizeProject, validateSource } from '../src/config/index.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { AgentBundleConfig, NormalizedPlugin } from '../src/core/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const registry = createDefaultRegistry();
 const logoSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>\n';
 const tempRoots: string[] = [];
 
 afterAll(async () => {
-  await Promise.all(tempRoots.map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(tempRoots.map((root) => removeTree(root)));
 });
 
 const loadedProject = async (

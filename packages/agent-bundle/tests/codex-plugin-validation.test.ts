@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -9,6 +9,7 @@ import {
   validateCodexPlugin,
   type CodexPluginCommandRunner,
 } from '../src/host-contracts/codex-plugin-validation.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const generatedSchemaNames = Object.freeze(
   Object.keys(codexCapabilityTable.validation.pinnedGeneratedComparison.pinnedRepositorySha256).sort(),
@@ -164,7 +165,7 @@ it('validates Codex bundle documents and matching generated schemas without shel
     expect(Object.isFrozen(report)).toBe(true);
     expect(Object.isFrozen(report.diagnostics)).toBe(true);
   } finally {
-    await rm(pluginDirectory, { force: true, recursive: true });
+    await removeTree(pluginDirectory);
   }
 });
 
@@ -233,7 +234,7 @@ it('reports the missing schema generator verb honestly and still checks pinned d
       version: '0.147.0',
     });
   } finally {
-    await rm(pluginDirectory, { force: true, recursive: true });
+    await removeTree(pluginDirectory);
   }
 });
 
@@ -259,7 +260,7 @@ it('warns when live generated schemas drift from the pinned revision', async () 
       version: '0.147.0',
     });
   } finally {
-    await rm(pluginDirectory, { force: true, recursive: true });
+    await removeTree(pluginDirectory);
   }
 });
 
@@ -288,7 +289,7 @@ it('reports app-server-only schema output as unassessable information even in st
       version: '0.147.0',
     });
   } finally {
-    await rm(pluginDirectory, { force: true, recursive: true });
+    await removeTree(pluginDirectory);
   }
 });
 
@@ -306,7 +307,7 @@ it('judges only the Codex documents under .codex-plugin/ in a root shared with C
     expect(report.diagnostics.filter((entry) => entry.code === 'AB6032')).toEqual([]);
     expect(report.status).toBe('passed');
   } finally {
-    await rm(pluginDirectory, { force: true, recursive: true });
+    await removeTree(pluginDirectory);
   }
 });
 
@@ -353,7 +354,7 @@ it('rejects malformed fixtures for every locally validated Codex schema', async 
         status: 'failed',
       });
     } finally {
-      await rm(pluginDirectory, { force: true, recursive: true });
+      await removeTree(pluginDirectory);
     }
   }
 });
@@ -380,7 +381,7 @@ it('maps schema-generation timeout and output-limit terminations to stable failu
       });
     }
   } finally {
-    await rm(pluginDirectory, { force: true, recursive: true });
+    await removeTree(pluginDirectory);
   }
 });
 

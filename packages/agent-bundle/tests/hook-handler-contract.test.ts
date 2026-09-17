@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -25,6 +25,7 @@ import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { launchEnvLayerSpecifier } from '../src/build/launch-env-shell.ts';
 import { canonicalHookEvents } from '../src/core/types.ts';
 import type { CanonicalAgentEvent } from '../src/routes/public.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 type Host = 'claude' | 'codex' | 'cursor';
 
@@ -107,7 +108,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(root, { force: true, recursive: true });
+  await removeTree(root);
 });
 
 /** Every result object shape over the four admitted keys: 4 outcomes × 2 × 2 × 2. */

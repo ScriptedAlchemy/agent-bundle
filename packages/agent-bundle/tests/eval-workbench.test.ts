@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { startDevServer } from '../src/dev/workbench-server.ts';
 import type { EvalRunRecord } from '../src/eval/run-store.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject } from './support/eval-project.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('runs a real deterministic eval through the packaged foreground server', async () => {
   const project = await createProjectFixture();
@@ -121,6 +122,6 @@ it('runs a real deterministic eval through the packaged foreground server', asyn
     await expect(fetch(`${server.url}/api/evals/suites`, { headers })).rejects.toThrow();
   } finally {
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 180_000);

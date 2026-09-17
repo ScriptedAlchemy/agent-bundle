@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,6 +17,7 @@ import {
 } from '../src/core/project-context.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -58,7 +59,7 @@ const withProject = async (
     if (packageJson !== undefined) await writeFile(join(root, 'package.json'), packageJson);
     await run(root);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -213,7 +214,7 @@ it('ignores a package.json symlinked outside the project root', async () => {
       { code: 'AB4011', severity: 'warning' },
     ]);
   });
-  await rm(outside, { force: true, recursive: true });
+  await removeTree(outside);
 });
 
 it('infers the plugin version from package.json when the config omits it', async () => {

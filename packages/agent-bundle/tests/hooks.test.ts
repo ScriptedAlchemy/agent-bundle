@@ -36,6 +36,7 @@ import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { NormalizationTargetRegistry, NormalizedPlugin } from '../src/core/types.ts';
 import { validateModel, validateSource } from '../src/config/validate.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const probeMeta: AgentBundleMeta = Object.freeze({
   name: 'hook-probe',
@@ -384,7 +385,7 @@ it('does not share a persistent Rslib cache between generated executables', asyn
       },
     });
   } finally {
-    await rm(outputRoot, { force: true, recursive: true });
+    await removeTree(outputRoot);
   }
 
   const [{ config }] = createOptions as [{
@@ -493,7 +494,7 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
       .filter((plugin) => plugin instanceof rspack.experiments.VirtualModulesPlugin);
     expect(virtualPlugins).toHaveLength(1);
   } finally {
-    await Promise.all([outputRoot, projectRoot].map((root) => rm(root, { force: true, recursive: true })));
+    await Promise.all([outputRoot, projectRoot].map((root) => removeTree(root)));
   }
 });
 
@@ -525,7 +526,7 @@ it('refuses to compile while anything occupies the reserved generated-module nam
     );
     expect(createRslib).not.toHaveBeenCalled();
   } finally {
-    await Promise.all([outputRoot, projectRoot].map((root) => rm(root, { force: true, recursive: true })));
+    await Promise.all([outputRoot, projectRoot].map((root) => removeTree(root)));
   }
 });
 
@@ -579,7 +580,7 @@ it('fails closed when the resolved environment lost its virtual modules or wrapp
       plugins: [new rspack.experiments.VirtualModulesPlugin({})],
     })).rejects.toThrow(/without its reserved module aliases/u);
   } finally {
-    await rm(outputRoot, { force: true, recursive: true });
+    await removeTree(outputRoot);
   }
 });
 
@@ -616,7 +617,7 @@ it('closes the Rslib build result when provenance stats are unavailable', async 
 
     expect(close).toHaveBeenCalledOnce();
   } finally {
-    await rm(outputRoot, { force: true, recursive: true });
+    await removeTree(outputRoot);
   }
 });
 
@@ -655,7 +656,7 @@ it('normalizes a shorthand session-start hook into a frozen stable record', asyn
     expect(Object.isFrozen(hooks)).toBe(true);
     expect(Object.isFrozen((hooks as readonly unknown[])[0]!)).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -682,7 +683,7 @@ it('filters inherited hook targets through adapter hook capabilities', async () 
     expect(targetRegistry.get('codex').plan(model).hookEntries).toHaveLength(1);
     expect(targetRegistry.get('claude').plan(model).hookEntries).toHaveLength(1);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -760,7 +761,7 @@ it('loads and deterministically merges target-native hook documents after genera
       });
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -792,7 +793,7 @@ it('reports stable target-native hook file diagnostics before merge', async () =
     }, { skills: [] }, targetRegistry);
     expect(targetRegistry.get('codex').plan(invalidSchema).diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['codex.native-hooks.schema']);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -822,7 +823,7 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     await cp(outputRoot, artifact, { recursive: true });
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
 
     await expect(importPublishedHook(join(artifact, 'hooks', 'session-start-session-start-7ab7e8a5.codex.mjs'))).resolves.toEqual({
       code: 0,
@@ -896,8 +897,8 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
     })).rejects.toThrow(/artifact files do not match/i);
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(consumer, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(consumer),
     ]);
   }
 }, 15_000);
@@ -1017,8 +1018,8 @@ it('escalates timed-out and aborted wrapper process trees from TERM to KILL befo
     if (previousDescendantPidPath === undefined) delete process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID;
     else process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID = previousDescendantPidPath;
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(consumer, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(consumer),
     ]);
   }
 }, 10_000);
@@ -1103,8 +1104,8 @@ it('waits for an admitted Windows taskkill cleanup after its wrapper leader clos
     if (previousStartedPath === undefined) delete process.env.AGENT_BUNDLE_HOOK_SIMULATION_STARTED_PATH;
     else process.env.AGENT_BUNDLE_HOOK_SIMULATION_STARTED_PATH = previousStartedPath;
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(consumer, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(consumer),
     ]);
   }
 }, 10_000);
@@ -1167,7 +1168,7 @@ it('compiles each native hook through a virtual Rslib entry without sibling chun
       'stop.ts',
     ]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1232,11 +1233,11 @@ it('applies the operator .env layer of the installed pack before a hook handler 
         const disabled = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_ENV_FILE: 'none' }, input: JSON.stringify(event) });
         expect(context(disabled)).toBe('unset=unset:unset');
       } finally {
-        await rm(elsewhere, { force: true, recursive: true });
+        await removeTree(elsewhere);
       }
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1318,7 +1319,7 @@ it('runs the embedded Codex and Claude native codecs through their published wra
       });
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 15_000);
 
@@ -1387,7 +1388,7 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
       stdout: '',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 15_000);
 
@@ -1469,7 +1470,7 @@ it('round-trips Claude and Codex subagent fields through published wrappers', as
       });
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 15_000);
 
@@ -1639,7 +1640,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       });
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1701,7 +1702,7 @@ it('rejects malformed event-specific native input before calling generated Codex
       });
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 15_000);
 
@@ -1753,7 +1754,7 @@ it('rejects canonical reason combinations whose selected native hook cannot repr
       });
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 15_000);
 
@@ -1813,7 +1814,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
       stdout: '',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 15_000);
 
@@ -1918,7 +1919,7 @@ it('plans deterministic Codex and Claude hook configurations from the same model
       { relativePath: 'hooks/stop-stop-bb2d7935.codex.mjs' },
     ]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2013,6 +2014,6 @@ it('normalizes a mixed hook fixture and reports malformed hook declarations', as
       'AB4202',
     ]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

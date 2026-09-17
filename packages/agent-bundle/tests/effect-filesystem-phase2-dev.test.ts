@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,7 @@ import { ScriptPlaygroundService } from '../src/dev/playground/script-playground
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { platformLayer, runWithPlatform } from '../src/effect/platform.ts';
 import { mcpCatalogStub, stdioTransportStub } from './support/mcp-client-stub.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * Phase-2 FileSystem adoption, dev-server slice: every dev service takes a
@@ -32,7 +33,7 @@ const runtimes: DevPlatformRuntime[] = [];
 
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 /**

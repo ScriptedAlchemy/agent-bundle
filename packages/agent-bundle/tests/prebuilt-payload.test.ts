@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ import { definePrebuilt as definePrebuiltFromIndex } from '../src/index.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { resolveWebLaunch, webPluginDataDirectory } from '../src/web-host/launch.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const configSource = (options: { readonly payload?: string; readonly hooks?: string; readonly mcp?: string }): string => [
   'export default {',
@@ -351,7 +352,7 @@ it('carries prebuilt args and env through the launch record and the web launcher
     expect(pluginData.startsWith(home)).toBe(true);
     expect(pluginData.startsWith(artifact)).toBe(false);
   } finally {
-    await Promise.all([removeProjectFixture(root), rm(home, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(root), removeTree(home)]);
   }
 });
 

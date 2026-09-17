@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -16,11 +16,12 @@ import {
   requestEventRuntimeStatus,
 } from '../src/events/ipc.ts';
 import { eventuallyPasses } from './support/eventually.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const writeProjectFile = async (root: string, path: string, contents: string): Promise<void> => {

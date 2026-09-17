@@ -17,6 +17,7 @@ import type { DiscoveredEvalSuite } from '../src/eval/discovery.ts';
 import type { EvalFixturePlan } from '../src/eval/fixtures.ts';
 import { defineEvalSuite, normalizeEvalCase } from '../src/eval/suite.ts';
 import { deepFreeze } from '../src/core/freeze.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 
 const epoch = (id: string, root: string, target?: 'claude' | 'codex') => Object.freeze({
@@ -75,7 +76,7 @@ const testCatalogDirectory = (): string => {
 afterEach(async () => {
   const directories = [...catalogDirectories];
   catalogDirectories.clear();
-  await Promise.all(directories.map((directory) => rm(directory, { force: true, recursive: true })));
+  await Promise.all(directories.map((directory) => removeTree(directory)));
 });
 
 const nativeCatalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
@@ -290,7 +291,7 @@ it('retains an exact epoch catalog across service restart after fixture source c
     }));
     await restarted.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -333,7 +334,7 @@ it('rejects corrupt, oversized, and duplicate persisted catalog snapshots withou
       await reader.close();
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -365,7 +366,7 @@ it('rejects a persisted catalog replaced by a symbolic link before parsing it', 
     await expect(reader.catalog(reference)).rejects.toThrow('catalog snapshot');
     await reader.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -459,7 +460,7 @@ it('rejects catalog directories that escape epoch metadata through a symlinked d
       await expect(service.catalog(reference)).rejects.toThrow('catalog directory is invalid');
       await service.close();
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }
 });
@@ -496,7 +497,7 @@ it('requires every persisted fixture sha256 to be exactly 64 lowercase hexadecim
         .rejects.toThrow('Native Playground discovered an invalid fixture plan.');
       await service.close();
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }
 });
@@ -555,7 +556,7 @@ it('rejects a catalog whose cumulative nested values exceed the whole-sidecar bu
     await expect(service.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -601,7 +602,7 @@ it('tolerates only Windows directory fsync capability failures during catalog pu
   };
   try {
     for (const code of ['EACCES', 'EINVAL', 'EPERM'] as const) {
-      await rm(catalogDirectory, { force: true, recursive: true });
+      await removeTree(catalogDirectory);
       const service = serviceFor(code);
       await expect(service.catalog(epoch(`epoch-${code.toLowerCase()}`, join(root, code)))).resolves.toMatchObject({ epochId: `epoch-${code.toLowerCase()}` });
       await service.close();
@@ -609,7 +610,7 @@ it('tolerates only Windows directory fsync capability failures during catalog pu
   } finally {
     if (previousPlatform === undefined) delete runtime[nativeCatalogDurabilityPlatformKey];
     else runtime[nativeCatalogDurabilityPlatformKey] = previousPlatform;
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -664,7 +665,7 @@ it('fails catalog publication when Windows regular-file fsync EPERM is not a dir
     await service.close();
     if (previousPlatform === undefined) delete runtime[nativeCatalogDurabilityPlatformKey];
     else runtime[nativeCatalogDurabilityPlatformKey] = previousPlatform;
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -697,7 +698,7 @@ it('fails catalog publication when file fsync EPERM is not a Windows FlushFileBu
     await expect(service.catalog(epoch('epoch-posix-file-fsync', join(root, 'artifact')))).rejects.toBe(eperm);
   } finally {
     await service.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -759,7 +760,7 @@ it('preserves a catalog replacement raced into rollback and fsyncs the parent af
     expect(directorySyncs).toBe(publicationSyncs + 1);
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -894,7 +895,7 @@ it('keeps close pending until admitted run cleanup has settled', async () => {
     await expect(closing).resolves.toBeUndefined();
   } finally {
     releaseCleanup();
-    await rm(projectRoot, { force: true, recursive: true });
+    await removeTree(projectRoot);
   }
 });
 
@@ -938,7 +939,7 @@ it('retains an admitted workspace cleanup failure for service close', async () =
     expect(closeFailure).toBeInstanceOf(AggregateError);
     expect((closeFailure as AggregateError).errors).toEqual([cleanupFailure]);
   } finally {
-    await rm(projectRoot, { force: true, recursive: true });
+    await removeTree(projectRoot);
   }
 });
 
@@ -995,7 +996,7 @@ it('refuses fixture bytes changed after cataloging without recomputing the serve
     }));
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1061,7 +1062,7 @@ it('turns missing, incompatible, and unauthenticated native preflight into path-
       await service.close();
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1163,7 +1164,7 @@ it('projects only awaited normalized Claude completion evidence and removes its 
     expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1229,7 +1230,7 @@ it('bounds normalized native evidence before it reaches durable Playground event
     expect(Buffer.byteLength(JSON.stringify(responseEvent), 'utf8')).toBeLessThan(1024 * 1024);
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1298,7 +1299,7 @@ it('redacts hostile normalized Codex MCP labels without changing observed eviden
     expect(JSON.stringify(result)).not.toContain('sk-proj-1234567890abcdef');
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1384,7 +1385,7 @@ it('awaits a cancelled Codex child, preserves its harness failure, and removes a
     expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1461,7 +1462,7 @@ it('eagerly captures every epoch catalog before a later build can replace author
     }));
     await restarted.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1523,7 +1524,7 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
   };
   try {
     for (const failure of ['write', 'file', 'link', 'directory'] as const) {
-      await rm(catalogDirectory, { force: true, recursive: true });
+      await removeTree(catalogDirectory);
       const service = serviceFor(failure);
       if (failure === 'directory') {
         await expect(service.catalog(reference)).rejects.toMatchObject({
@@ -1537,12 +1538,12 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
         .rejects.toMatchObject({ code: 'ENOENT' });
       await service.close();
     }
-    await rm(catalogDirectory, { force: true, recursive: true });
+    await removeTree(catalogDirectory);
     const cleanupFailure = new Error('stage cleanup failed');
     const cleanupService = serviceFor('file', cleanupFailure);
     await expect(cleanupService.catalog(reference)).rejects.toMatchObject({ errors: [failures.get('file'), cleanupFailure] });
     await cleanupService.close();
-    await rm(catalogDirectory, { force: true, recursive: true });
+    await removeTree(catalogDirectory);
 
     // Two independent services race on the same epoch: the loser validates the
     // link winner rather than replacing it.
@@ -1552,7 +1553,7 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
     expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
     await Promise.all([left.close(), right.close()]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1613,7 +1614,7 @@ it('waits for a linked winner to release its staging link, then adopts it instea
     await Promise.all([winner.close(), loser.close()]);
   } finally {
     releaseWinnerCleanup();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1678,7 +1679,7 @@ it('never adopts a staged sidecar that its publisher rolls back, and republishes
     await Promise.all([winner.close(), loser.close()]);
   } finally {
     releaseWinnerCleanup();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1748,7 +1749,7 @@ it('withdraws a sidecar whose directory fsync fails before releasing its staging
     await Promise.all([winner.close(), loser.close()]);
   } finally {
     releaseDirectorySync();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1806,7 +1807,7 @@ it('keeps the staging link when a failed publication cannot roll its sidecar bac
     await expect(reader.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
     await reader.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1964,7 +1965,7 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
     // The exited publisher may never have flushed the directory after link(); recovery does.
     expect(directorySyncs).toEqual([catalogDirectory]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1991,7 +1992,7 @@ it('still rejects a persisted catalog aliased by a hard link that is not an epoc
       await rm(join(catalogDirectory, alias));
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2049,7 +2050,7 @@ it('sweeps staging files orphaned by exited publishers of other epochs on the ne
     await expect(readFile(join(catalogDirectory, 'epoch-next.json'), 'utf8')).resolves.toContain('"epochId":"epoch-next"');
   } finally {
     await service.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2113,7 +2114,7 @@ it('keeps a live winner\'s staging link, live-publisher and foreign entries, and
     await reader.close();
   } finally {
     await service.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2144,7 +2145,7 @@ it('bounds the orphan sweep per publish and finishes on later publications', asy
     expect(await stagingEntries()).toEqual([]);
   } finally {
     await service.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2181,7 +2182,7 @@ it('drains a gated catalog discovery before close and never publishes it after c
     await expect(service.catalog(reference)).rejects.toThrow('closed');
     await expect(readFile(join(root, '.agent-bundle', 'epochs', '.metadata', 'native-playground', 'epoch-catalog-close.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2343,7 +2344,7 @@ it('rolls back an owned native catalog sidecar when staging cleanup alone fails'
     });
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2388,7 +2389,7 @@ it('preserves a replacement sidecar when staging cleanup fails after the owned l
     await expect(readFile(join(catalogDirectory, `${reference.epoch.id}.json`), 'utf8')).resolves.toBe(replacement);
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2461,7 +2462,7 @@ it('does not deadlock when a direct native Codex abort listener awaits a reentra
     await running;
     expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2538,6 +2539,6 @@ it('does not deadlock when caller cancellation reaches a native Codex close list
     await closing;
     expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

@@ -19,7 +19,7 @@
     "test:mcp-conformance": "pnpm build && AGENT_BUNDLE_MCP_CONFORMANCE=1 rstest --config rstest.mcp-conformance.config.ts",
     "test:native-host": "pnpm build && AGENT_BUNDLE_NATIVE_HOST_CONTRACTS=1 rstest --config rstest.native-host.config.ts",
     "test:watch": "rstest --config rstest.config.ts --watch",
-    "lint": "rslint .",
+    "lint": "rslint . && node scripts/check-test-remove-tree.mjs",
     "bench:hook-cold-start": "node scripts/measure-hook-cold-start.mjs",
     "record:claude-hooks-fixtures": "node scripts/record-claude-hooks-schema-fixtures.mjs",
     "typecheck": "node scripts/check-dist-fresh.mjs && tsc --noEmit && tsc --project packages/workbench/tsconfig.json && tsc --project packages/create-agent-bundle/tsconfig.json && tsc --project packages/rsc-markdown-stream/tsconfig.json && tsc --project packages/agent-bundle/tsconfig.web-host.json && pnpm --filter @agent-bundle/docs typecheck",
