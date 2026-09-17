@@ -16,15 +16,15 @@ it('tracks named, aliased, and namespace Node fs removal bindings', () => {
     namespaceNames: new Set(),
   });
   expect(removalBindings(`import { rm as remove } from 'node:fs/promises';`)).toEqual({
-    bareNames: new Set(['rm', 'remove']),
+    bareNames: new Set(['remove']),
     namespaceNames: new Set(),
   });
   expect(removalBindings(`import * as fs from 'node:fs/promises';`)).toEqual({
-    bareNames: new Set(['rm']),
+    bareNames: new Set(),
     namespaceNames: new Set(['fs']),
   });
   expect(removalBindings(`import fs from 'node:fs';`)).toEqual({
-    bareNames: new Set(['rm']),
+    bareNames: new Set(),
     namespaceNames: new Set(['fs']),
   });
 });
@@ -151,4 +151,38 @@ it('keeps regex literals, template substitutions, and spaced member calls correc
     "import { rm } from 'node:fs/promises';",
     `other. rm(root, { ${recursiveTrue} });`,
   ]))).toEqual([]);
+});
+
+it('only counts real AST Node fs import bindings', () => {
+  // Local identifier named rm is not a Node binding.
+  expect(recursiveRmCalls(sample([
+    'const rm = async () => undefined;',
+    `await rm(root, { ${recursiveTrue} });`,
+  ]))).toEqual([]);
+
+  // Commented-out import must not create a binding.
+  expect(recursiveRmCalls(sample([
+    "// import { rm as remove } from 'node:fs/promises';",
+    `await remove(root, { ${recursiveTrue} });`,
+  ]))).toEqual([]);
+
+  // Comments inside the named import still bind.
+  expect(recursiveRmCalls(sample([
+    "import { rm /* teardown */ as remove } from 'node:fs/promises';",
+    `await remove(root, { ${recursiveTrue} });`,
+  ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+
+  // Default + named form registers both namespace and bare alias.
+  expect(removalBindings(`import fs, { rm as remove } from 'node:fs/promises';`)).toEqual({
+    bareNames: new Set(['remove']),
+    namespaceNames: new Set(['fs']),
+  });
+  expect(recursiveRmCalls(sample([
+    "import fs, { rm as remove } from 'node:fs/promises';",
+    `await remove(root, { ${recursiveTrue} });`,
+    `await fs.rm(root, { ${recursiveTrue} });`,
+  ]))).toEqual([
+    expect.objectContaining({ hasRetries: false, line: 2 }),
+    expect.objectContaining({ hasRetries: false, line: 3 }),
+  ]);
 });

@@ -5,9 +5,10 @@
  * Catches bare `rm(`, aliased `import { rm as remove }` calls, and `ns.rm(` when
  * `ns` is a namespace/default import from node:fs, fs, or their /promises forms.
  *
- * Call and option detection is parser-backed (typescript-5): only Node-bound call
- * expressions are considered, and `recursive` / `maxRetries` are read from the
- * second argument's object-literal properties (including quoted keys). Nested
+ * Call, option, and import-binding detection is parser-backed (typescript-5):
+ * only real node:fs(/promises) ImportDeclaration bindings count, only Node-bound
+ * call expressions are considered, and `recursive` / `maxRetries` are read from
+ * the second argument's object-literal properties (including quoted keys). Nested
  * objects in the path argument, member calls, comments, strings, regexes, and
  * template substitutions are handled by the AST rather than text masking.
  */
@@ -47,38 +48,55 @@ const walk = async (directory, files) => {
   }
 };
 
-/** Named/aliased rm bindings and namespace/default bindings that expose .rm. */
-export const removalBindings = (text) => {
-  const bareNames = new Set(['rm']);
+/**
+ * Named/aliased rm bindings and namespace/default bindings that expose .rm.
+ * Import bindings are collected from the TypeScript AST so comments and local
+ * identifiers cannot forge Node fs.rm bindings.
+ */
+export const removalBindings = (text, fileName = 'bindings.ts') => {
+  const bareNames = new Set();
   const namespaceNames = new Set();
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKindFor(fileName),
+  );
 
-  const named = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*(['"])([^'"]+)\2/gu;
-  let match = named.exec(text);
-  while (match !== null) {
-    if (nodeFsSpecifier.test(match[3])) {
-      for (const part of match[1].split(',')) {
-        const specifier = part.trim();
-        if (specifier.length === 0 || specifier.startsWith('type ')) continue;
-        const alias = /^\s*(?:type\s+)?rm(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/u.exec(specifier);
-        if (alias === null) continue;
-        bareNames.add(alias[1] ?? 'rm');
-      }
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause === undefined) continue;
+    if (statement.moduleSpecifier === undefined || !ts.isStringLiteral(statement.moduleSpecifier)) {
+      continue;
     }
-    match = named.exec(text);
-  }
+    if (!nodeFsSpecifier.test(statement.moduleSpecifier.text)) continue;
 
-  const star = /import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*(['"])([^'"]+)\2/gu;
-  match = star.exec(text);
-  while (match !== null) {
-    if (nodeFsSpecifier.test(match[3])) namespaceNames.add(match[1]);
-    match = star.exec(text);
-  }
+    const { importClause } = statement;
+    if (importClause.isTypeOnly) continue;
 
-  const defaults = /import\s+([A-Za-z_$][\w$]*)\s*(?:,\s*\{[^}]*\})?\s*from\s*(['"])([^'"]+)\2/gu;
-  match = defaults.exec(text);
-  while (match !== null) {
-    if (nodeFsSpecifier.test(match[3])) namespaceNames.add(match[1]);
-    match = defaults.exec(text);
+    if (importClause.name !== undefined) {
+      namespaceNames.add(importClause.name.text);
+    }
+
+    const bindings = importClause.namedBindings;
+    if (bindings === undefined) continue;
+
+    if (ts.isNamespaceImport(bindings)) {
+      namespaceNames.add(bindings.name.text);
+      continue;
+    }
+
+    if (!ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      if (element.isTypeOnly) continue;
+      if (element.propertyName !== undefined) {
+        if (element.propertyName.text !== 'rm') continue;
+        bareNames.add(element.name.text);
+        continue;
+      }
+      if (element.name.text !== 'rm') continue;
+      bareNames.add('rm');
+    }
   }
 
   return { bareNames, namespaceNames };
