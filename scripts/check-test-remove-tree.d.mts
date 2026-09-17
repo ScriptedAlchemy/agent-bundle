@@ -12,7 +12,7 @@ export interface RemovalBindings {
   readonly namespaceNames: ReadonlySet<string>;
 }
 
-export declare const removalBindings: (text: string) => RemovalBindings;
+export declare const removalBindings: (text: string, fileName?: string) => RemovalBindings;
 
 export declare const recursiveRmCalls: (text: string, fileName?: string) => RecursiveRmCall[];
 
