@@ -113,3 +113,42 @@ it('matches $-suffixed removal aliases literally', () => {
     'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree.',
   ]);
 });
+
+it('reads quoted options keys and only the second call argument', () => {
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    'rm(root, { "recursive": true });',
+  ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    `rm(root, { ${recursiveTrue}, "maxRetries": 5 });`,
+  ]))).toEqual([expect.objectContaining({ hasRetries: true, line: 2 })]);
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    `rm(makeRoot({ maxRetries: 5 }), { ${recursiveTrue} });`,
+  ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    `rm(makeRoot({ ${recursiveTrue} }));`,
+  ]))).toEqual([]);
+});
+
+it('keeps regex literals, template substitutions, and spaced member calls correct', () => {
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    String.raw`const re = /['"]/; rm(root, { ${recursiveTrue} });`,
+  ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    'const result = `${await rm(root, { ' + recursiveTrue + ' })}`;',
+  ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    `other. rm(root, { ${recursiveTrue} });`,
+  ]))).toEqual([]);
+});

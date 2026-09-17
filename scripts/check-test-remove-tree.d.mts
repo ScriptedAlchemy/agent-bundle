@@ -12,10 +12,8 @@ export interface RemovalBindings {
   readonly namespaceNames: ReadonlySet<string>;
 }
 
-export declare const maskCommentsAndStrings: (text: string) => string;
-
 export declare const removalBindings: (text: string) => RemovalBindings;
 
-export declare const recursiveRmCalls: (text: string) => RecursiveRmCall[];
+export declare const recursiveRmCalls: (text: string, fileName?: string) => RecursiveRmCall[];
 
 export declare const bareRecursiveRmFailures: (file: string, text: string) => string[];
