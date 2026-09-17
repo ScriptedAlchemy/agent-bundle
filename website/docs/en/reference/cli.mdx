@@ -30,17 +30,17 @@ npx agent-bundle --version
 
 ## Shared option groups
 
-**Source commands** — `build`, `prepack`, `validate`, `eval`:
+**Source commands**, `build`, `prepack`, `validate`, `eval`:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--root <root>` | `process.cwd()` | Project root. |
-| `--config <path>` | — | Configuration file relative to `--root`. |
+| `--config <path>` | none | Configuration file relative to `--root`. |
 | `--mode <mode>` | `production` | Configuration mode. |
 | `--target <target>` | config `targets`, else `portable` | Host projection to select: `amp`, `claude`, `codex`, `cursor`, or `portable`. Repeatable; the selection replaces the configured `targets` for this run, and every selected host lands in the one composite root whatever the order. Any other name, `plugin` included, is `AB4100`. |
 | `--json` | off | Write one machine-readable JSON document. |
 
-**Artifact commands** — `mcp list`, `mcp invoke`, `mcp run`, `serve-app`, `hooks list`, `hooks simulate`:
+**Artifact commands**, `mcp list`, `mcp invoke`, `mcp run`, `serve-app`, `hooks list`, `hooks simulate`:
 the same `--root`, `--config`, `--mode`, and `--json`, plus `--artifact <path>` to use exactly
 one built artifact and `--target <target>` to select the host projection. For `mcp list`,
 `mcp invoke`, `mcp run`, and `serve-app`, `--target` is **optional**: when omitted, the artifact's
@@ -85,15 +85,15 @@ Workbench: the command launches the plugin's packed MCP server exactly as `mcp r
 the App to it through the same host stack the Workbench App workspace uses (sandbox proxy, consent
 authority, bridge), calls the App's tool once so it opens populated, and prints the loopback URL.
 Its output is a contract: once the host is listening, stdout carries exactly one line,
-`MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)` — `<app>` as given on the command
-line, `<tool>` the tool that opened the App — and every diagnostic goes to stderr. The command
+`MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)`, `<app>` as given on the command
+line, `<tool>` the tool that opened the App, and every diagnostic goes to stderr. The command
 then runs in the foreground: `SIGINT` or `SIGTERM` closes the host and its server and exits `0`;
 when the bound MCP server exits on its own, one `AB5000` diagnostic is written to stderr and the
 command exits `1`. The same ready-line contract is printed by [`<plugin> web`](#plugin-web).
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `<app>` | **required** | `<server>/<app>` — the generated MCP server name and the App name (the last segment of its `ui://` URI without `.html`, for example `status/status`) — or `<server>/ui://...` to select an exact resource URI. |
+| `<app>` | **required** | `<server>/<app>`, the generated MCP server name and the App name (the last segment of its `ui://` URI without `.html`, for example `status/status`), or `<server>/ui://...` to select an exact resource URI. |
 | `--root`, `--config`, `--mode` | as for artifact commands | Project options. |
 | `--artifact <path>` | throwaway build | Use exactly this built artifact. Without it the project is built into a staging directory beside the root and removed when the host closes. |
 | `--target <target>` | the manifest's one MCP-capable host | The host projection whose MCP server runs the App. Optional: without it, the artifact manifest's `projections[]` must name exactly one MCP-capable host; when several qualify the command fails and names them. |
@@ -111,7 +111,7 @@ only the selected server through the bridge. The App document itself runs on a s
 origin inside the framework's sandbox. It is a local preview host, not a deployment target. The
 programmatic form for scripts and tests is `serveApp` in `agent-bundle/api`. From an installed
 artifact the supported command is [`<plugin> web`](#plugin-web), which runs the same host stack
-from `bin/<plugin>.mjs` without the framework on the machine — see
+from `bin/<plugin>.mjs` without the framework on the machine, see
 [Exposing an App in the browser](../guide/authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 ## `<plugin> web`
@@ -124,7 +124,7 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 The framework-owned `web` command on the composite artifact's `bin/<plugin>.mjs`. It is emitted
 when the project configures [`web`](./configuration.mdx#web), even if `src/cli/**` compiled no
 commands, and is listed in that bin's `--help`. Run it from the built artifact or the installed
-plugin root — `agent-bundle.manifest.json` must sit beside `bin/` (exit `1` otherwise).
+plugin root, `agent-bundle.manifest.json` must sit beside `bin/` (exit `1` otherwise).
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -138,13 +138,13 @@ plugin root — `agent-bundle.manifest.json` must sit beside `bin/` (exit `1` ot
 | `--json` | off | Print one JSON line `{ app, server, tool, url, port, resourceUri, sandboxOrigin }` instead of the human ready line, then keep running. |
 
 The command launches the plugin's own MCP server (`node <root>/mcp/<entry>.mjs`,
-`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded — the
+`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded, the
 plugin-data token resolves outside the artifact, under
 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches).
 The spawned server's own durable framework state likewise lives outside the artifact under
 `~/.agent-bundle/state/<plugin>-<digest>` (or `AGENT_BUNDLE_STATE_ROOT`). It calls the opening
 tool once and serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
-second loopback sandbox origin for the App document — the same host stack and consent behavior as
+second loopback sandbox origin for the App document, the same host stack and consent behavior as
 `agent-bundle serve-app` and the Workbench. Human mode prints
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` and runs until Ctrl-C /
 SIGTERM. An authored `src/cli/web.ts` (or any generated-mode command or top-level alias spelled
@@ -165,7 +165,7 @@ in [Targets and artifacts](./targets-artifacts.mdx).
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--host-validation` / `--no-host-validation` | on | After the root is written, run the installed Claude Code developer validator and load check over it when `claude` is among the selected projections — the same pair `validate --artifact` runs (`AB6019`–`AB6022`, `AB7311`, `AB7325`). Without `claude` on `PATH` the build spawns once and reports one informational `AB6019` skip. |
+| `--host-validation` / `--no-host-validation` | on | After the root is written, run the installed Claude Code developer validator and load check over it when `claude` is among the selected projections, the same pair `validate --artifact` runs (`AB6019`–`AB6022`, `AB7311`, `AB7325`). Without `claude` on `PATH` the build spawns once and reports one informational `AB6019` skip. |
 | `--strict` | off | Promote host-tool warnings to errors. |
 
 The JSON document carries the reports under `hostValidation`, one per validated projection, each
@@ -200,9 +200,9 @@ touches owned files only, and `--replace` adopts a pre-receipt copy; Claude repl
 unknown-enablement Codex replacements are refused (`AB7004`) because the native plugin CLI
 has no qualified settings-preserving update API. Every install writes a lifecycle
 receipt (format `agent-bundle-install-receipt/2`:
-version, content hash, mode, scope, owned paths, host registrations, timestamps) — in-tree for
+version, content hash, mode, scope, owned paths, host registrations, timestamps), in-tree for
 Cursor and Amp local copies, under `<host root>/agent-bundle/receipts/` for Claude, Codex, and Cursor
-marketplace mode — that `uninstall` and `doctor` consume.
+marketplace mode, that `uninstall` and `doctor` consume.
 During install, an explicit state root that does not yet exist is created and receives
 `.agent-bundle-state-owner.json`, which records the installation identity. Parent directories may
 be created to reach it but are never claimed or recursively removed.
@@ -229,7 +229,7 @@ Uninstall removes exactly what the receipt owns: the recorded files and installe
 directories (Cursor local, including the `~/.cursor/plugins[/local]` directories the install
 created; Amp project/system, inside only `.amp/plugins/<name>`), the staged repository (Cursor marketplace, after its `HEAD` matches the recorded
 commit), or the host registrations (`claude plugin uninstall <id> --scope <scope> --keep-data` +
-`claude plugin marketplace remove`, `codex plugin remove` + `codex plugin marketplace remove` —
+`claude plugin marketplace remove`, `codex plugin remove` + `codex plugin marketplace remove`,
 the marketplace is retained while another installed plugin still uses it, including a Claude
 install at another scope or in another project known only to Claude's `plugins/installed_plugins.json`
 registry). Unowned entries are retained and listed; a missing receipt is `AB7009` and a mismatch is `AB7007` unless `--force`; a
@@ -260,12 +260,12 @@ after `--keep-data`.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, or `cursor`. |
-| `--from <root>` | — | The composite root to compare against, read through its `agent-bundle.manifest.json` as `install` reads it: identity from `application`, each inspected host from its `projections[]` row (`AB7001` when the manifest does not describe the host). |
+| `--from <root>` | none | The composite root to compare against, read through its `agent-bundle.manifest.json` as `install` reads it: identity from `application`, each inspected host from its `projections[]` row (`AB7001` when the manifest does not describe the host). |
 | `--json` | off | Write one machine-readable JSON document. |
 
 Doctor exits `1` when it reports any error diagnostic, and never modifies anything. With `--from`,
-it reports the installed copy per host as `current`, `stale` (same version, different content —
-`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), `load-failed` (`AB7325` — Claude Code lists
+it reports the installed copy per host as `current`, `stale` (same version, different content,
+`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), `load-failed` (`AB7325`, Claude Code lists
 the copy with `errors` in `claude plugin list --json` and refused to load it; the message carries the host's
 text verbatim), or `not-installed` (`AB7307`). For Claude it also reads each row's `enabled` flag: a
 copy listed with `enabled: false` is `disabled` in the inventory and carries `enabled: false` next to its
@@ -276,9 +276,9 @@ Claude Code developer validator (`claude plugin validate --strict` against `plug
 Cursor it also proves plugin-scoped hook registration from the installed manifest (`AB7322`), warns
 when `~/.cursor/hooks.json` would deliver a plugin hook a second time (`AB7323`), and tracks a
 staged marketplace from `unregistered` to `registered` once Cursor imports it (`AB7324`). For an
-Agent Plugins install it proves the emitted installer's placeholder expansion — `expanded`,
+Agent Plugins install it proves the emitted installer's placeholder expansion, `expanded`,
 `unexpanded` (spec forms Cursor 3.18.25 cannot launch), or `drifted` (`AB7326`). With
-`--from` it also reports the lifecycle stage per host — placed → registered → enabled → active,
+`--from` it also reports the lifecycle stage per host, placed → registered → enabled → active,
 each observed (Claude and Codex `plugin list --json` rows and `enabled` flags, the Cursor local
 directory, the Cursor marketplace import cache) or typed `unavailable` with the reason no read-only
 surface exposes it (`AB7330`). It inventories the Agent Bundle receipt store under each host root
@@ -296,7 +296,7 @@ and flagged with `AB7332`.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--artifact <path>` | — | Validate exactly this built artifact instead of project source. |
+| `--artifact <path>` | none | Validate exactly this built artifact instead of project source. |
 | `--host-validation` / `--no-host-validation` | on | Run installed host developer tools over the root for the selected projections that have one. When `claude` is selected this is the two `claude plugin validate --strict` runs followed by the `claude --plugin-dir <root> plugin list --json` load check (`AB7325` when the row carries `errors`, `AB7311` when there is no row). |
 | `--strict` | off | Promote host-tool warnings to errors. |
 
@@ -323,7 +323,7 @@ manifest fails with `AB7001`.
 
 | Flag | Focus |
 | --- | --- |
-| `--bundler` | The lowered Rspack configuration of every compiled output — what Rslib (executables) or Rsbuild (MCP App views) hands the compiler after the `tools` hatch and the framework invariants, lowered in production mode regardless of `NODE_ENV`. Resolved aliases, externals, plugins (`[object <ClassName>]`), and functions (`[function <name>]`) are rendered in place; `output.path` is the artifact output, `<output>`, because every selected projection compiles into the one composite root. A `tools` value the build would refuse makes the inspection invalid with `AB7001`. |
+| `--bundler` | The lowered Rspack configuration of every compiled output, what Rslib (executables) or Rsbuild (MCP App views) hands the compiler after the `tools` hatch and the framework invariants, lowered in production mode regardless of `NODE_ENV`. Resolved aliases, externals, plugins (`[object <ClassName>]`), and functions (`[function <name>]`) are rendered in place; `output.path` is the artifact output, `<output>`, because every selected projection compiles into the one composite root. A `tools` value the build would refuse makes the inspection invalid with `AB7001`. |
 | `--hooks` | Hooks. |
 | `--routes` | The compiled route graph. |
 | `--skills` | Skills. |
@@ -331,22 +331,22 @@ manifest fails with `AB7001`.
 
 Passing more than one focus is an error. `inspect` exits `1` when the normalized model is invalid.
 
-With `--json`, the document gains an `output.manifest` summary — the built `projections[]` and
-`executables` — whenever a built `agent-bundle.manifest.json` exists at the artifact output, so a
+With `--json`, the document gains an `output.manifest` summary, the built `projections[]` and
+`executables`, whenever a built `agent-bundle.manifest.json` exists at the artifact output, so a
 JSON consumer sees what the last build emitted without probing the root itself. The source-side
 model and plan view is unchanged.
 
 `inspect --artifact <path>` does not load project config. `--json` prints `{ manifest, application }`:
 the same `InspectManifestSummary` as `output.manifest`, and the same `application` projection the
-Workbench renders (`applicationExplorerFor`), including `distribution.payloads[]` — each prebuilt
+Workbench renders (`applicationExplorerFor`), including `distribution.payloads[]`, each prebuilt
 payload's `name`, `hosts`, and `runtimeDependencies` (the row artifact-only consumers read for
 packages that must exist at consumer runtime; see [`definePrebuilt`](../guide/authoring/package-entries.mdx#prebuilt-payloads)).
 Without `--json`, the human output is the application id/name/version, projections with
 `builtInHost`, servers with tool counts, hooks by host, bins, scripts, and payload rows.
 
-Every inspection plan reports each component with its canonical kind — `agent`, `cli`, `command`,
+Every inspection plan reports each component with its canonical kind, `agent`, `cli`, `command`,
 `event-route`, `hook`, `lsp`, `mcp-app`, `mcp-server`, `native-diagnostics`, `native-extension`,
-`rule`, `script`, `skill` (`AgentComponentKind` from `agent-bundle/api`) — as `selected` or
+`rule`, `script`, `skill` (`AgentComponentKind` from `agent-bundle/api`), as `selected` or
 `skipped` with its cause, plus a `kinds` matrix: one entry per kind with the target's own four-state
 capability judgment and selected/omitted counts. The human output prints one line per target,
 each omission and its reason, then `kinds this host cannot emit:`. Filesystem `src/events` routes
@@ -360,7 +360,7 @@ object, not an array or scalar.
 
 All three resolve the server from the artifact's `agent-bundle.manifest.json`: the compiled entry
 (and its Flight worker) from `executables.mcpServers[].entry`, the Apps from
-`executables.mcpServers[].apps[]`, and — when `--target` is omitted — the host from the one
+`executables.mcpServers[].apps[]`, and, when `--target` is omitted, the host from the one
 MCP-capable `projections[]` row; an ambiguous selection is an error that names the candidates.
 
 `mcp run` requires `--server` and runs one stdio server in the foreground with inherited stdio:
@@ -377,7 +377,7 @@ nothing of its own to stdout. See [Runtime environment](./runtime-environment.md
 
 ## hooks
 
-`hooks list` reports the hooks in an artifact — the `executables.hooks[]` rows of its
+`hooks list` reports the hooks in an artifact, the `executables.hooks[]` rows of its
 `agent-bundle.manifest.json`. `hooks simulate` requires `--hook <hook>` (an id or a name) and the
 same `--input` / `--input-file` pair as `mcp invoke`.
 
@@ -389,5 +389,5 @@ same `--input` / `--input-file` pair as `mcp invoke`.
 | `1` | A reported failure: an error diagnostic, an invalid model from `inspect`, a failing or inconclusive eval run, or an uncaught error written to stderr as one `AB5000` diagnostic. A malformed `--input` / `--input-file` document is a runtime input failure and lands here. |
 | `2` | A parser-level failure from the command-line parser: an unknown command or option, a missing required argument or option, or an invalid value for `--port`, `eval --trials`, `dev --install-host`, `install` / `uninstall` `<host>`, `--scope`, or `--mode`, `serve-app --profile`, `serve-app --allow`, or `doctor --host`. |
 
-An eval run exits `1` when any trial **fails or is inconclusive** — an inconclusive trial produced
+An eval run exits `1` when any trial **fails or is inconclusive**, an inconclusive trial produced
 no evidence, so it cannot report success either.

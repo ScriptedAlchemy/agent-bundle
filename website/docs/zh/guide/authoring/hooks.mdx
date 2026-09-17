@@ -42,7 +42,7 @@ export default async function AfterFileEdit(
 }
 ```
 
-`canonical` 是框架推导出的跨宿主身份——`event`、由事件、target 与原生载荷哈希而来的 `idempotencyKey`、
+`canonical` 是框架推导出的跨宿主身份，`event`、由事件、target 与原生载荷哈希而来的 `idempotencyKey`、
 `observedAt`、一个 `sequence`、记录触发宿主与原生事件名的 `provenance`，以及该事件族的规范 `payload`。
 `native` 是经过校验的宿主信封的冻结快照。`canonical` 中没有任何伪造：宿主未报告的字段保持缺失。
 
@@ -137,7 +137,7 @@ export default async function BeforeWrite(
 
 ### 规范载荷
 
-`canonical.payload` 是该路由事件族对信封的跨宿主读法：至少两个宿主以各自名字报告的那些字段——工具族上的
+`canonical.payload` 是该路由事件族对信封的跨宿主读法：至少两个宿主以各自名字报告的那些字段，工具族上的
 `toolName`、`toolInput`、`toolResponse`，`sessionId`（Claude 与 Codex 的 `session_id`、Cursor 的
 `conversation_id`）、`transcriptPath`、`cwd`、`prompt`、`agentId` 与 `agentType`、`reentry`（Claude 与 Codex 的
 `stop_hook_active`、Cursor 的 `loop_count > 0`）等等。每个字段以 `{ value, nativeKey }` 的形式到达：解码后的值
@@ -145,10 +145,10 @@ export default async function BeforeWrite(
 字段是 `undefined`，绝不补默认值。只有两处读法超出「按键取值」：Cursor 的 `tool_output` JSON 字符串会被解析为
 `toolResponse`（不是合法 JSON 时保留为字符串），Cursor 的 `loop_count` 计数变为 `reentry` 布尔值。
 
-把路由类型标注到它的事件族——`AgentEventRouteProps<'tool/after'>`——`payload` 就收窄为该族的字段，于是在工具
+把路由类型标注到它的事件族，`AgentEventRouteProps<'tool/after'>`，`payload` 就收窄为该族的字段，于是在工具
 路由上读取 `payload.reentry` 是编译错误；生成的 `.agent-bundle/routes.d.ts` 把同样的收窄带进 `renderRoute`。
-用裸的 `AgentEventRouteProps` 标注的路由把所有字段都视为可选。载荷未建模的一切——Cursor 的 `attachments`、
-Claude 的 `background_tasks`、只有一个宿主才有的 `duration`——仍在 `native` 上。按事件族、按宿主的表（字段 ×
+用裸的 `AgentEventRouteProps` 标注的路由把所有字段都视为可选。载荷未建模的一切，Cursor 的 `attachments`、
+Claude 的 `background_tasks`、只有一个宿主才有的 `duration`，仍在 `native` 上。按事件族、按宿主的表（字段 ×
 宿主 → 原生键）是生成的事件参考中的[规范载荷字段](../../reference/events.md#规范载荷字段)一节，由固定的
 能力表渲染而来；运行时读取的是同一张表，以 `agentEventPayloadFields` 与 `agentEventPayloadNativeKeys` 导出。
 
@@ -166,12 +166,12 @@ const rendered = await renderRoute('event:tool/after', {
 ```
 
 路由通过它渲染出的文档作答。`Agent.Context` 文本成为宿主的附加上下文通道，`Agent.Result` 的 `value` 可以
-携带 `{ outcome: 'continue' | 'allow' | 'ask' | 'deny', reason?, updatedInput? }`。`continue`——或完全不给
-`value`——是「放行」的回答：路由没有意见，因此**不会写入任何决定**，宿主的正常权限流程照常适用。只有显式的
+携带 `{ outcome: 'continue' | 'allow' | 'ask' | 'deny', reason?, updatedInput? }`。`continue`，或完全不给
+`value`，是「放行」的回答：路由没有意见，因此**不会写入任何决定**，宿主的正常权限流程照常适用。只有显式的
 `allow`、`ask` 或 `deny` 才会被投影为决定。投影按事件、按宿主进行，非法组合在任何内容到达宿主之前就会抛错：
 `session/end`、`compact/after`、`tool/failure` 与 `workspace/open` 在所有宿主上都只可观察；做出决定的
 `tool/before` 在 Claude 与 Codex 上成为 `hookSpecificOutput.permissionDecision: 'allow' | 'ask' | 'deny'`，
-在 Cursor 上则是 `{ permission: 'allow' | 'deny', … }`——Cursor 文档称 `ask` 不会被强制执行，因此会拒绝它；
+在 Cursor 上则是 `{ permission: 'allow' | 'deny', … }`，Cursor 文档称 `ask` 不会被强制执行，因此会拒绝它；
 被拒绝的 `stop` 成为 `{ decision: 'block', reason }` 或 Cursor 的 `followup_message`。`allow` 与 `ask` 是
 `tool/before` 与 `model-switch/before` 的决定（`allow` 也可以代表用户回答 `permission/request`）；其他任何
 事件族都会拒绝它们。做出决定的 `model-switch/before` 在 Claude Code 的 `PreModelSwitch`（2.1.251 或更新）上
@@ -188,7 +188,7 @@ const rendered = await renderRoute('event:tool/after', {
 `permission/request`、`model-switch/before`……）；配置声明的 `hooks` 只覆盖上面列出的七个。
 
 **抛出**异常的路由或处理器不会产生文档，因此也没有决定：生成的包装器写到 stderr，stdout 无输出，
-退出码为 `1`——所有受支持的宿主都把它记作非阻塞错误，待执行的动作会像 pass-through 之后一样继续进行。
+退出码为 `1`，所有受支持的宿主都把它记作非阻塞错误，待执行的动作会像 pass-through 之后一样继续进行。
 对于 `runtime: 'standalone'` 的路由或配置声明的处理器，stderr 文本是抛出的消息；共享运行时中的路由
 报告 `Event route rendering failed.`，因为运行时以通用的 `runtime-failed` 错误应答包装器，并把原始消息
 留在自己的进程中。
@@ -200,8 +200,8 @@ const rendered = await renderRoute('event:tool/after', {
 两种形态都编译成位于根目录 `hooks/` 下的包装层，由宿主以
 `node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"`（或宿主自己的根令牌）调用。只有一个选中宿主
 接收的钩子编译为 `hooks/<name>.mjs`；被多个选中宿主共享的钩子则为每个宿主各编译一份
-`hooks/<name>.<host>.mjs`，因为每个包装层都烘焙了自己宿主的事件拼写——Claude Code 与 Codex 为
-`PreToolUse` / `PostToolUse`，Cursor 为小驼峰的 `preToolUse` / `postToolUse`——而每个宿主的文档
+`hooks/<name>.<host>.mjs`，因为每个包装层都烘焙了自己宿主的事件拼写，Claude Code 与 Codex 为
+`PreToolUse` / `PostToolUse`，Cursor 为小驼峰的 `preToolUse` / `postToolUse`，而每个宿主的文档
 都指向它自己的包装层。Claude Code 的文档是 `hooks/hooks.json`，它按约定加载该文件且从不扫描
 `hooks/` 下的其他文档，因此 Claude 清单不写 `hooks` 指针：Claude Code 会把指向约定文件的指针
 报告为重复的 hooks 文件（`manifest.hooks` 只用于额外文档）。Codex 与 Cursor 的清单带有显式的
@@ -215,8 +215,8 @@ const rendered = await renderRoute('event:tool/after', {
 1. **宿主 → 包装层（stdin）。** 宿主写入一个 JSON 信封。包装层以 1 MiB 的硬上限流式读取 stdin，只解析
    恰好一个值，并按宿主、按事件校验它（`session_id`、`transcript_path`、`cwd`、工具字段……）。任何
    不匹配都以非零退出。
-2. **包装层 → 运行时（IPC）。** 一条按换行分隔的请求——`protocolVersion`、`artifactEpoch`、`event`、
-   `hostContractRevision`、`target` 与校验过的 `native` 信封——经由每用户的 Unix socket（Windows 上为
+2. **包装层 → 运行时（IPC）。** 一条按换行分隔的请求，`protocolVersion`、`artifactEpoch`、`event`、
+   `hostContractRevision`、`target` 与校验过的 `native` 信封，经由每用户的 Unix socket（Windows 上为
    命名管道）发送。socket 目录为 `0700`，socket 为 `0600`，端点哈希绑定了产物 epoch、target 与产物的
    安装目录，因此两份安装绝不会共享运行时。请求与 `timeoutMs`（默认 5000 ms）竞速。
 3. **运行时渲染。** 服务端拒绝 epoch 不匹配与畸形消息，构造 `canonical` props，并在请求上下文内通过
@@ -229,29 +229,29 @@ const rendered = await renderRoute('event:tool/after', {
 
 失败默认是关闭的。唯一的回退是同时编译了独立形态的路由上的 `fallback: 'standalone'`，而且它**只**在
 `runtime-unavailable`（没有活的 socket）时触发。`runtime-timeout`、`epoch-mismatch`、`invalid-message`
-与 `runtime-failed` 都以非零退出——过期的代码绝不会作答，也绝不会输出伪造的响应。
+与 `runtime-failed` 都以非零退出，过期的代码绝不会作答，也绝不会输出伪造的响应。
 
 运行时一侧同样是失败即关闭。生成的 MCP 服务端拥有这个 socket：它用一个独占锁文件认领端点、开始监听，
-并在关停时只有当它们仍是自己创建的那些文件时才把两者删除。无法删除自己 socket 路径的关停——或无法
-释放认领锁的启动——会报告 code 为 `runtime-failed` 的 `EventRuntimeTransportError`（`Unable to remove
+并在关停时只有当它们仍是自己创建的那些文件时才把两者删除。无法删除自己 socket 路径的关停，或无法
+释放认领锁的启动，会报告 code 为 `runtime-failed` 的 `EventRuntimeTransportError`（`Unable to remove
 the event runtime endpoint.` / `Unable to release the event runtime endpoint claim.`），而不是静默退出；
 启动失败时会先关掉已经起来的监听器，因此绝不会在错误背后留下一个活的服务端。崩溃进程留下的过期
 socket 或锁会由下一个服务端恢复：它探测端点，并回收所有者已被证明死亡的认领。
 
-**并发会话。** 宿主经常从同一个安装根目录运行同一插件的多个会话——Claude Desktop 启动的每个
-Claude Code 会话共享同一个 `--plugin-dir`，Cursor 也会从同一个缓存导入 Claude 安装的插件——因此多个
+**并发会话。** 宿主经常从同一个安装根目录运行同一插件的多个会话，Claude Desktop 启动的每个
+Claude Code 会话共享同一个 `--plugin-dir`，Cursor 也会从同一个缓存导入 Claude 安装的插件，因此多个
 端点相同的生成 MCP 服务端进程是常态。任一时刻恰好只有一个进程拥有 socket。启动时发现端点已被另一个
 进程拥有的服务端**不会**退出：它以 `standby` 角色启动，照常服务自己的 MCP 会话，向 stderr 写入
 `agent-bundle event runtime: <socket> is owned by another process; standing by`，并大约每秒探测一次
 端点。所有者一退出，某个待命者就会通过与无主启动完全相同的认领并监听路径接管 socket（并记录
 `… was released by its owner; took it over`）；若有多个待命者，认领锁保证恰好一个胜出，其余继续等待。
 钩子包装层无需任何改动：只要所有者活着，它们的回答与以前一样；在接管间隙（最多约一秒）里它们会看到
-`runtime-unavailable`，这正是上文 `fallback: 'standalone'` 路由覆盖的情形——仅共享的路由则对这一个事件
+`runtime-unavailable`，这正是上文 `fallback: 'standalone'` 路由覆盖的情形，仅共享的路由则对这一个事件
 以非零退出。接管因"socket 仍被占有"之外的任何原因失败时（无法写入的 socket 目录、永远不清除的认领），
-服务端会把失败报告到自己的 stderr——每种不同的失败一行，最多每 30 秒重复一次——并继续待命。因其他
+服务端会把失败报告到自己的 stderr，每种不同的失败一行，最多每 30 秒重复一次，并继续待命。因其他
 任何原因失败的启动仍然失败即关闭，所有者无法删除的过期 socket 也一样。
 
-在同一个复合根目录里，每个所选宿主都通过自己 MCP 文档所列出的第一个生成式 MCP 服务器到达该运行时——
+在同一个复合根目录里，每个所选宿主都通过自己 MCP 文档所列出的第一个生成式 MCP 服务器到达该运行时，
 当所有所选宿主都列出同一个服务器时是一个进程，否则每个宿主一个。运行时的 socket 只由制品本身标识（它的
 epoch 与根目录，而非 `targets` 选择），发起调用的宿主随每个请求一起传递，因此无论哪个进程持有该 socket，
 都会应答所有所选宿主的包装层。
@@ -322,7 +322,7 @@ export default defineConfig({
 | `stop` | 智能体即将停止时。 |
 | `agentStart` | 子智能体启动时。 |
 | `agentStop` | 子智能体停止时。 |
-| `workspaceOpen` | 工作区被打开时。请以[事件路由](#事件路由)（`src/events/workspace/open.tsx`）声明它，而不是配置钩子：没有任何 target 会映射这种朴素钩子形式，因此配置声明的 `workspaceOpen` 在每个宿主上都是构建错误——包括 Cursor，它只通过路由形式支持该事件。 |
+| `workspaceOpen` | 工作区被打开时。请以[事件路由](#事件路由)（`src/events/workspace/open.tsx`）声明它，而不是配置钩子：没有任何 target 会映射这种朴素钩子形式，因此配置声明的 `workspaceOpen` 在每个宿主上都是构建错误，包括 Cursor，它只通过路由形式支持该事件。 |
 
 不实现某个事件的宿主，就不会收到对应的钩子；输出的文档保持诚实，而不是发明一个等价物。
 
@@ -333,7 +333,7 @@ Amp 把朴素 `sessionStart` 映射到 fire-and-forget 的 `session.start`，把
 
 ## 工具选择器
 
-`tools` 接受规范选择器——`shell`、`file.read`、`file.write`、`mcp`、`agent`——在宿主有对应原生匹配器时
+`tools` 接受规范选择器，`shell`、`file.read`、`file.write`、`mcp`、`agent`，在宿主有对应原生匹配器时
 翻译过去。Cursor 映射全部五个；Claude Code 没有 `agent`；Codex 没有 `agent` 也没有 `file.read`。钩子上的每个
 选择器都必须在每个所选 target 上可映射，因此以 `codex` 为 target 的 `tools: ['file.read', 'shell']` 会导致构建
 失败，尽管单独的 `shell` 本可以工作。[事件与钩子矩阵](../../reference/events.md)渲染了这张匹配器表。`tools` 同时接受写成 `<target>:<native-name>` 的显式宿主原生选择器，例如 `claude:WebSearch` 或
@@ -362,8 +362,8 @@ export default ((event) => ({
 })) satisfies HookHandler<'sessionStart'>;
 ```
 
-`event` 是 `HookEvent<'sessionStart'>`——`sessionId` 加上可选的 `cwd`、`source`、`transcriptPath`
-以及宿主可能附带的其他会话事实——返回类型是 `HookResult<'sessionStart'>`，因此一个返回
+`event` 是 `HookEvent<'sessionStart'>`，`sessionId` 加上可选的 `cwd`、`source`、`transcriptPath`
+以及宿主可能附带的其他会话事实，返回类型是 `HookResult<'sessionStart'>`，因此一个返回
 `{ outcome: 'deny', reason: '…' }` 的 `sessionStart` 处理器是 `tsc` 错误，而不是 hook 运行时的失败。
 按事件划分的负载类型（`BeforeToolHookEvent` 携带 `toolName`、`toolInput`、`toolUseId`；`AfterToolHookEvent`
 增加 `toolResponse`；`StopHookEvent` 与 `AgentStopHookEvent` 携带 `stopHookActive`；`AgentStartHookEvent`
@@ -378,7 +378,7 @@ export default ((event) => ({
 `status` 为 `completed` 的子代理消费 `agentStop` 拒绝，因此同时面向 Cursor 的处理器应在拒绝前检查
 `context.nativeInput.status`。
 
-生成的包装层仍会在把结果投影为宿主原生输出之前先校验它——同样的规则，在 hook 运行时也施加于 JavaScript
+生成的包装层仍会在把结果投影为宿主原生输出之前先校验它，同样的规则，在 hook 运行时也施加于 JavaScript
 与预构建的处理器。只接受四个键，并且每一个都会被检查：
 
 | 键 | 契约 |
@@ -392,13 +392,13 @@ export default ((event) => ({
 
 - `sessionStart`、`afterTool` 与 `agentStart` 不能拒绝、停止或替换输入。类型契约（以及 Claude 与 Codex 的
   包装层）拒绝 `agentStart` 的拒绝结果；只有 Cursor 的运行时包装层容忍带原因的 `agentStart` 拒绝，并把它
-  投影为 `permission: 'deny'`——因此它只能从未带类型的结果触及。
+  投影为 `permission: 'deny'`，因此它只能从未带类型的结果触及。
 - `beforeTool` 不能停止，也不能在拒绝的同时替换输入。继续（`continue`）的 `beforeTool` 处理器
   **不做**任何权限决定：宿主的决定字段不会被写入，因此其正常的权限提示仍然适用；`updatedInput`
   改写会由该流程针对改写后的输入进行评估。只有 `deny` 会被投影为决定。若要显式批准一次调用，请使用
   [事件路由](#事件路由)并返回 `outcome: 'allow'`。
 - `stop` 只接受 `continue`，或带原因的 `deny`。
-- `agentStop` 不能停止父流程或替换输入；在 Codex 与 Cursor 上也不能追加上下文——只有 Claude Code 会投递
+- `agentStop` 不能停止父流程或替换输入；在 Codex 与 Cursor 上也不能追加上下文，只有 Claude Code 会投递
   `agentStop` 的 `additionalContext`。
 
 未知的键、错误的类型，或违反上述任一规则，都会让钩子以清晰的错误消息失败，而不是被投影成一份行为
@@ -438,7 +438,7 @@ export default defineConfig({
 });
 ```
 
-预构建钩子输出的原生命令形如 `node "<root>/<payload path>" <args…>`——一条配置声明取代了逐宿主手工
+预构建钩子输出的原生命令形如 `node "<root>/<payload path>" <args…>`，一条配置声明取代了逐宿主手工
 维护的 `hooks/hooks.json`。预构建钩子按原生钩子文档的方式打包：它们不编译包装层，也不会出现在清单的
 `executables.hooks[]` 行中，因此 `hooks list` 与 `hooks simulate` 看不到它们。
 
@@ -455,23 +455,23 @@ npx agent-bundle hooks simulate --artifact artifact --target claude \
     "cwd":"/tmp/project","source":"startup"}'
 ```
 
-`--hook` 必须是 `hooks list` 打印出的精确 `name`（或 `id`）——规范化会把它推导为
+`--hook` 必须是 `hooks list` 打印出的精确 `name`（或 `id`），规范化会把它推导为
 `<event>-<handler>-<hash>`，因此像 `session-start` 这样的裸事件名不会匹配任何钩子。
 `session-start-session-start-7ab7e8a5` 正是本页开头那段声明所产生的名称；哈希覆盖事件、处理器路径、
-targets、tools、timeout 与 args，因此声明的任何改动都会得到新名称——要复制的永远是 `hooks list`
+targets、tools、timeout 与 args，因此声明的任何改动都会得到新名称，要复制的永远是 `hooks list`
 为你的构建打印出的那一个。
 载荷是**规范**输入；包装层会把它转换为宿主的原生信封并按宿主的方式校验，所以 Claude 的
 `sessionStart` 模拟需要 `sessionId`、`transcriptPath`、`cwd` 与 `source`（工具事件还需要
 `toolName`、`toolInput` 与 `toolUseId`）。
 
-`hooks simulate` 运行的是真实输出的包装层——正是宿主将要执行的那个文件——所以你看到的结果就是宿主
+`hooks simulate` 运行的是真实输出的包装层，正是宿主将要执行的那个文件，所以你看到的结果就是宿主
 会得到的结果。在开发者 Workbench 中，于 **Application → Events / Hooks** 下选中该事件，选择一份
 Canonical、Claude、Codex 或 Cursor 夹具，然后在那里运行。路由工作区首先展示结果，并把规范/原生
 编解码细节留在投影检查器中。
 
 ## 下一步
 
-- [MCP 服务器与 MCP App](./mcp.mdx) —— 另一种可执行表面。
-- [脚本与资源](./scripts-assets.mdx) —— 钩子或 Skill 可以调用的代码。
-- [编译器架构](../concepts/architecture.mdx) —— 事件路由、配置钩子与宿主包装层
+- [MCP 服务器与 MCP App](./mcp.mdx) ， 另一种可执行表面。
+- [脚本与资源](./scripts-assets.mdx) ， 钩子或 Skill 可以调用的代码。
+- [编译器架构](../concepts/architecture.mdx) ， 事件路由、配置钩子与宿主包装层
   在编译管线中的位置。

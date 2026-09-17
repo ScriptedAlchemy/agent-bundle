@@ -22,9 +22,9 @@ Read `repos/effect/LLMS.md` before writing Effect code. Refresh
 
 Each Effect-consuming package has exactly one `src/effect/boundary.ts`:
 
-- [`packages/rsc-runtime/src/effect/boundary.ts`](../packages/rsc-runtime/src/effect/boundary.ts) — runtime + state kernel internals.
-- [`packages/agent-bundle/src/effect/boundary.ts`](../packages/agent-bundle/src/effect/boundary.ts) — the dev seam (Stage 3). Maps interruption to `AbortError` and rethrows the dev seam's typed contracts (`CodedError` / `YieldableCodedError` subclasses, `DiagnosticError`) unchanged.
-- [`packages/create-agent-bundle/src/effect/boundary.ts`](../packages/create-agent-bundle/src/effect/boundary.ts) — the scaffolder (FileSystem phase 1). Rethrows `UsageError` / `Error` unchanged; unwraps `PlatformError` to its Node cause.
+- [`packages/rsc-runtime/src/effect/boundary.ts`](../packages/rsc-runtime/src/effect/boundary.ts): runtime + state kernel internals.
+- [`packages/agent-bundle/src/effect/boundary.ts`](../packages/agent-bundle/src/effect/boundary.ts): the dev seam (Stage 3). Maps interruption to `AbortError` and rethrows the dev seam's typed contracts (`CodedError` / `YieldableCodedError` subclasses, `DiagnosticError`) unchanged.
+- [`packages/create-agent-bundle/src/effect/boundary.ts`](../packages/create-agent-bundle/src/effect/boundary.ts): the scaffolder (FileSystem phase 1). Rethrows `UsageError` / `Error` unchanged; unwraps `PlatformError` to its Node cause.
 
 The boundary owns:
 
@@ -58,13 +58,13 @@ Services: declare `class X extends Context.Service<X, Shape>()("pkg/path/X")`.
 
 zod stays at every schema boundary (MCP SDK interop; recorded G-decisions).
 **Effect Schema is deferred** (re-evaluated 2026-09-01 for wire contracts; see
-[Effect Schema wire contracts](#effect-schema-wire-contracts-schema-projections))
-— do not introduce `Schema.TaggedError` on the public or MCP-facing contracts.
+[Effect Schema wire contracts](#effect-schema-wire-contracts-schema-projections)),
+do not introduce `Schema.TaggedError` on the public or MCP-facing contracts.
 Internals keep the existing classes.
 
 ### Yieldable framework errors (`Data.Error`, decided 2026-09-03)
 
-Framework-process error classes — the ones raised inside Effect programs in
+Framework-process error classes, the ones raised inside Effect programs in
 the dev seam and the eval service whose declarations no package export
 reaches (today: `DevCoordinatorCloseError`, `RuntimeMcpRegistryError` /
 `RuntimeMcpRegistryCloseError`, `RuntimeGenerationStoreError` /
@@ -72,7 +72,7 @@ reaches (today: `DevCoordinatorCloseError`, `RuntimeMcpRegistryError` /
 `ScriptPlaygroundFailure` / `ScriptPlaygroundAbortError`,
 `LifecycleReplayRequestError`, `ArtifactInspectionServiceError`,
 `HookSimulationAbortError` / `HookSimulationTerminationError`,
-`CodexEvalHarnessError`, `SmokeStepError`) — extend the yieldable bases in
+`CodexEvalHarnessError`, `SmokeStepError`), extend the yieldable bases in
 [`packages/agent-bundle/src/effect/errors.ts`](../packages/agent-bundle/src/effect/errors.ts):
 `YieldableFrameworkError` (the `Data.Error` twin of `Error`, same
 `(message?, options?)` constructor) and `YieldableCodedError<TCode>` (the
@@ -87,15 +87,15 @@ What does not change: `instanceof Error` / `instanceof X`, `.name`,
 `.message`, `.code`, `.cause`, `.stack`, the boundary's identity-preserving
 rethrow (`isTypedDevError` matches the string `code`), `JSON.stringify`,
 `stableJson`, `{ ...error }`, and `util.inspect`. rc.112 `Data.Error` would
-otherwise change the last four — its prototype `toJSON` spreads the
+otherwise change the last four, its prototype `toJSON` spreads the
 constructor fields (`message`, `cause`) into the JSON and its
-`[nodejs.util.inspect.custom]` prints that instead of the stack — so the
+`[nodejs.util.inspect.custom]` prints that instead of the stack, so the
 base shadows both with non-functions and installs `cause` non-enumerable;
 `tests/effect-errors.test.ts` pins byte-identical output against the plain
 twin. Migration is mechanical per file: swap the `extends` clause, import
 the base; constructors and call sites stay.
 
-Carve-outs — these stay on plain `Error` / `CodedError`, and a class that
+Carve-outs. These stay on plain `Error` / `CodedError`, and a class that
 moves into one of these positions moves back:
 
 - **Effect-free entry graphs.** `src/effect/errors.ts` imports `effect`.
@@ -108,7 +108,7 @@ moves into one of these positions moves back:
   on all five entries. `McpAppBridgeCloseError` stays plain for the same
   reason (`agent-bundle/rstest` and `agent-bundle/test/browser` reach it).
 - **The public declaration graph.** Any class whose declaration file a
-  `package.json` export's `types` reaches — not only classes that are
+  `package.json` export's `types` reaches, not only classes that are
   themselves exported. A consumer's `tsc` resolves every `.d.ts` the entry
   imports, so `class X extends YieldableCodedError` in a reachable file
   makes `effect` a type dependency of the package (`public-api.test.ts`'s
@@ -178,7 +178,7 @@ on the Promise edge. Do not widen public error types to satisfy Effect.
   with no reason, and never hands out the controller. A contract that must
   abort *with a reason* on a caller's request (the MCP session's `cancel()`
   and close-time `#cancelAll`, whose reason reaches the SDK rejection) owns
-  its `AbortController` as the scoped resource instead — `acquireRelease`
+  its `AbortController` as the scoped resource instead, `acquireRelease`
   admits the slot and returns the controller, release aborts it and frees
   the slot, and the host signal is joined with `AbortSignal.any` (#512,
   `dev/mcp-session/mcp-session.ts` `#admitRequest`). That is the same
@@ -208,7 +208,7 @@ Stage 2 uses Effect `Stream` for the #145 dispatcher: Flight bytes via
 `Stream.unfold` that waits for event-stream demand *before* `reader.read()`,
 pending boundaries via `Stream.paginate`, contract bounds as the emit stage
 (`emitBoundRenderEvent` / `createAgentRenderEventSequence`), and progress
-via `Stream.merge` + `takeUntil(complete)` (not `Stream.callback` — a failed
+via `Stream.merge` + `takeUntil(complete)` (not `Stream.callback`, a failed
 callback producer does not fail the stream). A `Latch` opened from the
 public event-stream pull gates Flight bytes after the shell. Host
 `AbortSignal` becomes `Stream.interruptWhen` + `abortToInterrupt` at the
@@ -224,9 +224,9 @@ public edge. Pattern files:
 One subsystem per PR, all behind unchanged Promise APIs and wire contracts
 (#158 boundary, #159 MCP session lifecycles, #160 rebuild scheduler,
 #161 EpochStore). Leaf filesystem/SDK helpers stay imperative and are
-identity-lifted through `src/effect/lift.ts`; the orchestration —
+identity-lifted through `src/effect/lift.ts`; the orchestration,
 lifecycles, mutual exclusion, coalescing, compensation, failure
-aggregation — is Effect.
+aggregation, is Effect.
 
 **`ProjectEventHub` (the SSE hub) stays imperative.** Its public contract is
 *synchronous* re-entrant fan-out: `publish` delivers to listeners in the same
@@ -264,9 +264,9 @@ Helped:
 
 Hurt / gotchas:
 
-- Scope finalizers are infallible by type — `Effect.acquireRelease` takes a
+- Scope finalizers are infallible by type: `Effect.acquireRelease` takes a
   `release: (a, exit) => Effect<unknown, never, R>` and `Effect.addFinalizer`
-  an `Effect<void, never, R>` — so a release that can fail cannot even be
+  an `Effect<void, never, R>`, so a release that can fail cannot even be
   written there. `Effect.acquireUseRelease`'s `release` and `Effect.onExit`
   / `Effect.ensuring` handlers are **not** infallible: rc.112 types them
   `Effect<void, E3, R3>` and merges a failing handler into the result
@@ -278,8 +278,8 @@ Hurt / gotchas:
   chains, `DevCoordinatorCloseError` in `dev/coordinator.ts` #513, the IPC
   claim release and socket removal in `events/ipc.ts` #516, the staging-root
   removal that replaces the publish outcome) are therefore explicit effect
-  sequences — `Effect.exit` on the attempt, run the cleanup, aggregate,
-  then unwrap — under `Effect.uninterruptibleMask` where the original
+  sequences, `Effect.exit` on the attempt, run the cleanup, aggregate,
+  then unwrap, under `Effect.uninterruptibleMask` where the original
   `finally` was uninterruptible. Neither scope finalizers nor
   `acquireUseRelease` express that ordering.
 - Bare `Effect.tryPromise(fn)` wraps rejections in `Cause.UnknownError`;
@@ -312,19 +312,19 @@ The discovery module owns report loading plus ephemeral live-probe consent
 and result state. Atoms live in `effect/unstable/reactivity`; React bindings come from
 `@effect/atom-react`.
 
-- No `Atom` or `AsyncResult` types in DTOs, public exports, or examples —
+- No `Atom` or `AsyncResult` types in DTOs, public exports, or examples,
   atoms consume the strictly-decoded outputs of the existing zod clients and
   never replace wire contracts.
 - One root `RegistryProvider` mounted in the app shell (`src/main.tsx`); the
   module-level default registry is never used.
-- Components never call `Effect.run*` — the registry owns effect execution;
+- Components never call `Effect.run*`: the registry owns effect execution;
   components interact through the `@effect/atom-react` hooks only (rslint
   `effect-boundary/no-ad-hoc-run` already enforces the run ban).
 - Imperative clients (`ProjectClient`, `RuntimeClient`, `AgentDocumentClient`,
   …) stay the lifecycle authorities; atoms are read-side caches over their
   decoded outputs.
 - Known caveat: `4.0.0-rc.112` has a stream-backed derived-atom disposal bug
-  (fixed upstream post-rc.112, unpublished) — no stream-backed derived atoms
+  (fixed upstream post-rc.112, unpublished), no stream-backed derived atoms
   in the Workbench until a re-pin past the fix; the root `RegistryProvider`
   (not the default registry) avoids the reported React case.
 - Every effect re-pin must bump `@effect/atom-react` to the same RC in the
@@ -344,8 +344,8 @@ implementations come from `@effect/platform-node` (`NodeServices.layer`) in
 `NodeFileSystem` / `NodePath` / `NodeChildProcessSpawner` / `NodeStdio` /
 `NodeTerminal` / `NodeCrypto`; `@effect/platform-node`'s modules are
 re-exports of it) in `agent-bundle`, which every consumer installs:
-`@effect/platform-node@rc.112` would add `undici`, `mime`, and — through a
-non-optional `redis` peer that npm auto-installs — a Redis client (+23 MB,
+`@effect/platform-node@rc.112` would add `undici`, `mime`, and, through a
+non-optional `redis` peer that npm auto-installs, a Redis client (+23 MB,
 +17 packages) to each consumer install. `agent-bundle`'s `platformLayer`
 composes the same six services the same way `NodeServices.layer` does. The
 `ws` / `@types/ws` / `@types/node` dependencies of `platform-node-shared`
@@ -355,7 +355,7 @@ encodes: the pinned `FileSystem` has no `lstat`, `OpenFlag` accepts only
 string flags (no `O_NOFOLLOW`), and there is no directory fsync.
 `NodeRuntime.runMain` stays banned (the 130/143 signal-distinct exit
 contract). The same package's `Terminal` and `Stdio` services are adopted for
-the first-party CLI's user-facing text — see
+the first-party CLI's user-facing text, see
 [Terminal and Stdio](#terminal-and-stdio-user-facing-cli-text).
 
 ### Adopt
@@ -363,7 +363,7 @@ the first-party CLI's user-facing text — see
 - Ordinary reads, writes, `mkdir`, `readDirectory`, `stat`, `exists`,
   `remove`, `rename`, `copy` in code that already runs (or is being moved)
   inside an Effect program: `yield* FileSystem.FileSystem`, then the method.
-  `readDirectory` returns names only — `stat(...).type === 'Directory'`
+  `readDirectory` returns names only, `stat(...).type === 'Directory'`
   replaces `Dirent.isDirectory()`.
 - `Path.Path` for `join` / `resolve` / `dirname` / `fromFileUrl` in the same
   modules. `fromFileUrl` fails with `BadArgument`; `Effect.orDie` it when the
@@ -371,7 +371,7 @@ the first-party CLI's user-facing text — see
 - Temporary directories whose lifetime ends with the enclosing operation:
   in `agent-bundle`, `withTempDirectory(options, use)` from
   `src/effect/platform.ts`, the bracket that reproduces `mkdtemp` +
-  `try`/`finally` `rm(dir, { recursive: true, force: true })` exactly —
+  `try`/`finally` `rm(dir, { recursive: true, force: true })` exactly,
   `force`, cleanup failure as a typed `PlatformError` that wins over the
   operation's failure, cleanup on interruption. Not
   `fs.makeTempDirectoryScoped` in library code: the rc.112 finalizer removes
@@ -412,7 +412,7 @@ the first-party CLI's user-facing text — see
   [Terminal and Stdio](#terminal-and-stdio-user-facing-cli-text)) and widens
   to `platformLayer` there when CLI code adopts the filesystem services; the
   dev server has one `makeScopedEffectRuntime(platformLayer)`, created
-  inside `startDevServer` (never at module top level — `effect` is a CLI
+  inside `startDevServer` (never at module top level, `effect` is a CLI
   cold-start cost) and disposed from the returned session's `close` after
   every service has closed (`createDevPlatformRuntime` in
   `src/dev/platform-run.ts`). Every dev service takes the runtime as an
@@ -425,7 +425,7 @@ the first-party CLI's user-facing text — see
   over the long-lived runtime, `PlatformError` unwrapped the same way);
   absent a handle, `platformRunOf` returns `runWithPlatform`, so the services
   stay usable on their own. Both modules live under `dev/`, not in
-  `platform.ts` — that module is bundled into the emitted installer, which
+  `platform.ts`, that module is bundled into the emitted installer, which
   stays byte-identical. Never provide a platform layer deep inside library
   code.
 - Errors: `PlatformError` flows through the Effect error channel and is
@@ -435,13 +435,13 @@ the first-party CLI's user-facing text — see
   Node error" (the scaffolder), unwrap `PlatformError.cause` to the
   `ErrnoException` so messages stay byte-identical.
 - Tests: `FileSystem.layerNoop({ ...overrides })` for call/result/error
-  protocol tests — its defaults fail with `NotFound` or die, so override
+  protocol tests, its defaults fail with `NotFound` or die, so override
   every operation the code under test performs. Keep real temp directories
   (`makeTempDirectoryScoped` under `it.effect` / `it.live`) for anything
   about symlinks, permissions, atomic rename, SQLite, or packed executables.
   Do not convert Promise-contract tests solely for fixture cleanup.
 
-### Keep raw (`node:fs` / `node:path`) — explicit carve-outs
+### Keep raw (`node:fs` / `node:path`), explicit carve-outs
 
 - `core/durable-fs.ts` and everything that publishes through it: epoch
   store, playground stores, eval run-store, dev-lock, receipts. They need
@@ -480,8 +480,8 @@ the first-party CLI's user-facing text — see
   `dev/playground/lifecycle-replay-service.ts`'s synchronous `existsSync`
   probe.
 - `dev/watcher.ts`: chokidar stays. `FileSystem.watch` is a thin `fs.watch`
-  with create/update/remove only — no `ignored` callbacks, readiness, or the
-  other event kinds — and the watcher's `dev:ino` signatures need `stat`
+  with create/update/remove only, no `ignored` callbacks, readiness, or the
+  other event kinds, and the watcher's `dev:ino` signatures need `stat`
   semantics we do not want to change.
 - Synchronous config/discovery on the compiler and cold-start path
   (`config/validate.ts`, `config/conventional-entry.ts`,
@@ -533,7 +533,7 @@ and `native-codex-contract.ts`, `services/{hook-service,mcp-service,mcp-run}.ts`
 `mcp-run`'s SIGINT/SIGTERM forwarding is a scoped `acquireRelease`), the
 `eval/*` harness readers, `fixtures.ts` materialization and the Codex trial
 home, and the post-build readers `build/validate-artifact*.ts`,
-`pack-inventory.ts` — each through `runWithPlatform` at its existing
+`pack-inventory.ts`, each through `runWithPlatform` at its existing
 Promise signature, with the link-identity checks kept raw per the
 carve-outs above. The sibling `routes/graph.ts` reads stay raw:
 `compileRouteGraph` is the compiler/cold-start discovery path, and lifting
@@ -557,8 +557,8 @@ contract (`runtime-store-contracts.ts`, exported from `agent-bundle/api`)
 has no session runtime to hand it. Two directories outlive their call and are
 therefore not `withTempDirectory` brackets: the MCP session's plugin-data
 directory is acquired into its own session-lifetime `Scope` whose only
-finalizer removes it — the session closes that scope from `close()`, and
-until the session exists the open scope's release closes it instead — and
+finalizer removes it, the session closes that scope from `close()`, and
+until the session exists the open scope's release closes it instead, and
 the script playground's workspace lease keeps `close` as a separate step so
 a removal failure is reported in the result's `cleanupFailures`, not in
 place of the script's outcome.
@@ -578,7 +578,7 @@ stdout-only; **diagnostics** (the canonical JSON diagnostics document) go
 through `Stdio.stderr()`, and **machine output** (`--json`, stable JSON
 lines) goes through `Stdio.stdout()` so its bytes stay exact. The helpers
 live in `src/effect/terminal.ts` (`display`, `writeStderr`, `writeStdout`).
-**Argv-layer text** — Commander's `--help`, `--version`, and argv errors —
+**Argv-layer text**, Commander's `--help`, `--version`, and argv errors,
 is the one exception: it is written synchronously to the process streams
 before any command runs (see the cold-start budget below).
 
@@ -586,7 +586,7 @@ Cold-start budget (measured 2026-09-03, Node v22.23.2, 30 runs, median wall
 time of the built `bin/agent-bundle.js`; `node -e 0` is ≈28 ms on the same
 machine): `--version` ≈60 ms before the adoption, ≈300 ms with the runtime
 built eagerly in `runCli`, ≈60 ms with the lazy runtime; `--help` the same;
-`validate` on `examples/host-test` unchanged (≈1.7–2.3 s, dominated by the
+`validate` on `examples/host-test` unchanged (≈1.7 to 2.3 s, dominated by the
 compiler). Where the +240 ms went: loading the `effect` module graph
 (≈300 ms for the `effect` barrel in an unbundled process; ≈100 ms of it is
 `effect/Terminal` alone, and the minimal `effect/Effect` + `Layer` +
@@ -631,8 +631,8 @@ Wiring rules:
 - The scaffolder (`packages/create-agent-bundle/src/index.ts`) follows the
   same split: `runCli` parses flags and writes `--help` (stdout) and flag
   errors (stderr) synchronously to its `CliStreams` (default: the process
-  streams), then loads `src/scaffold-cli.ts` — the `NodeServices.layer`
-  root, the scaffold program, and Clack — with a dynamic `import()`. Clack
+  streams), then loads `src/scaffold-cli.ts`, the `NodeServices.layer`
+  root, the scaffold program, and Clack, with a dynamic `import()`. Clack
   stays the prompt renderer and is not replaced by `readLine`.
 - Keep `display` text explicit about line endings (`\n`); the service writes
   what it is given.
@@ -650,9 +650,9 @@ Wiring rules:
   `process.stdout`/`process.stderr` adapters: emitted artifacts must not carry
   a platform runtime, and byte-exact protocol frames are not terminal text.
 - **The route-facing terminal capability is plain Node, not `Terminal`.**
-  `request.terminal` (#511) — TTY-ness, color depth, and `columns`/`rows` per
+  `request.terminal` (#511), TTY-ness, color depth, and `columns`/`rows` per
   output stream, reported to routes, rendered scripts, and `main`-envelope
-  executables — is probed by the dependency-free `src/terminal-capability.ts`
+  executables, is probed by the dependency-free `src/terminal-capability.ts`
   (aliased into emitted executables as `agent-bundle/terminal-capability`)
   because those artifacts must not carry the Effect runtime; the first-party
   CLI mounts no route request scope, so it has nothing to read from the
@@ -679,8 +679,8 @@ identical. That claim does not cover every export under `contracts/*`.
 `McpSessionTraceEntry.occurredAt` preserves a numeric Unix timestamp, and
 `DevRuntimeAsset.body` carries a `Uint8Array` through `contracts/runtime.ts`;
 neither is one of the audited JSON DTO routes. `toType` / `toEncoded` would
-therefore be near-identity at the audited seams. The real dual maintenance —
-contract types plus separately hand-written Workbench decoders — is a
+therefore be near-identity at the audited seams. The real dual maintenance,
+contract types plus separately hand-written Workbench decoders, is a
 single-source-of-truth problem that the pinned zod can already solve with
 `z.infer`; it does not require a second schema runtime.
 
@@ -702,8 +702,8 @@ fixtures measure Effect Schema at 101.5 kB / 33.4 kB gzip versus zod at
 The diagnostics do not fit these seams either. Workbench clients deliberately
 collapse decode failures into single AB-coded errors such as `AB8233` and
 `AB8063`, so `SchemaIssue` / `Formatter` trees add nothing there.
-`config/validate.ts` contains business-rule diagnostics — AB code, severity,
-and recovery per rule — rather than shape validation.
+`config/validate.ts` contains business-rule diagnostics, AB code, severity,
+and recovery per rule, rather than shape validation.
 
 zod stays at every wire/schema boundary under the existing G-decisions, and
 the hand-rolled exact-key guards stay. If a future contract needs real
@@ -716,7 +716,7 @@ projections on that single contract before any wider adoption.
   `*Exit` siblings) outside `src/effect/boundary.ts`.
 - Imports from `repos/**`.
 - Effect Schema on public or zod boundaries.
-- `@effect/vitest` — this repo uses rstest.
+- `@effect/vitest`: this repo uses rstest.
 - `NodeRuntime.runMain` / `BunRuntime` as a substitute for the boundary.
 - Ad-hoc `ManagedRuntime` outside a boundary module.
 - `effect/unstable/*` until listed below (Stages 2, 3, and the #99 notice ledger listed none).
@@ -736,7 +736,7 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
 | `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
-| `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); host-contracts validators, `services/*`, `eval/*`, and the post-build readers (phase 2, ordinary-I/O modules, 2026-09-03); the dev server's services on one session-scoped runtime created in `startDevServer` (phase 2, dev server, 2026-09-03); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
+| `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O, `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); host-contracts validators, `services/*`, `eval/*`, and the post-build readers (phase 2, ordinary-I/O modules, 2026-09-03); the dev server's services on one session-scoped runtime created in `startDevServer` (phase 2, dev server, 2026-09-03); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
 | `@effect/platform-node-shared` (`NodeTerminal` / `NodeStdio`) + `effect/Terminal`, `effect/Stdio` | first-party CLI command output, diagnostics, and machine output (`src/cli.ts`, `src/effect/terminal.ts`, `src/effect/cli-runtime.ts`), loaded lazily on the first command write (2026-09-03); Commander's help/version/argv-error text and the scaffolder's `--help` / flag-error text stay on synchronous process writes for the cold-start budget | re-pin re-checks `Terminal.display` stays stdout-only, `readLine` EOF → `QuitError`, the `Stdio` sink contract, and re-measures `agent-bundle --version` startup against the recorded ≈60 ms (`cli.test.ts` fails the build if the trivial invocations resolve an `effect` module) |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
 
@@ -748,7 +748,7 @@ is the official installer; this repo pins the plugin config in
 `tsconfig.base.json` so the same rules apply to every package that extends it.
 `.vscode/settings.json` enables the TypeScript 7 / tsgo workspace SDK
 (`js/ts.experimental.useTsgo`). We do not add a `prepare` hook that runs
-`effect-tsgo patch` — that mutates `typescript` on every install. Re-run
+`effect-tsgo patch`, that mutates `typescript` on every install. Re-run
 `npx @effect/tsgo setup --non-interactive` during a re-pin if the editor
 wiring drifts.
 
@@ -757,7 +757,7 @@ wiring drifts.
 Generated stdio hooks run under host deadlines. Stage 0 baseline (generated
 `claude` SessionStart hook, bare `node <hook>` process, 7 samples, Node
 v22.23.1, 2026-09-01): **median 39.74 ms**, min 36.41 ms, max 43.06 ms.
-Adding the `effect` dependency changed no generated artifact — no runtime
+Adding the `effect` dependency changed no generated artifact, no runtime
 entry (`index.js`, `state.js`, `state/sqlite.js`, `plugin.js`) imports it
 until Stage 1+. Machine-readable copy:
 [effect-cold-start-baseline.json](effect-cold-start-baseline.json). Stage 2
@@ -814,7 +814,7 @@ resolved the current repo practice stands, and new code follows it.
   budget for hooks that would newly import `effect/Predicate`. Either way
   the emitted-string copies stay: generated host-side JS has no `effect`
   import by design.
-- **`Data.Error` for internal class errors — decided 2026-09-03: adopt,
+- **`Data.Error` for internal class errors: decided 2026-09-03: adopt,
   internals only.** The rule and its carve-outs live in
   [Yieldable framework errors](#yieldable-framework-errors-dataerror-decided-2026-09-03).
   Summary: framework-process error classes in Effect-native modules extend
@@ -824,15 +824,15 @@ resolved the current repo practice stands, and new code follows it.
   restore plain-`Error` `toJSON` / `util.inspect`), so programs write
   `return yield* new X(...)`. `Schema.TaggedError` stays deferred. Plain
   `Error` / `CodedError` remain for the bases on Effect-free entry graphs
-  (`CodedError`, `DiagnosticError`, `DevLockError`, `McpAppBridgeCloseError`
-  — the swap was measured to add a static `effect` import to
+  (`CodedError`, `DiagnosticError`, `DevLockError`, `McpAppBridgeCloseError`,
+  the swap was measured to add a static `effect` import to
   `agent-bundle/config`, `meta`, `rstest`, the CLI `--help` path, and the host
-  MCP proxy), every class on a public declaration graph — exported from a
+  MCP proxy), every class on a public declaration graph, exported from a
   package entry (the `Agent*` classes included) or merely reached by one
   through the emitted `.d.ts` files (`McpSessionError`, `EpochStoreError`,
   `ProjectEventHubError`, …), because `Cause.YieldableError` would make
   `effect` a type dependency for consumers; `public-api.test.ts` walks every
-  export's declaration graph and pins it —
+  export's declaration graph and pins it,
   emitted artifacts (66 `examples/host-test` files byte-identical in size
   before/after; the +12 kB figure was `effect/PlatformError`'s
   `Schema.TaggedError`, not `Data.Error`, which lives in the Effect core the
@@ -852,6 +852,6 @@ soon as the trigger fires and retire the row.
 
 | Recorded | Pin (where) | Observed registry state | Trigger / action |
 | --- | --- | --- | --- |
-| 2026-09-03 | `effect-rstest` **pkg.pr.new preview `e5f8d5f`** (`https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f`) — `packages/agent-bundle`, `packages/rsc-runtime`, `packages/create-agent-bundle` devDependencies (three pins). Needs a real release pin once published. | `npm view effect-rstest versions`: **E404 — not published to npm** (no versions, no dist-tags). | First npm publish of `effect-rstest`. Replace all three preview URLs with the exact published version, refresh `pnpm-lock.yaml`, re-run `pnpm test:unit` (`it.effect` / `it.live` suites). |
-| 2026-09-03 | `effect` **`4.0.0-rc.112`** (`packages/agent-bundle`, `packages/rsc-runtime`, `packages/workbench`, `packages/create-agent-bundle`), `@effect/atom-react` `4.0.0-rc.112` (`packages/workbench`), `@effect/platform-node` `4.0.0-rc.112` (`packages/create-agent-bundle`), `@effect/platform-node-shared` `4.0.0-rc.112` (`packages/agent-bundle`), `@effect/language-service` `0.87.2` and `@effect/tsgo` `0.39.0` (root). Auto re-pin in lockstep + `repos/effect` subtree + Workbench atom phase 4 unblock (stream-backed derived atoms) once the post-rc.112 disposal fix ships. | `npm view effect dist-tags`: `rc` **`4.0.0-rc.112`** (unchanged), `beta` `4.0.0-beta.107`, `latest` `3.22.1`. `@effect/atom-react`: `rc` `4.0.0-rc.112`. `@effect/language-service`: `latest` `0.87.2`. `@effect/tsgo`: `latest` `0.39.1` (patch ahead of the `0.39.0` pin; rides the lockstep chore). | `effect@rc` advances past `4.0.0-rc.112`. Run the re-pin chore steps 1–6 above, bumping `effect`, `@effect/atom-react`, `@effect/language-service`, and `@effect/tsgo` together, then lift the stream-backed derived-atom ban in the Workbench if the disposal fix is in the new RC. |
-| 2026-09-03 | Agent Plugins specification **`1.0.0`** — `packages/agent-bundle/src/adapters/schemas/portable/{plugin,mcp}.schema.json` + `PROVENANCE.json` (spec repo `agentplugins/agent-plugins-spec` @ `ff8ab5e392cc87bd88d87c060815a87490e51003`, 2026-08-19), portable `adapterRevision` `1.8.0`, pins in `tests/adapter-metadata.test.ts`. Spec watch for #426; not an npm pin, so re-verify with `curl`/`gh api`, not `npm view`. | Live `https://agent-plugins.org/schemas/1.0.0/{plugin,mcp}.schema.json` rehash to the pinned sha256 (1805 / 3408 bytes). Repo `main` HEAD unchanged at the pinned commit; **no tags, no GitHub releases**. `spec/1.1.0.md` is "Status: Working Draft" (started 2026-08-15, `a2afd7ec`); in-repo `schemas/1.1.0/*.schema.json` differ from 1.0.0 only in the `$id`/`const`/`description` version strings; `https://agent-plugins.org/schemas/1.1.0/*.schema.json` → 404. Observed latest published version: **1.0.0**. | `spec/1.1.0.md` (or later) flips to "Published" **and** `agent-plugins.org/schemas/<version>/` serves both schemas. Re-pin under `schemas/portable/` with a dated `PROVENANCE.json` (sha/bytes/date/commit), bump the portable `adapterRevision`, refresh the metadata pins, run `pnpm test:unit` (portable adapter + plugin-validation suites) and `pnpm test:host-install:build`, and add a capability row per additive field. |
+| 2026-09-03 | `effect-rstest` **pkg.pr.new preview `e5f8d5f`** (`https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f`), `packages/agent-bundle`, `packages/rsc-runtime`, `packages/create-agent-bundle` devDependencies (three pins). Needs a real release pin once published. | `npm view effect-rstest versions`: **E404, not published to npm** (no versions, no dist-tags). | First npm publish of `effect-rstest`. Replace all three preview URLs with the exact published version, refresh `pnpm-lock.yaml`, re-run `pnpm test:unit` (`it.effect` / `it.live` suites). |
+| 2026-09-03 | `effect` **`4.0.0-rc.112`** (`packages/agent-bundle`, `packages/rsc-runtime`, `packages/workbench`, `packages/create-agent-bundle`), `@effect/atom-react` `4.0.0-rc.112` (`packages/workbench`), `@effect/platform-node` `4.0.0-rc.112` (`packages/create-agent-bundle`), `@effect/platform-node-shared` `4.0.0-rc.112` (`packages/agent-bundle`), `@effect/language-service` `0.87.2` and `@effect/tsgo` `0.39.0` (root). Auto re-pin in lockstep + `repos/effect` subtree + Workbench atom phase 4 unblock (stream-backed derived atoms) once the post-rc.112 disposal fix ships. | `npm view effect dist-tags`: `rc` **`4.0.0-rc.112`** (unchanged), `beta` `4.0.0-beta.107`, `latest` `3.22.1`. `@effect/atom-react`: `rc` `4.0.0-rc.112`. `@effect/language-service`: `latest` `0.87.2`. `@effect/tsgo`: `latest` `0.39.1` (patch ahead of the `0.39.0` pin; rides the lockstep chore). | `effect@rc` advances past `4.0.0-rc.112`. Run the re-pin chore steps 1 to 6 above, bumping `effect`, `@effect/atom-react`, `@effect/language-service`, and `@effect/tsgo` together, then lift the stream-backed derived-atom ban in the Workbench if the disposal fix is in the new RC. |
+| 2026-09-03 | Agent Plugins specification **`1.0.0`**, `packages/agent-bundle/src/adapters/schemas/portable/{plugin,mcp}.schema.json` + `PROVENANCE.json` (spec repo `agentplugins/agent-plugins-spec` @ `ff8ab5e392cc87bd88d87c060815a87490e51003`, 2026-08-19), portable `adapterRevision` `1.8.0`, pins in `tests/adapter-metadata.test.ts`. Spec watch for #426; not an npm pin, so re-verify with `curl`/`gh api`, not `npm view`. | Live `https://agent-plugins.org/schemas/1.0.0/{plugin,mcp}.schema.json` rehash to the pinned sha256 (1805 / 3408 bytes). Repo `main` HEAD unchanged at the pinned commit; **no tags, no GitHub releases**. `spec/1.1.0.md` is "Status: Working Draft" (started 2026-08-15, `a2afd7ec`); in-repo `schemas/1.1.0/*.schema.json` differ from 1.0.0 only in the `$id`/`const`/`description` version strings; `https://agent-plugins.org/schemas/1.1.0/*.schema.json` → 404. Observed latest published version: **1.0.0**. | `spec/1.1.0.md` (or later) flips to "Published" **and** `agent-plugins.org/schemas/<version>/` serves both schemas. Re-pin under `schemas/portable/` with a dated `PROVENANCE.json` (sha/bytes/date/commit), bump the portable `adapterRevision`, refresh the metadata pins, run `pnpm test:unit` (portable adapter + plugin-validation suites) and `pnpm test:host-install:build`, and add a capability row per additive field. |

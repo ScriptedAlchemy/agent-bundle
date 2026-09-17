@@ -4,7 +4,7 @@ description: 'Field reference for agent-bundle.config.ts: every top-level key, i
 
 # Configuration
 
-The conceptual model — what config owns versus what the `src/` conventions own — is in
+The conceptual model, what config owns versus what the `src/` conventions own, is in
 [Configuration model](../guide/authoring/index.mdx). This page is the field contract.
 
 ```ts twoslash
@@ -21,7 +21,7 @@ export default defineConfig({
 | Field | Type | Default |
 | --- | --- | --- |
 | `plugin` | `{ name, description?, logo?, ... }` | **Required.** |
-| `targets` | `string[]` | `['portable']` — the only adapter registered as a default; a `--target` flag overrides both the default and a declared list. |
+| `targets` | `string[]` | `['portable']`, the only adapter registered as a default; a `--target` flag overrides both the default and a declared list. |
 | `skills` | `string[]` | The `src/skills/*` convention. |
 | `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | The `src/hooks/*` convention. |
 | `mcp` | `{ servers: Record<string, ...> }` | The `src/mcp/*` convention. |
@@ -39,7 +39,7 @@ export default defineConfig({
 | `dev` | `{ agentApi?, contracts?, runtime? }` | None. |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | See below. |
 | `tools` | `{ rsbuild?, rspack? }` | None. |
-| `web` | `{ apps, open? }` | None — omit it and nothing is emitted. |
+| `web` | `{ apps, open? }` | None, omit it and nothing is emitted. |
 
 Host-scoped extension keys (`claude`, `codex`, `cursor`, `portable`) are contributed by target
 adapters through declaration merging on `AgentBundleConfigExtensions`. Extension values must be
@@ -56,7 +56,7 @@ by TypeDoc on every documentation build, so they cannot drift from the published
 Two keys in the table above are not members of `AgentBundleConfig`: `evals` and `routes` are read
 through its `[key: string]: unknown` index signature, so `tsc` does not check their shape. The
 route compiler still parses `routes` during discovery, so `agent-bundle validate` reports a
-malformed override through the route graph's diagnostics; `validateSource` never reads `evals` —
+malformed override through the route graph's diagnostics; `validateSource` never reads `evals`,
 the [`evals` rules below](#evals) fire when `agent-bundle eval` or the Workbench loads the config,
 as `EVAL_CONFIG_INVALID`, `EVAL_INCLUDE_INVALID`, or `EVAL_RUNS_DIR_INVALID` errors rather than
 `AB` diagnostics. A tool that already has a colocated `<tool>.cli.ts` projection module is
@@ -91,7 +91,7 @@ also compiled for that operation. See
 `author`, `homepage`, `keywords`, `license`, and `repository` are declared once, not once per
 host block. Each field resolves in one order:
 
-1. the host block for that artifact — `portable.license`, `cursor.license`, `codex.license`, or
+1. the host block for that artifact, `portable.license`, `cursor.license`, `codex.license`, or
    `claude.marketplace.plugin.license`;
 2. `plugin.metadata.license`;
 3. the `license` field of the project's `package.json`.
@@ -120,8 +120,8 @@ An empty `package.json` field is an absent one: `"keywords": []` and `"license":
 nothing and report nothing. Under `plugin.metadata` the same value is the config author's, so
 `plugin.metadata.license: ''` reports `AB4014`; `null` is how a field is opted out.
 
-Claude Code's `.claude-plugin/plugin.json` carries no descriptive fields — its pinned schema
-admits none — and its `author.name` stays the generated plugin name. The shared values reach
+Claude Code's `.claude-plugin/plugin.json` carries no descriptive fields, its pinned schema
+admits none, and its `author.name` stays the generated plugin name. The shared values reach
 Claude Code through the marketplace entry.
 
 `package.json` is authoritative for release identity. Declare the release version only there:
@@ -133,7 +133,7 @@ will be removed under the normal breaking-change policy.
 ## targets
 
 The host projections `build` lays into the composite plugin root: any combination of `amp`,
-`claude`, `codex`, `cursor`, and `portable`. Order is irrelevant — the selection is sorted by name, so
+`claude`, `codex`, `cursor`, and `portable`. Order is irrelevant, the selection is sorted by name, so
 `['codex', 'claude']` and `['claude', 'codex']` build the same bytes. Omit the key and only the
 `portable` projection is emitted. `--target` on the command line replaces the configured list for
 one run. Any other name, `plugin` included, is an unknown target (`AB4100`). What each projection
@@ -154,7 +154,7 @@ without a reason fails.
 
 ## output and runtime
 
-`output.distPath` is the artifact output directory relative to the project root — the composite
+`output.distPath` is the artifact output directory relative to the project root, the composite
 plugin root every selected host reads, with no per-host subdirectory beneath it. The CLI
 (`build`, `prepack`, `dev`) defaults it to `artifact`, because the CLI also runs the package build
 and that owns `dist/`; the programmatic `build()` defaults to `dist` unless `packageOutputs: true`.
@@ -164,7 +164,7 @@ in a reserved compiler namespace is unsupported (`AB4707`–`AB4709`).
 
 `output.sourceMap` is an explicit opt-in for source maps on generated executables. It defaults to
 `false`. When `true`, the compiler profile sets the bundler's `output.sourceMap` to an inline JS
-map so the map stays inside the executable — sibling `.map` files are not part of the planned
+map so the map stays inside the executable, sibling `.map` files are not part of the planned
 artifact file set. A non-boolean value is `AB4707`. MCP App views keep their own default (off)
 and still opt in through `tools.rsbuild.output.sourceMap`.
 
@@ -176,8 +176,8 @@ default floor for generated executables, never lower it, and the selected floor 
 ## notices
 
 `notices.retention` sets the retention policy of the notice ledger a stateful project co-mounts
-beside `src/state.ts`. Terminal notices — `expired`, `unavailable`, `withdrawn`, `acknowledged`,
-and `attempted` with an exhausted retry budget — are pruned from the ledger once they have been
+beside `src/state.ts`. Terminal notices, `expired`, `unavailable`, `withdrawn`, `acknowledged`,
+and `attempted` with an exhausted retry budget, are pruned from the ledger once they have been
 settled for `terminalTtl`, or earliest-settled first once more than `maxTerminal` remain, and the
 store's journal is compacted onto its head once it exceeds `maxJournalBytes`. Pruning runs only
 on admitted events and explicit `retain()` calls; no timer is implied.
@@ -188,16 +188,16 @@ on admitted events and explicit `retain()` calls; no timer is implied.
 | `maxTerminal` | `500` | Positive integer. |
 | `maxJournalBytes` | `16777216` | Positive integer of bytes. |
 
-Anything else — an unknown key, a non-positive or fractional value, a duration the grammar does
-not spell, or a policy declared by a project without a state module — is `AB4833`. `inspect
+Anything else, an unknown key, a non-positive or fractional value, a duration the grammar does
+not spell, or a policy declared by a project without a state module, is `AB4833`. `inspect
 --state` and the Workbench State panel show the resolved policy and whether it was declared or
 defaulted; live counts and the last compaction belong to each installed store
 (`AgentNoticeLedger.inspect()`).
 
 ## payload
 
-Keys are artifact-root destination directories — one safe path segment outside the
-compiler-owned namespaces — and values are already-built source directories. Payload trees are
+Keys are artifact-root destination directories, one safe path segment outside the
+compiler-owned namespaces, and values are already-built source directories. Payload trees are
 copied byte-for-byte and are **opaque to the compiler**, which cannot rewrite their internal
 sibling references, so stable names are the correctness contract. Integrity stays
 content-addressed through the artifact manifest.
@@ -213,7 +213,7 @@ Accepts exactly three keys; anything else is rejected.
 | `semanticGrader` | none | Must contain exactly `harness` and `model`. `harness` must be `'claude'`; `model` must be a safe model identifier, not a path. |
 
 Provider credential material in the `evals` block is rejected outright
-(`EVAL_CREDENTIAL_REJECTED`) — Agent Bundle reuses the host CLI's existing signed-in session. See
+(`EVAL_CREDENTIAL_REJECTED`), Agent Bundle reuses the host CLI's existing signed-in session. See
 [Security](./security.mdx).
 
 ```ts twoslash
@@ -239,7 +239,7 @@ Development-only settings that never become part of a built artifact.
 | `dev.agentApi` | Exposes the authenticated, loopback-only Agent API from `agent-bundle dev`. The `--agent-api` / `--no-agent-api` flags override it. |
 | `dev.contracts.fixtures` | **Required when `dev.contracts` is set.** Project-relative module whose default export maps route ids to contract fixtures. Declaring `dev.contracts` switches `agent-bundle dev` from adopting every epoch directly to gating host-facing adoption on the development contract matrix: an epoch whose checks fail still publishes to the Workbench route workspace, but live host connections and development installs keep the last passing epoch (`AB7211`). A malformed block, a fixtures module that escapes the project root, cannot load, or exports the wrong shape is `AB7210`. |
 | `dev.contracts.server` | The MCP server the matrix checks. Optional only when the project compiles exactly one server. |
-| `dev.runtime.provider` | The development runtime provider module: it exports `createDevRuntimeProvider` ([`CreateDevRuntimeProvider`](../api/api.md#createdevruntimeprovider)), returning a [`DevRuntimeProvider`](../api/api.md#devruntimeprovider) whose `start` takes a [`DevRuntimeStartContext`](../api/api.md#devruntimestartcontext) and returns a [`DevRuntimeSession`](../api/api.md#devruntimesession). The whole protocol a provider implements ships from `agent-bundle/api` — the inspection envelope ([`DevRuntimeInspectionEnvelope`](../api/api.md#devruntimeinspectionenvelope)), the MCP server descriptor ([`DevRuntimeMcpServerDescriptor`](../api/api.md#devruntimemcpserverdescriptor)), the errors it throws ([`DevRuntimeUnavailableError`](../api/api.md#devruntimeunavailableerror), [`DevRuntimeGenerationConflictError`](../api/api.md#devruntimegenerationconflicterror)), and the generation store and MCP registry a session drives, as contracts ([`DevRuntimeGenerationStore`](../api/api.md#devruntimegenerationstore), [`DevRuntimeProviderMcpRegistry`](../api/api.md#devruntimeprovidermcpregistry)) with their constructors ([`createRuntimeGenerationStore`](../api/api.md#createruntimegenerationstore), [`createRuntimeMcpRegistry`](../api/api.md#createruntimemcpregistry)). |
+| `dev.runtime.provider` | The development runtime provider module: it exports `createDevRuntimeProvider` ([`CreateDevRuntimeProvider`](../api/api.md#createdevruntimeprovider)), returning a [`DevRuntimeProvider`](../api/api.md#devruntimeprovider) whose `start` takes a [`DevRuntimeStartContext`](../api/api.md#devruntimestartcontext) and returns a [`DevRuntimeSession`](../api/api.md#devruntimesession). The whole protocol a provider implements ships from `agent-bundle/api`, the inspection envelope ([`DevRuntimeInspectionEnvelope`](../api/api.md#devruntimeinspectionenvelope)), the MCP server descriptor ([`DevRuntimeMcpServerDescriptor`](../api/api.md#devruntimemcpserverdescriptor)), the errors it throws ([`DevRuntimeUnavailableError`](../api/api.md#devruntimeunavailableerror), [`DevRuntimeGenerationConflictError`](../api/api.md#devruntimegenerationconflicterror)), and the generation store and MCP registry a session drives, as contracts ([`DevRuntimeGenerationStore`](../api/api.md#devruntimegenerationstore), [`DevRuntimeProviderMcpRegistry`](../api/api.md#devruntimeprovidermcpregistry)) with their constructors ([`createRuntimeGenerationStore`](../api/api.md#createruntimegenerationstore), [`createRuntimeMcpRegistry`](../api/api.md#createruntimemcpregistry)). |
 
 ## web
 
@@ -282,10 +282,10 @@ are in the [diagnostics reference](./diagnostics.md).
 The `web` command lives only in the framework-generated `bin/<plugin>.mjs`. `web` never
 displaces authored code: a hand-written `src/cli.ts`, a `bin` entry that claims the plugin name,
 or `bin: false` keeps the executable it describes, and `AB4341` reports that the web surface has
-nowhere to live — move the commands under `src/cli/**` (generated mode) or drop `web`.
+nowhere to live, move the commands under `src/cli/**` (generated mode) or drop `web`.
 
 When `web` is valid, the composite artifact's `agent-bundle.manifest.json` gains a `web` section
-and `bin/<plugin>.mjs` exists even without `src/cli/**` — see
+and `bin/<plugin>.mjs` exists even without `src/cli/**`, see
 [Targets and artifacts](./targets-artifacts.mdx) and
 [Exposing an App in the browser](../guide/authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
@@ -297,7 +297,7 @@ hatch value that breaks an artifact contract is a hard diagnostic rather than a 
 (`AB472x`). `AB4720`–`AB4723` check the shape of `tools`, `tools.rsbuild`, and `tools.rspack`;
 `AB4724` rejects a `tools.rsbuild.plugins` entry that re-adds a framework-owned plugin
 (`@rsbuild/plugin-react`, `rsbuild:react`), because `plugins` arrays concatenate and Rsbuild
-never dedupes plugins by name — the framework registers it for you. `AB4725` rejects
+never dedupes plugins by name, the framework registers it for you. `AB4725` rejects
 `tools.rsbuild.output.autoExternal` that is not `false`, and a string or object `externals`
 entry that names a package (neither a Node built-in, `pnpapi`, nor a relative path), in
 `tools.rsbuild.output` or an object-form `tools.rspack`. `AB4726` rejects deprecated or removed
@@ -309,11 +309,11 @@ Each diagnostic names the current replacement. This check is path-specific to `t
 authored `html.templateParameters` variables and valid Rspack configuration under
 `tools.rspack` are not subject to it.
 
-The hatch executes on one bundler engine — the `@rspack/core` behind agent-bundle's pinned
+The hatch executes on one bundler engine, the `@rspack/core` behind agent-bundle's pinned
 `@rsbuild/core`, shared by the Rslib-compiled outputs (artifact scripts, MCP entries, hooks, the
-package build) and the MCP App views — but that engine is agent-bundle's dependency, not your
+package build) and the MCP App views, but that engine is agent-bundle's dependency, not your
 project's. Never construct plugins or perform `instanceof` checks against an imported
-`@rspack/core` — use the `utils` argument passed to `tools.rspack` mutator functions
+`@rspack/core`, use the `utils` argument passed to `tools.rspack` mutator functions
 (`(config, { rspack }) => ...`), which always hands you the executing engine's own `rspack`
 object.
 
@@ -338,8 +338,8 @@ compilation and plugin internals remain withheld. Framework script injection and
 ### Plugins
 
 The framework registers exactly one Rsbuild plugin in the configs it synthesizes:
-`@rsbuild/plugin-react` (plugin name `rsbuild:react`), on every artifact entry — routes are
-authored as TSX and the plugin selects the automatic JSX runtime — and on every MCP App view,
+`@rsbuild/plugin-react` (plugin name `rsbuild:react`), on every artifact entry, routes are
+authored as TSX and the plugin selects the automatic JSX runtime, and on every MCP App view,
 whatever its entry's extension (fast refresh off), so a `.ts` entry importing `.tsx` components
 compiles to the same automatic runtime. That set is `frameworkOwnedRsbuildPlugins` in
 `packages/agent-bundle/src/build/framework-plugins.ts`; a unit test derives it from the synthesized

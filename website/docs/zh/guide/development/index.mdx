@@ -4,7 +4,7 @@ description: 'agent-bundle 的开发循环：开发服务器、重建 epoch，�
 
 # 开发循环
 
-开发只有一个入口，以及三个证据表面。入口是 `agent-bundle dev` —— 一个前台、仅绑定 loopback 的
+开发只有一个入口，以及三个证据表面。入口是 `agent-bundle dev` ， 一个前台、仅绑定 loopback 的
 服务器，它随输入变化重建产物。三个表面分别是开发者 Workbench、测试 harness 与 eval 运行器。
 
 ```sh
@@ -14,7 +14,7 @@ npx agent-bundle dev --root .
 ## 重建循环
 
 `dev` 会准备项目源码、构建产物，并把它发布为一个 **epoch**：由 `epochId` 标识的不可变世代。任何读取
-已构建产物的表面——Workbench 产物树、一个 MCP 会话、一次钩子模拟、一个开发期宿主安装——都会指明自己
+已构建产物的表面，Workbench 产物树、一个 MCP 会话、一次钩子模拟、一个开发期宿主安装，都会指明自己
 读取的是哪个 epoch，因此会话进行中的一次重建绝不会悄悄改变某个结果所证明的对象。
 
 重建是防抖且串行的。构建成功会发布一个 `artifact.available` 事件；构建**失败**则什么都不发布，因此
@@ -34,14 +34,14 @@ npx agent-bundle dev --root .
 写入一个同级临时文件，再原子地重命名覆盖先前那份完整声明，因此无效源码会保留上一份可用文件，而一次
 成功的、不含路由的准备过程会移除它。只有编译了这份声明的 TypeScript 程序，才会为 `renderRoute`、App
 客户端与 provider 值提供类型：请把 `".agent-bundle/routes.d.ts"` 保留在每一个导入了 `agent-bundle/test`、
-`agent-bundle/app`、`agent-bundle/eval` 或 `@agent-bundle/runtime` 的 tsconfig 的 `include` 中。请运行各项目自己的 TypeScript 检查；框架不再分析 TypeScript 程序。`validate` 也是在独立类型检查之前发布最新声明的轻量方式——无需 dev
-服务器或生产构建——因此带路由的模板把 `typecheck` 脚本写成 `agent-bundle validate && tsc`。
+`agent-bundle/app`、`agent-bundle/eval` 或 `@agent-bundle/runtime` 的 tsconfig 的 `include` 中。请运行各项目自己的 TypeScript 检查；框架不再分析 TypeScript 程序。`validate` 也是在独立类型检查之前发布最新声明的轻量方式，无需 dev
+服务器或生产构建，因此带路由的模板把 `typecheck` 脚本写成 `agent-bundle validate && tsc`。
 
 ## 三个表面
 
 | 表面 | 它是什么 | 它证明什么 |
 | --- | --- | --- |
-| [开发者 Workbench](./workbench.mdx) | `dev` 提供的 loopback 界面：一棵 Application 树与路由工作区、本次会话的调用 Trace、Problems，以及 Advanced 工具。 | 它自身不证明任何东西——它是你*查看*并*演练*真实生成输出的地方。 |
+| [开发者 Workbench](./workbench.mdx) | `dev` 提供的 loopback 界面：一棵 Application 树与路由工作区、本次会话的调用 Trace、Problems，以及 Advanced 工具。 | 它自身不证明任何东西，它是你*查看*并*演练*真实生成输出的地方。 |
 | [测试](./testing.mdx) | `agent-bundle/rstest` 与 `agent-bundle/test`，以及框架自有的契约矩阵。 | 可复核的证明级别，从路由模块渲染，一直到从已安装宿主布局中启动的捆绑包。 |
 | [评测](./evaluations.mdx) | 通过确定性、Claude 或 Codex harness 运行的带类型 eval 套件。 | 智能体是否真的抵达了你的插件，并以 `pass` / `fail` / `inconclusive` 与声明的最低证据门槛报告。 |
 
@@ -49,6 +49,6 @@ npx agent-bundle dev --root .
 
 ## 本章的边界
 
-编写表面——Skill、钩子、MCP 路由、脚本或包入口*是什么*——在[编写](../authoring/index.mdx)中。把一份
+编写表面，Skill、钩子、MCP 路由、脚本或包入口*是什么*，在[编写](../authoring/index.mdx)中。把一份
 已校验的产物变成宿主能安装的东西，在[分发](../distribution/index.mdx)中。精确的命令行标志、配置字段
 语义与运行时契约在[参考](../../reference/index.mdx)中。

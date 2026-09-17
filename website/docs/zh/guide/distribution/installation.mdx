@@ -4,7 +4,7 @@ description: '把已构建的 agent-bundle 安装进 Claude Code、Codex、Curso
 
 # 宿主安装
 
-`build` 输出的组合插件根目录包含一份生成的 `INSTALL.md`——每个所选宿主一节——其中的命令使用捆绑包真实
+`build` 输出的组合插件根目录包含一份生成的 `INSTALL.md`，每个所选宿主一节，其中的命令使用捆绑包真实
 的插件名与市场名。其中每条命令都是宿主命令（`claude plugin …`、`codex plugin …`）或随行的 `install.mjs`，
 因此无论从 npm、市场检出还是 zip 拿到已构建根目录的消费者，安装、重装或卸载它都不需要 `agent-bundle` CLI；
 `INSTALL.md` 明言这一点，并在每处提及该 CLI 时标注其为可选。框架 CLI 为拥有它的开发者执行同样的操作，而且
@@ -18,7 +18,7 @@ npx agent-bundle install amp --from artifact --scope user
 ```
 
 `--from` 指定的是**组合根目录**：存放 `agent-bundle.manifest.json` 的那个目录。安装器只读这一个文件来了解
-自己在安装什么——插件名与版本来自 `application`，市场名来自 `projections[host].marketplace`，宿主被指向的
+自己在安装什么，插件名与版本来自 `application`，市场名来自 `projections[host].marketplace`，宿主被指向的
 文件来自 `projections[host].documents.plugin`（Amp 使用 `documents.entry`；见[产物清单](../../reference/artifact-manifest.mdx)）。它不需要
 项目源码，也不存在 `<from>/<host>` 查找：构建不会写出 `artifact/<host>` 子目录，根目录本身就是捆绑包。
 以下情形会以 `AB7001` 拒绝：清单缺失或不是规范字节；没有该宿主的投影；投影没有宿主插件清单（或所指文件
@@ -31,7 +31,7 @@ npx agent-bundle install amp --from artifact --scope user
 | Amp（实验性） | 只把 `.amp/plugins/<name>/` 复制到项目根，或 `$XDG_CONFIG_HOME/amp/plugins/<name>`（回退为 `~/.config/amp/plugins/<name>`）。它不修改设置、信任、禁用状态、个人/工作区仓库或其他插件。有 Amp 账号时可用 `amp plugins list` 检查副本；运行中会话仍需交互式 Ctrl+O → `plugins: reload`。现场激活为已核对契约、运行时未验证。 | `project`、`user`（系统根） |
 | Claude Code | 委托给 `claude plugin marketplace add` 与 `claude plugin install`。Claude Code 会自行加载插件根目录下的 `hooks/hooks.json` 与 `.mcp.json`，因此 `.claude-plugin/plugin.json` 不带 `hooks` 指针（Claude Code 会把指向该文件的指针报告为重复的 hooks 文件）；同一根目录中紧挨着 Codex 与 Cursor 各自清单的文档从不会被 Claude Code 读取。对于 `directory` 类型的市场，Claude Code 会把 `${CLAUDE_PLUGIN_ROOT}` 解析为该目录本身而不是其插件缓存，因此重新构建该目录会改变正在运行的会话所执行的钩子。 | `user`、`project`、`local` |
 | Codex | 委托给 `codex plugin marketplace add` 与 `codex plugin add`。`.codex-plugin/plugin.json` 指向自己的 `.codex-plugin/hooks.json` 与 `.codex-plugin/mcp.json`，因此 Codex 绝不会回退到发现根目录中另一宿主的文档。 | `user` |
-| Cursor | 把根目录复制到 `~/.cursor/plugins/local/<name>`（默认的 `--mode local`），因为 Cursor 未发布非交互式安装动词；`--mode marketplace` 则在 `~/.cursor/agent-bundle/marketplaces/<name>` 下暂存一个已提交的本地市场仓库，并打印 Customize → Plugins →“Add Plugins from Local Repository”这一步。无论哪种方式，Cursor 都加载 `.cursor-plugin/plugin.json` 所指定的钩子与 MCP 文档——紧挨着清单的 `.cursor-plugin/hooks.json` 与 `.cursor-plugin/mcp.json`——因此插件 hook 会在替换 `${CURSOR_PLUGIN_ROOT}` 后运行，无需 `~/.cursor/hooks.json` 条目。 | `user` |
+| Cursor | 把根目录复制到 `~/.cursor/plugins/local/<name>`（默认的 `--mode local`），因为 Cursor 未发布非交互式安装动词；`--mode marketplace` 则在 `~/.cursor/agent-bundle/marketplaces/<name>` 下暂存一个已提交的本地市场仓库，并打印 Customize → Plugins →“Add Plugins from Local Repository”这一步。无论哪种方式，Cursor 都加载 `.cursor-plugin/plugin.json` 所指定的钩子与 MCP 文档，紧挨着清单的 `.cursor-plugin/hooks.json` 与 `.cursor-plugin/mcp.json`，因此插件 hook 会在替换 `${CURSOR_PLUGIN_ROOT}` 后运行，无需 `~/.cursor/hooks.json` 条目。 | `user` |
 
 由于 Claude 与 Codex 投影始终随行本地市场清单，它们的公开 CLI 可以直接安装该根目录。当所选宿主
 二进制文件不可用时，安装器会以一条带类型的诊断失败，而不是报告一次它并未完成的成功。宿主安装诊断属于
@@ -56,8 +56,8 @@ node ./install.mjs
 存在 `agent-bundle.manifest.json` 时，安装器从所选投影读取插件与 MCP 指针；只有无清单的包才回退探测
 `.cursor-plugin/*` 或根目录 Agent Plugins 路径。
 
-对于 Cursor 会按 Agent Plugins 1.0.0 包加载的根目录——选中了 `portable` 而未选 `cursor`，因此根目录的
-`plugin.json` 是 Cursor 能找到的唯一清单——安装器还会在 `mcp.json` 的 Cursor 副本中展开该标准的占位符，
+对于 Cursor 会按 Agent Plugins 1.0.0 包加载的根目录，选中了 `portable` 而未选 `cursor`，因此根目录的
+`plugin.json` 是 Cursor 能找到的唯一清单，安装器还会在 `mcp.json` 的 Cursor 副本中展开该标准的占位符，
 因为 Cursor 3.18.25 自己不会展开：它把 `args`、`env` 值和 `cwd` 中的 `${PLUGIN_ROOT}` / `${PLUGIN_DATA}`
 原样留下，不提供 `PLUGIN_ROOT` / `PLUGIN_DATA` 变量（规范 §9.1），把省略的 `cwd` 默认为主目录，并把相对插件的
 `./` 命令解析到工作区文件夹（规范 §7.2.1），因此每个符合规范的 stdio 服务器都无法启动。Cursor 副本会得到绝对的
@@ -65,7 +65,7 @@ node ./install.mjs
 `./` 命令，以及每个 stdio 服务器环境中的 `PLUGIN_ROOT` / `PLUGIN_DATA`。捆绑包本身不被改动，对其他 Agent Plugins
 客户端仍然符合规范；展开前的文档保存在安装回执中（`cursorExpansion`），`agent-bundle doctor --host cursor` 以
 `AB7326` 证明这次展开。这里没有任何内容是 Cursor 的行为：来源为 `derived`，而带有
-`.cursor-plugin/plugin.json` 的根目录——选中了 `cursor`——会被原样复制，因为 Cursor 转而加载那份清单。
+`.cursor-plugin/plugin.json` 的根目录，选中了 `cursor`，会被原样复制，因为 Cursor 转而加载那份清单。
 
 产物校验会拒绝缺少必需安装表面的根目录，因此捆绑包不可能在缺少它所承诺的安装器的情况下发布。
 
@@ -75,7 +75,7 @@ npm 包根目录包含组合插件清单拥有的全部字节，并额外带有 
 `validate --artifact` 等命令仍接收纯组合产物；清单感知的 `install --from` 接受任一根目录。
 对于生成的路由式 CLI，`package.json` 的 `bin` 指向产物公开的同一个
 `bin/<name>.mjs` 可执行文件，不会再次编译，也没有包装器。因此它的完整命令面（包括 `web`）从
-`node_modules` 运行时与从复制的产物运行完全一致。**任何 npm 生命周期都不会执行宿主安装**——安装一个包
+`node_modules` 运行时与从复制的产物运行完全一致。**任何 npm 生命周期都不会执行宿主安装**，安装一个包
 绝不会改动宿主的插件状态。
 
 仓库中的 `AGENTS.md` 作为作者编写的包元数据原样复制。生成的投影说明绝不会覆盖它；路径冲突会让包构建失败。
@@ -105,13 +105,13 @@ export const main = (argv: readonly string[]): Promise<number> =>
 ```
 
 `runInstallCli` 就是 `agent-bundle` CLI 自己的 `install <host>`、`uninstall <host>` 与 `doctor`
-命令——同样的标志、回执、替换规则、`--plan`、数据策略、`--json` 输出与退出码——只是把 bundle 根目录固定为 `from`，因此该 bin 不暴露 `--from`，也绝不会去寻找别的产物根目录。
+命令，同样的标志、回执、替换规则、`--plan`、数据策略、`--json` 输出与退出码，只是把 bundle 根目录固定为 `from`，因此该 bin 不暴露 `--from`，也绝不会去寻找别的产物根目录。
 包构建会把生命周期实现内联进可执行文件；已安装的包在运行时不需要 `agent-bundle`。
 该入口还导出 `installBundle`、`uninstallBundle`、`runDoctor` 与 `format*` 助手，供自行组合命令面的 bin 使用。
 只读的状态检查是 `doctor --host <host>`：它报告已安装副本是最新、过期、版本不匹配、外来还是缺失。
 
 退出码与 `agent-bundle` CLI 一致。0 表示成功。`doctor` 总是把报告（人类可读或 `--json`）写到 stdout，
-当报告含有错误诊断时以 1 退出——请读取报告，而不是 stderr。失败的 `install` 或 `uninstall`，以及任何抛出异常的命令，
+当报告含有错误诊断时以 1 退出，请读取报告，而不是 stderr。失败的 `install` 或 `uninstall`，以及任何抛出异常的命令，
 会把诊断作为一行 JSON 写到 stderr 并以 1 退出。用法错误以 2 退出。
 
 ## 开发期安装是另一回事
@@ -123,10 +123,10 @@ Amp 不属于开发期安装宿主；请使用其有归属回执的 `agent-bundl
 
 ## 重建后重新安装
 
-每个输出的安装器——`agent-bundle install <host>` 与独立的 `install.mjs`——共用同一套替换策略。
+每个输出的安装器，`agent-bundle install <host>` 与独立的 `install.mjs`，共用同一套替换策略。
 内容完全相同的副本是 `already-installed` 空操作。**版本相同但内容哈希不同**的副本会被自动替换，因此不升版本
 地重建不再需要卸载加 `rm -rf`。版本不同则以 `AB7005` 拒绝，除非传入 `--replace`（别名 `--force`）；外来目录
-——不是本插件安装器放置的——无论如何都会被拒绝。独立的 `install.mjs` 对没有回执的目标目录按其中实际存在的文件计算哈希，
+，不是本插件安装器放置的，无论如何都会被拒绝。独立的 `install.mjs` 对没有回执的目标目录按其中实际存在的文件计算哈希，
 包括回执出现之前的副本和已暂存的 marketplace 插件。存在 `agent-bundle.manifest.json` 时，产物哈希使用该清单的 `files[]`，
 清单列出而产物缺失的路径会使安装失败。外来或已暂存的目标目录中缺少的清单路径不进入目标哈希，因此两边哈希不同，安装拒绝该副本，而不是抛出 `ENOENT`。属于本安装器的同版本副本可以修复。Cursor 与 Amp 副本携带安装回执（`.agent-bundle-install.json`：
 插件、版本、宿主、内容哈希、归属文件）；替换就地进行，只触碰归属文件，绝不动旧版或就地的 `state/` 之类的非归属条目，
@@ -145,7 +145,7 @@ MCP 覆盖。原生 add 会把插件级 `enabled = false` 重置为 `true`；原
 
 ## 操作者配置：已安装包的 `.env`
 
-通过环境变量配置的插件——会话 cookie、API 令牌、主机名——应在安装处配置，而不是在产物里：清单 `env` 是编译
+通过环境变量配置的插件，会话 cookie、API 令牌、主机名，应在安装处配置，而不是在产物里：清单 `env` 是编译
 产物，按内容寻址且每次构建都会重新输出，不是放置密钥的地方。取而代之，在已安装副本的插件根目录（存放
 `.claude-plugin/`、`.codex-plugin/` 或 `.cursor-plugin/`、与 `mcp/`、`hooks/`、`bin/` 同级的目录）放一个
 `.env` 文件，可选地再放一个 `.env.local`：
@@ -156,9 +156,9 @@ IPT_SESSION=…
 RTORRENT_SSH_HOST=nas.local
 ```
 
-包输出的每个外壳——stdio MCP 服务器入口（工厂导出；[自行连接的入口](../authoring/mcp.mdx#手写-stdio-入口)
+包输出的每个外壳，stdio MCP 服务器入口（工厂导出；[自行连接的入口](../authoring/mcp.mdx#手写-stdio-入口)
 没有外壳，除非自行调用 `applyOperatorEnv`，否则不读取任何文件）、运行插件代码的 hook 包装器、产物 CLI
-`bin/<name>.mjs`——在启动时按同一条规则读取该文件：
+`bin/<name>.mjs`，在启动时按同一条规则读取该文件：
 
 | 优先级 | 层 | 内容 |
 | --- | --- | --- |
@@ -167,7 +167,7 @@ RTORRENT_SSH_HOST=nas.local
 | 2 | `.env` | 只填补空缺。 |
 | 1（最低） | 清单 `env` | 服务器清单 `env` 块声明的变量，以宿主合并进进程环境的形态出现。 |
 
-这与 `agent-bundle mcp run` 合成的顺序相同——清单 `env` 在文件之下，文件在操作者导出的变量之下。宿主把
+这与 `agent-bundle mcp run` 合成的顺序相同，清单 `env` 在文件之下，文件在操作者导出的变量之下。宿主把
 清单 `env` 和自己导出的变量作为同一份环境交给 stdio 服务器，因此生成入口会把该服务器声明的 `env` 块作为
 构建时字面量随行携带，并把仍持有清单默认值的变量视为未设置：文件可以覆盖它。取值与默认值不同的变量是
 宿主或操作者导出的，予以保留。由此有两个推论。操作者恰好导出了与清单默认值相同的值时，无法与透传区分，
@@ -175,7 +175,7 @@ RTORRENT_SSH_HOST=nas.local
 会在启动前被宿主展开，因此永远不等于其字面默认值，总是被保留。hook 包装器与产物 CLI 没有清单 `env`，
 对它们而言宿主环境就是宿主导出的变量。
 
-位置是包解析出的插件根目录——宿主设置了 `AGENT_BUNDLE_PLUGIN_ROOT` 时取它，否则取外壳自身所在目录
+位置是包解析出的插件根目录，宿主设置了 `AGENT_BUNDLE_PLUGIN_ROOT` 时取它，否则取外壳自身所在目录
 （`mcp/`、`hooks/`、`bin/`）的上一级。`AGENT_BUNDLE_ENV_FILE` 可指定改为读取的一个或多个文件（以平台路径
 分隔符分隔），`AGENT_BUNDLE_ENV_FILE=none` 则关闭这一层。语法即 dotenv：`KEY=value`、`export KEY=value`、
 `#` 注释、单引号、双引号或反引号包裹的值（双引号内展开 `\n`）、跨行的引号值，且不做 `${VAR}` 插值。
@@ -188,7 +188,7 @@ RTORRENT_SSH_HOST=nas.local
 读取的是同一组文件。
 
 `agent-bundle doctor` 会报告已安装副本是否带有 `.env` 或 `.env.local` 以及各自声明了多少个变量
-（`AB7331`，信息级）——绝不报告名字或取值。
+（`AB7331`，信息级），绝不报告名字或取值。
 
 ## 按回执卸载
 
@@ -208,7 +208,7 @@ node artifact/install.mjs --uninstall [--mode marketplace]
 目录、安装器创建的宿主目录、执行过的宿主注册，以及时间戳。Cursor 本地副本与 Amp 项目/系统副本以
 `.agent-bundle-install.json` 携带它；Claude、Codex 与 Cursor 市场模式的安装把回执放在
 `<宿主根目录>/agent-bundle/receipts/` 下。`uninstall` 只删除回执
-归属的内容，只撤销它记录的注册——绝不多删；非归属条目会被列为保留。有效框架状态根、推导出的 web-data、旧版 `state/`，以及 Agent Plugins
+归属的内容，只撤销它记录的注册，绝不多删；非归属条目会被列为保留。有效框架状态根、推导出的 web-data、旧版 `state/`，以及 Agent Plugins
 包的 Cursor 副本在回执中记录的 `PLUGIN_DATA` 目录，除非传入 `--purge-data --confirm-purge` 否则保留，且结果如实说明宿主自行决定而 Agent Bundle 无法左右的部分（Claude 把缓存
 副本标为 orphaned 并保留约 14 天；Codex 删除缓存树且没有 keep-data 选项）。缺少回执（`AB7009`）或内容不匹配
 （`AB7007`）会被拒绝，除非 `--force`；属于另一个插件的目录无论如何都被拒绝；再次运行是 `not-installed` 空操作。
@@ -231,16 +231,16 @@ Doctor 是只读的。`--from` 就是 `install` 接受的那个组合根目录�
 根目录是 `AB7001`。它探测宿主、清点已安装的捆绑包、把它们与提供的捆绑包做比对、检查注册证明、采样运行时
 端点的健康状况与身份、清点持久状态，并对已安装的字节重新运行被固定的、无进程的文档与加载器校验器。它
 绝不修复任何东西。带 `--from` 时，它按宿主把已安装副本报告为 `current`、`stale`（`AB7308`）、`version-mismatch`
-（`AB7309`）、`foreign`（`AB7321`）、`load-failed`（`AB7325`）或 `not-installed`（`AB7307`），以及它的生命周期阶段——placed →
-registered → enabled → active——每一阶段要么从宿主观察得到，要么被类型化为 `unavailable` 并给出原因（`AB7330`）。`load-failed` 表示
-Claude Code 列出了该副本却拒绝加载它——它在 `claude plugin list --json` 中的行带有 `errors` 数组，Doctor 会原样报告
+（`AB7309`）、`foreign`（`AB7321`）、`load-failed`（`AB7325`）或 `not-installed`（`AB7307`），以及它的生命周期阶段，placed →
+registered → enabled → active，每一阶段要么从宿主观察得到，要么被类型化为 `unavailable` 并给出原因（`AB7330`）。`load-failed` 表示
+Claude Code 列出了该副本却拒绝加载它，它在 `claude plugin list --json` 中的行带有 `errors` 数组，Doctor 会原样报告
 该数组而不是 `current`，因为被拒绝的副本不会为会话提供任何 hook、MCP 服务器或技能。安装器读取同一数组：当刚安装的
 （或字节完全相同的既有）副本带有 `errors` 时，`agent-bundle install claude` 以 `AB7006` 失败，而不是报告 `installed`。
 Doctor 还会清点每个宿主根目录下的回执仓库并与宿主交叉核对（`AB7328`、`AB7329`）。
 
 对 Claude，Doctor 还会读取每一行的 `enabled` 标志并运行 Claude Code 开发者校验器。被列为 `enabled: false`
 的副本（用 `claude plugin disable` 或 `/plugin` 菜单关闭）在清点中报告为 `disabled`，在 `--from` 比对中保留其内容
-结论，并追加一条带 `claude plugin enable` 命令的 `AB7327` warning——被禁用的插件不会加载任何内容，重新安装也不会启用它。
+结论，并追加一条带 `claude plugin enable` 命令的 `AB7327` warning，被禁用的插件不会加载任何内容，重新安装也不会启用它。
 校验器（对 `plugin.json`、再对 `marketplace.json` 执行 `claude plugin validate --strict`，与 `build` 和
 `validate --artifact` 执行的是同样的运行）覆盖 `--from` 捆绑包以及每一份已安装副本，其发现保留 `AB6019`–`AB6022`
 代码，并带有 `Bundle at …` 或 `Installed copy at … (scope …)` 前缀。Doctor 绝不会重复运行 `--plugin-dir` 加载检查：
@@ -260,9 +260,9 @@ Doctor 还会清点每个宿主根目录下的回执仓库并与宿主交叉核�
 | `AB7324` | info / warning / error | 由 `install cursor --mode marketplace` 暂存的市场已被导入（`registered`）、仍在等待 Customize 导入步骤（`unregistered`），或不完整（`corrupt`）。 |
 | `AB7326` | info / warning / error | `~/.cursor/plugins/local` 下的某个 Agent Plugins 安装：其 `mcp.json` 占位符已由输出的 `install.mjs` 展开且每个展开后的路径仍可解析（`expanded`）；仍带有 Cursor 3.18.25 不会解析的规范形式，因此其 stdio 服务器无法启动（`unexpanded`）；或在记录展开之后被移动、复制或编辑（`drifted`，条目为 `corrupt`）。请在当前位置用捆绑包的 `install.mjs` 重新安装。 |
 | `AB7327` | warning | `doctor --from` 比对了一份其 `claude plugin list --json` 行报告 `enabled: false` 的已安装 Claude 副本；修复方式是 `claude plugin enable <name>@<marketplace> [--scope <scope>]`。 |
-| `AB7320` | error / info | 当某个 `.cursor-plugin/plugin.json` 安装违反 Cursor 被固定的文档 schema 或 token 位置规则（检查的 hooks 文档是清单 `hooks` 字段所指定的那个——`.cursor-plugin/hooks.json`——因此同一根目录中 Claude Code 的 `hooks/hooks.json` 不构成发现），或某个本地插件包含逃逸出 `~/.cursor/plugins/local` 的符号链接时为 error，该清点条目被报告为 `corrupt`。当某个 `.claude-plugin/plugin.json` 或根 `plugin.json` 安装没有 Cursor 侧被固定的静态文档契约时为 info，被加载器识别的条目仍为 `installed`。 |
+| `AB7320` | error / info | 当某个 `.cursor-plugin/plugin.json` 安装违反 Cursor 被固定的文档 schema 或 token 位置规则（检查的 hooks 文档是清单 `hooks` 字段所指定的那个，`.cursor-plugin/hooks.json`，因此同一根目录中 Claude Code 的 `hooks/hooks.json` 不构成发现），或某个本地插件包含逃逸出 `~/.cursor/plugins/local` 的符号链接时为 error，该清点条目被报告为 `corrupt`。当某个 `.claude-plugin/plugin.json` 或根 `plugin.json` 安装没有 Cursor 侧被固定的静态文档契约时为 info，被加载器识别的条目仍为 `installed`。 |
 
 ## 下一步
 
-- [预览包](./preview-packages.mdx) —— 目前可安装的 tarball 从哪里来。
-- [产物校验](./validation.mdx) —— 在安装之前为捆绑包把关的那些检查。
+- [预览包](./preview-packages.mdx) ， 目前可安装的 tarball 从哪里来。
+- [产物校验](./validation.mdx) ， 在安装之前为捆绑包把关的那些检查。

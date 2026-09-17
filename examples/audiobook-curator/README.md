@@ -65,10 +65,10 @@ server selector.
 
 The CLI is the same 16 tools. Each tool has a colocated `<tool>.cli.ts`
 projection module (#725) that declares its command name, option spellings,
-positionals, and confirmation policy — `search_audible.cli.ts` spells the tool
+positionals, and confirmation policy, `search_audible.cli.ts` spells the tool
 as `audible-search` with `--duration` and a comma-separated or repeatable
 `--regions`, `prepare_audiobook.cli.ts` spells `outputRoot` as `--output`, and
-`inspect_sources.cli.ts` takes `<root>` as a positional — so the compiled graph
+`inspect_sources.cli.ts` takes `<root>` as a positional, so the compiled graph
 carries exactly 16 CLI commands, each with the tool's identity
 (`tool:curator/<tool>`). There is no `src/cli/` directory, no second input
 schema or render body per command, and no `audiobook-curator curator <tool>`
@@ -77,8 +77,8 @@ the plan-first commands gate their mutation on `--apply`, never on `--yes`.
 
 ### `src/layout.tsx` is the shared document shell
 
-The conventional layout module wraps every rendered route once — the 16 MCP
-tools (on both surfaces), the catalog resource, and the curate prompt — so no
+The conventional layout module wraps every rendered route once, the 16 MCP
+tools (on both surfaces), the catalog resource, and the curate prompt, so no
 route imports a wrapper to get
 the server's standard document structure. The layout renders a container
 `Agent.Result` and the runtime merges each route's own
@@ -146,7 +146,7 @@ The conventional state module defines the workspace-durable
 `mutationApplied`, and `shelfCleared`. `select_audible_edition` dispatches the
 selection event; `apply_audiobook_metadata` and `apply_audiobook_chapters`
 dispatch mutation records and render the updated shelf. The read-only
-`review_curation_shelf` tool — `shelf` on the command line — exposes the
+`review_curation_shelf` tool, `shelf` on the command line, exposes the
 mounted state. If state is not mounted, it returns an empty structured shelf
 and renders an explicit unavailable notice on both surfaces.
 
@@ -155,7 +155,7 @@ and renders an explicit unavailable notice on both surfaces.
 `audit_library` places the asynchronous `LibraryAnalysis` component behind
 React `Suspense`. While that component re-stats duplicate candidates and
 calculates reclaimable bytes, its fallback is an `Agent.Progress` document
-node — and that node is the whole progress story: the generated MCP projector
+node, and that node is the whole progress story: the generated MCP projector
 turns the streamed fallback into `notifications/progress` for a client that
 sent a progress token, then replaces it with the completed analysis without
 changing the final structured `LibraryAuditReceipt`. No `progress.report()`
@@ -165,8 +165,8 @@ call repeats the fallback's message. On an interactive terminal the
 ### Every command renders its tool's document
 
 Each command runs its tool's component: piped output is one final Markdown
-document — the same headline and report the MCP client receives as text
-content — and an interactive terminal draws the streamed `Agent.Progress`
+document, the same headline and report the MCP client receives as text
+content, and an interactive terminal draws the streamed `Agent.Progress`
 fallback in place. `--json` selects machine output and emits one
 result-schema-validated JSON value followed by a newline: the canonical final
 `Agent.Result` value, never the Markdown presentation or an intermediate
@@ -176,8 +176,8 @@ projected as flags; `convert` carries its optional `receipt` inside the JSON
 `conversion` object. A command that gets one still writes the receipt file
 when it succeeds. This is a
 behavior change from the retired `src/cli/` tree, where every command that
-took a report or receipt path — thirteen of the sixteen, `inventory --report`
-and the convert receipt among them — required it: those commands now run
+took a report or receipt path, thirteen of the sixteen, `inventory --report`
+and the convert receipt among them, required it: those commands now run
 without the path and write no report or receipt file, and their exit codes,
 `--apply` gating, and error output are unchanged either way. `inspect`,
 `prepare`, and `shelf` never took one.

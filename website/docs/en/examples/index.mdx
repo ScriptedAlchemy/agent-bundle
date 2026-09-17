@@ -38,7 +38,7 @@ pnpm example:skills
 ```
 
 For the noninteractive path, `pnpm examples:check` runs every example package's own `check`
-script — validate and build, plus typecheck and tests where the example has them — with no dev
+script, validate and build, plus typecheck and tests where the example has them, with no dev
 server and no browser:
 
 ```sh
@@ -62,7 +62,7 @@ pnpm dev        # agent-bundle dev
 
 Every example page below records the same four things: what the example proves, the public
 packages it depends on, its root run command, and a link to its source. Read the source next to
-the page — the configuration files are short on purpose, because the `src/` conventions carry
+the page, the configuration files are short on purpose, because the `src/` conventions carry
 most of the structure.
 
 Two habits make the Workbench trustworthy while you explore:
@@ -75,7 +75,7 @@ Two habits make the Workbench trustworthy while you explore:
   the checked-in source and rebuild; the new active epoch is the repair evidence.
 
 [Hooks and Scripts](./hooks-and-scripts.mdx) ships a scripted, reversible diagnostic walkthrough
-for exactly that reason — break a handler, watch the failed rebuild keep the last-good artifact,
+for exactly that reason, break a handler, watch the failed rebuild keep the last-good artifact,
 restore, and read the new epoch as the repair. [Skills Starter](./skills-starter.mdx) practices the
 same rebuild-and-restore loop against stale eval evidence; the other walkthroughs only ask you to
 wait for a completed state before judging a rebuild.

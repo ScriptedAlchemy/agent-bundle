@@ -34,14 +34,14 @@ export default defineConfig({
 `output.distPath` 或 `--output` 指向 `dist` 就是 `AB4706`。`dist` 是强制忽略的目录：包输出
 永远不会进入项目源码快照，也不会进入 Skill 与资源发现。
 
-输出会被暂存并原子发布，其 provenance——字节数、SHA-256，以及排序后的项目相对源码输入——会像产物文件
+输出会被暂存并原子发布，其 provenance，字节数、SHA-256，以及排序后的项目相对源码输入，会像产物文件
 一样在构建结果中报告。
 
 ### 声明文件
 
 `lib.dts` 默认为 `true`。声明生成会从项目中解析 `typescript`，因此请把它加为 devDependency。它把 lib
 入口所在的源码目录编译为独立的 program：编译选项通过 `extends` 来自项目的 `tsconfig.json`，`rootDir`
-固定为入口所在目录，并且只纳入该子树——测试文件永远不会让包构建失败，也不会污染它。声明文件平铺落在
+固定为入口所在目录，并且只纳入该子树，测试文件永远不会让包构建失败，也不会污染它。声明文件平铺落在
 `dist/` 下，每个源码模块一个 `.d.ts`。
 
 `lib` profile 刻意做得很薄。需要多格式矩阵（UMD、多入口、逐格式 tsconfig）的包已经超出这个 profile，
@@ -49,7 +49,7 @@ export default defineConfig({
 
 ## 可执行封套
 
-一个 `bin` 条目——或一个产物脚本——只要其模块导出了 `main`，或默认导出一个函数，就会获得生成的进程
+一个 `bin` 条目，或一个产物脚本，只要其模块导出了 `main`，或默认导出一个函数，就会获得生成的进程
 封套：
 
 ```ts
@@ -68,7 +68,7 @@ export const main = async (
 封套会 await `main(process.argv.slice(2), { terminal })`，把数值返回值作为进程退出码，并让逃逸的
 rejection 走 Node 的顶层失败路径（堆栈打到 stderr，退出码 1）。`terminal` 是该进程的
 [终端能力](./mcp.mdx#终端能力)：stdout 与 stderr 各自的 TTY 属性、颜色与尺寸，以及两者是否指向同一
-目标，由封套内联的一个无依赖模块在 `main` 运行前探测一次——普通脚本或 bin 不会为此加载任何运行时。
+目标，由封套内联的一个无依赖模块在 `main` 运行前探测一次，普通脚本或 bin 不会为此加载任何运行时。
 包 bin 的 `hostSurface` 为 `cli`，产物脚本的为 `script`，因此同时发布到两个表面的模块看到的是它实际
 被启动的那个表面。只声明一个参数的 `main` 照常工作，第二个参数只是没有被读取。没有 `main` 导出的
 自执行模块则逐字节直接打包，也不会收到探测结果。
@@ -123,7 +123,7 @@ export default async function inspect(
 
 当 `inputSchema` 拒绝解析后的 argv 时，shell 会用 CLI 的措辞逐条说明问题，而不是打印原始的 schema issue
 JSON：按用户输入的形式指出参数（`--max-files`、`<root>`，或投影 MCP 命令的 `--input.<path>`）、期望值与
-实际收到的值，每个问题一行，随后是该命令的准确用法行与 `--help` 提示——全部写到 stderr，退出码为 `2`：
+实际收到的值，每个问题一行，随后是该命令的准确用法行与 `--help` 提示，全部写到 stderr，退出码为 `2`：
 
 ```text
 Invalid value for --max-files: expected number <= 55000; received 300000.
@@ -140,8 +140,8 @@ Run 'curator doctor --help' for usage.
 [脚本与资源](./scripts-assets.mdx)中描述的四种输出模式。路由式 CLI 项目需要把 `@agent-bundle/runtime`
 作为依赖，因为生成的可执行文件通过它装配请求上下文。
 
-渲染式命令运行在一个挂钟默认为 60 秒的渲染会话中。合理运行时间更长的命令——例如在两小时的构建上执行
-`<bin> await <ticket>`——以 `config.render: { maxElapsedMs }` 声明自己的预算（以毫秒计的正整数，最多 24
+渲染式命令运行在一个挂钟默认为 60 秒的渲染会话中。合理运行时间更长的命令，例如在两小时的构建上执行
+`<bin> await <ticket>`，以 `config.render: { maxElapsedMs }` 声明自己的预算（以毫秒计的正整数，最多 24
 小时，否则报 `AB4835`）；编译后的命令把它带进生成的可执行文件，投影的 MCP 命令（`routes.mcpCommands`）
 则继承其工具的预算。纯 `.ts` 命令没有渲染会话，会拒绝该键。参见[渲染预算](./mcp.mdx#渲染预算)。
 
@@ -270,10 +270,10 @@ export const mapInput = (
 `keyof z.input<Schema>`。`config` 使用与路由模块相同的静态提取语法（会解包 `satisfies`）。
 `mapInput` 是普通的命名导出，其存在性会被静态记录，并且只由 CLI bin 加载；MCP worker 永远不会看到
 该模块。`mapInput` 是表面适配器，不是领域逻辑：它只把 argv 重塑或补默认值成规范输入（重命名、拆分
-列表、派生工作目录）。领域校验与行为留在操作里——它的 `inputSchema` 精化以及它的组件。在 mapper
+列表、派生工作目录）。领域校验与行为留在操作里，它的 `inputSchema` 精化以及它的组件。在 mapper
 里重写一遍命令逻辑，正是投影要去掉的重复。由于 mapper 仍可能拆分或重命名一个值，投影导出了 `mapInput`
-的命令，其 `z.enum` 取值由规范 schema 在 `mapInput` 运行之后判定——因此 `--regions us,uk` 能到达
-mapper——而枚举之外的值仍以 2 退出，并以 CLI 拼写报告为
+的命令，其 `z.enum` 取值由规范 schema 在 `mapInput` 运行之后判定，因此 `--regions us,uk` 能到达
+mapper，而枚举之外的值仍以 2 退出，并以 CLI 拼写报告为
 `Invalid value for --<option>[<index>]: expected one of: …`。没有 `mapInput` 的投影则像 `src/cli`
 路由一样在解析 argv 时就拒绝未知的枚举值。
 
@@ -318,8 +318,8 @@ audiobook-curator convert --input \
 
 该对象原样到达工具自己的 `inputSchema`，因此默认值、refinement 与 transform 的应用方式与
 `tools/call` 完全一致；schema 问题以 `--input.<path>` 报告，非对象的 `--input` 会在任何工具运行之前
-以退出码 2 被拒绝。命令保留投影控制的其余一切——`command`、`aliases`、`description`、`confirm`
-与 `exitCode`——帮助、`inspect` 与制品清单都会记录这一模式（`projection.input: "json"`）。
+以退出码 2 被拒绝。命令保留投影控制的其余一切，`command`、`aliases`、`description`、`confirm`
+与 `exitCode`，帮助、`inspect` 与制品清单都会记录这一模式（`projection.input: "json"`）。
 策展器的先计划后执行转换设置 `confirm: false`，嵌套的 `conversion.apply` 字段仍是显式修改门禁。
 
 `flags` 以工具的 `RouteContract.input` 的规范键为键。发现阶段会在派生身份之前排除 `.cli.{ts,tsx}`，
@@ -355,13 +355,13 @@ hook、Skill、脚本与 npm 消费者都使用插件根目录，因此构建把
 `bin/<plugin-name>-flight.mjs`），由所有选中宿主共享。每个内置 target 都发布了准入它的 `cli` 能力。产物 bin 是一个
 带 Node shebang 和可执行位的自包含 ESM 模块。npm 根目录原样复制它，并让 `package.json` 的 `bin`
 直接指向它，因此帮助、argv 解析、输出模式、退出码、信号与完整命令集合都逐字节相同。两种形式都从
-`bin/` 的上级根目录解析插件代码，并从该代码根目录推导出同一个框架状态根目录——
+`bin/` 的上级根目录解析插件代码，并从该代码根目录推导出同一个框架状态根目录，
 `~/.agent-bundle/state/<plugin>-<digest>`（或对应的 `XDG_STATE_HOME` 路径），或已设置的
-`AGENT_BUNDLE_STATE_ROOT`——因此 CLI 与 MCP 服务器共享同一份存储。
+`AGENT_BUNDLE_STATE_ROOT`，因此 CLI 与 MCP 服务器共享同一份存储。
 
-从其他表面引用它时使用插件根 token——Claude Skill Markdown 与 hook 命令中写
+从其他表面引用它时使用插件根 token，Claude Skill Markdown 与 hook 命令中写
 `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`，Codex hook 中写 `${PLUGIN_ROOT}/…`，Cursor hook 中写
-`${CURSOR_PLUGIN_ROOT}/…`——或者在编译后的脚本里用同级引用
+`${CURSOR_PLUGIN_ROOT}/…`，或者在编译后的脚本里用同级引用
 `new URL('../bin/<plugin-name>.mjs', import.meta.url)`。`inspect` 把该 bin 记为每个 target 的一个 `cli`
 组件，产物清单会记录这两个文件。不具备 `cli` 能力的 target 会省略该 bin 并报告 `AB4765`；宿主在同一路径
 发射的文件（例如 `claude.bin` 目录中交付的 `<plugin-name>.mjs`）是 `AB4766`。npm 根目录复制清单声明的
@@ -390,7 +390,7 @@ hook、Skill、脚本与 npm 消费者都使用插件根目录，因此构建把
 import meta, { name, packageName, packageVersion, version } from 'agent-bundle/meta';
 ```
 
-`version` 是解析出的插件版本，`name` 是宿主原生的插件 slug——绝不是 npm 包名——`packageName` 与
+`version` 是解析出的插件版本，`name` 是宿主原生的插件 slug，绝不是 npm 包名，`packageName` 与
 `packageVersion` 则是经过校验的 npm 轴，对未打包的开发期项目为 `undefined`。编译器会在每个被编译的
 表面替换该 specifier：产物脚本、路由式 CLI、MCP 入口、钩子包装层、包构建，以及浏览器 MCP App 包。
 它是保留 specifier，因此 `tools` 逃生舱无法把它外部化，任何输出包也不可能残留对它的未解析导入。
@@ -427,14 +427,14 @@ npm publish ./dist --ignore-scripts
 
 ## 预构建 payload
 
-有些项目确实自行掌控编译——例如逐入口逃生舱无法表达的、协调多环境的打包器拓扑——但仍希望使用框架
+有些项目确实自行掌控编译，例如逐入口逃生舱无法表达的、协调多环境的打包器拓扑，但仍希望使用框架
 自有的宿主打包。顶层 `payload` 块声明构建将按字节、按稳定路径打包的已构建目录树，而
 `entry: { prebuilt: './dist/…' }` 或 `handler: { prebuilt: './dist/…' }` 则把生成的宿主清单指向这些
 树中的文件，而不编译它们。
 
 每个 payload 文件都保留其精确的相对路径，因为框架并没有编译这些文件，也就无法改写它们内部的引用。
 完整性依然是内容寻址的：每个 payload 文件都会带着自己的 SHA-256 与 `prebuilt` 文件类别进入产物清单，
-并参与项目 revision 的哈希。请先运行你自己的构建——缺失或为空的 payload 在 `dev` 下只是警告，以便
+并参与项目 revision 的哈希。请先运行你自己的构建，缺失或为空的 payload 在 `dev` 下只是警告，以便
 干净检出也能工作，但 `agent-bundle build` 会拒绝它。
 
 编译器不会打开 payload 文件，因此请用 `definePrebuilt` 和 `runtimeDependencies` 列出它们加载的裸包名。
@@ -463,7 +463,7 @@ export default defineConfig({
 视图与包构建。这正是消费者永远不需要第二份打包器配置文件的原因。
 
 这个逃生舱是有边界的。框架的 invariant 钩子在你的 `tools.rspack` *之后*运行，解析后的配置断言也仍在
-合并之后运行。破坏产物契约的取值——异步 chunk、输出根目录、自包含性——会以硬诊断让构建失败，而不是
+合并之后运行。破坏产物契约的取值，异步 chunk、输出根目录、自包含性，会以硬诊断让构建失败，而不是
 悄悄覆盖契约。保留的模块 specifier 也以同样方式受到保护：把 `agent-bundle/mcp-entry`、
 `agent-bundle/meta` 或 `agent-bundle/mcp-apps` 外部化的逃生舱会让构建失败。外部化整体上也受到同样的
 边界约束：`AB4725` 会拒绝静态可见、点名某个包的 `externals`，相对路径、函数形式以及 mutator 添加的
@@ -473,15 +473,15 @@ externals 则由编译过程自身的证据判断（`AB6005`）。运行时路�
 *代码如何编译*，绝不是*产物承诺了什么*。
 
 逃生舱是*并列*合并到框架配置旁边的：`plugins` 数组会拼接，而 Rsbuild 从不按名称去重插件。通过
-`tools.rsbuild.plugins` 再次添加框架已经注册的插件——`@rsbuild/plugin-react`（`rsbuild:react`），
-每个合成入口与每个 MCP App 视图都带着它——会让它运行两次，因此 `agent-bundle validate`
+`tools.rsbuild.plugins` 再次添加框架已经注册的插件，`@rsbuild/plugin-react`（`rsbuild:react`），
+每个合成入口与每个 MCP App 视图都带着它，会让它运行两次，因此 `agent-bundle validate`
 会以 `AB4724` 报告，并点名该插件及其包名。删除这一项即可；框架会替你注册它。
 
 有一个引擎身份注意事项：产物脚本、MCP 入口、钩子包装层与包构建通过 Rslib 编译，MCP App 视图通过
 `@rsbuild/core` 编译；agent-bundle 固定了两者的版本，使项目只安装一个 `@rsbuild/core` 与一个
 `@rspack/core`，但这个引擎是 agent-bundle 的依赖，而不是你的依赖。因此，从单独安装的 `@rspack/core`
 导入的类，与实际执行配置的那个引擎的类身份可能并不相同。切勿针对导入的 `@rspack/core` 构造插件或执行
-`instanceof` 检查——请改用传给 mutator 函数的 utils 参数：
+`instanceof` 检查，请改用传给 mutator 函数的 utils 参数：
 
 ```ts
 tools: {
@@ -499,12 +499,12 @@ npx agent-bundle inspect --bundler --root .
 npx agent-bundle inspect --bundler --root . --target claude --json
 ```
 
-它会导出构建所编译的每个输出降级后的 Rspack 配置——每个编译器一条记录，由构建自己的 Rslib（可执行
-文件）或 Rsbuild（MCP App 视图）降级流程产出，并在构建即将开始编译的位置停下——因此这份导出不可能与
+它会导出构建所编译的每个输出降级后的 Rspack 配置，每个编译器一条记录，由构建自己的 Rslib（可执行
+文件）或 Rsbuild（MCP App 视图）降级流程产出，并在构建即将开始编译的位置停下，因此这份导出不可能与
 真实编译结果发生漂移。你能看到解析后的 `resolve.alias` 映射（框架运行时模块与你自己的别名并列）、
 `externals` 列表、以 `[object <ClassName>]` 渲染的插件、以 `[function <name>]` 渲染的函数，以及
 `output.path`：产物根目录显示为 `<output>`，包构建显示为 `<项目根>/dist`。被构建不变量拒绝的逃生舱值
-——例如给保留的 `agent-bundle/*` 说明符设置别名——会让检查变为无效，并以 `AB7001` 指出被拒绝的原因。
+，例如给保留的 `agent-bundle/*` 说明符设置别名，会让检查变为无效，并以 `AB7001` 指出被拒绝的原因。
 被框架包装的入口还会附带生成的包装模块源码。
 
 本页所有内容的完整契约见
@@ -512,5 +512,5 @@ npx agent-bundle inspect --bundler --root . --target claude --json
 
 ## 下一步
 
-- [配置模型](./index.mdx) —— 其余的配置表面。
-- [项目结构](../start/project-structure.mdx) —— 这些入口各自的位置。
+- [配置模型](./index.mdx) ， 其余的配置表面。
+- [项目结构](../start/project-structure.mdx) ， 这些入口各自的位置。
