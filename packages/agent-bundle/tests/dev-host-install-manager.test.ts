@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -9,6 +9,7 @@ import { ProjectEventHub } from '../src/dev/events.ts';
 import { DevHostInstallManager } from '../src/dev/host-install-manager.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('removes app-server-managed entries on the first Codex filesystem fallback', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-host-fallback-'));
@@ -91,7 +92,7 @@ it('removes app-server-managed entries on the first Codex filesystem fallback', 
   } finally {
     await manager.close();
     appServer.mockRestore();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -169,6 +170,6 @@ it('reconciles removed generation entries without deleting unmanaged installatio
     expect(await readFile(join(destination, 'host-receipt.json'), 'utf8')).toBe('keep file');
   } finally {
     await manager.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

@@ -22,6 +22,7 @@ import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { createTargetMcpRuntime, type TargetMcpRuntimeContract } from '../src/services/mcp-runtime.ts';
 import { sha256Hex } from '../src/core/digest.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface FixtureFile {
   readonly contents: string;
@@ -553,7 +554,7 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
     ]);
     expect(JSON.stringify(inspection)).not.toContain('do-not-expose');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -575,7 +576,7 @@ it('never publishes a manifested MCP host without its projection MCP document', 
     })).rejects.toThrow(`projections["${fixtureTarget}"].documents.mcp is absent, but the target's MCP manifest is "mcp.json".`);
     await expect(store.listEpochs()).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -600,7 +601,7 @@ it('revalidates an epoch on each inspection so post-publication corruption is vi
       code: 'ARTIFACT_INSPECTION_INVALID',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -666,7 +667,7 @@ it.each(provenanceTamperCases)('refuses to inspect an epoch whose provenance is 
     });
     expect(store).toMatchObject({ acquired: 1, closed: 1 });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -699,8 +700,8 @@ it('inspects identical root-relative provenance after the published epochs are r
     expect(serialized).not.toContain(relocated);
     expect(store).toMatchObject({ acquired: 1, closed: 1 });
   } finally {
-    await rm(root, { force: true, recursive: true });
-    await rm(relocated, { force: true, recursive: true });
+    await removeTree(root);
+    await removeTree(relocated);
   }
 });
 
@@ -732,7 +733,7 @@ it('returns deeply frozen detached inspection records', async () => {
 
     expect((await service.inspect('epoch-immutable')).project.sourceInputs[0]!.path).toBe(configPath);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -760,7 +761,7 @@ it('uses callback facts captured during validation and excludes unmanifested mut
     }]);
     expect(JSON.stringify(inspection.runtime)).not.toContain('not-manifested.mjs');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -789,7 +790,7 @@ it('preserves the supplied runtime resolver call sequence while inspecting valid
       name: 'runner',
     })]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -810,7 +811,7 @@ it('accepts an exact registry with a non-configurable own method', async () => {
       epochId: 'epoch-registry-identity',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -849,7 +850,7 @@ it('retains immutable inspection evidence when manifest and hook bytes are repla
     expect(Object.isFrozen(result.snapshot!.manifest.files)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.runtime.hooks)).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -866,7 +867,7 @@ it('fails closed without an inspection when an acquired artifact file cannot be 
     });
     expect(store).toMatchObject({ acquired: 1, closed: 1 });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -883,7 +884,7 @@ it('surfaces release failure after inspecting and closes every acquired referenc
     });
     expect(store).toMatchObject({ acquired: 1, closed: 1 });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -906,7 +907,7 @@ it('releases references after successful and invalid artifact inspections', asyn
     });
     expect(store).toMatchObject({ acquired: 2, closed: 2 });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -925,7 +926,7 @@ it('uses the exact supplied registry and fails closed with the default registry'
       epochId: 'epoch-registry',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -977,7 +978,7 @@ it('diffs exact epochs by artifact facts with stable lexical records', async () 
     ]);
     expect(store).toMatchObject({ acquired: 4, closed: 4 });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -992,7 +993,7 @@ it('releases an acquired base reference when candidate acquisition fails', async
       .rejects.toMatchObject({ code: 'EPOCH_NOT_FOUND' });
     expect(store).toMatchObject({ acquired: 1, closed: 1 });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1010,7 +1011,7 @@ it('surfaces release failure when diff closes a partially acquired reference', a
       });
     expect(store).toMatchObject({ acquired: 1, closed: 1 });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1047,6 +1048,6 @@ it('compares canonical file source-input paths rather than project input hashes'
       'scripts/source.mjs',
     ]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

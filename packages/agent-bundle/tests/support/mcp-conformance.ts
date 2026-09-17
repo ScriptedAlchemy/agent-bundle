@@ -25,6 +25,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import { build } from '../../src/api.ts';
 import { runBoundedChildProcess } from '../../src/host-contracts/process.ts';
+import { removeTree } from './remove-tree.ts';
 
 const runnerVersion = '0.1.16';
 const specVersion = '2025-11-25';
@@ -315,7 +316,7 @@ export const runMcpConformance = async (): Promise<McpConformanceReport> => {
   const outputRoot = resolve(
     process.env['AGENT_BUNDLE_MCP_CONFORMANCE_OUTPUT'] ?? defaultOutputRoot,
   );
-  await rm(outputRoot, { force: true, recursive: true });
+  await removeTree(outputRoot);
   await mkdir(dirname(outputRoot), { recursive: true });
   const expectedFailures = await readExpectedFailures();
 
@@ -328,8 +329,8 @@ export const runMcpConformance = async (): Promise<McpConformanceReport> => {
     // journey, so omit unrelated state, event, and CLI surfaces and narrow the
     // copied fixture config to its generated MCP routes.
     await Promise.all([
-      rm(join(project, 'src/cli'), { force: true, recursive: true }),
-      rm(join(project, 'src/events'), { force: true, recursive: true }),
+      removeTree(join(project, 'src/cli')),
+      removeTree(join(project, 'src/events')),
       rm(join(project, 'src/state.ts'), { force: true }),
       writeFile(join(project, 'agent-bundle.config.ts'), [
         'export default {',
@@ -411,6 +412,6 @@ export const runMcpConformance = async (): Promise<McpConformanceReport> => {
     return report;
   } finally {
     await bridge?.close();
-    await rm(fixture, { force: true, recursive: true });
+    await removeTree(fixture);
   }
 };

@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -26,6 +26,7 @@ import {
   submitJsonValue,
   submitJsonRecord,
 } from '../src/mcp/mcp-json-input.tsx';
+import { removeTree } from './support/remove-tree.ts';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const inputComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-json-input.tsx');
@@ -69,7 +70,7 @@ const mountedInputFixture = async (source: readonly string[]) => {
   return {
     close: async () => {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     },
     url: `${origin}/input.html`,
   };

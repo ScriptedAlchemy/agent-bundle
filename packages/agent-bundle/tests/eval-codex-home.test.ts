@@ -21,6 +21,7 @@ import {
   planEvalFixture,
   type EvalCase,
 } from '../src/eval/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const fixtureRoot = new URL('../fixtures/eval/codex/', import.meta.url);
 const normalCodexHome = resolveNormalCodexHome(process.env);
@@ -145,7 +146,7 @@ it('copies auth state byte for byte with its mode and never rewrites the source'
       code: 'CODEX_CLI_UNAUTHENTICATED',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -162,7 +163,7 @@ it('leaves a controlled normal Codex home digest unchanged across a trial', asyn
     await expect(lstat(join(root, 'workspaces'))).resolves.toMatchObject({});
     expect(existsSync(join(root, 'workspaces', 'home'))).toBe(false);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 60_000);
 
@@ -182,6 +183,6 @@ smokeIt('runs one signed-in ephemeral Codex trial without touching the normal ho
     // inferred level whatever the model chose to say.
     expect(trial.assertions.find((assertion) => assertion.kind === 'skill-activation')?.evidence).toBe('inferred');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 600_000);

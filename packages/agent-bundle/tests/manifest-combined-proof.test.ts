@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -16,6 +16,7 @@ import { runDoctor } from '../src/install/doctor.ts';
 import { webPluginDataDirectory } from '../src/web-host/launch.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { awaitStdoutLine, runBin } from './support/bin-process.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const fixtureName = 'manifest-combined-proof';
@@ -214,8 +215,8 @@ describe('the authoritative manifest combined proof', () => {
   afterAll(async () => {
     await Promise.all([
       projectRoot === '' ? Promise.resolve() : removeProjectFixture(projectRoot),
-      relocatedPackageRoot === '' ? Promise.resolve() : rm(relocatedPackageRoot, { force: true, recursive: true }),
-      isolatedHome === '' ? Promise.resolve() : rm(isolatedHome, { force: true, recursive: true }),
+      relocatedPackageRoot === '' ? Promise.resolve() : removeTree(relocatedPackageRoot),
+      isolatedHome === '' ? Promise.resolve() : removeTree(isolatedHome),
     ]);
   });
 

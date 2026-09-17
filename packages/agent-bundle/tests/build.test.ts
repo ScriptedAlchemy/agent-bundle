@@ -27,6 +27,7 @@ import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const testMeta: AgentBundleMeta = Object.freeze({
   name: 'reserved-probe-plugin',
@@ -319,7 +320,7 @@ const runModule = async (modulePath: string, cwd: string): Promise<{ readonly co
   });
 
 const cleanupProject = async (project: TestProject): Promise<void> => {
-  await rm(project.root, { force: true, recursive: true });
+  await removeTree(project.root);
 };
 
 it('low-level build writes and returns the exact canonical manifest for a configured Skill script', async () => {
@@ -1131,7 +1132,7 @@ it('restores the existing artifact when publication fails after backup', async (
     await expect(readFile(join(outputRoot, 'artifact.txt'), 'utf8')).resolves.toBe('previous\n');
     expect((await readdir(root)).sort()).toEqual(['dist']);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1205,7 +1206,7 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
       sourceInputs: [join(root, 'src', 'entry.ts'), join(root, 'src', 'shell.ts')],
     }]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 20_000);
 
@@ -1240,7 +1241,7 @@ it('lowers every bundler config and builds under NODE_ENV=development, leaving N
   } finally {
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 20_000);
 
@@ -1263,7 +1264,7 @@ it('leaves NODE_ENV unset when a failing inspection had set it', async () => {
   } finally {
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1314,7 +1315,7 @@ it('leaves filesystem URL and worker expressions in the emitted bundle untouched
     await expect(readdir(join(root, 'dist'))).resolves.toEqual(['scripts']);
     await expect(readdir(join(root, 'dist', 'scripts'))).resolves.toEqual(['references.mjs']);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 20_000);
 
@@ -1405,7 +1406,7 @@ const buildLinkedWorkspaceProject = async (
     const bundle = await readFile(join(root, 'dist', 'scripts', 'linked.mjs'), 'utf8');
     return { bundle, evidence, root };
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 };
 
@@ -1555,7 +1556,7 @@ it('validates a relocated artifact from its record alone and still reports an ig
     });
     const artifactRoot = join(relocated, 'artifact');
     await rename(project.outputRoot, artifactRoot);
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
     expect(await validateArtifact({ artifactRoot })).toEqual([]);
 
     const manifestPath = join(artifactRoot, 'agent-bundle.manifest.json');
@@ -1583,7 +1584,7 @@ it('validates a relocated artifact from its record alone and still reports an ig
     expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6039')).toEqual([]);
     expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6005')).toEqual(ignoredImportDiagnostics('scripts/greeting.mjs'));
   } finally {
-    await rm(relocated, { force: true, recursive: true });
+    await removeTree(relocated);
     await cleanupProject(project);
   }
 }, 20_000);
@@ -1689,7 +1690,7 @@ it('keeps sibling staged outputs alive under a tools hatch that asks to clean th
     await expect(readFile(join(root, 'dist', 'sibling.mjs'), 'utf8'))
       .resolves.toContain('already-emitted-sibling');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 20_000);
 
@@ -1715,7 +1716,7 @@ it('overrides a tools hatch that strips plugins and repoints the entry away from
     expect(bundle).toContain('generated-wrapper-marker');
     expect(bundle).toContain('generated-registry');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 20_000);
 
@@ -1730,7 +1731,7 @@ it('rejects a tools hatch that externalizes a reserved specifier statically', as
       tools: { rspack: { externals: { 'agent-bundle/mcp-entry': 'module agent-bundle/mcp-entry' } } },
     })).rejects.toThrow(/must not externalize the reserved specifier "agent-bundle\/mcp-entry"/u);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 20_000);
 
@@ -1761,7 +1762,7 @@ it('rejects a tools hatch that externalizes a reserved specifier through functio
       },
     })).rejects.toThrow(/must not externalize the reserved specifier "agent-bundle\/mcp-apps"/u);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 20_000);
 
@@ -1779,6 +1780,6 @@ it('rejects a tools hatch alias that shadows a reserved specifier', async () => 
       tools: { rspack: { resolve: { alias: { 'agent-bundle/mcp-apps': join(root, 'src', 'evil.ts') } } } },
     })).rejects.toThrow(/must not alias the reserved specifier/u);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 20_000);

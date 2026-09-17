@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -17,6 +17,7 @@ import {
   type StateConformanceContext,
 } from '../src/state/index.js';
 import { createSqliteStateDriver } from '../src/state/sqlite.js';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 /**
  * The workspace-durable driver must pass the exact same conformance suite as
@@ -47,7 +48,7 @@ const withContext = async (run: (context: StateConformanceContext) => Promise<vo
     for (const created of drivers) {
       await created.close();
     }
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -218,7 +219,7 @@ const withRoot = async (run: (root: string) => Promise<void>): Promise<void> => 
   try {
     await run(root);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 

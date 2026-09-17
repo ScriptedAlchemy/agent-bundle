@@ -24,6 +24,7 @@ import { createProjectFixture, removeProjectFixture } from './helpers/project-fi
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 import { timeScale } from './support/time-scale.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
   const decoder = new TextDecoder();
@@ -291,7 +292,7 @@ it('contains prebuilt workbench asset reads to their declared root', async () =>
     await expect(assets.read('../secret.txt')).resolves.toBeUndefined();
     await expect(assets.read('static/../../secret.txt')).resolves.toBeUndefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -317,7 +318,7 @@ it('types extensionless notice and license files as text and keeps the binary fa
     await expect(assets.read('static/payload')).resolves.toMatchObject({ contentType: 'application/octet-stream' });
     await expect(assets.read('static/licensed-fixture')).resolves.toMatchObject({ contentType: 'application/octet-stream' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -382,7 +383,7 @@ it('serves packaged notice files over HTTP as text without loosening asset path 
     await expect(probe('/LICENSE')).resolves.toMatchObject({ status: 404 });
     await server.close();
   } finally {
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -416,7 +417,7 @@ it('starts a loopback server with prebuilt assets, does not open on --no-open, a
     await expect(server.close()).resolves.toBeUndefined();
     await expect(fetch(server.url)).rejects.toThrow();
   } finally {
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -440,7 +441,7 @@ it('fails closed when the optional agent API is enabled without its fixed bearer
     }
   } finally {
     await server?.close();
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -474,7 +475,7 @@ it('enables the optional agent API from dev.agentApi when no CLI override is sup
     expect((await fetch(`${server.url}/mcp`, { method: 'POST' })).status).toBe(401);
   } finally {
     await server?.close();
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -499,7 +500,7 @@ it('normalizes a relative project root once before constructing every dev servic
     });
   } finally {
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -663,7 +664,7 @@ it('latches a runtime declaration added to an ordinary Workbench session as rest
   } finally {
     events?.close();
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -719,7 +720,7 @@ it('keeps the ordinary foreground and artifact lane available when provider star
     });
   } finally {
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -913,7 +914,7 @@ it('retains Runtime App routes through invalid config updates and reconciles onl
   } finally {
     delete runtimeGlobal[stateKey];
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 60_000);
 
@@ -1006,7 +1007,7 @@ it('fences a closing foreground before a held valid runtime reconcile can attach
     releaseReconcile();
     delete runtimeGlobal[stateKey];
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -1136,7 +1137,7 @@ it('does not reconcile a valid preparation released after foreground close begin
     releasePrepare();
     delete runtimeGlobal[stateKey];
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -1263,7 +1264,7 @@ it('attaches Runtime App routes once when a compiling provider later activates, 
   } finally {
     delete runtimeGlobal[stateKey];
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -1295,7 +1296,7 @@ it('does not attach a compiling Runtime App preview service after foreground clo
   } finally {
     delete runtimeGlobal[stateKey];
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -1446,7 +1447,7 @@ it('prepares the optional runtime once with the development config context befor
   } finally {
     await server?.close().catch(() => undefined);
     await failedServer?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -1482,7 +1483,7 @@ it('builds and serves a target owned only by the workbench registry', async () =
     expect(registry.names()).toEqual(['workbench-synthetic']);
   } finally {
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
 
@@ -1535,7 +1536,7 @@ it('binds real epoch MCP sessions to the workbench lifecycle and drains trace re
   } finally {
     await reader?.cancel();
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 60_000);
 
@@ -1597,7 +1598,7 @@ it('hosts real MCP App previews only on the foreground origin and closes their l
     await expect(access(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id))).resolves.toBeUndefined();
   } finally {
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 60_000);
 
@@ -1679,7 +1680,7 @@ it('simulates and replays real epoch-bound hooks through the packaged foreground
     await expect(fetch(`${server.url}/api/hooks?epochId=${epochId}`, { headers })).rejects.toThrow();
   } finally {
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 60_000);
 
@@ -1802,7 +1803,7 @@ it('records a durable playground trace and promotes it through the packaged fore
     await expect(fetch(`${server.url}/api/playground/sessions/${run.session.id}`, { headers })).rejects.toThrow();
   } finally {
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 60_000);
 
@@ -1868,7 +1869,7 @@ it('inspects and diffs published epochs through the packaged foreground server',
     expect(unauthorized.status).toBe(403);
   } finally {
     await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 60_000);
 

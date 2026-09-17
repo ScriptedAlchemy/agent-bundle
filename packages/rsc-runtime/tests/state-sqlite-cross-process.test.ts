@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -11,6 +11,7 @@ import { z } from 'zod';
 
 import { defineState, type AgentStateDefinition } from '../src/state/index.js';
 import { createSqliteStateDriver } from '../src/state/sqlite.js';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 /**
  * The two cross-process acceptance proofs for the workspace-durable driver
@@ -64,7 +65,7 @@ const withStateFile = async (run: (file: string) => Promise<void>): Promise<void
   try {
     await run(join(root, 'state.sqlite'));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 

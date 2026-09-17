@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,6 +19,7 @@ import {
   openInMemoryMcpServer,
   readMcpResource,
 } from '../../src/test/mcp.ts';
+import { removeTree } from '../support/remove-tree.ts';
 
 /**
  * The `mcp-in-memory` proof level: the real generated MCP server, registered
@@ -417,7 +418,7 @@ describe('the in-memory MCP projection level', () => {
       });
     } finally {
       await session.close();
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 
@@ -480,7 +481,7 @@ describe('the in-memory MCP projection level', () => {
         }
       }
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
 
     expect((await listMcpSurface()).resources).not.toContain('agent-bundle://notices/inbox');
@@ -552,7 +553,7 @@ describe('the in-memory MCP projection level', () => {
         await driver.close();
       }
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 
@@ -808,7 +809,7 @@ describe('the in-memory MCP projection level', () => {
       await expect(volatile.client.subscribeResource({ uri: inboxUri })).rejects.toThrow(/Method not found/u);
     } finally {
       await volatile.close();
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 

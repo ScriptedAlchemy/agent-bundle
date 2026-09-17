@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -11,12 +11,13 @@ import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build, inspect } from '../src/api.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const writeProjectFile = async (root: string, path: string, contents: string): Promise<void> => {
@@ -405,7 +406,7 @@ it('lets a skill reach the artifact bin through the plugin-root token, and the b
 
 it('emits a self-contained routed bin for a web-only plugin', { retry: 1, timeout: 240_000 }, async () => {
   const root = await createFixture({ targets: ['portable'], web: true });
-  await rm(join(root, 'src', 'cli'), { force: true, recursive: true });
+  await removeTree(join(root, 'src', 'cli'));
 
   const result = await build({ output: 'artifact', root });
   const binPath = join(root, 'artifact', 'bin', `${pluginName}.mjs`);

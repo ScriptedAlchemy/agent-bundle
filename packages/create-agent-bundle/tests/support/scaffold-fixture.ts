@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -13,6 +13,7 @@ import {
   packOutputFromJson,
   sharedPackedTarball,
 } from '../../../agent-bundle/tests/support/shared-pack.ts';
+import { removeTree } from '../../../agent-bundle/tests/support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 
@@ -100,7 +101,7 @@ const fixture = (): Promise<PackedFixture> => {
 export const cleanupScaffoldFixture = async (): Promise<void> => {
   if (fixturePromise === undefined) return;
   const { root } = await fixturePromise;
-  await rm(root, { force: true, recursive: true });
+  await removeTree(root);
 };
 
 export const scaffoldProject = async (

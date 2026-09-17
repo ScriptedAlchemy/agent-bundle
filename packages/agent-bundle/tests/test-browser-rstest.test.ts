@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -9,6 +9,7 @@ import {
   AGENT_BROWSER_TEST_REGISTRY_SYMBOL_KEY,
   AGENT_BROWSER_TEST_REGISTRY_VERSION,
 } from '../src/test/browser-registry.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/route-harness');
 
@@ -87,7 +88,7 @@ describe('agentBundleBrowserRstest', () => {
         'MCP App "panel" has no browser mount host selected by the project.',
       );
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 

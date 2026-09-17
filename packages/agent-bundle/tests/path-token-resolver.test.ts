@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import { pathTokens } from '../src/core/types.ts';
 import { createMcpPathTokenResolver, resolveMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
 import type { TargetMcpRuntimeContract } from '../src/services/mcp-runtime.ts';
 import { McpService } from '../src/services/mcp-service.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface ResolutionFixture {
   readonly cases: readonly {
@@ -309,6 +310,6 @@ it('resolves Claude path tokens outside command when launching a generated artif
       },
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);

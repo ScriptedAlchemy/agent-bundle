@@ -1,5 +1,5 @@
 import { expect, it } from '@rstest/core';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +12,7 @@ import {
   createProjectFixture,
   removeProjectFixture,
 } from './helpers/project-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('loads an async TypeScript config and discovers its conventional skill files', async () => {
   const fixture = await createProjectFixture();
@@ -215,7 +216,7 @@ it('rejects external config paths before evaluating their modules', async () => 
       root,
     })).rejects.toThrow(/outside project root/i);
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });
 
@@ -236,7 +237,7 @@ it('rejects config symlinks whose resolved targets escape the real project root 
       root,
     })).rejects.toThrow(/outside project root/i);
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });
 

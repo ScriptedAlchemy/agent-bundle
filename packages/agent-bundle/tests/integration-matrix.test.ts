@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat, symlink } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -12,6 +12,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { codexArtifactPaths } from '../src/adapters/codex.ts';
 import { build, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const fixturesRoot = join(process.cwd(), 'fixtures', 'integration');
@@ -183,7 +184,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
       target: hooks[0]!.host,
     })).resolves.toEqual({ additionalContext: 'hook:fixture', outcome: 'continue' });
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 }, 60_000);
 
@@ -208,7 +209,7 @@ it('builds the checked-in portable skills-only fixture', async () => {
       await readFile(join(root, 'src', 'skills', 'portable-skill', 'assets', 'binary.bin')),
     );
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });
 
@@ -229,6 +230,6 @@ it('reports checked-in unsupported-capability and canonical-collision diagnostic
     expect(unsupported.diagnostics.map((diagnostic) => diagnostic.code)).toContain('AB4204');
     expect(collision.diagnostics.map((diagnostic) => diagnostic.code)).toContain('AB4408');
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });

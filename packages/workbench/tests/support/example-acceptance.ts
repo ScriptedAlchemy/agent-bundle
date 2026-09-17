@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import type { Page, Request } from 'playwright-core';
 
 import { waitForWorkbenchIdle, workspaceRoot } from './workbench-e2e.ts';
 import { timeScale } from '../../../agent-bundle/tests/support/time-scale.ts';
+import { removeTree } from './remove-tree.ts';
 
 export type ExampleName =
   | 'audiobook-curator'
@@ -59,7 +60,7 @@ export const copyExample = async (name: ExampleName): Promise<{ readonly release
   // Teardown intermittently hits ENOTEMPTY on rmdir of `<root>/.agent-bundle`
   // (a late write landing after server.close()); retry like
   // playground/mcp-probe-service.ts does.
-  return { release: () => rm(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 50 }), root };
+  return { release: () => removeTree(root), root };
 };
 
 export const waitForSettledWorkbench = (page: Page): Promise<void> => waitForWorkbenchIdle(page, browserTimeout);

@@ -1,4 +1,4 @@
-import { access, cp, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ import type { EvalRunResult } from '../src/dev/eval/eval-service.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { seedEvalProject } from './support/eval-project.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const runCliWithOutput = async (args: readonly string[]): Promise<{
   readonly code: number;
@@ -126,7 +127,7 @@ it('persists an explicit artifact outside the project as an opaque portable iden
     expect(result.run.artifact.manifestPath).not.toContain(artifactRoot);
     expect(result.run.artifact.manifestPath).not.toContain('..');
   } finally {
-    await rm(externalRoot, { force: true, recursive: true });
+    await removeTree(externalRoot);
     await removeProjectFixture(project.root);
   }
 }, 120_000);

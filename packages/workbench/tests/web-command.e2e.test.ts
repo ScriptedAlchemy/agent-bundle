@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { readdir, readFile, rm, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
@@ -14,6 +14,7 @@ import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { copyExample } from './support/example-acceptance.ts';
 import { descendantProcessIds } from './support/packed-release-harness.ts';
 import { e2e } from './support/workbench-e2e.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const pluginName = 'mcp-app-example';
 const app = 'status/status';
@@ -121,7 +122,7 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     const built = await build({ output: artifactRoot, root: example.root });
     expect(built.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
     // The artifact is the whole product: the bin serves the App with no source beside it.
-    await rm(join(example.root, 'src'), { force: true, recursive: true });
+    await removeTree(join(example.root, 'src'));
     const bin = join(artifactRoot, 'bin', `${pluginName}.mjs`);
     await expect(stat(bin)).resolves.toMatchObject({});
     const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as {

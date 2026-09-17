@@ -1,10 +1,11 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -109,7 +110,7 @@ describe('rsc runtime topology script', () => {
       await run(root);
       await expect(run(root, true)).resolves.toBeDefined();
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 });

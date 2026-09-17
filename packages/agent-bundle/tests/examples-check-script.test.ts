@@ -1,10 +1,11 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -55,6 +56,6 @@ await writeFile(process.env.FAKE_PNPM_CAPTURE, JSON.stringify({
       });
     }
   } finally {
-    await rm(fixtureRoot, { force: true, recursive: true });
+    await removeTree(fixtureRoot);
   }
 });

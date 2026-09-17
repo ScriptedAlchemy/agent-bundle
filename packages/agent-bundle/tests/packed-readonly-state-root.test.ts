@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -14,6 +14,7 @@ import { openPackedMcpServer, removeProjectSource } from '../src/test/packed.ts'
 import { resolveWebLaunch } from '../src/web-host/launch.ts';
 import { readWebManifest } from '../src/web-host/manifest.ts';
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/durable-web-surface');
@@ -230,6 +231,6 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     expect(await exists(stateRoot)).toBe(false);
   } finally {
     if (readOnly) await chmodTree(installedRoot, { directory: 0o755, file: 0o644 });
-    await rm(consumer, { force: true, recursive: true });
+    await removeTree(consumer);
   }
 }, 300_000);

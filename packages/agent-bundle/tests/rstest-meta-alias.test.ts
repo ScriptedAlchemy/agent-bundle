@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -19,6 +19,7 @@ import { agentBundleRstest } from '../src/rstest/index.ts';
 import { metaModuleAliasKey, testMetaModuleSource } from '../src/rstest/meta-module.ts';
 import { FALLBACK_PLUGIN_IDENTITY, isFallbackPluginIdentity, testManifestFromRouteGraph } from '../src/test/manifest.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/meta-consumer');
 const metaModulePath = resolve(fixtureRoot, '.agent-bundle', 'test', 'meta.mjs');
@@ -94,7 +95,7 @@ describe('agentBundleRstest aliases agent-bundle/meta (#386)', () => {
       expect(error.recovery).toContain('Fix the compiler diagnostics');
       expect(error.message).not.toContain('ReferenceError');
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 

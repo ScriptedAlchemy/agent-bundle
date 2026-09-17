@@ -25,6 +25,7 @@ import {
   type DoctorReport,
 } from '../src/install/doctor.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const writeJson = async (path: string, value: unknown): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -61,7 +62,7 @@ const temporaryDoctor = async (): Promise<{
   const endpointDirectory = join(root, 'endpoints');
   await mkdir(home, { recursive: true });
   return {
-    cleanup: () => rm(root, { force: true, recursive: true }),
+    cleanup: () => removeTree(root),
     endpointDirectory,
     home,
     root,
@@ -204,7 +205,7 @@ it('reports Cursor directory evidence as available, unavailable, or failed', asy
       status: 'available',
     });
 
-    await rm(join(fixture.home, '.cursor'), { recursive: true });
+    await removeTree(join(fixture.home, '.cursor'));
     const unavailable = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
       home: fixture.home,
@@ -362,7 +363,7 @@ it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the
     expect(hostReport(unexpanded, 'cursor').inventory.findings).toEqual([
       expect.objectContaining({ launch: { servers: ['launcher', 'probe'], state: 'unexpanded' }, name: 'spec-shape', state: 'installed' }),
     ]);
-    await rm(join(installRoot, 'spec-shape'), { recursive: true });
+    await removeTree(join(installRoot, 'spec-shape'));
 
     // 2. The same pack installed by the emitted install.mjs: expanded, recorded, and verified — the Agent Plugins
     //    contract is checked against the bundle's document, so the absolute paths and §9.1 keys in the copy are no error.
@@ -420,7 +421,7 @@ it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the
     ]);
 
     // 3. Drift: the data directory disappears and a referenced script is removed — Cursor would spawn paths that do not exist.
-    await rm(pluginData, { recursive: true });
+    await removeTree(pluginData);
     await rm(join(destination, 'mcp', 'report.mjs'));
     const drifted = await doctor();
     expect(ab7325(drifted)).toEqual([expect.objectContaining({
@@ -439,13 +440,13 @@ it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the
     await mkdir(pluginData, { recursive: true });
     await writeFile(join(destination, 'mcp', 'report.mjs'), 'process.stdin.resume();\n');
     await cp(destination, join(installRoot, 'moved'), { recursive: true });
-    await rm(destination, { recursive: true });
+    await removeTree(destination);
     const moved = await doctor();
     expect(ab7325(moved).map((entry) => entry.severity)).toEqual(['error']);
     expect(ab7325(moved)[0]?.message).toContain(`the receipt expanded PLUGIN_ROOT to ${JSON.stringify(destination)} but the package is installed at ${JSON.stringify(join(installRoot, 'moved'))}`);
     // The moved copy's on-disk mcp.json is still validated against the recorded bundle document, not its expanded bytes.
     expect(ab7320Errors(moved)).toEqual([]);
-    await rm(join(installRoot, 'moved'), { recursive: true });
+    await removeTree(join(installRoot, 'moved'));
 
     // 5. An edit to the installed copy that keeps every path valid (a bare command renamed) is still drift:
     //    the installed bytes must equal the expansion of the recorded document, and the byte lane then
@@ -1462,7 +1463,7 @@ it('reports AB7306 when the bundle identity fails for a reason that is not a man
     const bundle = await createBundle(fixture.root, 'cursor');
     // The manifest points at `.cursor-plugin/plugin.json`; making `.cursor-plugin` a regular
     // file turns the pointer check into an ENOTDIR read failure rather than a missing file.
-    await rm(join(bundle, '.cursor-plugin'), { recursive: true });
+    await removeTree(join(bundle, '.cursor-plugin'));
     await writeFile(join(bundle, '.cursor-plugin'), 'not a directory\n');
     const report = await runDoctor({
       commandRunner: versionRunner,
@@ -1517,7 +1518,7 @@ it('classifies Cursor bundle state as installed, missing, drifted, or conflicted
     { expected: 'installed', mutate: async (_destination: string): Promise<void> => {} },
     {
       expected: 'missing',
-      mutate: async (destination: string): Promise<void> => rm(destination, { recursive: true }),
+      mutate: async (destination: string): Promise<void> => removeTree(destination),
     },
     {
       expected: 'drifted',
@@ -1618,7 +1619,7 @@ it('compares the installed Cursor copy against the artifact: current, stale, for
     expect(staleDiagnostic?.recovery).toContain('replaced automatically');
 
     // Legacy pre-receipt copy with different content: stale, recovery points at --replace.
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
     await cp(bundle, destination, { recursive: true });
     await writeFile(join(destination, 'payload.txt'), 'older\n');
     const legacy = hostReport(await doctor(), 'cursor');
@@ -1626,7 +1627,7 @@ it('compares the installed Cursor copy against the artifact: current, stale, for
     expect(legacy.diagnostics.find((entry) => entry.code === 'AB7308')?.recovery).toContain('--replace');
 
     // Foreign directory under the plugin name: no receipt, no install surface.
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
     await mkdir(destination, { recursive: true });
     await writeJson(join(destination, '.cursor-plugin/plugin.json'), { name: 'doctor-fixture', version: '1.2.3' });
     await writeFile(join(destination, 'payload.txt'), 'someone else\n');
@@ -2472,7 +2473,7 @@ it('reports a receipt-owned Codex marketplace whose source directory is gone', a
       `[marketplaces.doctor-fixture-marketplace]\nsource_type = "local"\nsource = ${JSON.stringify(bundle)}\n`,
       'utf8',
     );
-    await rm(bundle, { force: true, recursive: true });
+    await removeTree(bundle);
 
     const report = await runDoctor({
       commandRunner: async (request) => {
@@ -2618,7 +2619,7 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     expect(bare.diagnostics.filter((entry) => entry.code === 'AB7307').every((entry) => entry.message.includes('preserved runtime state'))).toBe(true);
 
     // With the remnant receipt `uninstall --keep-data` writes, Doctor names the plugin and the receipt too.
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
     await installBundle({ from: bundle, home: fixture.home, host: 'cursor' });
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
@@ -2653,7 +2654,7 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     }
 
     // Without any state left, a remnant receipt over unowned entries is still not "state-only".
-    await rm(join(destination, 'state'), { force: true, recursive: true });
+    await removeTree(join(destination, 'state'));
     const noState = hostReport(await doctor(), 'cursor');
     for (const entry of noState.diagnostics.filter((item) => item.code === 'AB7307')) {
       expect(entry.message).toContain('retained the unowned entry "operator-notes.md"');
@@ -2690,14 +2691,14 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
       expect(entry.message).not.toContain('PLUGIN_DATA');
       expect(entry.recovery).toContain('to consume the remnant');
     }
-    await rm(pluginData, { recursive: true });
+    await removeTree(pluginData);
     expect((await remnantMessages()).every((message) => !message.includes('PLUGIN_DATA') && !message.includes('state/'))).toBe(true);
     // An emptied state/ directory left behind is not preserved state either.
     await mkdir(join(destination, 'state'));
     expect((await remnantMessages()).every((message) => message.includes('whose preserved runtime state has since been removed'))).toBe(true);
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
     expect((await remnantMessages()).every((message) => message.includes('holds only preserved runtime state (state/)'))).toBe(true);
-    await rm(join(destination, 'state'), { recursive: true });
+    await removeTree(join(destination, 'state'));
     const elsewhere = join(fixture.root, 'other-home', '.cursor', 'agent-bundle', 'plugin-data', 'doctor-fixture');
     await mkdir(elsewhere, { recursive: true });
     await writeFile(join(elsewhere, 'cache.sqlite'), 'foreign\n');
@@ -3635,7 +3636,7 @@ it('tracks staged Cursor marketplaces from staged to imported', async () => {
     expect(hostReport(drifted, 'cursor').bundle?.lifecycle?.registered).toMatchObject({ status: 'observed', value: true });
 
     // Without an imported copy the same drift is only a stale staging: not registered, remove and restage.
-    await rm(cached, { recursive: true });
+    await removeTree(cached);
     const driftedUnimported = await doctor();
     expect(hostReport(driftedUnimported, 'cursor').bundle?.state).toBe('drifted');
     expect(hostReport(driftedUnimported, 'cursor').bundle?.lifecycle?.registered).toMatchObject({ status: 'observed', value: false });
@@ -3695,14 +3696,14 @@ it('tracks staged Cursor marketplaces from staged to imported', async () => {
     expect(hostReport(await doctor(), 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'registered' }]);
 
     // A staged repository whose plugin copy was deleted is corrupt for `--from` too, not "missing".
-    await rm(join(repo, 'plugins', 'doctor-fixture'), { recursive: true });
+    await removeTree(join(repo, 'plugins', 'doctor-fixture'));
     const gonePlugin = await doctor();
     expect(hostReport(gonePlugin, 'cursor').bundle).toMatchObject({ marketplace: 'doctor-fixture-marketplace', path: repo, state: 'corrupt' });
     expect(gonePlugin.diagnostics.filter((entry) => entry.code === 'AB7307')).toEqual([]);
     expect(gonePlugin.diagnostics.filter((entry) => entry.code === 'AB7324').length).toBeGreaterThan(0);
     await cp(bundle, join(repo, 'plugins', 'doctor-fixture'), { recursive: true });
 
-    await rm(join(repo, '.git'), { recursive: true });
+    await removeTree(join(repo, '.git'));
     const corrupt = await doctor();
     expect(hostReport(corrupt, 'cursor').inventory.findings).toEqual([expect.objectContaining({ entry: 'doctor-fixture', state: 'corrupt' })]);
     expect(corrupt.diagnostics.filter((entry) => entry.code === 'AB7324')[0]).toMatchObject({ severity: 'error' });

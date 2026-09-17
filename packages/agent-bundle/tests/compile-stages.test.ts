@@ -1,6 +1,6 @@
 import { rspack } from '@rslib/core';
 import { describe, expect, it } from '@rstest/core';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { generatedMetaModulePath, metaModuleSpecifier } from '../src/build/meta.
 import { buildRslibSurfaces, compileResultOf, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
 import { planCompileStages } from '../src/build/compile-stages.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const meta: AgentBundleMeta = Object.freeze({
   name: 'stages-fixture',
@@ -244,7 +245,7 @@ describe('buildRslibSurfaces', () => {
         },
       ]);
     } finally {
-      await rm(outputRoot, { force: true, recursive: true });
+      await removeTree(outputRoot);
     }
   });
 

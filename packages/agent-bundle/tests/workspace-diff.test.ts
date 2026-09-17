@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { expect, it } from '@rstest/core';
 
 import { workspaceDiff } from '../src/eval/workspace-diff.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('reports bounded relative workspace changes by opaque identity and digest without file contents or absolute paths', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-workspace-diff-'));
@@ -28,7 +29,7 @@ it('reports bounded relative workspace changes by opaque identity and digest wit
     expect(JSON.stringify(diff)).not.toContain('/private/source-fixture');
     expect(JSON.stringify(diff)).not.toContain('changed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -44,7 +45,7 @@ it('marks an oversized diff as truncated instead of expanding unbounded native w
       workspace: root,
     })).resolves.toMatchObject({ changes: expect.any(Array), truncated: true });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -68,7 +69,7 @@ it('bounds workspace traversal and file bytes before producing native evidence',
     await expect(workspaceDiff({ fileByteLimit: 8, plan, scanLimit: 2, totalByteLimit: 16, workspace: root }))
       .resolves.toMatchObject({ changes: expect.any(Array), truncated: true });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -83,6 +84,6 @@ it('charges every visited empty directory against the native workspace traversal
       workspace: root,
     })).resolves.toEqual(Object.freeze({ changes: Object.freeze([]), truncated: true }));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

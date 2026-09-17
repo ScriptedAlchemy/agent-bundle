@@ -8,7 +8,6 @@ import {
   readFile,
   readdir,
   realpath,
-  rm,
   writeFile,
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -19,6 +18,7 @@ import { promisify } from 'node:util';
 // so it stays on npm's default metadata staleness checks.
 import { npmInstallArguments, packOutputFromJson, sharedPackedTarball } from './shared-pack.ts';
 import { deepFreeze } from '../../src/core/freeze.ts';
+import { removeTree } from './remove-tree.ts';
 
 
 const execFile = promisify(executeFile);
@@ -376,7 +376,7 @@ export const runPackedClaudePluginProof = async (options: {
       version: versionNumber,
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -476,6 +476,6 @@ export const runPackedNativeSmoke = async (options: {
       package: { externalBinary: true, productionOnly: true, tarballs: 1 },
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };

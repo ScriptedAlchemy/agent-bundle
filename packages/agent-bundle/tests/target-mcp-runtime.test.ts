@@ -1,5 +1,5 @@
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
-import { access, cp, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,6 +22,7 @@ import { createMcpPathTokenResolver, resolveMcpPathTokens } from '../src/service
 import { McpService } from '../src/services/mcp-service.ts';
 import { build } from './support/build.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const metadata = Object.freeze({
   adapterRevision: 'test',
@@ -462,6 +463,6 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
     });
     await Promise.all([session.close(), persistent.close()]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

@@ -22,6 +22,7 @@ import { uninstallBundle, type UninstallResult } from '../src/install/uninstall.
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 import { diffTreeSnapshots, snapshotTree, treesIdentical } from './support/tree-snapshot.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface CommandCall {
   readonly args: readonly string[];
@@ -189,7 +190,7 @@ it('uninstalls a Cursor local install through its receipt and leaves the home by
     // Rerun: idempotent no-op.
     expect(await uninstallBundle(options)).toMatchObject({ state: 'not-installed' });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -259,10 +260,10 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
 
     // Reinstall beside the retained state (an install, not a replacement), then purge it with confirmation.
     await rm(join(destination, 'operator-notes.md'));
-    await rm(join(destination, 'scratch'), { recursive: true });
+    await removeTree(join(destination, 'scratch'));
     // skills/ survived the uninstall (its unowned child kept it alive), so a reinstall would find it pre-existing
     // and not claim it; clear it so the reinstall owns its directories again.
-    await rm(join(destination, 'skills'), { recursive: true });
+    await removeTree(join(destination, 'skills'));
     expect(await installBundle(options)).toMatchObject({ state: 'installed' });
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
     const purged = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
@@ -278,7 +279,7 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
     await expect(readdir(derivedStateRoot)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -325,7 +326,7 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
     expect((await uninstallBundle(options)).remnantReceipt).toBe(join(destination, installReceiptFile));
-    await rm(join(destination, 'state'), { force: true, recursive: true });
+    await removeTree(join(destination, 'state'));
     const emptyPlan = await uninstallBundle({ ...options, plan: true });
     expect(emptyPlan).toMatchObject({
       data: { outcome: 'absent', policy: 'keep' },
@@ -394,7 +395,7 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     await mkdir(join(pluginData, 'cache'), { recursive: true });
     await writeFile(join(pluginData, 'cache', 'index.json'), '{}\n');
     expect(await uninstallBundle(options)).toMatchObject({ data: { outcome: 'kept' }, remnantReceipt: join(destination, installReceiptFile) });
-    await rm(join(pluginData, 'cache'), { force: true, recursive: true });
+    await removeTree(join(pluginData, 'cache'));
     const emptiedByHand = await uninstallBundle(options);
     expect(emptiedByHand).toMatchObject({ data: { detail: expect.stringContaining('is empty and is pruned'), outcome: 'absent' }, receipt: { status: 'consumed' }, state: 'uninstalled' });
     expect(emptiedByHand.removed.directories).toEqual(expect.arrayContaining([pluginData, join(cursorRoot, 'agent-bundle', 'plugin-data'), join(cursorRoot, 'agent-bundle'), destination]));
@@ -417,8 +418,8 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     const linkedChild = await failureOf(uninstallBundle(options));
     expect(linkedChild.diagnostics[0]).toMatchObject({ code: 'AB7007', target: 'cursor' });
     expect(await readFile(join(outside, 'plugin-data', 'uninstall-fixture', 'cache.sqlite'), 'utf8')).toBe('elsewhere\n');
-    await rm(join(cursorRoot, 'agent-bundle'), { force: true, recursive: true });
-    await rm(outside, { force: true, recursive: true });
+    await removeTree(join(cursorRoot, 'agent-bundle'));
+    await removeTree(outside);
     expect(await uninstallBundle(options)).toMatchObject({ state: 'uninstalled' });
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
 
@@ -439,7 +440,7 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     expect(await readFile(join(elsewhere, 'note.txt'), 'utf8')).toBe('theirs\n');
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -482,8 +483,8 @@ it('purges AGENT_BUNDLE_STATE_ROOT from the host MCP document the installed mani
     await expect(readdir(declaredStateRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await Promise.all([
-      rm(fixture.cleanupRoot, { force: true, recursive: true }),
-      rm(cleanupRoot, { force: true, recursive: true }),
+      removeTree(fixture.cleanupRoot),
+      removeTree(cleanupRoot),
     ]);
   }
 });
@@ -533,7 +534,7 @@ it('never purges a pre-existing declared state root or its unrelated sentinel', 
     await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
     expect(await readFile(sentinel, 'utf8')).toBe('keep\n');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -561,7 +562,7 @@ it('prunes a newly marked explicit root when no runtime state was written', asyn
     expect(removed.remnantReceipt).toBeUndefined();
     await expect(readdir(declaredRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -593,7 +594,7 @@ it('records an inaccessible declared root as unproven without failing installati
       root: join(blockedParent, 'state'),
     }]);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -627,7 +628,7 @@ it('rolls back earlier state markers when a later root cannot be recorded', asyn
     });
     await expect(readdir(firstRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -660,7 +661,7 @@ it('purges only the install-time AGENT_BUNDLE_STATE_ROOT when the uninstall envi
     await expect(readdir(recordedRoot)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(sentinel, 'utf8')).toBe('keep\n');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -707,7 +708,7 @@ it('records and purges each server state root using its execution cwd', async ()
     await expect(readdir(firstRoot)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readdir(relativeRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -748,7 +749,7 @@ it('retains a marked root when its marker is replaced by another install identit
     });
     expect(await readFile(sentinel, 'utf8')).toBe('keep\n');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -799,8 +800,8 @@ it('lets only the owning installation purge a root shared by two installs', asyn
     await expect(readdir(sharedRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await Promise.all([
-      rm(owner.cleanupRoot, { force: true, recursive: true }),
-      rm(observer.cleanupRoot, { force: true, recursive: true }),
+      removeTree(owner.cleanupRoot),
+      removeTree(observer.cleanupRoot),
     ]);
   }
 });
@@ -846,7 +847,7 @@ it('retains a marked root when a symlinked ancestor is retargeted', async () => 
     });
     expect(await readFile(sentinel, 'utf8')).toBe('keep\n');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -886,7 +887,7 @@ it('refuses Cursor local uninstalls without proof of ownership unless forced, an
       state: 'uninstalled',
     });
     expect((await readdir(destination)).sort()).toEqual([installReceiptFile, 'state']);
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
 
     // A receipt naming another plugin, or a directory that is not ours at all: refused even with --force.
     await installBundle(options);
@@ -895,7 +896,7 @@ it('refuses Cursor local uninstalls without proof of ownership unless forced, an
     const otherPlugin = await failureOf(uninstallBundle({ ...options, force: true }));
     expect(otherPlugin.diagnostics[0]).toMatchObject({ code: 'AB7007', target: 'cursor' });
     expect(otherPlugin.diagnostics[0]?.message).toContain('names plugin "someone-else"');
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
     await mkdir(join(destination, '.cursor-plugin'), { recursive: true });
     await writeJson(join(destination, '.cursor-plugin', 'plugin.json'), { name: 'uninstall-fixture', version: '1.2.3' });
     await writeFile(join(destination, 'payload.txt'), 'someone else\n');
@@ -905,7 +906,7 @@ it('refuses Cursor local uninstalls without proof of ownership unless forced, an
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('someone else\n');
 
     // A symlinked destination is never traversed.
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
     const elsewhere = join(fixture.cleanupRoot, 'elsewhere');
     await mkdir(elsewhere);
     await symlink(elsewhere, destination);
@@ -913,7 +914,7 @@ it('refuses Cursor local uninstalls without proof of ownership unless forced, an
     expect(linked.diagnostics[0]).toMatchObject({ code: 'AB7007' });
     expect(await readdir(elsewhere)).toEqual([]);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -946,7 +947,7 @@ it('consumes a migrated format/1 Cursor receipt without a crash', async () => {
     });
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1051,7 +1052,7 @@ it('never derives legacy receipt purge ownership from the current environment', 
     await expect(readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1135,7 +1136,7 @@ it('removes a staged Cursor marketplace repository only when its HEAD matches th
     expect(await uninstallBundle({ ...options, force: true })).toMatchObject({ receipt: { status: 'forced-missing' }, state: 'uninstalled' });
     // An orphaned receipt (repository already gone) is consumed quietly.
     await installBundle(options);
-    await rm(repo, { force: true, recursive: true });
+    await removeTree(repo);
     expect(await uninstallBundle(options)).toMatchObject({
       registrations: [{ action: 'already-absent', kind: 'cursor-marketplace-staging' }],
       removed: { files: [receiptPath] },
@@ -1151,7 +1152,7 @@ it('removes a staged Cursor marketplace repository only when its HEAD matches th
     await mkdir(join(cachedCopy, '.cursor-plugin'), { recursive: true });
     await writeFile(join(cachedCopy, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'uninstall-fixture', version: '1.2.3' }));
     await writeFile(join(cachedCopy, '.cache-complete'), '');
-    await rm(repo, { force: true, recursive: true });
+    await removeTree(repo);
     const stagingGone = await uninstallBundle(options);
     expect(stagingGone.registrations).toEqual([
       expect.objectContaining({ action: 'already-absent', kind: 'cursor-marketplace-staging' }),
@@ -1159,7 +1160,7 @@ it('removes a staged Cursor marketplace repository only when its HEAD matches th
     ]);
     expect(stagingGone.nextSteps?.[0]).toContain('Customize -> Plugins');
     expect(await readFile(join(cachedCopy, '.cache-complete'), 'utf8')).toBe('');
-    await rm(join(cursorRoot, 'plugins'), { force: true, recursive: true });
+    await removeTree(join(cursorRoot, 'plugins'));
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
 
     // The bundle was rebuilt to a newer version after Cursor imported the staging: the imported copy carries the
@@ -1177,10 +1178,10 @@ it('removes a staged Cursor marketplace repository only when its HEAD matches th
     ]);
     expect(afterRebuild.nextSteps?.[0]).toContain('Customize -> Plugins');
     await writeJson(join(fixture.bundleRoot, '.cursor-plugin/plugin.json'), { name: 'uninstall-fixture', version: '1.2.3' });
-    await rm(join(cursorRoot, 'plugins'), { force: true, recursive: true });
+    await removeTree(join(cursorRoot, 'plugins'));
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 }, 60_000);
 
@@ -1301,7 +1302,7 @@ it.each([
     ]);
     expect(await readInstallReceiptFile(receiptPath)).toBeUndefined();
     // The simulated cache copy is host-owned residue in this unit test; everything Agent Bundle wrote is gone.
-    await rm(join(hostRoot, 'plugins'), { force: true, recursive: true });
+    await removeTree(join(hostRoot, 'plugins'));
     expect(diffTreeSnapshots(before, await snapshotTree(hostRoot))).toEqual({ added: [], changed: [], removed: [] });
 
     // Host says installed but no receipt: refused (AB7009) until --force, which uninstalls through the host CLI.
@@ -1425,7 +1426,7 @@ it.each([
       expect(sharedPurge.diagnostics[0]?.message).toContain('(scope project)');
       expect(scoped.calls.map((call) => call.args.join(' '))).not.toContain(uninstall);
       expect(await readFile(join(installPath, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
-      await rm(installPath, { force: true, recursive: true });
+      await removeTree(installPath);
       scoped.calls.length = 0;
       const otherScope = await uninstallBundle({ ...options, commandRunner: scoped.runner });
       expect(otherScope.registrations.find((registration) => registration.kind === 'claude-marketplace')).toMatchObject({
@@ -1521,7 +1522,7 @@ it.each([
       expect(receiptSharedPurge.diagnostics[0]?.message).toContain(`receipt ${elsewhere} (scope project in /elsewhere/project)`);
       expect(calls.map((call) => call.args.join(' '))).not.toContain(uninstall);
       expect(await readFile(join(installPath, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
-      await rm(installPath, { force: true, recursive: true });
+      await removeTree(installPath);
       calls.length = 0;
       // --plan announces the move without writing it.
       const planMove = await uninstallBundle({ ...options, plan: true });
@@ -1575,9 +1576,9 @@ it.each([
           { kind: 'claude-marketplace', name: 'uninstall-fixture-marketplace', scope: 'project' },
         ],
       });
-      await rm(installPath, { force: true, recursive: true });
+      await removeTree(installPath);
       await rm(otherPlugin);
-      await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
+      await removeTree(join(hostRoot, 'agent-bundle'));
       installed = false;
       marketplaceRegistered = false;
 
@@ -1606,7 +1607,7 @@ it.each([
         .toContain('uninstall-fixture@uninstall-fixture-marketplace (scope project in /elsewhere/by-hand, per plugins/installed_plugins.json)');
       expect(calls.map((call) => call.args.join(' '))).not.toContain(uninstall);
       expect(await readFile(join(installPath, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
-      await rm(installPath, { force: true, recursive: true });
+      await removeTree(installPath);
       calls.length = 0;
       const byRegistry = await uninstallBundle(options);
       expect(byRegistry.registrations.find((registration) => registration.kind === 'claude-marketplace')).toMatchObject({
@@ -1636,7 +1637,7 @@ it.each([
         detail: expect.stringContaining('other-fixture@uninstall-fixture-marketplace (scope local in /elsewhere/other, per plugins/installed_plugins.json)'),
       });
       expect(calls.map((call) => call.args.join(' '))).not.toContain(removeMarketplace);
-      await rm(installPath, { force: true, recursive: true });
+      await removeTree(installPath);
       installed = false;
       marketplaceRegistered = false;
 
@@ -1664,7 +1665,7 @@ it.each([
       });
       expect(calls.map((call) => call.args.join(' '))).toContain(uninstall);
       expect(calls.map((call) => call.args.join(' '))).not.toContain(removeMarketplace);
-      await rm(join(hostRoot, 'plugins'), { force: true, recursive: true });
+      await removeTree(join(hostRoot, 'plugins'));
       installed = false;
       marketplaceRegistered = false;
     }
@@ -1691,7 +1692,7 @@ it.each([
     expect(error.diagnostics[0]).toMatchObject({ code: 'AB7004', target: host });
     expect(unusable.calls).toHaveLength(1);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1747,7 +1748,7 @@ it('purges Claude durable state only when confirmed and reports the host-retaine
     await expect(readdir(join(installPath, 'state'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readdir(dataDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1825,7 +1826,7 @@ it('never derives legacy host-receipt purge ownership from the current environme
     expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
     expect(await readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).toBe('original\n');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1877,7 +1878,7 @@ it('reacquires Claude marketplace ownership after a keep-data remnant reinstall'
       .toMatchObject({ action: 'removed' });
     expect(marketplaceRegistered).toBe(false);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1927,7 +1928,7 @@ it('keeps external Codex state while reporting in-tree state only for purge', as
     const scoped = await failureOf(uninstallBundle({ ...options, scope: 'project' }));
     expect(scoped.diagnostics[0]).toMatchObject({ code: 'AB7003', target: 'codex' });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -1946,7 +1947,7 @@ it('rejects an uninstall mode for hosts other than Cursor before touching anythi
     expect(error.diagnostics).toMatchObject([{ code: 'AB7003', target: 'claude' }]);
     expect(calls).toEqual([]);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 

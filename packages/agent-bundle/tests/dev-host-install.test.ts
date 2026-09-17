@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -27,6 +27,7 @@ import {
   type BuiltHostInstallFixture,
 } from './support/host-install.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 let fixture: BuiltHostInstallFixture | undefined;
@@ -51,7 +52,7 @@ const createRoot = async (): Promise<string> => {
 };
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const builtFixture = (): BuiltHostInstallFixture => {
@@ -226,7 +227,7 @@ it('installs a marked public-host dev variant from a stable source and removes i
   };
   const uninstallBundle = async (options: UninstallBundleOptions): Promise<UninstallResult> => {
     uninstalls.push(options);
-    await rm(destination, { force: true, recursive: true });
+    await removeTree(destination);
     return {
       bundleRoot: options.from,
       data: { detail: 'test', outcome: 'kept', paths: [], policy: 'keep' },
@@ -435,7 +436,7 @@ unixSocketIt('refreshes a persistent Codex component snapshot before attaching e
         const mcp = JSON.parse(await readFile(join(source, '.codex-plugin', 'mcp.json'), 'utf8')) as {
           readonly mcpServers: Readonly<Record<string, unknown>>;
         };
-        await rm(destination, { force: true, recursive: true });
+        await removeTree(destination);
         await mkdir(dirname(destination), { recursive: true });
         await cp(source, destination, { recursive: true });
         appServer.set(`${pluginName}@${marketplaceDocument.name}`, {

@@ -1,4 +1,4 @@
-import { mkdir, rm, symlink } from 'node:fs/promises';
+import { mkdir, symlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
@@ -6,6 +6,7 @@ import { afterAll, expect, it } from '@rstest/core';
 
 import { inspectWorkbenchSurface, workbenchLeafPath } from '../../src/test/index.ts';
 import { createProjectFixture } from '../helpers/project-fixture.ts';
+import { removeTree } from '../support/remove-tree.ts';
 
 /**
  * The route-unit pool runs under `--conditions=react-server`, so a rendered
@@ -19,7 +20,7 @@ const reactPackageRoot = dirname(createRequire(import.meta.url).resolve('react/p
 const roots: string[] = [];
 
 afterAll(async () => {
-  await Promise.all(roots.map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.map((root) => removeTree(root)));
 });
 
 it('inspects the Workbench surface of a project with a rendered skill under the react-server condition (#441)', async () => {

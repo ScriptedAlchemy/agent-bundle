@@ -1,10 +1,11 @@
-import { chmod, mkdtemp, mkdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
 import { ProjectWatcher, type Invalidation } from '../src/dev/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 type Listener = (path: string) => void;
 
@@ -178,7 +179,7 @@ it('invalidates a reported file after chmod changes only its executable mode', a
     ]);
   } finally {
     await watcher.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -232,6 +233,6 @@ it('waits for the real watcher root before reporting create, change, and delete 
     expect(received).toHaveLength(4);
   } finally {
     await watcher.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

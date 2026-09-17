@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import {
   findEvalSuiteFiles,
   normalizeEvalConfig,
 } from '../src/eval/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const assertionsModule = fileURLToPath(new URL('../src/eval/assertions.ts', import.meta.url));
 const suiteModule = fileURLToPath(new URL('../src/eval/suite.ts', import.meta.url));
@@ -40,7 +41,7 @@ const withProject = async (run: (root: string) => Promise<void>): Promise<void> 
   try {
     await run(root);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 

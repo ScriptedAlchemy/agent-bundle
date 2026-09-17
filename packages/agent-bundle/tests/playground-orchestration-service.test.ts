@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,6 +32,7 @@ import { PlaygroundStore } from '../src/dev/playground/playground-store.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
 import { eventuallyPasses } from './support/eventually.ts';
 import { deepFreeze } from '../src/core/freeze.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 
 const activeEpoch = Object.freeze({
@@ -611,7 +612,7 @@ it('exports and promotes the real durable response event reference from a native
     });
   } finally {
     await service.close().catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

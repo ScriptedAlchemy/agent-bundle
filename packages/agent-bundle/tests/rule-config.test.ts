@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import {
   type RuleDocument,
 } from '../src/config/index.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const loadedProject = (
   root: string,
@@ -44,7 +45,7 @@ const withProject = async (
     );
     await run(root);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -193,7 +194,7 @@ it('discovers flat non-ignored rules deterministically and omits the collection 
       join(root, 'src', 'rules', 'zeta.mdc'),
     ]);
 
-    await rm(join(root, 'src', 'rules'), { recursive: true });
+    await removeTree(join(root, 'src', 'rules'));
     expect(await discoverProject(root, config)).not.toHaveProperty('rules');
   });
 });

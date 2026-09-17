@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,6 +22,7 @@ import {
   DevRuntimeProviderLoadError,
   resolveDevRuntimeProvider,
 } from '../src/dev/runtime-provider-loader.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const createProviderFixture = async (): Promise<{
   readonly provider: string;
@@ -1334,7 +1335,7 @@ it('loads one contained named runtime provider export with a frozen descriptor',
     expect(Object.isFrozen(provider.descriptor)).toBe(true);
     expect(Object.isFrozen(provider.descriptor.environmentVariables)).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1358,8 +1359,8 @@ it('rejects lexical, symlink, and directory provider escapes before importing', 
     expect(imports).toBe(0);
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(outside, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(outside),
     ]);
   }
 });
@@ -1386,7 +1387,7 @@ it('rejects missing exports and malformed provider descriptors without leaking e
     expect(error).toMatchObject({ code: 'AB8200' });
     expect((error as Error).message).not.toContain('must-not-leak');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1401,7 +1402,7 @@ it('normalizes provider property accessor failures to the stable load error', as
       }),
     }))).rejects.toMatchObject({ code: 'AB8200' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1431,7 +1432,7 @@ it('retains the factory provider as the start method receiver', async () => {
 
     await expect((provider.start as unknown as () => Promise<number>)()).resolves.toBe(1);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1471,7 +1472,7 @@ it('captures a named factory export only from an own data property', async () =>
     await expect(resolveDevRuntimeProvider(root, { provider: './src/dev/provider.ts' }, async () => inheritedModule))
       .rejects.toMatchObject({ code: 'AB8200' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1502,7 +1503,7 @@ it('rejects sparse, accessor-backed, and extended descriptor environment lists w
     }
     expect(getterCalls).toBe(0);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1528,6 +1529,6 @@ it('snapshots a dense environment list without reading its indexed values or len
     expect(provider.descriptor.environmentVariables).toEqual(['RUNTIME_TOKEN']);
     expect(lengthReads).toBe(0);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

@@ -1,6 +1,6 @@
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,6 +20,7 @@ import type { AgentBundleConfig, NormalizedHook, NormalizedPlugin } from '../src
 import type { CompiledEventHandler } from '../src/routes/types.ts';
 import { build } from './support/build.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const eventHandler: CompiledEventHandler = Object.freeze({
   provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/before.handler.ts' }),
@@ -278,7 +279,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
       },
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

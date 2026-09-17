@@ -16,6 +16,7 @@ import {
   type CreateEvalRunOptions,
   type EvalTrialRecordInput,
 } from '../src/eval/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const artifact = Object.freeze({
   manifestPath: 'artifacts/target/agent-bundle.manifest.json',
@@ -73,7 +74,7 @@ const withProject = async (task: (root: string) => Promise<void>): Promise<void>
   try {
     await task(root);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -708,7 +709,7 @@ it('rejects trial authority when the cases root changes after its directory snap
         },
       })).rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
     } finally {
-      await rm(outside, { force: true, recursive: true });
+      await removeTree(outside);
       await writer.close().catch(() => undefined);
     }
   });
@@ -725,7 +726,7 @@ it('refuses lexical, absolute, and Windows-absolute run storage escapes without 
       await expect(createEvalRun(runOptions(root, { runsDir: 'C:\\escaped-runs' })))
         .rejects.toMatchObject({ code: 'EVAL_RUN_RECORD_INVALID' });
     } finally {
-      await rm(outside, { force: true, recursive: true });
+      await removeTree(outside);
     }
   });
 });
@@ -738,7 +739,7 @@ it('refuses a configured storage ancestor that is a symlink outside the project'
       await expect(createEvalRun(runOptions(root))).rejects.toMatchObject({ code: 'EVAL_RUN_RECORD_INVALID' });
       await expect(readdir(outside)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
-      await rm(outside, { force: true, recursive: true });
+      await removeTree(outside);
     }
   });
 });
@@ -748,7 +749,7 @@ it('refuses writes when a run directory is replaced with an outside symlink', as
     const writer = await createEvalRun(runOptions(root));
     const outside = `${root}-outside`;
     try {
-      await rm(writer.directory, { force: true, recursive: true });
+      await removeTree(writer.directory);
       await symlink(outside, writer.directory);
 
       await expect(writer.appendEvent({ kind: 'escaped', payload: {} }))
@@ -756,7 +757,7 @@ it('refuses writes when a run directory is replaced with an outside symlink', as
       await expect(readdir(outside)).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(writer.close()).rejects.toBeInstanceOf(AggregateError);
     } finally {
-      await rm(outside, { force: true, recursive: true });
+      await removeTree(outside);
     }
   });
 });

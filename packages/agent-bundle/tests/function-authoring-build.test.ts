@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -6,6 +6,7 @@ import { expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
 import { runNodeScript } from './support/run-node-script.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('runs compiled function events, explicit JSX views, and CLI metadata and JSON input without source', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-function-authoring-'));
@@ -53,7 +54,7 @@ export default function Convert({input}) { return input; }
     const prompt = result.build.compiledHooks.find((hook) => hook.id === 'hook:event-route:prompt-submit')!;
     expect(await readFile(prompt.output, 'utf8')).not.toContain('Rendered decision');
     expect(await readFile(tool.output, 'utf8')).not.toContain('react.transitional.element');
-    await rm(join(root, 'src'), { recursive: true });
+    await removeTree(join(root, 'src'));
     const invoke = (output: string, input: object) => runNodeScript({ args: [output], cwd: root, input: JSON.stringify(input) });
     const base = { permission_mode: 'default', cwd: root, session_id: 'session', transcript_path: join(root, 'transcript.json') };
     const denial = await invoke(tool.output, { ...base, hook_event_name: 'PreToolUse', tool_use_id: 'use-1', tool_name: 'Write', tool_input: {} });
@@ -84,7 +85,7 @@ export default function Convert({input}) { return input; }
     expect(session.code, session.stderr).toBe(0);
     expect(session.stdout).toContain('Check the release checklist.');
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTree(root);
   }
 }, 240_000);
 
@@ -118,7 +119,7 @@ export default async function AfterView() {
     const built = await build({ root, output: join(root, 'artifact') });
     expect(built.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
     const output = built.build.compiledHooks[0]!.output;
-    await rm(join(root, 'src'), { recursive: true });
+    await removeTree(join(root, 'src'));
     const startedAt = performance.now();
     const result = await runNodeScript({
       args: [output],
@@ -147,7 +148,7 @@ export default async function AfterView() {
     if (childPid !== undefined) {
       try { process.kill(childPid, 'SIGKILL'); } catch { /* The deadline already terminated it. */ }
     }
-    await rm(root, { recursive: true, force: true });
+    await removeTree(root);
   }
 }, 180_000);
 
@@ -169,7 +170,7 @@ export default defineState({ id: 'event-context/state', lifetime: 'workspace-dur
     }
     const built = await build({ root, output: join(root, 'artifact') });
     const output = built.build.compiledHooks[0]!.output;
-    await rm(join(root, 'src'), { recursive: true });
+    await removeTree(join(root, 'src'));
     const native = { hook_event_name: 'PreToolUse', permission_mode: 'default', cwd: root, session_id: 'session', transcript_path: join(root, 'transcript.json'), tool_use_id: 'use-1', tool_name: 'Write', tool_input: {} };
     const probe = await runNodeScript({
       args: ['--input-type=module', '-e', `const { prepareRouteInvocation } = await import(${JSON.stringify(output)}); const trace = []; const result = await prepareRouteInvocation(${JSON.stringify(native)}, new AbortController().signal, event => trace.push(event)); const again = await prepareRouteInvocation(${JSON.stringify(native)}, new AbortController().signal); console.log(JSON.stringify({ value: JSON.parse(result.gate.reason), next: JSON.parse(again.gate.reason).process.hits, providers: result.providerObservations, trace }));`],
@@ -191,6 +192,6 @@ export default defineState({ id: 'event-context/state', lifetime: 'workspace-dur
     expect(observed.providers).toEqual([expect.objectContaining({ key: 'context', status: 'mounted', durationMs: expect.any(Number) })]);
     expect(observed.trace.map((event: { kind: string }) => event.kind)).toEqual(['handler.start', 'providers.start', 'providers.finish', 'handler.outcome']);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTree(root);
   }
 }, 180_000);
