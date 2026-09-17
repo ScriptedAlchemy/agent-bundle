@@ -735,7 +735,7 @@ it('preserves Codex nested MCP overrides and concurrent config edits across enab
     expect(config).toContain('model = "changed-by-add"');
     expect(config).not.toContain('model = "keep-me"');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -778,7 +778,7 @@ it('keeps Codex plugin settings when add fails during enabled replace', async ()
     expect(config).toContain(`${codexPluginNestedMcp}\nenabled = false`);
     expect(config).toContain('model = "changed-by-add"');
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -826,7 +826,7 @@ it('does not plugin-remove after a failed Codex replace receipt write', async ()
     expect(config).not.toBe(prior);
   } finally {
     writeReceipt.mockRestore();
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
@@ -889,7 +889,7 @@ it('fails Codex replace closed for disabled or unknown enablement before any mut
     expect(unreadable.calls.map((call) => call.args.join(' '))).toEqual(['plugin list --json']);
     expect((await stat(join(codexHome, 'config.toml'))).isDirectory()).toBe(true);
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await removeTree(fixture.cleanupRoot);
   }
 });
 
