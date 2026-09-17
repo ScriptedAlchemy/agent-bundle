@@ -1128,7 +1128,7 @@ it('emitted install.mjs refuses a foreign destination that lacks artifact-manife
     expect(broken.stderr).not.toContain('lstat');
     expect(await readFile(foreignReceipt, 'utf8')).toBe('{ "installer": "plugin-library" }\n');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1176,7 +1176,7 @@ it('emitted install.mjs reruns a marketplace stage with unlisted files as alread
     expect(await readFile(join(stagedPlugin, 'payload.txt'), 'utf8')).toBe('payload\n');
     await expect(readFile(join(stagedPlugin, 'extra.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1212,7 +1212,7 @@ it('emitted install.mjs --uninstall --force removes present files from a pre-rec
     await expect(readFile(join(destination, 'operator.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
