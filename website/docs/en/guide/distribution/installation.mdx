@@ -158,8 +158,9 @@ this plugin's installer did not place — is refused either way. The standalone 
 receipt-less destination from the files present there. That includes a legacy copy and a staged
 marketplace plugin. When `agent-bundle.manifest.json` is present, the artifact hash uses that
 manifest's `files[]`, and a listed path missing from the artifact fails the run. A listed path
-missing from the destination is omitted from the destination hash, so the hashes differ and the
-install refuses that copy instead of throwing `ENOENT`. Cursor and Amp copies carry an install receipt
+missing from a foreign or staged destination is omitted from its hash, so the hashes differ and
+install refuses that copy instead of throwing `ENOENT`. Owned same-version copies can be repaired.
+Cursor and Amp copies carry an install receipt
 (`.agent-bundle-install.json`: plugin, version, host, content hash, owned files); replacement is in
 place and touches owned files only, never unowned entries such as legacy or in-place `state/`, and
 `--replace` adopts a pre-receipt copy. Current artifact builds keep framework state under
