@@ -767,6 +767,8 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
   const reinstall = (codex.split('### Reinstall after a same-version rebuild')[1] ?? '').split('### Uninstall')[0] ?? '';
   const reinstallBlocks = [...reinstall.matchAll(/```sh\n([\s\S]*?)```/gu)].map((match) => match[1]!);
   expect(reinstallBlocks.join('\n')).not.toContain('codex plugin remove');
+  expect(codex).toContain('no settings-preserving update API');
+  expect(codex).toContain('AB7004');
   expect(codex).toContain('--replace');
 
   for (const target of ['cursor', 'portable']) {

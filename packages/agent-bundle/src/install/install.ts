@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, posix, resolve } from 'node:path';
 
@@ -451,24 +451,16 @@ export const parsePublicHostMarketplaces = (
   return Object.freeze(marketplaces);
 };
 
-const readCodexConfig = async (codexRoot: string): Promise<string | undefined> => {
-  try {
-    return await readFile(join(codexRoot, 'config.toml'), 'utf8');
-  } catch {
-    return undefined;
-  }
-};
-
-const writeCodexConfig = async (codexRoot: string, contents: string): Promise<void> => {
-  await writeFile(join(codexRoot, 'config.toml'), contents);
-};
-
 export const readCodexMarketplaceSource = async (
   codexRoot: string,
   marketplace: string,
 ): Promise<string | undefined> => {
-  const config = await readCodexConfig(codexRoot);
-  if (config === undefined) return undefined;
+  let config: string;
+  try {
+    config = await readFile(join(codexRoot, 'config.toml'), 'utf8');
+  } catch {
+    return undefined;
+  }
   const headers = new Set([
     `[marketplaces.${marketplace}]`,
     `[marketplaces.${JSON.stringify(marketplace)}]`,
@@ -674,12 +666,26 @@ const installPublicCli = async (
       previousContentHash = installed?.hash ?? previousReceipt?.contentHash;
     }
   }
-  // Decided before any host verb runs, so the marketplace ownership check sees the pre-install state.
-  const recorded = await receiptIdentity();
   // Codex `plugin remove` deletes the `[plugins."<id>"]` subtree in config.toml, including nested
   // MCP overrides. Native `plugin add` refreshes the cache in place and keeps those tables, so
-  // replacement is add-only. Native add does reset plugin-level `enabled = false` to `true`;
-  // the snapshot taken after marketplace add is written back when the inventory said disabled.
+  // replacement is add-only. Native add also resets plugin-level `enabled = false` to `true`.
+  // Pinned Codex has no qualified settings-preserving update API (no expected-version write),
+  // so a replace whose inventory row is disabled or omits `enabled` is refused before any host
+  // verb mutates config. Enable the plugin in Codex, then replace; otherwise leave it unchanged.
+  if (replaced && host === 'codex' && entry?.enabled !== true) {
+    const reason = entry?.enabled === false
+      ? 'plugin list reports enabled: false'
+      : 'plugin list omits enabled';
+    throw failure(
+      'AB7004',
+      `Cannot replace the Codex install of ${id}: ${reason}. ` +
+        'Pinned Codex has no settings-preserving update API, and native `plugin add` resets ' +
+        'plugin-level enabled to true. Enable the plugin in Codex before replacing, or leave this install unchanged.',
+      host,
+    );
+  }
+  // Decided before any host verb runs, so the marketplace ownership check sees the pre-install state.
+  const recorded = await receiptIdentity();
   const replaceRemovesPlugin = replaced && host !== 'codex';
   if (replaceRemovesPlugin) {
     await runHostCommand(runner, identity, host, publicHostUninstallArguments(host, id, scope), 'removal');
@@ -690,13 +696,6 @@ const installPublicCli = async (
     'add',
     identity.bundleRoot,
   ]);
-  const priorCodexConfig = host === 'codex' && replaced
-    ? await readCodexConfig(publicHostRoot(host, environment, home))
-    : undefined;
-  const restorePriorCodexConfig = async (): Promise<void> => {
-    if (priorCodexConfig === undefined) return;
-    await writeCodexConfig(publicHostRoot(host, environment, home), priorCodexConfig);
-  };
   // Between `marketplace add` and the receipt write, everything this run registered is claimed only in memory.
   // If the plugin install or the receipt write fails there, reverse what did complete rather than leave
   // registrations nothing records: a plugin without a receipt would pass the byte-identical fast path on retry
@@ -712,9 +711,6 @@ const installPublicCli = async (
       ? ['plugin', 'install', id, '--scope', scope]
       : ['plugin', 'add', id]);
     pluginInstalled = true;
-    // Native Codex add resets plugin-level enabled to true; restore the captured settings so a
-    // disabled plugin stays disabled and nested MCP overrides stay exactly as they were.
-    if (entry?.enabled === false) await restorePriorCodexConfig();
     const state = await recordInstalledState({
       environment,
       home,
@@ -735,15 +731,6 @@ const installPublicCli = async (
     }));
   } catch (error) {
     if (stateRollback !== undefined) await stateRollback();
-    try {
-      await restorePriorCodexConfig();
-    } catch (restoreError) {
-      throw failure(
-        'AB7004',
-        `${errorMessage(error)} Restoring prior Codex plugin settings also failed: ${errorMessage(restoreError)}.`,
-        host,
-      );
-    }
     const rollbacks: (readonly string[])[] = [
       // Codex replace is add-only: the plugin was already installed, so a failed receipt must not
       // `plugin remove` (that would delete the settings subtree this path exists to keep).

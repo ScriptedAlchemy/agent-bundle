@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-Preserve Codex plugin settings across `agent-bundle install codex` replace: refresh with `codex plugin add` only so nested MCP overrides in `config.toml` survive, and restore a plugin-level `enabled = false` after native add resets it. (#824)
+Replace Codex plugins with `codex plugin add` only so nested MCP overrides in `config.toml` survive. Refuse disabled or unknown-enablement Codex replacements (`AB7004`) because pinned Codex has no settings-preserving update API. (#824)

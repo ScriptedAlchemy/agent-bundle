@@ -170,8 +170,10 @@ installation owns them. Pre-existing, shared, marker-less, and otherwise unprove
 are retained. Claude replacement runs
 `claude plugin uninstall --keep-data` before reinstalling because `plugin update` is
 version-gated; Codex replacement is add-only (`codex plugin add`) so plugin settings and nested
-MCP overrides in `config.toml` survive — native add resets a plugin-level `enabled = false` to
-`true`, and the installer restores that flag from the prior config. The emitted `INSTALL.md`
+MCP overrides in `config.toml` survive. Native add would reset a plugin-level `enabled = false`
+to `true`; pinned Codex has no settings-preserving update API, so the installer refuses
+disabled or unknown-enablement replacements (`AB7004`) and leaves those installs unchanged.
+The emitted `INSTALL.md`
 documents the same recipe per host.
 
 The framework CLI derives the artifact-side hash and copy set from
