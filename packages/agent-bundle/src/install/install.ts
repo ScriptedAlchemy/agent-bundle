@@ -669,9 +669,11 @@ const installPublicCli = async (
   // Codex `plugin remove` deletes the `[plugins."<id>"]` subtree in config.toml, including nested
   // MCP overrides. Native `plugin add` refreshes the cache in place and keeps those tables, so
   // replacement is add-only. Native add also resets plugin-level `enabled = false` to `true`.
-  // Pinned Codex has no qualified settings-preserving update API (no expected-version write),
-  // so a replace whose inventory row is disabled or omits `enabled` is refused before any host
-  // verb mutates config. Enable the plugin in Codex, then replace; otherwise leave it unchanged.
+  // The native plugin CLI has no qualified settings-preserving update API (no expected-version
+  // write on plugin add/list/remove). A replace whose inventory row is disabled or omits
+  // `enabled` is refused before any host verb mutates config. Enable the plugin in Codex, then
+  // replace; otherwise leave it unchanged. The list `--json` `enabled` snapshot is not atomic
+  // against a concurrent edit of this same plugin's enabled flag between list and add.
   if (replaced && host === 'codex' && entry?.enabled !== true) {
     const reason = entry?.enabled === false
       ? 'plugin list reports enabled: false'
@@ -679,7 +681,7 @@ const installPublicCli = async (
     throw failure(
       'AB7004',
       `Cannot replace the Codex install of ${id}: ${reason}. ` +
-        'Pinned Codex has no settings-preserving update API, and native `plugin add` resets ' +
+        'The native plugin CLI has no qualified settings-preserving update API, and native `plugin add` resets ' +
         'plugin-level enabled to true. Enable the plugin in Codex before replacing, or leave this install unchanged.',
       host,
     );
