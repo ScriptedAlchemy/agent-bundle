@@ -35,4 +35,5 @@ it('removeTree surfaces a persistent ENOTEMPTY', async () => {
   };
   await expect(removeTree(root, fs)).rejects.toBe(emptyError);
   expect((await stat(root)).isDirectory()).toBe(true);
+  await removeTree(root);
 });
