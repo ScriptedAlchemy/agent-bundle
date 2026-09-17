@@ -169,8 +169,10 @@ location); `uninstall --purge-data --confirm-purge` removes only roots whose rec
 installation owns them. Pre-existing, shared, marker-less, and otherwise unproven override roots
 are retained. Claude replacement runs
 `claude plugin uninstall --keep-data` before reinstalling because `plugin update` is
-version-gated; Codex runs `codex plugin remove` before `add`. The emitted `INSTALL.md` documents
-the same recipe per host.
+version-gated; Codex replacement is add-only (`codex plugin add`) so plugin settings and nested
+MCP overrides in `config.toml` survive — native add resets a plugin-level `enabled = false` to
+`true`, and the installer restores that flag from the prior config. The emitted `INSTALL.md`
+documents the same recipe per host.
 
 The framework CLI derives the artifact-side hash and copy set from
 `agent-bundle.manifest.json` `files[]`, verifies every listed digest, and does not walk the artifact

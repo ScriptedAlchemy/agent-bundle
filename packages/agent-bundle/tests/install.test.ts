@@ -543,7 +543,67 @@ it('fails a Claude install (AB7006) when plugin list --json reports load errors 
   }
 });
 
-it('honours --replace for Codex through remove + add and fails closed without a usable inventory', async () => {
+const codexPluginId = 'install-fixture@install-fixture-marketplace';
+const codexPluginTable = `[plugins.${JSON.stringify(codexPluginId)}]`;
+const codexPluginNestedMcp = `${codexPluginTable}.mcp_servers.grok-bot`;
+
+const writeCodexPluginSettings = async (
+  codexHome: string,
+  pluginEnabled: boolean,
+): Promise<string> => {
+  const config = [
+    'model = "keep-me"',
+    '',
+    codexPluginTable,
+    `enabled = ${pluginEnabled}`,
+    '',
+    codexPluginNestedMcp,
+    'enabled = false',
+    '',
+    '[marketplaces.install-fixture-marketplace]',
+    'source_type = "local"',
+    '',
+  ].join('\n');
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(join(codexHome, 'config.toml'), config);
+  return config;
+};
+
+/**
+ * Native Codex `plugin add` resets plugin-level `enabled` to true and leaves
+ * nested MCP tables in place. `plugin remove` deletes the plugin settings subtree.
+ */
+const applyNativeCodexPluginMutation = async (
+  codexHome: string,
+  verb: 'add' | 'remove',
+): Promise<void> => {
+  const path = join(codexHome, 'config.toml');
+  let config: string;
+  try {
+    config = await readFile(path, 'utf8');
+  } catch {
+    return;
+  }
+  if (verb === 'remove') {
+    const kept: string[] = [];
+    let skipping = false;
+    for (const line of config.split(/\n/u)) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('[')) {
+        skipping = trimmed === codexPluginTable || trimmed.startsWith(`${codexPluginTable}.`);
+      }
+      if (!skipping) kept.push(line);
+    }
+    await writeFile(path, kept.join('\n'));
+    return;
+  }
+  await writeFile(
+    path,
+    config.replace(`${codexPluginTable}\nenabled = false`, `${codexPluginTable}\nenabled = true`),
+  );
+};
+
+it('honours --replace for Codex through add-only and fails closed without a usable inventory', async () => {
   const fixture = await createHostBundle('codex');
   const home = join(fixture.cleanupRoot, 'home');
   const codexHome = join(fixture.cleanupRoot, 'codex-home');
@@ -577,11 +637,11 @@ it('honours --replace for Codex through remove + add and fails closed without a 
       previousContentHash: (await treeInventory(installed)).hash,
       state: 'replaced',
     });
+    // Native remove deletes plugin settings; replacement refreshes through add-only.
     // No receipt yet, so the marketplace ownership read precedes every host verb.
     expect(calls.map((call) => call.args.join(' '))).toEqual([
       'plugin list --json',
       'plugin marketplace list --json',
-      'plugin remove install-fixture@install-fixture-marketplace',
       `plugin marketplace add ${fixture.bundleRoot}`,
       'plugin add install-fixture@install-fixture-marketplace',
     ]);
@@ -599,6 +659,110 @@ it('honours --replace for Codex through remove + add and fails closed without a 
       expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
       expect(unusable.calls).toHaveLength(1);
     }
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('preserves Codex nested MCP overrides and restores plugin-level disabled state across replace', async () => {
+  const fixture = await createHostBundle('codex');
+  const home = join(fixture.cleanupRoot, 'home');
+  const codexHome = join(fixture.cleanupRoot, 'codex-home');
+  const installed = join(codexHome, 'plugins', 'cache', 'install-fixture-marketplace', 'install-fixture', '1.0.0');
+  await cp(fixture.bundleRoot, installed, { recursive: true });
+  const prior = await writeCodexPluginSettings(codexHome, false);
+  const calls: CommandCall[] = [];
+  const runner: InstallCommandRunner = {
+    run: async (command, args, runOptions) => {
+      const call = { args: [...args], command, cwd: runOptions.cwd };
+      calls.push(call);
+      if (isInventoryCall(call)) {
+        return { code: 0, stderr: '', stdout: JSON.stringify({
+          available: [],
+          installed: [{
+            enabled: false,
+            installed: true,
+            marketplaceName: 'install-fixture-marketplace',
+            name: 'install-fixture',
+            pluginId: codexPluginId,
+            version: '1.0.0',
+          }],
+        }) };
+      }
+      if (args[0] === 'plugin' && args[1] === 'add') {
+        await applyNativeCodexPluginMutation(codexHome, 'add');
+      }
+      if (args[0] === 'plugin' && args[1] === 'remove') {
+        await applyNativeCodexPluginMutation(codexHome, 'remove');
+      }
+      return { code: 0, stderr: '', stdout: isMarketplaceListCall(call) ? noMarketplaces(call) : '' };
+    },
+  };
+  try {
+    const replaced = await installBundle({
+      commandRunner: runner,
+      environment: { CODEX_HOME: codexHome },
+      from: fixture.from,
+      home,
+      host: 'codex',
+      replace: true,
+      scope: 'user',
+    });
+    expect(replaced).toMatchObject({ host: 'codex', state: 'replaced' });
+    expect(calls.map((call) => call.args.join(' '))).not.toContain(`plugin remove ${codexPluginId}`);
+    expect(await readFile(join(codexHome, 'config.toml'), 'utf8')).toBe(prior);
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('restores prior Codex plugin settings when add fails during replace', async () => {
+  const fixture = await createHostBundle('codex');
+  const home = join(fixture.cleanupRoot, 'home');
+  const codexHome = join(fixture.cleanupRoot, 'codex-home');
+  const installed = join(codexHome, 'plugins', 'cache', 'install-fixture-marketplace', 'install-fixture', '1.0.0');
+  await cp(fixture.bundleRoot, installed, { recursive: true });
+  const prior = await writeCodexPluginSettings(codexHome, false);
+  const calls: CommandCall[] = [];
+  const runner: InstallCommandRunner = {
+    run: async (command, args, runOptions) => {
+      const call = { args: [...args], command, cwd: runOptions.cwd };
+      calls.push(call);
+      if (isInventoryCall(call)) {
+        return { code: 0, stderr: '', stdout: JSON.stringify({
+          available: [],
+          installed: [{
+            enabled: false,
+            installed: true,
+            marketplaceName: 'install-fixture-marketplace',
+            name: 'install-fixture',
+            pluginId: codexPluginId,
+            version: '1.0.0',
+          }],
+        }) };
+      }
+      if (args[0] === 'plugin' && args[1] === 'add') {
+        await applyNativeCodexPluginMutation(codexHome, 'add');
+        return { code: 1, stderr: 'add exploded', stdout: '' };
+      }
+      return { code: 0, stderr: '', stdout: isMarketplaceListCall(call) ? noMarketplaces(call) : '' };
+    },
+  };
+  try {
+    const failed = await installBundle({
+      commandRunner: runner,
+      environment: { CODEX_HOME: codexHome },
+      from: fixture.from,
+      home,
+      host: 'codex',
+      replace: true,
+      scope: 'user',
+    }).catch((failure: unknown) => failure);
+    expect(failed).toBeInstanceOf(DiagnosticError);
+    expect((failed as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'codex' });
+    expect((failed as DiagnosticError).diagnostics[0]?.message).toContain('add exploded');
+    expect(calls.map((call) => call.args.join(' '))).not.toContain(`plugin remove ${codexPluginId}`);
+    expect(await readFile(join(codexHome, 'config.toml'), 'utf8')).toBe(prior);
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }

@@ -2183,7 +2183,8 @@ it('compares the Codex cache copy against the artifact once plugin list --json n
     });
     const staleDiagnostic = stale.diagnostics.find((entry) => entry.code === 'AB7308');
     expect(staleDiagnostic).toMatchObject({ severity: 'warning', target: 'codex' });
-    expect(staleDiagnostic?.recovery).toContain('codex plugin remove');
+    expect(staleDiagnostic?.recovery).toContain('codex plugin add');
+    expect(staleDiagnostic?.recovery).not.toContain('codex plugin remove');
   } finally {
     await fixture.cleanup();
   }

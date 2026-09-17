@@ -195,8 +195,10 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 The emitted standalone `install.mjs` accepts the same `--replace`. Cursor copies carry an install
 receipt (`.agent-bundle-install.json`), replacement
 touches owned files only, and `--replace` adopts a pre-receipt copy; Claude replacement runs
-`claude plugin uninstall --keep-data` before reinstalling and Codex runs `codex plugin remove`
-before `add`. Every install writes a lifecycle receipt (format `agent-bundle-install-receipt/2`:
+`claude plugin uninstall --keep-data` before reinstalling. Codex replacement is add-only
+(`codex plugin add`) so plugin settings and nested MCP overrides survive; a plugin-level
+`enabled = false` is restored after native add resets it. Every install writes a lifecycle
+receipt (format `agent-bundle-install-receipt/2`:
 version, content hash, mode, scope, owned paths, host registrations, timestamps) — in-tree for
 Cursor and Amp local copies, under `<host root>/agent-bundle/receipts/` for Claude, Codex, and Cursor
 marketplace mode — that `uninstall` and `doctor` consume.

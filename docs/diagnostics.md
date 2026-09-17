@@ -1371,7 +1371,8 @@ this plugin's name — a copy installed before receipts existed), or **foreign**
 `plugin list --json` inventory (Doctor runs it once per host and also lists every
 installed plugin from it; `AB7303` is emitted only when that listing is unusable);
 the host owns those copies, so replacement runs `claude plugin uninstall
---keep-data` + `install` or `codex plugin remove` + `add`.
+--keep-data` + `install` or Codex add-only (`codex plugin add`, preserving
+plugin settings and nested MCP overrides in `config.toml`).
 
 | Installed copy | `install` | `install --replace` (alias `--force`) | Doctor |
 | --- | --- | --- | --- |
