@@ -1,5 +1,5 @@
 ---
-description: '从 pkg.pr.new 预览通道安装 agent-bundle，以及首个 npm 版本发布后会发生什么变化。'
+description: '从 pkg.pr.new 安装 agent-bundle，并将 compiler、runtime 与 scaffolder 固定到同一个 commit。'
 ---
 
 # 安装
@@ -14,8 +14,7 @@ description: '从 pkg.pr.new 预览通道安装 agent-bundle，以及首个 npm 
 
 ## 从预览通道安装
 
-目前尚未向 npm 发布任何内容。这是刻意为之：现有的包名只是占位符，而 npm 上的 `agent-bundle` 这个名字
-当前属于一个无关项目。在首个正式版本发布之前，请安装 CI 为每个 pull request 以及 `main` 最新提交发布的预览包：
+包通过 pkg.pr.new 分发，而不是 npm 注册表。请安装 CI 为每个 pull request 以及 `main` 最新提交发布的预览包：
 
 ```sh
 npm i -D https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@<sha-or-pr>
@@ -39,9 +38,9 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@5685
 内部的这个 peer 范围改写为同一提交构建出的 runtime 精确预览版本，因此配对安装用原生 npm 即可完成。
 混用两个不同的 SHA 会按设计以 `ERESOLVE` 失败——需要检查的范围位于已安装的 `agent-bundle` 包中。
 
-预览脚手架没有 npm 发布配对记录。因此，对需要 runtime 的模板显式传入 `--framework-version` 时，必须使用
-精确的 pkg.pr.new compiler URL，或使用相邻的本地 `agent-bundle.tgz` 与
-`agent-bundle-runtime.tgz`。带版本号的 registry 或本地 tarball 覆盖需要匹配的正式发布脚手架。
+预览脚手架从共享 commit SHA 推导 compiler/runtime 配对。因此，对需要 runtime 的模板显式传入
+`--framework-version` 时，必须使用精确的 pkg.pr.new compiler URL，或使用相邻的本地
+`agent-bundle.tgz` 与 `agent-bundle-runtime.tgz`。
 
 pnpm 与 yarn 接受同样的 URL（`pnpm add <url>`、`yarn add agent-bundle@<url>`）。
 
@@ -73,23 +72,17 @@ to type '5'`）。同一 minor 的两份安装仍能通过类型检查；peer �
 的版本的现有项目，必须先升级该依赖再安装此 runtime，否则 npm 会以 `ERESOLVE` 拒绝所需的
 peer。
 
-## 等到 npm 正式发布之后
+## 固定 Version Packages commit
 
-下面这些命令是**未来**的安装路径。它们现在还不可用，因为尚未发布任何 npm 版本：
+合并 Version Packages 会提升仓库内版本，并通过 pkg.pr.new 发布结果 commit。消费者仍然固定 merge SHA：
 
 ```sh
-npm install --save-dev agent-bundle
-npm create agent-bundle@latest my-plugin
+npm i -D https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@<sha>
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha> my-plugin
 ```
 
-打包后的 `create-agent-bundle` 版本会把兼容的 `agent-bundle` 与 `@agent-bundle/runtime` 版本记录为可选
-peer。`npm create` 会分别固定这两个记录值，而不是把 compiler 版本复制给 runtime 包。例如 compiler
-可以是 `0.2.0`，而对应 runtime 是 `0.1.0`。带 runtime 的模板会拒绝超出该发布配对的
-`--framework-version`；此时应安装与 compiler 匹配的脚手架版本。本地 compiler tarball 会在相邻
-runtime tarball 的文件名中使用记录的 runtime 版本，并在写入项目之前校验两个包的清单。
-
-首个 npm 版本将使用 npm package provenance。在发布负责人确定最终包名与许可证之前，pkg.pr.new 预览
-就是发布通道。
+`@agent-bundle/runtime` 使用相同的 SHA。预览 scaffolder 会自动推导同 SHA 的 compiler 与 runtime
+配对。不需要 npm 注册表凭据。
 
 ## 验证安装
 

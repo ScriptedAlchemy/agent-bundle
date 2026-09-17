@@ -47,7 +47,6 @@
     "test:host-install:session:claude": "pnpm build && AGENT_BUNDLE_HOST_INSTALL_CLAUDE_SESSION=1 pnpm test:host-install:session",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "pnpm check:release && changeset publish",
     "preview:publish": "pkg-pr-new publish --previewVersion --peerDeps --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime' './packages/rsc-markdown-stream' './packages/create-agent-bundle'",
     "pack:dry-run": "pnpm build && npm pack ./packages/agent-bundle --dry-run --json",
     "lint:release": "attw --pack --profile esm-only packages/agent-bundle && attw --pack --profile esm-only packages/rsc-runtime && attw --pack --profile esm-only packages/rsc-markdown-stream && attw --pack --profile esm-only packages/create-agent-bundle && node scripts/check-declaration-imports.mjs --strict packages/agent-bundle packages/rsc-runtime packages/rsc-markdown-stream packages/create-agent-bundle",

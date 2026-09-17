@@ -1,21 +1,13 @@
 # Preview packages (pkg.pr.new)
 
-Nothing is published to npm yet, deliberately: the current package names are
-placeholders, and npm publishing is deferred until the final name is chosen
-(it will then use [npm package provenance](https://docs.npmjs.com/generating-provenance-statements);
-the publish step exports `NPM_CONFIG_PROVENANCE=true` and runs the packed
-release gates before `changeset publish`, and only runs at all when the
-`AGENT_BUNDLE_NPM_PUBLISH` repository variable is `true` — see "How an npm
-release will flow" below). Before enabling that path, the
-release owner must resolve the repository-wide `"access": "restricted"`
-policy for `agent-bundle`, which does not currently override it with
-`publishConfig.access`. Until then
-pkg.pr.new is the release channel. Every CI package-preview run publishes real,
-installable tarballs of all four publishable workspace packages (`agent-bundle`,
+pkg.pr.new is the only package distribution channel. Every CI package-preview
+run publishes real, installable tarballs of all four publishable workspace
+packages (`agent-bundle`,
 `@agent-bundle/runtime`, `rsc-markdown-stream`, `create-agent-bundle`) to
 [pkg.pr.new](https://pkg.pr.new)
 — a free continuous-release registry keyed by commit SHA and pull request.
-These are the packages to install until a first npm release is cut.
+Consumers pin these previews by commit SHA; no npm registry credential is
+needed or expected.
 
 ## Install the latest preview
 
@@ -87,25 +79,20 @@ URL, so `pnpm add` of a preview `@agent-bundle/runtime` fails with
 `blockExoticSubdeps: false` in the consuming project's `pnpm-workspace.yaml`,
 or install previews with npm.
 
-## How an npm release will flow
+## How a Version Packages merge flows
 
 Versioning is driven by Changesets (`.changeset/README.md`). Every PR that
 changes a publishable package carries a `.changeset/*.md`; on each push to
 `main`, `.github/workflows/release.yml` runs `changesets/action`, which keeps
 a machine-owned **Version Packages** pull request up to date with the pending
-bumps and `CHANGELOG.md` entries. Merging that PR versions the packages and
-must leave them on npm: the workflow runs the release gates
-(`pnpm check:release`) against that exact versioned candidate SHA and then
-`scripts/verify-registry-versions.sh`, which fails the job unless every
-publishable `package.json` version resolves with `npm view`. Publishing turns
-on when the repository variable `AGENT_BUNDLE_NPM_PUBLISH` is `true` *and*
-the `NPM_TOKEN` secret exists; the action then runs `pnpm release`
-(`pnpm check:release && changeset publish`) with npm provenance, and the
-registry check runs on every later `main` push too, so a silently failed
-publish is red at the next merge. With publishing disabled, a Version
-Packages merge fails the registry check (`outcome: failed`, **NOT
-PUBLISHED**) instead of reporting green; a push that only refreshes the
-Version Packages PR records `version-maintenance-only`.
+bumps and `CHANGELOG.md` entries. Merging that PR versions the packages. The
+`Release packages` workflow calls the reusable `Package preview` workflow,
+which publishes and resolves all four
+`https://pkg.pr.new/ScriptedAlchemy/agent-bundle/<package>@<sha>` URLs. The
+release job depends on that proof and runs `pnpm check:release` against the
+same Version Packages commit. A green run records `preview-release`; a push
+that only refreshes the Version Packages PR records
+`version-maintenance-only`.
 
 ## Where previews come from
 
@@ -113,11 +100,10 @@ Version Packages PR records `version-maintenance-only`.
 `pnpm preview:publish` (`pkg-pr-new publish --previewVersion --peerDeps
 --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime'
 './packages/rsc-markdown-stream' './packages/create-agent-bundle'`)
-after a full build, on every pull request and on every push to `main`. Runs are
-grouped per PR and per branch with `cancel-in-progress`, so a newer push
-cancels the superseded build: only the latest preview of a PR or of `main`
-matters, and a `main` commit overtaken before its preview published has no
-installable snapshot (pin the tip instead). The "Publish pkg.pr.new preview"
-check on a PR or commit links to the exact URLs for that build. Previews are
-built from the same `pnpm build` output the release gates verify; they are
-not npm releases and carry preview version strings.
+after a full build. Pull requests invoke the workflow directly and cancel a
+superseded run for the same PR. On `main`, the serialized `Release packages`
+workflow calls it as a reusable workflow and waits for all four URLs to
+resolve before continuing. The "Publish pkg.pr.new preview" check on a PR or
+commit links to the exact URLs for that build. Previews are built from the same
+`pnpm build` output the release gates verify; they are not npm releases and
+carry preview version strings.

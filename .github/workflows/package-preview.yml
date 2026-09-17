@@ -2,8 +2,7 @@ name: Package preview
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 permissions: {}
 
@@ -26,3 +25,7 @@ jobs:
           node-version: 22.19.0
       - run: pnpm build
       - run: pnpm preview:publish
+      - name: Verify pkg.pr.new preview artifacts
+        run: >-
+          bash scripts/verify-preview-artifacts.sh
+          "${{ github.event.pull_request.head.sha || github.sha }}"
