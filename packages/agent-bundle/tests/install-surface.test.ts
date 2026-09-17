@@ -1125,7 +1125,7 @@ it('emitted install.mjs refuses a foreign destination that lacks artifact-manife
   }
 });
 
-it('emitted install.mjs refuses a marketplace restage whose staged plugin lacks a newly declared path', async () => {
+it('emitted install.mjs reruns a marketplace stage with unlisted files as already staged and refuses a newly declared path', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-marketplace-restage-'));
   const bundle = join(root, 'bundle');
   const home = join(root, 'home');
@@ -1144,12 +1144,21 @@ it('emitted install.mjs refuses a marketplace restage whose staged plugin lacks 
       writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
       writeFile(join(bundle, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
       writeFile(join(bundle, 'payload.txt'), 'payload\n'),
+      writeFile(join(bundle, 'package.json'), '{ "name": "install-fixture" }\n'),
       writeFile(join(bundle, 'agent-bundle.manifest.json'), manifest([])),
     ]);
 
     const staged = await run(installer, ['--mode', 'marketplace'], home);
     expect(staged).toMatchObject({ code: 0, stderr: '' });
+    expect(staged.stdout).toContain('Staged install-fixture@1.2.3');
     expect(await readFile(join(stagedPlugin, 'payload.txt'), 'utf8')).toBe('payload\n');
+    const commit = /@ ([0-9a-f]{40})/u.exec(staged.stdout)?.[1];
+    expect(commit).toMatch(/^[0-9a-f]{40}$/u);
+
+    const rerun = await run(installer, ['--mode', 'marketplace'], home);
+    expect(rerun).toMatchObject({ code: 0, stderr: '' });
+    expect(rerun.stdout).toContain('Already staged install-fixture@1.2.3');
+    expect(rerun.stdout).toContain(`@ ${commit}`);
 
     await writeFile(join(bundle, 'extra.txt'), 'extra\n');
     await writeFile(join(bundle, 'agent-bundle.manifest.json'), manifest(['extra.txt']));
