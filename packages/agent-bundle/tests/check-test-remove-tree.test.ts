@@ -73,3 +73,43 @@ it('exempts the canonical removeTree helper and formats lint failures', () => {
     'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree.',
   ]);
 });
+
+it('ignores recursive rm text inside comments and string literals', () => {
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    `const sample = 'rm(root, { ${recursiveTrue} })'`,
+  ]))).toEqual([]);
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    `/* rm(root, { ${recursiveTrue} }); */`,
+  ]))).toEqual([]);
+});
+
+it('still flags calls after string urls and rejects commented-out maxRetries', () => {
+  const afterUrl = recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    `const url = "https://example.test"; rm(root, { ${recursiveTrue} });`,
+  ]));
+  expect(afterUrl).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+
+  const commentedRetries = recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    `rm(root, { ${recursiveTrue} /* maxRetries: 5 */ });`,
+  ]));
+  expect(commentedRetries).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+});
+
+it('matches $-suffixed removal aliases literally', () => {
+  const dollars = recursiveRmCalls(sample([
+    "import { rm as remove$ } from 'node:fs/promises';",
+    `await remove$(root, { ${recursiveTrue} })`,
+  ]));
+  expect(dollars).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+  expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', sample([
+    "import { rm as remove$ } from 'node:fs/promises';",
+    `await remove$(root, { ${recursiveTrue} })`,
+  ]))).toEqual([
+    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree.',
+  ]);
+});

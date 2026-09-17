@@ -4,6 +4,10 @@
  *
  * Catches bare `rm(`, aliased `import { rm as remove }` calls, and `ns.rm(` when
  * `ns` is a namespace/default import from node:fs, fs, or their /promises forms.
+ *
+ * Call and option detection is syntax-aware: comments and string/template contents
+ * are masked before matching, imported names are matched as literals (including `$`),
+ * and `recursive` / `maxRetries` are read from actual options-object properties.
  */
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -21,6 +25,10 @@ const nodeFsSpecifier = /^(?:node:)?fs(?:\/promises)?$/u;
 
 const isRemoveTreeHelper = (file) => /(?:^|\/)remove-tree\.ts$/u.test(file.replaceAll('\\', '/'));
 
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+
+const isIdentPart = (char) => char !== undefined && /[\w$]/u.test(char);
+
 const walk = async (directory, files) => {
   let entries;
   try {
@@ -36,29 +44,78 @@ const walk = async (directory, files) => {
   }
 };
 
-const lineCommentAt = (text, index) => {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const char = text[cursor];
-    if (char === '\n') return false;
-    if (char === '/' && text[cursor - 1] === '/') return true;
+/**
+ * Replace comments and string/template contents with spaces so call/property
+ * scans see only code tokens. Length and newlines are preserved for line numbers.
+ */
+export const maskCommentsAndStrings = (text) => {
+  let result = '';
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === '/' && text[index + 1] === '/') {
+      while (index < text.length && text[index] !== '\n') {
+        result += ' ';
+        index += 1;
+      }
+      continue;
+    }
+    if (char === '/' && text[index + 1] === '*') {
+      result += '  ';
+      index += 2;
+      while (index < text.length) {
+        if (text[index] === '\n') {
+          result += '\n';
+          index += 1;
+          continue;
+        }
+        if (text[index] === '*' && text[index + 1] === '/') {
+          result += '  ';
+          index += 2;
+          break;
+        }
+        result += ' ';
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      const quote = char;
+      result += ' ';
+      index += 1;
+      while (index < text.length) {
+        if (text[index] === '\\') {
+          result += '  ';
+          index += 2;
+          continue;
+        }
+        if (text[index] === '\n') {
+          result += '\n';
+          index += 1;
+          continue;
+        }
+        if (text[index] === quote) {
+          result += ' ';
+          index += 1;
+          break;
+        }
+        result += ' ';
+        index += 1;
+      }
+      continue;
+    }
+    result += char;
+    index += 1;
   }
-  return false;
+  return result;
 };
 
 const sliceCall = (text, openParenIndex) => {
   let depth = 1;
-  let inString = null;
   let index = openParenIndex + 1;
   while (index < text.length && depth > 0) {
     const char = text[index];
-    if (inString !== null) {
-      if (char === '\\') {
-        index += 2;
-        continue;
-      }
-      if (char === inString) inString = null;
-    } else if (char === "'" || char === '"' || char === String.fromCharCode(96)) inString = char;
-    else if (char === '(') depth += 1;
+    if (char === '(') depth += 1;
     else if (char === ')') depth -= 1;
     index += 1;
   }
@@ -102,41 +159,56 @@ export const removalBindings = (text) => {
   return { bareNames, namespaceNames };
 };
 
-const pushRecursiveCall = (calls, text, startIndex, openParenIndex) => {
-  if (lineCommentAt(text, startIndex)) return;
-  const { call } = sliceCall(text.slice(startIndex), openParenIndex - startIndex);
-  if (!/recursive\s*:\s*true/u.test(call)) return;
+/**
+ * Options flags from the call's object-literal properties (code already masked).
+ * Matches property keys, not comment/string text that previously looked like them.
+ */
+const optionsFlags = (call) => ({
+  recursive: /(?:^|[,{\s])recursive\s*:\s*true\b/u.test(call),
+  hasRetries: /(?:^|[,{\s])maxRetries\s*:/u.test(call),
+});
+
+const pushRecursiveCall = (calls, code, startIndex, openParenIndex) => {
+  const { call } = sliceCall(code.slice(startIndex), openParenIndex - startIndex);
+  const flags = optionsFlags(call);
+  if (!flags.recursive) return;
   calls.push({
     call,
-    hasRetries: /maxRetries\s*:/u.test(call),
-    line: text.slice(0, startIndex).split('\n').length,
+    hasRetries: flags.hasRetries,
+    line: code.slice(0, startIndex).split('\n').length,
   });
 };
 
 export const recursiveRmCalls = (text) => {
   const { bareNames, namespaceNames } = removalBindings(text);
+  const code = maskCommentsAndStrings(text);
   const calls = [];
 
   for (const name of bareNames) {
-    const pattern = new RegExp(`\\b${name}\\s*\\(`, 'gu');
-    let match = pattern.exec(text);
+    const pattern = new RegExp(`${escapeRegExp(name)}\\s*\\(`, 'gu');
+    let match = pattern.exec(code);
     while (match !== null) {
-      const before = text[match.index - 1];
-      if (before === '.' || before === '$') {
-        match = pattern.exec(text);
+      const before = code[match.index - 1];
+      if (isIdentPart(before) || before === '.') {
+        match = pattern.exec(code);
         continue;
       }
-      pushRecursiveCall(calls, text, match.index, match.index + match[0].length - 1);
-      match = pattern.exec(text);
+      pushRecursiveCall(calls, code, match.index, match.index + match[0].length - 1);
+      match = pattern.exec(code);
     }
   }
 
   for (const namespace of namespaceNames) {
-    const pattern = new RegExp(`\\b${namespace}\\s*\\.\\s*rm\\s*\\(`, 'gu');
-    let match = pattern.exec(text);
+    const pattern = new RegExp(`${escapeRegExp(namespace)}\\s*\\.\\s*rm\\s*\\(`, 'gu');
+    let match = pattern.exec(code);
     while (match !== null) {
-      pushRecursiveCall(calls, text, match.index, match.index + match[0].length - 1);
-      match = pattern.exec(text);
+      const before = code[match.index - 1];
+      if (isIdentPart(before) || before === '.') {
+        match = pattern.exec(code);
+        continue;
+      }
+      pushRecursiveCall(calls, code, match.index, match.index + match[0].length - 1);
+      match = pattern.exec(code);
     }
   }
 
