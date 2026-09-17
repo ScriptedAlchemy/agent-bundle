@@ -8,9 +8,12 @@
  * Call, option, and import-binding detection is parser-backed (typescript-5):
  * only real node:fs(/promises) ImportDeclaration bindings count, only Node-bound
  * call expressions are considered, and `recursive` / `maxRetries` are read from
- * the second argument's object-literal properties (including quoted keys). Nested
+ * the second argument's object-literal properties (including quoted keys,
+ * shorthand `maxRetries`, and Parenthesized / As / Satisfies wrappers). Nested
  * objects in the path argument, member calls, comments, strings, regexes, and
  * template substitutions are handled by the AST rather than text masking.
+ * Named `promises` rebinds from `fs` / `node:fs` count as `.rm` carriers.
+ * A later local binding that shadows an import is not treated as Node-bound.
  */
 import { createRequire } from 'node:module';
 import { readdir, readFile } from 'node:fs/promises';
@@ -49,7 +52,7 @@ const walk = async (directory, files) => {
 };
 
 /**
- * Named/aliased rm bindings and namespace/default bindings that expose .rm.
+ * Named/aliased rm bindings and namespace/default/`promises` bindings that expose .rm.
  * Import bindings are collected from the TypeScript AST so comments and local
  * identifiers cannot forge Node fs.rm bindings.
  */
@@ -87,15 +90,20 @@ export const removalBindings = (text, fileName = 'bindings.ts') => {
     }
 
     if (!ts.isNamedImports(bindings)) continue;
+    const isFsRoot = /^(?:node:)?fs$/u.test(statement.moduleSpecifier.text);
     for (const element of bindings.elements) {
       if (element.isTypeOnly) continue;
-      if (element.propertyName !== undefined) {
-        if (element.propertyName.text !== 'rm') continue;
-        bareNames.add(element.name.text);
+      const importedName = element.propertyName === undefined
+        ? element.name.text
+        : element.propertyName.text;
+      const localName = element.name.text;
+      if (importedName === 'rm') {
+        bareNames.add(localName);
         continue;
       }
-      if (element.name.text !== 'rm') continue;
-      bareNames.add('rm');
+      if (importedName === 'promises' && isFsRoot) {
+        namespaceNames.add(localName);
+      }
     }
   }
 
@@ -108,14 +116,102 @@ const propertyName = (name) => {
   return undefined;
 };
 
+const unwrapExpression = (node) => {
+  let current = node;
+  while (current !== undefined) {
+    if (
+      ts.isParenthesizedExpression(current)
+      || ts.isAsExpression(current)
+      || ts.isSatisfiesExpression(current)
+      || ts.isTypeAssertionExpression(current)
+    ) {
+      current = current.expression;
+      continue;
+    }
+    break;
+  }
+  return current;
+};
+
+const declarationNameIs = (nameNode, name) => {
+  if (ts.isIdentifier(nameNode)) return nameNode.text === name;
+  if (ts.isObjectBindingPattern(nameNode) || ts.isArrayBindingPattern(nameNode)) {
+    return nameNode.elements.some((element) => {
+      if (ts.isOmittedExpression(element) || ts.isIdentifier(element)) {
+        return ts.isIdentifier(element) && element.text === name;
+      }
+      return ts.isBindingElement(element) && declarationNameIs(element.name, name);
+    });
+  }
+  return false;
+};
+
+const statementDeclares = (statement, name) => {
+  if (ts.isVariableStatement(statement)) {
+    return statement.declarationList.declarations.some((decl) => declarationNameIs(decl.name, name));
+  }
+  if (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) {
+    return statement.name !== undefined && statement.name.text === name;
+  }
+  return false;
+};
+
+const functionLikeDeclares = (node, name) => {
+  if (
+    !(
+      ts.isFunctionDeclaration(node)
+      || ts.isFunctionExpression(node)
+      || ts.isArrowFunction(node)
+      || ts.isMethodDeclaration(node)
+      || ts.isConstructorDeclaration(node)
+    )
+  ) {
+    return false;
+  }
+  if (ts.isFunctionDeclaration(node) && node.name !== undefined && node.name.text === name) {
+    return true;
+  }
+  return node.parameters.some((parameter) => declarationNameIs(parameter.name, name));
+};
+
+/** True when a later/inner local binding hides the Node fs import of `name`. */
+const identifierIsLocallyShadowed = (identifier) => {
+  const name = identifier.text;
+  let current = identifier.parent;
+  while (current !== undefined) {
+    if (ts.isSourceFile(current) || ts.isBlock(current) || ts.isModuleBlock(current)) {
+      const shadowed = current.statements.some((statement) => {
+        if (ts.isSourceFile(current) && ts.isImportDeclaration(statement)) return false;
+        return statementDeclares(statement, name);
+      });
+      if (shadowed) return true;
+    }
+    if (functionLikeDeclares(current, name)) return true;
+    if (
+      ts.isCatchClause(current)
+      && current.variableDeclaration !== undefined
+      && declarationNameIs(current.variableDeclaration.name, name)
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+};
+
 /** Options flags from a call's second-argument object literal only. */
 const optionsFlags = (optionsArg) => {
-  if (optionsArg === undefined || !ts.isObjectLiteralExpression(optionsArg)) {
+  const unwrapped = unwrapExpression(optionsArg);
+  if (unwrapped === undefined || !ts.isObjectLiteralExpression(unwrapped)) {
     return { recursive: false, hasRetries: false };
   }
   let recursive = false;
   let hasRetries = false;
-  for (const property of optionsArg.properties) {
+  for (const property of unwrapped.properties) {
+    if (ts.isShorthandPropertyAssignment(property)) {
+      if (property.name.text === 'maxRetries') hasRetries = true;
+      continue;
+    }
     if (!ts.isPropertyAssignment(property)) continue;
     const key = propertyName(property.name);
     if (key === 'recursive' && property.initializer.kind === ts.SyntaxKind.TrueKeyword) {
@@ -127,14 +223,17 @@ const optionsFlags = (optionsArg) => {
 };
 
 const isNodeBoundRmCall = (expression, bareNames, namespaceNames) => {
-  if (ts.isIdentifier(expression)) return bareNames.has(expression.text);
+  if (ts.isIdentifier(expression)) {
+    return bareNames.has(expression.text) && !identifierIsLocallyShadowed(expression);
+  }
   if (
     ts.isPropertyAccessExpression(expression)
     && !expression.questionDotToken
     && expression.name.text === 'rm'
     && ts.isIdentifier(expression.expression)
   ) {
-    return namespaceNames.has(expression.expression.text);
+    return namespaceNames.has(expression.expression.text)
+      && !identifierIsLocallyShadowed(expression.expression);
   }
   return false;
 };
