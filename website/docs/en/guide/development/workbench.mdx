@@ -5,7 +5,7 @@ description: 'Explore, invoke, render, trace, and diagnose an agent-bundle appli
 # Developer Workbench
 
 `agent-bundle dev` serves a prebuilt developer Workbench over loopback. It is the place to look
-at what the compiler actually emitted — per host, per epoch — and to run the emitted wrappers
+at what the compiler actually emitted, per host, per epoch, and to run the emitted wrappers
 instead of trusting that a green build implies a working plugin.
 
 ```sh
@@ -30,13 +30,13 @@ These are contracts, not defaults:
 
 The primary navigation has five destinations:
 
-- **Application** — the compiled application tree and the workspace for its selected leaf.
-- **Trace** — the correlated timeline of application activity observed in this foreground
+- **Application**: the compiled application tree and the workspace for its selected leaf.
+- **Trace**: the correlated timeline of application activity observed in this foreground
   development session.
-- **Host sessions** — explicit Claude Code and Codex terminals attached to the current dev
+- **Host sessions**: explicit Claude Code and Codex terminals attached to the current dev
   plugin.
-- **Problems** — current compiler, runtime, and contract diagnostics.
-- **Advanced** — Evals, Artifact, Protocol, Host diagnostics, and Raw logs.
+- **Problems**: current compiler, runtime, and contract diagnostics.
+- **Advanced**: Evals, Artifact, Protocol, Host diagnostics, and Raw logs.
 
 The header stays visible across them. It shows the project name, build state and epoch,
 contract-gate and diagnostic failure count (linked to Problems), and foreground connection
@@ -112,17 +112,17 @@ to rerun its epoch-bound input; there is no separate lifecycle destination.
 
 An App leaf places the sandboxed MCP App preview in the center of the workspace, bound to its
 server. Its **Launch** selector lists the launches the dev server judges eligible for that
-server on the published build — the declared targets grouped by launch identity, with installed
-hosts consulted — and the session opens with the chosen launch's representative target, so a
+server on the published build, the declared targets grouped by launch identity, with installed
+hosts consulted, and the session opens with the chosen launch's representative target, so a
 target the build declares but no host can launch is never offered. Calling a tool mounts the
 preview at once: the App receives `ui/notifications/tool-input` while the call is in flight, then
-exactly one terminal outcome — the tool result (including an `isError` result) as
+exactly one terminal outcome, the tool result (including an `isError` result) as
 `ui/notifications/tool-result`, or `ui/notifications/tool-cancelled` when **Cancel call** aborts
 it. A late outcome for a call the workspace no longer shows is dropped rather than delivered to a
 newer preview. A bound App can also be reached from its tool's projection details. The same host stack
 serves one App standalone in a plain browser tab through `agent-bundle serve-app`; when the
 project configures [`web`](../../reference/configuration.mdx#web), `agent-bundle dev` also serves
-`GET /web/<server>/<app>` on the foreground server — the same page, relay, routes, sandbox proxy,
+`GET /web/<server>/<app>` on the foreground server, the same page, relay, routes, sandbox proxy,
 and consent behavior, bound to the current epoch's server session. Apps not listed in `web.apps`
 are 404. The launch resolves from the artifact's declared projections (`?target=` is validated,
 and materially different launches answer 409 naming the choices), web sessions are keyed by
@@ -248,7 +248,7 @@ receipt file; simulations receive the pair directly from the foreground server, 
 removes the file. The write-only route rejects a non-loopback peer and any request with an
 `Origin` header; neither the Workbench cookie nor its session header authorizes it. A receipt
 contains execution identity, payload-free kernel events, host/session/request ids, and resolved
-lineage — never the native hook payload. Posting has a 750 ms budget and failure is ignored, so
+lineage, never the native hook payload. Posting has a 750 ms budget and failure is ignored, so
 Workbench observation cannot change the hook result. Because the wrapper awaits that post after
 writing stdout, the same 750 ms timeout bounds added hook exit latency. This is narrow
 authenticated telemetry, not a remote-control or general-purpose ingestion endpoint.
@@ -386,18 +386,18 @@ projections, diagnostics, and execution timings. Render events are retained unde
 render-history window, applied identically to the live stream replay, the completed and
 cancelled envelopes, `GET /api/routes/invocations/<id>`, the `final` stream message, and the
 Workbench's live view: at most 256 events and 2 MiB serialized, with the newest event
-and the newest document-bearing event (`shell`, `replace`, or `complete`) always kept — those two
-alone may carry the window past 2 MiB — so `events` folds to a coherent latest document even
+and the newest document-bearing event (`shell`, `replace`, or `complete`) always kept. Those two
+alone may carry the window past 2 MiB, so `events` folds to a coherent latest document even
 after eviction. Older intermediate events are dropped; the child never returns the stream a
-second time. When anything was evicted the envelope carries `retention` — `producedEvents`,
-`evictedEvents`, `evictedBytes`, and `retainedBytes` — and the stream signals `truncated` once. A
+second time. When anything was evicted the envelope carries `retention`, `producedEvents`,
+`evictedEvents`, `evictedBytes`, and `retainedBytes`, and the stream signals `truncated` once. A
 cancelled or failed run keeps the same retained window and the latest document it reached. The
 final `document`, `result`, `outcome`, and `correlationId` are never truncated by this window;
 the runtime's own `maxDocumentBytes` bounds the document before it reaches the service. When the worker reports observations,
 `providers` contains only providers it selected and reports each as `mounted` or `failed`;
 unselected catalog providers are absent. A `durationMs` appears only when measured. When the
-child reports no observations — a plain script, a handler short-circuit, or a failure before
-observations began — every catalog provider is `unobserved` and `durationMs` is omitted; `0` is
+child reports no observations, a plain script, a handler short-circuit, or a failure before
+observations began, every catalog provider is `unobserved` and `durationMs` is omitted; `0` is
 a measured zero, not "unknown". `timings` lists only measured phases: `render` (the child's
 render or script-run duration), `projection` (host-projection time in the service), and, when
 observed, `handler`, `providers`, and `provider:<name>`. A failed invocation records an
@@ -428,7 +428,7 @@ reported as plain success.
 | `status` | `cancelled` | The operator cancelled a running or queued invocation; no `outcome` is present. |
 | `outcome` | `{ kind: "success" }` | The projected result is a success by the route's surface. |
 | `outcome` | `{ kind: "represented-error", summary }` | The MCP projection carries `isError: true` (a non-`success` Agent Document, such as `Agent.Error`), or an event route's decision is `deny`. `summary` lists the `Agent.Error` codes and messages, or the deny reason. |
-| `outcome` | `{ kind: "process-exit", exitCode }` | A CLI or script route completed and its generated executable set a non-zero exit code — the bin's own `exitCode` policy applied to the validated result, or `1` for a non-`success` document. A zero exit reports `success`. |
+| `outcome` | `{ kind: "process-exit", exitCode }` | A CLI or script route completed and its generated executable set a non-zero exit code, the bin's own `exitCode` policy applied to the validated result, or `1` for a non-`success` document. A zero exit reports `success`. |
 
 The Workbench status line shows the execution status (`Running` / `Completed` / `Failed` /
 `Cancelled`) beside an outcome
@@ -575,24 +575,24 @@ allowlist `http://localhost:3001` in Terminal A instead. Whenever `AGENT_BUNDLE_
 is set, `packages/workbench/rsbuild.config.ts` also sets `server.strictPort: true`, so a busy port
 `3000` fails loudly instead of Rsbuild silently moving the UI to a port that is not allowlisted.
 
-**What is proxied.** Only `/api` — every typed Workbench client route plus the
-`/api/project/events` SSE stream — is forwarded to the foreground server. The HTML document, the
+**What is proxied.** Only `/api`, every typed Workbench client route plus the
+`/api/project/events` SSE stream, is forwarded to the foreground server. The HTML document, the
 JavaScript and CSS, and the HMR websocket come from the Rsbuild server. MCP App preview and runtime
 client-surface iframes are bound to the foreground origin: the App sandbox exchanges `postMessage`
 frames only with the foreground URL, and runtime client surfaces set their `frame-ancestors` CSP to
-it. They are not covered by this loop — open the foreground URL itself (`http://127.0.0.1:3100`
+it. They are not covered by this loop, open the foreground URL itself (`http://127.0.0.1:3100`
 above) to work on those pages.
 
 **The origin rule.** The proxy never rewrites `Origin` (Rsbuild's `changeOrigin` rewrites only
-`Host`), so whenever the browser sends `Origin` — on every mutation — the foreground server sees
+`Host`), so whenever the browser sends `Origin`, on every mutation, the foreground server sees
 `Origin: http://localhost:3000`, not its own.
 `--workbench-dev-origin <origin>` (repeatable; `startDevServer({ workbenchDevOrigins })`
 programmatically) makes it accept session bootstrap (`GET /api/project/session`), mutation
 (`POST`/`DELETE` with the `x-agent-bundle-session` token), and project-event stream
 (`GET /api/project/events`, session cookie) requests whose `Origin` is one of the listed origins,
 in addition to its own origin. Every other origin is still `AB8003`, and the Agent API origin rule
-on `/mcp` is unchanged. Each value must be a bare loopback `http:` or `https:` origin —
-`localhost`, `127.0.0.1`, or `[::1]`, such as `http://localhost:3000`, with no path — otherwise
+on `/mcp` is unchanged. Each value must be a bare loopback `http:` or `https:` origin,
+`localhost`, `127.0.0.1`, or `[::1]`, such as `http://localhost:3000`, with no path, otherwise
 the foreground server refuses to start (`agent-bundle dev` exits before serving anything;
 `startDevServer` rejects with code `AB8000`). `GET /api/project/session` additionally returns
 `devOrigins: [...]` when the list is non-empty (`origin` in that body remains the foreground
@@ -601,19 +601,19 @@ or is listed in `devOrigins`. Without the flag the guard is byte-for-byte unchan
 allowlist is never on by default.
 
 The `Origin` guard defends the loopback foreground server against request forgery from any other
-origin, including other loopback origins — MCP App sandbox iframes run third-party plugin code on
+origin, including other loopback origins, MCP App sandbox iframes run third-party plugin code on
 separate loopback ports, and Rsbuild's development server admits every loopback origin through its
-default CORS policy — so the allowlist names exactly your own Rsbuild origin, and the foreground
+default CORS policy, so the allowlist names exactly your own Rsbuild origin, and the foreground
 still sees the browser's real `Origin`.
 
 Without `--workbench-dev-origin`, the UI at `http://localhost:3000` refuses its own bootstrap as
 `AB8003` (the session body names the foreground origin, not the page's) and stays on the
-"Foreground connection unavailable" gate, reporting `AB8003 — Origin http://localhost:3000 is not
+"Foreground connection unavailable" gate, reporting `AB8003, Origin http://localhost:3000 is not
 allowed by the foreground server at http://127.0.0.1:3100. Open http://127.0.0.1:3100 instead, or
 start agent-bundle dev with --workbench-dev-origin http://localhost:3000 to allow this origin.`
-The gate appends `(HTTP <status>)` only when the foreground response itself failed — a 403
-`AB8003` from the foreground renders as `AB8003 — Request origin is not this foreground server.
-(HTTP 403)` — so the no-flag line carries no status: the foreground answered 200 and the UI
+The gate appends `(HTTP <status>)` only when the foreground response itself failed, a 403
+`AB8003` from the foreground renders as `AB8003, Request origin is not this foreground server.
+(HTTP 403)`, so the no-flag line carries no status: the foreground answered 200 and the UI
 refused the body. Restarting the foreground without the flag while the page is open ends on the same
 status-less `AB8003 — Origin …` line: the gate first reports `Foreground project event stream
 disconnected.`, then the refusal once the reconnect's own 200 bootstrap is turned away by the UI. The
@@ -630,5 +630,5 @@ that `Origin` with `AB8003`. The foreground URL keeps working regardless.
 
 ## Next
 
-- [Testing](./testing.mdx) — the proof levels behind the surfaces the Workbench exercises.
-- [Evaluations](./evaluations.mdx) — eval runs and comparisons under Advanced.
+- [Testing](./testing.mdx): the proof levels behind the surfaces the Workbench exercises.
+- [Evaluations](./evaluations.mdx): eval runs and comparisons under Advanced.

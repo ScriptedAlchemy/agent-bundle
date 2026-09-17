@@ -12,14 +12,14 @@ description: '生成式 agent-bundle 可执行文件的运行时契约：Node.js
 
 ## 宿主路径 token
 
-生成的文档通过各宿主会替换的那个 token 引用插件根目录——即每个所选宿主都加载的组合根目录——编译器把
+生成的文档通过各宿主会替换的那个 token 引用插件根目录，即每个所选宿主都加载的组合根目录，编译器把
 正确的拼写写进各宿主自己的文档，而不是假定只有一种：
 
 | 宿主 | 插件根 | 插件数据 |
 | --- | --- | --- |
 | Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
-| Cursor | `${CURSOR_PLUGIN_ROOT}` | — （拒绝：没有文档化的宿主等价物） |
-| Codex | `${PLUGIN_ROOT}`（仅钩子命令） | — （拒绝：没有文档化的宿主等价物） |
+| Cursor | `${CURSOR_PLUGIN_ROOT}` | ， （拒绝：没有文档化的宿主等价物） |
+| Codex | `${PLUGIN_ROOT}`（仅钩子命令） | ， （拒绝：没有文档化的宿主等价物） |
 | portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
 
 替换是**按位置的，而不是全局的**。Codex 的 `${PLUGIN_ROOT}` 只是其生成的钩子命令的命令根，别无他用：
@@ -27,7 +27,7 @@ Codex 的 MCP 运行时不插值任何路径 token，因此 MCP `command`、`arg
 只有在位于取值开头、且该服务器的 `cwd` 就是插件根时才被接受，此时编译器会把它改写为 `cwd: "./"`
 之下的 `./` 相对路径；嵌在中间的 token、缺少该 `cwd` 的 token，以及任何插件数据或工作区根 token
 都是构建错误。Claude Code 只在 Skill 与 agent 内容、钩子与 monitor 命令、MCP 服务器
-以及 LSP 服务器中替换 `${CLAUDE_PLUGIN_ROOT}` 及其同类——绝不在 `settings.json` 中替换，这正是
+以及 LSP 服务器中替换 `${CLAUDE_PLUGIN_ROOT}` 及其同类，绝不在 `settings.json` 中替换，这正是
 `claude.settings` 直接拒绝路径 token 的原因。Cursor 被固定的加载器有自己的可替换字段表，位于该表之外的
 token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
@@ -35,7 +35,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 | 变量 | 由谁读取 | 含义 |
 | --- | --- | --- |
-| `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件代码根目录——即组合插件根目录，存放宿主清单、`mcp/`、`hooks/` 与 `bin/` 的那个目录。覆盖内置的回退值；以 `(await agent()).plugin.value.root`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
+| `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件代码根目录，即组合插件根目录，存放宿主清单、`mcp/`、`hooks/` 与 `bin/` 的那个目录。覆盖内置的回退值；以 `(await agent()).plugin.value.root`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
 | `AGENT_BUNDLE_STATE_ROOT` | 生成式可执行文件 | 框架状态根目录：SQLite 状态内核、通知账本与 lineage 日志所在的确切目录。覆盖推导出的位置。未展开的 `${…}` token 视为未设置。 |
 | `XDG_STATE_HOME` | 生成式可执行文件 | 设置为绝对路径时（相对值按 base-directory 规范忽略），推导出的状态根目录为 `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`，而不是 `~/.agent-bundle/state/<plugin>-<digest>`。 |
 | `AGENT_BUNDLE_ENV_FILE` | 生成式可执行文件 | 已安装包在启动时改为读取的操作者 env 文件：一个路径，或以平台路径分隔符连接的多个路径（后者胜出），代替 `<插件根目录>/.env` 与 `.env.local`；`none` 关闭这一层。`mcp run` 会根据 `--env-file` / `--no-env` 为其子进程设置它。 |
@@ -60,8 +60,8 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 2. **`.env` 文件层**。
 3. 操作者真实的 `process.env`，因此已导出的变量总是胜出。
 
-`.env` 层是项目根目录下（运行时称之为工作区根目录）Rsbuild 的约定集合 —— `.env`、`.env.local`、
-`.env.<mode>`、`.env.<mode>.local` —— 除非 `--env-file <path>` 用你指定的那些文件替换它，或者
+`.env` 层是项目根目录下（运行时称之为工作区根目录）Rsbuild 的约定集合 ， `.env`、`.env.local`、
+`.env.<mode>`、`.env.<mode>.local` ， 除非 `--env-file <path>` 用你指定的那些文件替换它，或者
 `--no-env` 把它移除。
 这两个标志互斥。文件被读入一个临时对象，因此真实的 `process.env` 绝不会被改动。
 
@@ -69,7 +69,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 宿主直接启动已安装的包，因此包自己的外壳会自行应用同一层：stdio MCP 入口、运行插件代码的 hook 包装器
 以及产物 CLI `bin/<name>.mjs` 在启动时读取 `<插件根目录>/.env` 再读取 `.env.local`（或
-`AGENT_BUNDLE_ENV_FILE` 指定的文件），只填补宿主未设置的变量——导出的变量胜出，宿主透传的清单 `env`
+`AGENT_BUNDLE_ENV_FILE` 指定的文件），只填补宿主未设置的变量，导出的变量胜出，宿主透传的清单 `env`
 默认值让位于文件（stdio 入口随行携带其服务器声明的 `env` 块以区分二者），`.env.local` 胜过 `.env`，取值
 永不记录，文件缺失没有开销，无法读取则跳过。这一层在服务器、处理器、路由、provider 与 state 模块求值之前
 应用，因此模块顶层的 `process.env` 读取也能看到它。插件根目录在宿主设置了
@@ -81,7 +81,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 ## 持久状态
 
-已安装产物——MCP 入口、Flight worker、产物 CLI bin、渲染 worker 与独立 hook 包装器——把框架状态根目录
+已安装产物，MCP 入口、Flight worker、产物 CLI bin、渲染 worker 与独立 hook 包装器，把框架状态根目录
 推导为 `~/.agent-bundle/state/<plugin>-<digest>`。`<plugin>` 是代码根目录的 basename，当它不是安全
 路径段时则为 `plugin`；`<digest>` 是代码根目录真实路径的 SHA-256 摘要的前 16 位十六进制字符。因此两次
 安装绝不会共享状态，只读安装也能启动。`XDG_STATE_HOME` 按上表把推导位置挪走，`AGENT_BUNDLE_STATE_ROOT`
@@ -89,15 +89,15 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 只有 `workspace-durable` 状态定义使用 SQLite 驱动；其他生命期使用内存驱动，
 不在磁盘上留下任何东西。每个生成的进程只解析代码根目录与状态根目录一次（`@agent-bundle/runtime` 的
-`resolvePluginRoot`），并以 `(await agent()).plugin` 发布——`{ root, stateRoot }`——因此把自己的文件
+`resolvePluginRoot`），并以 `(await agent()).plugin` 发布，`{ root, stateRoot }`，因此把自己的文件
 放在框架状态旁边的路由或 provider 读取 `plugin.value.stateRoot` 即可，不必再自行推导路径。
 
 在 `mcp run` 之下，**env 取值**中的 plugin-root 锚点默认展开到项目根目录，而不是产物：在那里产物只是
 一个临时构建产物，把持久状态锚定其上会让状态在每次重建时被割裂。若要按字节忠实地演练一次「复制产物后
-启动」，请传入指向产物根目录本身——组合插件根目录，而不是某个宿主子目录——的 `--plugin-root <path>`。
+启动」，请传入指向产物根目录本身，组合插件根目录，而不是某个宿主子目录，的 `--plugin-root <path>`。
 除非 `AGENT_BUNDLE_STATE_ROOT` 指定了位置，状态根目录随后从展开后的代码根目录推导
 （`~/.agent-bundle/state/<project>-<digest>`）。由 `agent-bundle dev` 启动的 Workbench MCP 会话与
-Workbench 路由调用会把 `AGENT_BUNDLE_STATE_ROOT` 固定为 `<project>/.agent-bundle/state`——每个项目
+Workbench 路由调用会把 `AGENT_BUNDLE_STATE_ROOT` 固定为 `<project>/.agent-bundle/state`，每个项目
 一个状态根，位于构建 epoch 旁边而非其内部，因此能跨重新发布与 epoch retirement 保留，也不会在每次重建
 时多出一个用户数据目录。warm dev runtime 本身不会设置该变量。
 
@@ -109,5 +109,5 @@ Workbench 路由调用会把 `AGENT_BUNDLE_STATE_ROOT` 固定为 `<project>/.age
 
 ## 下一步
 
-- [安全](./security.mdx) —— 这些进程周围的凭据与网络边界。
-- [命令行](./cli.mdx) —— 上文引用的那些标志。
+- [安全](./security.mdx) ， 这些进程周围的凭据与网络边界。
+- [命令行](./cli.mdx) ， 上文引用的那些标志。

@@ -20,7 +20,7 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 
 `agent-bundle.manifest.json` 为每个输出文件记录一份 SHA-256 摘要，包括被复制的脚本与资源。产物校验
 把真实字节与这些摘要比对，因此被手工改过的生成文件会失败，而不会因为路径还在就通过。被引用的文件同样
-会被检查——清单声明的 `logo` 若在产物中缺失或逃逸出部署树，会报告 `AB6025`。已列入清单的编译证据记录若
+会被检查，清单声明的 `logo` 若在产物中缺失或逃逸出部署树，会报告 `AB6025`。已列入清单的编译证据记录若
 与清单文件表不一致，会报告 `AB6039`。
 
 自包含性由编译过程的 externals 证据证明（在编译期报告 `AB6005`）。编译器服务会降低每个宿主包表面、
@@ -33,14 +33,14 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 因此它既不会被打包，也不算外部模块。
 
 已输出模块的遍历仍留在这份编译器证据之后，只负责编译器看不见的部分。它把每个已输出的 `.js`/`.mjs`
-模块按 ES 模块读取，并在其中任何一个——包括编译产物——里出现表达式 `import()` 时失败
-（`AB6005 has a non-literal dynamic import`）。被编译证据记录证明的模块——记录以相同字节覆盖的清单
-`bundle` 文件，且构建未使用 [`tools` 逃生舱](../../reference/configuration.mdx#tools)——只做词法
+模块按 ES 模块读取，并在其中任何一个，包括编译产物，里出现表达式 `import()` 时失败
+（`AB6005 has a non-literal dynamic import`）。被编译证据记录证明的模块，记录以相同字节覆盖的清单
+`bundle` 文件，且构建未使用 [`tools` 逃生舱](../../reference/configuration.mdx#tools)，只做词法
 分析而不完整解析，但它仍带有的每个字面量导入都要对照记录核对：Node 内建模块或该文件记录在案的
-外部依赖通过；其他任何请求都是构建被要求忽略的导入（`rspackIgnore`/`webpackIgnore`——Rspack
+外部依赖通过；其他任何请求都是构建被要求忽略的导入（`rspackIgnore`/`webpackIgnore`，Rspack
 原样保留它，没有模块、外部依赖或警告），并以 `AB6005 loads "<request>", which the compiler neither
 bundled nor recorded as an external` 失败。摘要匹配只证明字节是编译器输出的，不证明其中每个导入都
-已被解析。其他所有模块都会被完整解析，导入也会对照清单解析——生成的 `install.mjs`、被复制的消费者脚本、
+已被解析。其他所有模块都会被完整解析，导入也会对照清单解析，生成的 `install.mjs`、被复制的消费者脚本、
 没有记录的产物中的每个模块，以及逃生舱可能改写了输出资源的构建（记录中的 `coverage.rewritable`）
 里的每个模块。这些发现就是 `AB6005` 的残余形态：不受支持或无效的说明符、缺失于或逃逸出输出树的目标、
 无效语法；`dist` 的发现以 `dist/<path>` 命名文件。预构建负载（`kind: 'prebuilt'`）保持不透明、仅做哈希
@@ -86,9 +86,9 @@ bundled nor recorded as an external` 失败。摘要匹配只证明字节是编�
 - `Compile evidence for "<path>" records "<request>" as an external; a view inlines every module it loads.`
 
 每条诊断都是一份结构化记录：稳定的 `AB` 代码、一个严重级别、一条消息，通常还有 `sourcePath` 与一条
-`recovery` 提示。由诊断把关的命令——`build`、`prepack`、`validate`、`doctor`、`install` 与 `dev`——只有
+`recovery` 提示。由诊断把关的命令，`build`、`prepack`、`validate`、`doctor`、`install` 与 `dev`，只有
 存在 error 级诊断时才以非零退出；warning 与 info 绝不会为构建、校验或 dev 重建把关。`eval` 与 `inspect`
-在试验失败或无定论、或模型无效时也会以 `1` 退出，这与错误诊断无关——见
+在试验失败或无定论、或模型无效时也会以 `1` 退出，这与错误诊断无关，见
 [命令行退出码](../../reference/cli.mdx#退出码)。
 
 ## Claude Code 严格校验
@@ -121,15 +121,15 @@ claude plugin validate <root>/.claude-plugin/marketplace.json --strict
 ### 加载检查
 
 校验不是加载结论。Claude Code 2.1.250 到 2.1.260 在 `--strict` 下会接受一些随后会被会话拒绝加载的清单与
-组件文件——例如无效的 `monitors/monitors.json`，或指向自动加载的 `hooks/hooks.json` 的 `hooks` 字段。拒绝
+组件文件，例如无效的 `monitors/monitors.json`，或指向自动加载的 `hooks/hooks.json` 的 `hooks` 字段。拒绝
 唯一显现的地方是 `claude --plugin-dir <root> plugin list --json`（"Plugins reference" → "plugin list"）
 中该插件所在的行：被拒绝的行带有 `errors` 数组，内含宿主的消息；健康的行没有 `errors` 键。因此 `build` 与
 `validate --artifact` 在两次校验运行之后正好执行这条列表命令，并读取 bundle 的 `<name>@inline` 行：
 
 | `load.status` | 含义 | 代码 |
 | --- | --- | --- |
-| `loaded` | 该行没有 `errors`。 | — |
-| `refused` | 该行带有 `errors`；逐字引用。 | `AB7325`（error；当每一项都是 `Dependency "…" is not installed` 时为 warning，因为它描述的是执行校验的机器而非产物——`--strict` 会提升它） |
+| `loaded` | 该行没有 `errors`。 | 无 |
+| `refused` | 该行带有 `errors`；逐字引用。 | `AB7325`（error；当每一项都是 `Dependency "…" is not installed` 时为 warning，因为它描述的是执行校验的机器而非产物，`--strict` 会提升它） |
 | `unregistered` | 没有该 bundle 的行：Claude Code 没有把该目录注册为插件。 | `AB7311` |
 | `failed` | 列表无法读取（非零退出、超时、不是 JSON 数组）。 | `AB6022` |
 
@@ -142,7 +142,7 @@ CI 应当使用严格校验：
 npx agent-bundle validate --artifact artifact --strict
 ```
 
-当需要确定性的、只看 schema 的检查时使用 `--no-host-validation` ——没有安装这些宿主的机器也必须能运行
+当需要确定性的、只看 schema 的检查时使用 `--no-host-validation` ，没有安装这些宿主的机器也必须能运行
 同一道门禁，并得到同样的 schema 结论。
 
 在开发期，先在不安装的情况下为单个会话加载已构建的根目录，然后迭代：
@@ -168,7 +168,7 @@ hook 文件。
 Doctor 还会读取每一行的 `enabled` 标志。被 `claude plugin disable` 关闭的副本（"Plugins reference" →
 "plugin disable"）仍然处于已安装状态，甚至可能与 bundle 字节一致，但它的任何内容都不会进入会话；Doctor 把它列为
 `disabled`，保留其内容结论，并追加一条 `AB7327` warning，其修复建议就是精确的
-`claude plugin enable <name>@<marketplace> [--scope <scope>]` 命令——重新安装不会启用一个被禁用的插件。
+`claude plugin enable <name>@<marketplace> [--scope <scope>]` 命令，重新安装不会启用一个被禁用的插件。
 
 ## Codex 与 Cursor：被固定的 schema
 
@@ -220,8 +220,8 @@ spawn 的命令时（pnpm 管理的 Node，或 Windows 上 PATH 没有 `npm.cmd`
 门禁会检查这份精确清单、清单哈希、包 bin 目标、发布版本一致性、包专属编译证据以及
 `package.json` 中的安装期依赖字段。作者写入的 `package.json.files` 与 `.npmignore` 规则不会缩窄
 生成根目录：每个所选隐藏宿主目录与每个清单文件都必须进入包，否则 prepack 会在发布前失败。构建会把每个依赖内联进手写包入口与各宿主包，因此已发布的插件不应安装任何东西：请把框架、`@agent-bundle/runtime`、`react`、
-`zod` 以及其余技术栈都声明在 `devDependencies` 下。已编译的 bundle——无论是宿主包模块还是 `dist`
-bundle——都不能把裸包保持外部化：编译器会在 `prepack` 触及清单之前报告 `AB6005`。因此
+`zod` 以及其余技术栈都声明在 `devDependencies` 下。已编译的 bundle，无论是宿主包模块还是 `dist`
+bundle，都不能把裸包保持外部化：编译器会在 `prepack` 触及清单之前报告 `AB6005`。因此
 仅仅把包内联进 bundle 并不能证明消费者需要安装它。`--output` 是相对
 `--root` 的产物路径，会覆盖配置中的 `output.distPath`，默认值为 `artifact`。请直接运行门禁（生成项目提供
 `pack:check`），再用 `npm publish ./dist --ignore-scripts` 发布生成根目录。任何 npm 生命周期都绝不会执行宿主安装。
@@ -231,12 +231,12 @@ bundle——都不能把裸包保持外部化：编译器会在 `prepack` 触及
 已暂存文件校验。不支持的 Node 命令或缺失的源码资源会报告 `AB4768`；包构建器绝不会为了满足生命周期路径
 而复制整棵源码树。
 
-这种内联是编译器的契约，而不是一次工具链升级就可能翻转的打包器默认值。生成的可执行文件——产物脚本、路由式
-CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都以禁用 Rslib 的 `autoExternal`、`bundle: true` 与
+这种内联是编译器的契约，而不是一次工具链升级就可能翻转的打包器默认值。生成的可执行文件，产物脚本、路由式
+CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle，都以禁用 Rslib 的 `autoExternal`、`bundle: true` 与
 `splitChunks: false` 的配置编译，框架自身也不添加任何 `externals`；Rslib 的 `node` target 只把 Node
 内建模块（`node:fs`、`path`，以及 Yarn PnP 的 `pnpapi`）保持外部化。MCP App 视图则把每个脚本与样式都
 内联进同一个 HTML 文件，同一个审计插件也位于它们的 Rsbuild 编译器中：浏览器文档不允许任何 external，
-因此视图编译保持外部化的任何模块——比如通过逃生舱映射到全局变量的 `react`——都会让该视图以 `AB6005`
+因此视图编译保持外部化的任何模块，比如通过逃生舱映射到全局变量的 `react`，都会让该视图以 `AB6005`
 失败（`Compiled MCP App view "mcp-apps/<name>.html" keeps … external …`）。`AB4725` 会拒绝不为 `false`
 的 `tools.rsbuild.output.autoExternal`，以及静态可见、
 点名某个包的字符串或对象 `externals` 条目。RegExp、函数形式、相对路径与 mutator 添加的 externals 则由编译过程
@@ -270,7 +270,7 @@ CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都�
 | `AB7012` | 生成 npm 根目录或实际发布的 `package.json` 中，某个 bin 指向 `src/`，或指名了不在该包打包文件集中的文件。每个 bin 都必须指向该包实际包含的文件；路由式 CLI 使用清单声明的 `bin/<name>.mjs`，手写 bin 使用生成的 `bin/*.js`。 |
 | `AB7013` | `package.json`、规范化后的插件元数据、某份宿主清单或产物 provenance 报告了不同的发布版本。请让每处发布标识一致。 |
 | `AB7014` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 字段点名了消费者无需安装的包。必须有上列三类证据之一才算使用；已编译 bundle 内联该包不算。诊断会点名内联了这个未使用包的所有 `dist` bundle。对 `dependencies` 与 `optionalDependencies` 是 error，对 `peerDependencies` 是 warning；可选 peer 会跳过，`optionalDependencies` 中的同名项优先于 `dependencies`。 |
-| `AB7015` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 中的某一项无法被消费者的 npm 经由注册表解析。包名与说明符一并交给 npm 自己的解析器 `npm-package-arg` 读取，结果分为三类：注册表类（版本、范围、dist-tag，或指向它们的 `npm:` 别名）、抓取类（git、GitHub 简写、远程 tarball 或路径来源——npm 12 默认拒绝 git 与远程抓取（`allow-git`、`allow-remote`），而路径在消费者磁盘上并不存在），以及不可解析类（npm 不接受的包名、它不支持的协议如 `link:`、`portal:` 或拼写错误、既非范围也非 URL 安全 dist-tag 的选择器、指向非注册表目标的别名，或非法 URL——清单本身就读不下去，因此即使出现在可选 peer 上也会被报告）。抓取类的 `optionalDependencies` 项只发出警告，因为 npm 可以在没有它时继续；但消费者安装脚本需要该包时会升级为错误：其 `bin` 命令位于命令位置、运行了 `node_modules/<name>/` 文件，或通过 `-r`/`--require`/`--import`/`--loader`（包括 `NODE_OPTIONS`）预加载了裸包。若 `dependencies` 或 `optionalDependencies` 也声明了同名 peer，则只按该具体条目判断。规范根目录按 `npm publish ./dist` 校验，因此 `workspace:` 与 `catalog:` 一律拒绝；已打包的 `bundleDependencies` 与包内可安装的 `file:` 来源不会被报告。请依赖已发布的版本，或把该包打包进产物并声明在 `devDependencies` 下。 |
+| `AB7015` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 中的某一项无法被消费者的 npm 经由注册表解析。包名与说明符一并交给 npm 自己的解析器 `npm-package-arg` 读取，结果分为三类：注册表类（版本、范围、dist-tag，或指向它们的 `npm:` 别名）、抓取类（git、GitHub 简写、远程 tarball 或路径来源，npm 12 默认拒绝 git 与远程抓取（`allow-git`、`allow-remote`），而路径在消费者磁盘上并不存在），以及不可解析类（npm 不接受的包名、它不支持的协议如 `link:`、`portal:` 或拼写错误、既非范围也非 URL 安全 dist-tag 的选择器、指向非注册表目标的别名，或非法 URL，清单本身就读不下去，因此即使出现在可选 peer 上也会被报告）。抓取类的 `optionalDependencies` 项只发出警告，因为 npm 可以在没有它时继续；但消费者安装脚本需要该包时会升级为错误：其 `bin` 命令位于命令位置、运行了 `node_modules/<name>/` 文件，或通过 `-r`/`--require`/`--import`/`--loader`（包括 `NODE_OPTIONS`）预加载了裸包。若 `dependencies` 或 `optionalDependencies` 也声明了同名 peer，则只按该具体条目判断。规范根目录按 `npm publish ./dist` 校验，因此 `workspace:` 与 `catalog:` 一律拒绝；已打包的 `bundleDependencies` 与包内可安装的 `file:` 来源不会被报告。请依赖已发布的版本，或把该包打包进产物并声明在 `devDependencies` 下。 |
 
 发布构建同样会拒绝**完全没有**发布版本的项目（`AB4013`），因此已发布的产物绝不会携带
 `0.0.0-dev.<short-revision>` 这个开发期回退值。声明的 `plugin.version` 与 `package.json` 不一致时会
@@ -278,5 +278,5 @@ CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都�
 
 ## 下一步
 
-- [宿主安装](./installation.mdx) —— 把已校验的捆绑包注册到宿主。
-- [预览包](./preview-packages.mdx) —— 这些输出目前如何抵达消费者。
+- [宿主安装](./installation.mdx) ， 把已校验的捆绑包注册到宿主。
+- [预览包](./preview-packages.mdx) ， 这些输出目前如何抵达消费者。

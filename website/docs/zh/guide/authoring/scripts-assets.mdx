@@ -38,12 +38,12 @@ export default defineConfig({
 ### 约定
 
 `src/scripts/<name>.ts` 处一个未被认领的普通模块，无需任何声明即可走同一条流水线发布。引用了该文件的
-`scripts` 条目会认领它——上面的例子中 `detect-risk` 之所以保持显式，正是因为它限制了 target。
+`scripts` 条目会认领它，上面的例子中 `detect-risk` 之所以保持显式，正是因为它限制了 target。
 
-`src/scripts/` 下的嵌套模块是硬错误（`AB4808`）——输出名必须无歧义。给某一段路径加 `_` 前缀，或用
+`src/scripts/` 下的嵌套模块是硬错误（`AB4808`），输出名必须无歧义。给某一段路径加 `_` 前缀，或用
 显式 `scripts` 条目认领该文件，即可退出。
 
-每个引用了某模块的显式配置条目——`scripts`、`hooks`、`mcp`、`lib`——都会把它从约定中认领走，只有一个
+每个引用了某模块的显式配置条目，`scripts`、`hooks`、`mcp`、`lib`，都会把它从约定中认领走，只有一个
 例外：`bin` 条目**不会**认领 `src/scripts/<name>.ts` 这样的直接子模块。bin 编译到 `dist/bin/<name>.js`，
 与所有 artifact 互不重叠，而且两种外壳运行同一个 `main`，所以该模块会同时作为 npm bin *和* artifact 中的
 `scripts/<name>.mjs` 发布。这样的模块必须导出 `main` 或自执行：只导出 `default` 的普通脚本是 `AB4738`，
@@ -76,7 +76,7 @@ react-server worker。
 `{"error":{"code":"render-failed","message":"..."}}`。Flight worker 不会再回显 React 堆栈帧。
 
 输出模式由可执行文件探测到的[终端能力](./mcp.mdx#终端能力)决定，而组件通过 `(await agent()).terminal`
-（`hostSurface: 'script'`）读到的正是同一个值——因此一个自行向 stderr 写进度的脚本，其上色与定宽会与
+（`hostSurface: 'script'`）读到的正是同一个值，因此一个自行向 stderr 写进度的脚本，其上色与定宽会与
 框架完全一致，无需自己探测 `process.stdout`。导出 `main` 的普通脚本则把同一个值作为 `main` 的第二个
 参数收到（见[包入口](./package-entries.mdx#可执行封套)）。
 
@@ -90,7 +90,7 @@ react-server worker。
 
 根 `assets/` 目录下的文件按字节复制到产物根目录的 `assets/` 目录，只复制一份，由所有选中宿主共享。这个约定不需要任何配置。
 
-顶层 `assets` 列表会**取代**该约定，改为显式条目——字面文件路径、整个目录，或 glob，全部相对项目
+顶层 `assets` 列表会**取代**该约定，改为显式条目，字面文件路径、整个目录，或 glob，全部相对项目
 根目录解析：
 
 ```ts twoslash
@@ -120,5 +120,5 @@ npx agent-bundle validate --artifact artifact --strict
 
 ## 下一步
 
-- [包入口](./package-entries.mdx) —— `bin`、`lib`、路由式 CLI 与打包器逃生舱。
-- [钩子](./hooks.mdx) —— 经常调用这些脚本的生命周期处理器。
+- [包入口](./package-entries.mdx) ， `bin`、`lib`、路由式 CLI 与打包器逃生舱。
+- [钩子](./hooks.mdx) ， 经常调用这些脚本的生命周期处理器。

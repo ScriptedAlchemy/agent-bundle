@@ -5,7 +5,7 @@ description: 'The agent-bundle development loop: the dev server, rebuild epochs,
 # The development loop
 
 Development has one entry point and three evidence surfaces. The entry point is
-`agent-bundle dev` — a foreground, loopback-only server that rebuilds the artifact as inputs
+`agent-bundle dev`, a foreground, loopback-only server that rebuilds the artifact as inputs
 change. The surfaces are the developer Workbench, the test harness, and the eval runner.
 
 ```sh
@@ -15,8 +15,8 @@ npx agent-bundle dev --root .
 ## The rebuild loop
 
 `dev` prepares project source, builds an artifact, and publishes it as an **epoch**: an immutable
-generation identified by an `epochId`. Every surface that reads a built artifact — the Workbench
-artifact tree, an MCP session, a hook simulation, a development host install — names the epoch it
+generation identified by an `epochId`. Every surface that reads a built artifact, the Workbench
+artifact tree, an MCP session, a hook simulation, a development host install, names the epoch it
 is reading, so a rebuild mid-session can never silently change what a result was evidence about.
 
 Rebuilds are debounced and serialized. A successful build publishes an `artifact.available`
@@ -42,17 +42,17 @@ route-free preparation removes it. The declaration only types `renderRoute`, the
 provider values in a TypeScript program that compiles it: keep `".agent-bundle/routes.d.ts"` in
 the `include` of every tsconfig that imports `agent-bundle/test`, `agent-bundle/app`,
 `agent-bundle/eval`, or `@agent-bundle/runtime`. Include it in each consuming project of a
-solution-style workspace and run that project’s actual TypeScript check; framework validation
+solution-style workspace and run that project's actual TypeScript check; framework validation
 does not reconstruct TypeScript programs. `validate` is also the
-lightweight way to publish current declarations before an isolated type check — no dev server or
-production bundle needed — which is why the routed templates' `typecheck` script runs
+lightweight way to publish current declarations before an isolated type check, no dev server or
+production bundle needed, which is why the routed templates' `typecheck` script runs
 `agent-bundle validate && tsc`.
 
 ## The three surfaces
 
 | Surface | What it is | What it proves |
 | --- | --- | --- |
-| [Developer Workbench](./workbench.mdx) | The loopback UI `dev` serves: one Application tree and route workspace, this session's invocation Trace, Problems, and Advanced tooling. | Nothing by itself — it is where you *look at* and *exercise* real generated output. |
+| [Developer Workbench](./workbench.mdx) | The loopback UI `dev` serves: one Application tree and route workspace, this session's invocation Trace, Problems, and Advanced tooling. | Nothing by itself. It is where you *look at* and *exercise* real generated output. |
 | [Testing](./testing.mdx) | `agent-bundle/rstest` and `agent-bundle/test`, plus the framework-owned contract matrix. | Recorded proof levels, from a route module rendering to a bundle spawned from an installed host layout. |
 | [Evaluations](./evaluations.mdx) | Typed eval suites run through deterministic, Claude, or Codex harnesses. | Whether an agent actually reaches your plugin, with `pass` / `fail` / `inconclusive` and a declared minimum evidence bar. |
 
@@ -61,7 +61,7 @@ None of them substitutes for another.
 
 ## Where this section stops
 
-Authoring surfaces — what a Skill, hook, MCP route, script, or package entry *is* — are in
+Authoring surfaces, what a Skill, hook, MCP route, script, or package entry *is*, are in
 [Authoring](../authoring/index.mdx). Turning a validated artifact into something a host can
 install is in [Distribution](../distribution/index.mdx). Exact flags, config field semantics, and
 runtime contracts are in [Reference](../../reference/index.mdx).

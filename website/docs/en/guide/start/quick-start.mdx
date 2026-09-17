@@ -41,7 +41,7 @@ The routed templates intentionally pin one known-good React and React DOM releas
 projects start reproducibly and a fresh install cannot select an incompatible peer pair.
 
 The scaffolder offers every target the compiler builds: `amp`, `portable`, `claude`, `codex`, and
-`cursor`. One combination is refused — `amp` with this MCP starter, because Amp's skill-scoped MCP
+`cursor`. One combination is refused, `amp` with this MCP starter, because Amp's skill-scoped MCP
 contract rejects the starter's compiler-owned local `status` server
 (`amp.mcp.generated-local`). Project creation says so and names the templates Amp can carry, so
 the refusal arrives before the project exists rather than at its first build. Scaffold `minimal`
@@ -133,8 +133,8 @@ Run the ordinary test command:
 npm test
 ```
 
-In the MCP starter, `npm test` runs every test pool the project ships — the plain module tests,
-the route-unit pool, and the in-memory MCP projection pool — each as its own labeled run, so a
+In the MCP starter, `npm test` runs every test pool the project ships, the plain module tests,
+the route-unit pool, and the in-memory MCP projection pool, each as its own labeled run, so a
 route that stops rendering fails it even while the domain tests stay green. `npm run check` adds
 build and typecheck in front of it for the complete starter gate; `npm run test:routes` is the
 focused route loop. More proof levels, including real MCP processes and browser Apps, are covered

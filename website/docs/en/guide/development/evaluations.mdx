@@ -35,7 +35,7 @@ export default defineEvalSuite({
 ```
 
 A case names its `id`, `prompt`, `fixture`, `hosts` (with a pinned model per host), `invocation`
-mode — `automatic`, `explicit`, or `none` — its `assertions`, and how many `trials` to run. Case
+mode, `automatic`, `explicit`, or `none`, its `assertions`, and how many `trials` to run. Case
 ids must be unique within a suite. Suite discovery, the runs directory, and the optional semantic
 grader are configured under the top-level `evals` config block; see
 [Configuration](../../reference/configuration.mdx).
@@ -94,8 +94,8 @@ The context is the trial the grader is judging:
 | `artifactRoot` | The prepared artifact the trial ran against, for a grader that checks what shipped rather than what the agent wrote. |
 | `prompt` | The case prompt the agent received. |
 
-The outcome is `{ outcome, detail }`: `outcome` is `pass`, `fail`, or `inconclusive` — the same
-three verdicts as every other assertion — and `detail` is the sentence shown beside the result in
+The outcome is `{ outcome, detail }`: `outcome` is `pass`, `fail`, or `inconclusive`, the same
+three verdicts as every other assertion, and `detail` is the sentence shown beside the result in
 the trial record. A module that does not default-export a function, or returns anything but that
 shape, is a grader defect, not plugin evidence: the trial is reported `EVAL_GRADER_FAILED` and its
 result stays inconclusive. Graders run in the eval process with the host's file system, so read the
@@ -105,7 +105,7 @@ fixture and the artifact; do not reach into the agent's session.
 
 Every assertion resolves to `pass`, `fail`, or **`inconclusive`**, and declares the minimum
 evidence it accepts. An assertion that needs stronger evidence than the harness produced is
-inconclusive — never silently passed.
+inconclusive, never silently passed.
 
 | Evidence | Meaning |
 | --- | --- |
@@ -130,7 +130,7 @@ green trial is a signal that the path exists; it is not a rate.
 
 Comparison rows are only aligned when every one of these facets matches: case, fixture, semantic
 grader identity, harness, host CLI version, invocation, and model. The artifact target digest is
-deliberately *not* an alignment facet — it is the thing under comparison. Facets a run did not
+deliberately *not* an alignment facet. It is the thing under comparison. Facets a run did not
 record are labeled unverified rather than assumed aligned, and an unmatched facet makes the row
 non-comparable instead of producing a delta nobody should trust.
 
@@ -155,7 +155,7 @@ the primary trace is usable and the deterministic graders finish, Agent Bundle m
 server-owned, plugin-free Claude grading call. Its fixed result id is `claude-semantic`, and its
 request, raw stream, stderr, and canonical provenance are retained with the trial artifacts. A
 malformed or failed semantic grader leaves the trial inconclusive rather than becoming plugin
-evidence — a grader that broke is not a plugin that misbehaved.
+evidence, a grader that broke is not a plugin that misbehaved.
 
 Semantic grading requires a native Claude harness and a signed-in Claude Code session.
 Deterministic and Codex selections are refused when it is configured.
@@ -204,5 +204,5 @@ used as trial state and are left unchanged. The full credential contract is in
 
 ## Next
 
-- [Distribution](../distribution/index.mdx) — turning a validated artifact into an installable bundle.
-- [Limitations](../../reference/limitations.mdx) — what evals and harnesses currently do not prove.
+- [Distribution](../distribution/index.mdx): turning a validated artifact into an installable bundle.
+- [Limitations](../../reference/limitations.mdx): what evals and harnesses currently do not prove.

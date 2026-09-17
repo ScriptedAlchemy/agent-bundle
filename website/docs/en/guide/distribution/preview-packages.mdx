@@ -27,7 +27,7 @@ superseded PR build. On `main`, the serialized `Release packages` workflow waits
 preview job and does not cancel an earlier release run.
 
 The "Publish pkg.pr.new preview" check on a PR or commit links to the exact URLs for that build.
-Previews are built from the same `pnpm build` output the release gates verify — but they are not
+Previews are built from the same `pnpm build` output the release gates verify, but they are not
 npm releases, and they carry preview version strings.
 
 ## Pinning, and one historical caveat
@@ -76,9 +76,9 @@ profile on the packed `agent-bundle`, `@agent-bundle/runtime`, `rsc-markdown-str
 inventories: every `.d.ts` a consumer can
 reach from `exports` may only import packed files, the package's own exported subpaths, `#` imports
 its `imports` map resolves, Node built-ins, and packages declared in `dependencies`,
-`peerDependencies`, or `optionalDependencies` —
+`peerDependencies`, or `optionalDependencies`,
 absolute paths and URLs never resolve in a consumer install, and a devDependency such as `zod` in
-any packed declaration fails the gate — `lint:release` runs the check with `--strict`, so an
+any packed declaration fails the gate, `lint:release` runs the check with `--strict`, so an
 internal declaration no entry point reaches fails like a reachable one (without the flag it is only
 reported as a warning). Reachability
 starts from every `types` target under `exports` plus the legacy `types` field, `/// <reference
@@ -89,5 +89,5 @@ a warning. That gate is release-only and does not replace the ordinary `pnpm che
 
 ## Next
 
-- [Installation](../start/installation.mdx) — the exact install and pairing commands.
-- [Artifact validation](./validation.mdx) — the `prepack` inventory gate these previews run through.
+- [Installation](../start/installation.mdx): the exact install and pairing commands.
+- [Artifact validation](./validation.mdx): the `prepack` inventory gate these previews run through.
