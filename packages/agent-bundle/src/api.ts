@@ -265,6 +265,7 @@ export type {
 } from './dev/eval/eval-service.ts';
 import {
   ProjectService,
+  resolveOutputRoots,
   projectDiagnostic,
   type PreparedProject,
 } from './dev/project-service.ts';
@@ -619,6 +620,8 @@ export interface InvalidInspectResult {
 export type InspectResult = ReadyInspectResult | InvalidInspectResult;
 
 export interface BuildOptions extends ProjectOptions {
+  /** Set false for temporary builds that must not replace configured repository marketplaces. */
+  readonly repositoryMarketplaces?: boolean;
   /**
    * After the artifact is written, run the installed Claude developer
    * validator (`claude plugin validate --strict` against the emitted
@@ -1286,8 +1289,12 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     }]);
   }
   log(options.logger, 'artifact.build', { output, root: prepared.root });
+  const repositoryOutputRoot = model.repositoryMarketplace === true && options.repositoryMarketplaces !== false
+    ? (await resolveOutputRoots(root, prepared.root, [output]))[0]
+    : undefined;
   const result = await buildArtifact({
     model,
+    ...(repositoryOutputRoot === undefined ? {} : { repositoryOutputRoot }),
     outputRoot: output,
     projectContext,
     projectRoot: prepared.root,

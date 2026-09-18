@@ -1300,6 +1300,14 @@ const validateOutput = (loaded: LoadedConfig): Diagnostic[] => {
     )];
   }
   const diagnostics: Diagnostic[] = [];
+  if (Object.hasOwn(output, 'repositoryMarketplace') && typeof output.repositoryMarketplace !== 'boolean') {
+    diagnostics.push(sourceDiagnostic(
+      'AB4707',
+      'Output repositoryMarketplace must be a boolean when declared.',
+      loaded.configPath,
+      'Set output.repositoryMarketplace to true to emit repository-root marketplaces, or remove it.',
+    ));
+  }
   if (Object.hasOwn(output, 'sourceMap') && typeof output.sourceMap !== 'boolean') {
     diagnostics.push(sourceDiagnostic(
       'AB4707',

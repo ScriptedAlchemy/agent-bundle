@@ -30,6 +30,7 @@ import {
   type CompiledCliBin,
 } from './cli-bins.ts';
 import { composeProjections, type CompositePlan } from './compose.ts';
+import { checkRepositoryMarketplacePaths, emitRepositoryMarketplaces, planRepositoryMarketplaces } from './repository-marketplace.ts';
 import { projectMeta } from './meta.ts';
 import {
   compileMcpApps,
@@ -107,6 +108,8 @@ export interface BuildResult {
 }
 
 export interface BuildOptions {
+  /** Only an explicit project build publishes repository files; dev/eval staging does not. */
+  readonly repositoryOutputRoot?: string;
   /**
    * The MCP App view compile profile; defaults to `production`. Only the
    * Workbench dev loop passes `development` (readable output, inline source
@@ -696,6 +699,10 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
   // together and staged as one tree at the artifact root, never one
   // subdirectory per target.
   const composite = composeProjections(options.model, options.registry);
+  const repositoryMarketplaces = options.repositoryOutputRoot !== undefined
+    ? planRepositoryMarketplaces(composite, options.registry, options.projectRoot, options.repositoryOutputRoot)
+    : [];
+  await checkRepositoryMarketplacePaths(options.projectRoot, repositoryMarketplaces);
   const preflight = planStagedRoot({
     composite,
     model: options.model,
@@ -901,6 +908,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       );
     }
     await publishArtifact({ outputRoot, stageRoot });
+    await emitRepositoryMarketplaces(options.projectRoot, repositoryMarketplaces);
     return Object.freeze({
       compiledCliBins: Object.freeze(compiledCliBins.map((entry) => Object.freeze({
         ...entry,
