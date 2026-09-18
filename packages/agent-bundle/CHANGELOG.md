@@ -1,5 +1,15 @@
 # agent-bundle
 
+## 0.2.2
+
+### Patch Changes
+
+- ab5ae66: Replace Codex plugins with `codex plugin add` only so nested MCP overrides in `config.toml` survive. Refuse disabled or unknown-enablement Codex replacements (`AB7004`) because the native plugin CLI has no qualified settings-preserving update API. (#824)
+- a0652c1: Refuse a foreign destination and a same-version marketplace restage from `install.mjs` when the destination lacks paths listed in `agent-bundle.manifest.json`, instead of crashing with `ENOENT`. `uninstall --force` on a pre-receipt copy removes the files present in that copy, matching the framework CLI. (#818)
+- 7c96689: Add `ToolConfig.excludeClients` to hide generated MCP tools from matching negotiated client-name prefixes and reject direct calls while preserving other clients and CLI/browser projections. (#820)
+- cb9792d: Generate repository-root host marketplaces with `output.repositoryMarketplace` so committed artifacts install directly from GitHub without hand-written manifests (#827).
+- 10485c4: Preserve `output.repositoryMarketplace` files during temporary MCP, hook, and `serve-app` builds, including failed operations (#828).
+
 ## 0.2.1
 
 ### Patch Changes
