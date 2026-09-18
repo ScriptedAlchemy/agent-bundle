@@ -162,6 +162,8 @@ the selected marketplace files; do not hand-edit them. It refuses symlinked dest
 paths that overlap the artifact, custom adapters, and authored marketplace source or
 `metadata.pluginRoot` overrides. These generated files are excluded from source snapshots.
 Development and evaluation staging do not publish repository marketplaces.
+Temporary builds used by MCP commands, hook inspection/simulation, and `serve-app` also
+leave these files unchanged, including when the operation fails.
 
 `output.distPath` is the artifact output directory relative to the project root — the composite
 plugin root every selected host reads, with no per-host subdirectory beneath it. The CLI

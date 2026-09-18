@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { TargetRegistry, build, createDefaultRegistry, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
+import { TargetRegistry, build, createDefaultRegistry, inspect, invokeMcp, listHooks, listMcp, serveApp, simulateHook, validate } from '../src/api.ts';
 import { unavailableCapability } from '../src/adapters/capability-state.ts';
 import {
   nativeHookWrapperSource,
@@ -386,6 +386,11 @@ it('emits repository marketplaces from the selected host plans without making ou
     const first = await build({ root });
     const second = await build({ root });
     expect(second.projectContext.sourceInputs).toEqual(first.projectContext.sourceInputs);
+    const marketplaceBeforeOperations = await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8');
+    await listHooks({ root, target: 'cursor' });
+    expect(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(marketplaceBeforeOperations);
+    await expect(serveApp({ app: 'missing/missing', root, target: 'cursor' })).rejects.toThrow();
+    expect(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(marketplaceBeforeOperations);
     for (const path of ['.claude-plugin/marketplace.json', '.cursor-plugin/marketplace.json', '.agents/plugins/marketplace.json']) {
       const repository = JSON.parse(await readFile(join(root, path), 'utf8'));
       const artifact = JSON.parse(await readFile(join(root, 'artifact', path), 'utf8'));
