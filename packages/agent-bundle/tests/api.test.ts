@@ -389,7 +389,14 @@ it('emits repository marketplaces from the selected host plans without making ou
     const marketplaceBeforeOperations = await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8');
     await listHooks({ root, target: 'cursor' });
     expect(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(marketplaceBeforeOperations);
-    await expect(serveApp({ app: 'missing/missing', root, target: 'cursor' })).rejects.toThrow();
+    const serveEvents: string[] = [];
+    await expect(serveApp({
+      app: 'missing/missing',
+      logger: { log: (event) => { serveEvents.push(event); } },
+      root,
+      target: 'cursor',
+    })).rejects.toThrow();
+    expect(serveEvents).toContain('artifact.build');
     expect(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(marketplaceBeforeOperations);
     for (const path of ['.claude-plugin/marketplace.json', '.cursor-plugin/marketplace.json', '.agents/plugins/marketplace.json']) {
       const repository = JSON.parse(await readFile(join(root, path), 'utf8'));
