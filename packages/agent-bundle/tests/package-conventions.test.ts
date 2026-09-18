@@ -469,6 +469,7 @@ describe('artifact output validation', () => {
     { code: 'AB4707', label: 'an undefined block', output: undefined },
     { code: 'AB4707', label: 'an array block', output: [] },
     { code: 'AB4707', label: 'a string block', output: 'artifact' },
+    { code: 'AB4707', label: 'a non-boolean repository marketplace option', output: { repositoryMarketplace: 'yes' } },
     { code: 'AB4707', label: 'an undefined path', output: { distPath: undefined } },
     { code: 'AB4707', label: 'a non-string path', output: { distPath: 7 } },
     { code: 'AB4707', label: 'an empty path', output: { distPath: '' } },

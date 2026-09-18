@@ -30,7 +30,7 @@ export default defineConfig({
 | `bin` | `false \| Record<string, string \| { entry }>` | The `src/cli.ts` convention. |
 | `lib` | `false \| string \| { entry, dts? }` | The `src/index.ts` convention. |
 | `routes` | Route-graph policy (`cli`, `mcpCommands`, `servers`) | Convention-derived. A tool with a colocated `<tool>.cli.ts` is excluded from `routes.mcpCommands`. |
-| `output` | `{ distPath?, sourceMap? }` | `artifact` from the CLI; `dist` from `build()` without `packageOutputs`. `sourceMap` defaults to `false`. |
+| `output` | `{ distPath?, sourceMap?, repositoryMarketplace? }` | `artifact` from the CLI; `dist` from `build()` without `packageOutputs`. Both boolean options default to `false`. |
 | `runtime` | `{ node }` | Node 22.12. |
 | `payload` | `Record<string, string \| { source, targets? }>` | None. |
 | `state` | `false` | The `src/state.ts` convention. |
@@ -153,6 +153,15 @@ valid **only** when denying a `beforeTool`, `stop`, or `agentStop` hook, and den
 without a reason fails.
 
 ## output and runtime
+
+`output.repositoryMarketplace: true` makes an explicit `build` also generate the selected
+hosts' marketplace documents at the project root, with local plugin sources pointing to the
+artifact output directory. Cursor additionally requires `marketplace: true`. Commit these
+files and the artifact directory for installation directly from GitHub. The compiler replaces
+the selected marketplace files; do not hand-edit them. It refuses symlinked destinations,
+paths that overlap the artifact, custom adapters, and authored marketplace source or
+`metadata.pluginRoot` overrides. These generated files are excluded from source snapshots.
+Development and evaluation staging do not publish repository marketplaces.
 
 `output.distPath` is the artifact output directory relative to the project root — the composite
 plugin root every selected host reads, with no per-host subdirectory beneath it. The CLI
