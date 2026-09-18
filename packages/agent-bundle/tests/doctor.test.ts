@@ -1160,6 +1160,7 @@ it('validates --from Codex bytes without running the live schema generator', asy
         return commandResult({ stdout: 'codex 0.147.0\n' });
       },
       endpointDirectory: fixture.endpointDirectory,
+      environment: {},
       from: bundle,
       home: fixture.home,
       hosts: ['codex'],
@@ -1169,7 +1170,6 @@ it('validates --from Codex bytes without running the live schema generator', asy
     expect(calls).toEqual([
       expect.objectContaining({ args: ['--version'], executable: 'codex' }),
       expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle, executable: 'codex' }),
-      expect.objectContaining({ args: ['plugin', 'marketplace', 'list', '--json'], cwd: bundle, executable: 'codex' }),
     ]);
     expect(hostReport(report, 'codex').bundle?.state).toBe('corrupt');
     expect(report.diagnostics).toEqual(expect.arrayContaining([
