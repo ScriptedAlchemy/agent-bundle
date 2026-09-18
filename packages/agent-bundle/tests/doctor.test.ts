@@ -1165,10 +1165,11 @@ it('validates --from Codex bytes without running the live schema generator', asy
       hosts: ['codex'],
     });
 
-    // Read-only inventory only: the version probe and the pinned `plugin list --json`, never the schema generator.
+    // Read-only version and inventory probes, never the schema generator.
     expect(calls).toEqual([
       expect.objectContaining({ args: ['--version'], executable: 'codex' }),
       expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle, executable: 'codex' }),
+      expect.objectContaining({ args: ['plugin', 'marketplace', 'list', '--json'], cwd: bundle, executable: 'codex' }),
     ]);
     expect(hostReport(report, 'codex').bundle?.state).toBe('corrupt');
     expect(report.diagnostics).toEqual(expect.arrayContaining([

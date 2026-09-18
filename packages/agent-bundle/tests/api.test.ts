@@ -407,6 +407,8 @@ it('emits repository marketplaces from the selected host plans without making ou
     expect(JSON.parse(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).plugins[0].source)
       .toBe('./release/plugin');
     await expect(build({ output: '.cursor-plugin', root })).rejects.toThrow('overlaps the artifact output');
+    await symlink(join(root, 'artifact'), join(root, 'linked-artifact'), 'dir');
+    await expect(build({ output: 'linked-artifact', root })).rejects.toThrow('real artifact output directory');
     await symlink(root, join(root, 'alias'), 'dir');
     await expect(build({ output: 'alias/.cursor-plugin', root })).rejects.toThrow('overlaps the artifact output');
     await build({ output: 'alias/release/plugin', root });

@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -26,7 +26,7 @@ import {
   featureCapabilityName,
   type AgentComponentKind,
 } from './core/components.ts';
-import { errorMessage } from './core/errors.ts';
+import { errorMessage, isErrno } from './core/errors.ts';
 import { resolveProcessNpmCliJs } from './core/npm-cli.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import {
@@ -1289,6 +1289,15 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     }]);
   }
   log(options.logger, 'artifact.build', { output, root: prepared.root });
+  if (model.repositoryMarketplace === true && options.repositoryMarketplaces !== false) {
+    try {
+      if ((await lstat(output)).isSymbolicLink()) {
+        throw new Error('Repository marketplaces require a real artifact output directory, not a symlink.');
+      }
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+    }
+  }
   const repositoryOutputRoot = model.repositoryMarketplace === true && options.repositoryMarketplaces !== false
     ? (await resolveOutputRoots(root, prepared.root, [output]))[0]
     : undefined;
