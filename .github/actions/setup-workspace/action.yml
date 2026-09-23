@@ -68,7 +68,7 @@ runs:
   steps:
     - name: Set up pnpm and Node.js
       id: setup
-      uses: pnpm/setup@v2
+      uses: pnpm/setup@v3
       continue-on-error: true
       with:
         cache: true
@@ -85,7 +85,7 @@ runs:
 
     - name: Set up pnpm and Node.js (retry)
       if: steps.setup.outcome == 'failure'
-      uses: pnpm/setup@v2
+      uses: pnpm/setup@v3
       with:
         cache: true
         install: false
