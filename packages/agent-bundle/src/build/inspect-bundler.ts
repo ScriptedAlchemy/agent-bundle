@@ -162,6 +162,7 @@ const scriptEntries = async (
           ? {
             aliases: { [terminalCapabilityRuntimeSpecifier]: terminalCapabilityRuntimePath() },
             virtualSource: generatedExecutableEntrySource({
+              projectRoot: model.projectRoot,
               entrySource: script.source,
               exportName: 'main',
               hostSurface: 'script',
@@ -208,6 +209,7 @@ const mcpEntryEntries = async (
     const routeSource = generatedRoutes === undefined || server === undefined
       ? undefined
       : generatedRouteMcpEntrySource({
+        projectRoot: model.projectRoot,
         allowedTargets: hosting.serverIds.has(server.id) ? hosting.allowedTargets : [],
         hosts: selectedServerHosts(server, composite.selected),
         ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
@@ -234,6 +236,7 @@ const mcpEntryEntries = async (
         ...(wrapped
           ? {
             virtualSource: generatedStdioMcpEntrySource({
+              projectRoot: model.projectRoot,
               entrySource: routeSource === undefined ? entry.source : 'agent-bundle/generated-route-server',
               serverName,
             }),
@@ -268,6 +271,7 @@ const mcpEntryEntries = async (
           source: entry.source,
           sourceInputs: [],
           virtualSource: generatedRouteFlightWorkerSource({
+            projectRoot: model.projectRoot,
             artifactEpoch: generatedRouteArtifactEpoch({ name: model.metadata.name, version: model.metadata.version }),
             layouts: model.layouts ?? [],
             ...(noticeDelivery === undefined ? {} : { noticeDelivery }),

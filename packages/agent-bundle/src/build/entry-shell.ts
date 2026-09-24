@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
 import { operatorEnvLayerImport, operatorEnvLayerImports, operatorEnvLayerStatement } from './launch-env-shell.ts';
+import { generatedModuleSpecifier } from './meta.ts';
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedNoticeRetentionPolicy, NormalizedStateDefinition } from '../core/types.ts';
@@ -115,11 +116,13 @@ export const stdioPreludeVirtualModule = (
  */
 export const generatedStdioMcpEntrySource = (options: {
   readonly entrySource: string;
+  /** The project root; generated imports name its modules through {@link generatedModuleSpecifier}. */
+  readonly projectRoot: string;
   readonly serverName: string;
 }): string => [
   stdioPreludeImport,
   `import { runGeneratedStdioMcpEntry } from ${JSON.stringify(mcpEntryRuntimeSpecifier)};`,
-  `import * as serverModule from ${JSON.stringify(options.entrySource)};`,
+  `import * as serverModule from ${JSON.stringify(generatedModuleSpecifier(options.projectRoot, options.entrySource))};`,
   '',
   'await runGeneratedStdioMcpEntry({',
   '  loadEntry: async () => serverModule,',
@@ -137,16 +140,18 @@ export const generatedStdioMcpEntrySource = (options: {
  */
 export const generatedExecutableEntrySource = (options: {
   readonly entrySource: string;
+  /** The project root; generated imports name its modules through {@link generatedModuleSpecifier}. */
+  readonly projectRoot: string;
   readonly exportName: 'default' | 'main';
   /** `cli` for a package bin, `script` for an artifact script; defaults to `script`. */
   readonly hostSurface?: GeneratedExecutableSurface;
 }): string => [
   `import { detectProcessTerminal } from ${JSON.stringify(terminalCapabilityRuntimeSpecifier)};`,
-  `import * as entry from ${JSON.stringify(options.entrySource)};`,
+  `import * as entry from ${JSON.stringify(generatedModuleSpecifier(options.projectRoot, options.entrySource))};`,
   '',
   `const main = entry[${JSON.stringify(options.exportName)}];`,
   "if (typeof main !== 'function') {",
-  `  throw new TypeError('Executable entry must export a ${options.exportName} function: ' + ${JSON.stringify(options.entrySource)});`,
+  `  throw new TypeError('Executable entry must export a ${options.exportName} function: ' + ${JSON.stringify(generatedModuleSpecifier(options.projectRoot, options.entrySource))});`,
   '}',
   `const code = await main(process.argv.slice(2), Object.freeze({ terminal: detectProcessTerminal(${JSON.stringify(options.hostSurface ?? 'script')}) }));`,
   "if (typeof code === 'number') process.exitCode = code;",
@@ -180,6 +185,8 @@ export const webHostRuntimePath = (): string => runtimeModulePath('web-host');
 export type GeneratedStateFallback = 'artifact' | 'cwd';
 
 export interface GeneratedCliBinEntryOptions {
+  /** The project root; generated imports name its modules through {@link generatedModuleSpecifier}. */
+  readonly projectRoot: string;
   readonly commands: readonly CompiledCliCommand[];
   readonly plugin: { readonly description?: string; readonly name: string; readonly version: string };
   /** Absolute projection-module sources keyed by their backing tool route id. */
@@ -243,6 +250,7 @@ const pluginRootDeclaration = (
   } });`;
 
 const generatedStateImports = (
+  projectRoot: string,
   state: NormalizedStateDefinition | undefined,
 ): readonly string[] => {
   if (state === undefined) return [];
@@ -251,7 +259,7 @@ const generatedStateImports = (
       ? ["import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';"]
       : ["import { createMemoryStateDriver } from '@agent-bundle/runtime/state';"]),
     "import { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';",
-    `import stateDefinition from ${JSON.stringify(state.source)};`,
+    `import stateDefinition from ${JSON.stringify(generatedModuleSpecifier(projectRoot, state.source))};`,
   ];
 };
 
@@ -303,10 +311,11 @@ const generatedStateOwner = (
 
 /** Reuse the generated state owner for a lightweight event request. */
 export const eventHandlerStateSource = (
+  projectRoot: string,
   state: NormalizedStateDefinition | undefined,
   policy: GeneratedNoticePolicy,
 ): readonly string[] => [
-  ...generatedStateImports(state),
+  ...generatedStateImports(projectRoot, state),
   ...generatedStateOwner(state, policy),
   ...(state === undefined
     ? ['const withEventState = (_signal, run) => run(undefined);']
@@ -441,10 +450,10 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
       : []),
     ...pluginRootImports(stateFallback, options.web?.pluginRootRelativeUrl),
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
-    ...generatedStateImports(options.state),
-    ...routeImports(commandRoutes),
+    ...generatedStateImports(options.projectRoot, options.state),
+    ...routeImports(options.projectRoot, commandRoutes),
     ...projectionSources.map((source, index) =>
-      `import * as projection${String(index)} from ${JSON.stringify(source)};`),
+      `import * as projection${String(index)} from ${JSON.stringify(generatedModuleSpecifier(input.projectRoot, source))};`),
     '',
     ...(runtimeBacked ? [pluginRootDeclaration(stateFallback, options.web?.pluginRootRelativeUrl)] : []),
     // Launch from the artifact carrying the manifest, not an environment override.
@@ -453,7 +462,7 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
       : [`const artifactRoot = ${pluginRootFallbackExpression(stateFallback, options.web.pluginRootRelativeUrl)};`]),
     ...generatedStateOwner(options.state, options),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
-    ...providerRegistrySource(providers),
+    ...providerRegistrySource(options.projectRoot, providers),
     'const routes = Object.freeze({',
     ...commandRoutes.map((route, index) => {
       const projectionIndex = projectionIndexByRoute.get(route.id);
@@ -584,6 +593,8 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
 };
 
 export interface GeneratedRenderedRouteWorkerOptions {
+  /** The project root; generated imports name its modules through {@link generatedModuleSpecifier}. */
+  readonly projectRoot: string;
   readonly layouts?: readonly CompiledLayout[];
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
@@ -608,8 +619,8 @@ const workerLayouts = (
   return layouts.filter((layout) => applicable.has(layout)).sort((left, right) => left.id.localeCompare(right.id));
 };
 
-const layoutImports = (layouts: readonly CompiledLayout[]): readonly string[] =>
-  layouts.map((layout, index) => `import * as layout${String(index)} from ${JSON.stringify(layout.source)};`);
+const layoutImports = (projectRoot: string, layouts: readonly CompiledLayout[]): readonly string[] =>
+  layouts.map((layout, index) => `import * as layout${String(index)} from ${JSON.stringify(generatedModuleSpecifier(projectRoot, layout.source))};`);
 
 const layoutRecords = (layouts: readonly CompiledLayout[]): readonly string[] =>
   layouts.map((layout, index) =>
@@ -682,9 +693,9 @@ export const generatedRenderedRouteWorkerSource = (
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
     "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
     ...pluginRootImports(stateFallback),
-    ...generatedStateImports(options.state),
-    ...routeImports(options.routes),
-    ...layoutImports(layouts),
+    ...generatedStateImports(options.projectRoot, options.state),
+    ...routeImports(options.projectRoot, options.routes),
+    ...layoutImports(options.projectRoot, layouts),
     '',
     pluginRootDeclaration(stateFallback),
     ...generatedStateOwner(options.state, options),
@@ -694,7 +705,7 @@ export const generatedRenderedRouteWorkerSource = (
     '// Machine output owns the parent stdout; anything a route logs goes to stderr.',
     'process.stdout.write = process.stderr.write.bind(process.stderr);',
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
-    ...providerRegistrySource(providers),
+    ...providerRegistrySource(options.projectRoot, providers),
     ...composeLayoutsSource(layouts),
     'const routes = Object.freeze({',
     ...options.routes.map((route, index) =>
@@ -811,6 +822,8 @@ export const generatedRenderedScriptEntrySource = (
 ].join('\n');
 
 export interface GeneratedRouteMcpEntryOptions {
+  /** The project root; generated imports name its modules through {@link generatedModuleSpecifier}. */
+  readonly projectRoot: string;
   readonly artifactEpoch?: string;
   readonly eventRoutes?: readonly NormalizedHook[];
   /**
@@ -846,6 +859,8 @@ export interface GeneratedRouteMcpEntryOptions {
 }
 
 export interface GeneratedRouteFlightWorkerOptions {
+  /** The project root; generated imports name its modules through {@link generatedModuleSpecifier}. */
+  readonly projectRoot: string;
   readonly artifactEpoch: string;
   readonly eventRoutes?: readonly NormalizedHook[];
   readonly layouts?: readonly CompiledLayout[];
@@ -867,9 +882,9 @@ export const generatedRouteArtifactEpoch = (plugin: {
 const executableMcpRoutes = (routes: readonly CompiledAgentRoute[]): readonly CompiledAgentRoute[] =>
   routes.filter((route) => route.kind !== 'app');
 
-const routeImports = (routes: readonly CompiledAgentRoute[]): readonly string[] =>
+const routeImports = (projectRoot: string, routes: readonly CompiledAgentRoute[]): readonly string[] =>
   routes.flatMap((route, index) => [
-    `import * as routeModule${String(index)} from ${JSON.stringify(route.source)};`,
+    `import * as routeModule${String(index)} from ${JSON.stringify(generatedModuleSpecifier(projectRoot, route.source))};`,
     `const route${String(index)} = Object.assign({}, Reflect.get(routeModule${String(index)}, 'default'), routeModule${String(index)});`,
   ]);
 
@@ -955,10 +970,11 @@ const noticeDeliveryOwner = (wired: boolean, policy: GeneratedNoticePolicy): rea
     : [];
 
 const eventRouteImports = (
+  projectRoot: string,
   routes: readonly NormalizedHook[],
   offset: number,
 ): readonly string[] => routes.map((route, index) =>
-  `import * as route${String(offset + index)} from ${JSON.stringify(route.eventRoute?.handler?.view ?? route.source)};`);
+  `import * as route${String(offset + index)} from ${JSON.stringify(generatedModuleSpecifier(projectRoot, route.eventRoute?.handler?.view ?? route.source))};`);
 
 /**
  * Event route records stay keyed by the hook identity the worker resolves
@@ -974,15 +990,15 @@ const eventRouteRecords = (
 ): readonly string[] => routes.map((route, index) =>
   `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(`event:${route.eventRoute!.event}`)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
 
-const providerRecords = (providers: readonly CompiledProvider[]): readonly string[] =>
+const providerRecords = (projectRoot: string, providers: readonly CompiledProvider[]): readonly string[] =>
   providers.map((provider) =>
-    `  Object.freeze({ key: ${JSON.stringify(providerKeyFromName(provider.name))}, load: () => import(${JSON.stringify(provider.source)}), source: ${JSON.stringify(provider.provenance.relativePath)} }),`);
+    `  Object.freeze({ key: ${JSON.stringify(providerKeyFromName(provider.name))}, load: () => import(${JSON.stringify(generatedModuleSpecifier(projectRoot, provider.source))}), source: ${JSON.stringify(provider.provenance.relativePath)} }),`);
 
 /** The frozen provider registry a generated request scope iterates; empty when the project declares none. */
-export const providerRegistrySource = (providers: readonly CompiledProvider[]): readonly string[] =>
+export const providerRegistrySource = (projectRoot: string, providers: readonly CompiledProvider[]): readonly string[] =>
   providers.length === 0
     ? []
-    : ['const providers = Object.freeze([', ...providerRecords(providers), ']);'];
+    : ['const providers = Object.freeze([', ...providerRecords(projectRoot, providers), ']);'];
 
 /**
  * Claims this request's hit on the process identity and snapshots it in the
@@ -1057,11 +1073,11 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
     "import { Agent, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
     ...pluginRootImports('artifact'),
-    ...generatedStateImports(options.state),
+    ...generatedStateImports(options.projectRoot, options.state),
     ...noticeInboxImport(wiresInbox),
-    ...routeImports(routes),
-    ...eventRouteImports(eventRoutes, routes.length),
-    ...layoutImports(layouts),
+    ...routeImports(options.projectRoot, routes),
+    ...eventRouteImports(options.projectRoot, eventRoutes, routes.length),
+    ...layoutImports(options.projectRoot, layouts),
     '',
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
     'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
@@ -1074,7 +1090,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     // observed value rides each render message and wins when present.
     pluginRootDeclaration('artifact'),
     ...generatedStateOwner(options.state, options),
-    ...providerRegistrySource(providers),
+    ...providerRegistrySource(options.projectRoot, providers),
     ...composeLayoutsSource(layouts),
     'const routes = Object.freeze({',
     ...routeRecords(routes, { layouts }),
@@ -1252,7 +1268,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     "import mcpApps from 'agent-bundle/mcp-apps';",
     ...noticeDeliveryImports(wiresResourceUpdated),
     ...noticeInboxImport(wiresInbox),
-    ...routeImports(routes),
+    ...routeImports(options.projectRoot, routes),
     '',
     `const ARTIFACT_EPOCH = ${JSON.stringify(artifactEpoch)};`,
     // The server process's one root resolution (#468): the lineage journal,

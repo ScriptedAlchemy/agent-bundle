@@ -102,7 +102,7 @@ describe('generated entry templates', () => {
   });
 
   it('generates a stdio entry whose first import is the prelude — stdout guard, then the operator .env layer — ahead of the server module (#469)', () => {
-    const source = generatedStdioMcpEntrySource({ entrySource: '/proj/src/mcp/curator.ts', serverName: 'curator' });
+    const source = generatedStdioMcpEntrySource({ projectRoot: '/proj', entrySource: '/proj/src/mcp/curator.ts', serverName: 'curator' });
     expect(source).toContain(`from ${JSON.stringify(mcpEntryRuntimeSpecifier)}`);
     expect(source).toContain('serverName: "curator"');
     // The prelude is the shell's first import and the server module a static
@@ -112,7 +112,7 @@ describe('generated entry templates', () => {
     // module's own top level (pinned end to end by tests/mcp.test.ts).
     expect(source.startsWith(`${stdioPreludeImport}\n`)).toBe(true);
     expect(stdioPreludeImport).toBe('import "agent-bundle/stdio-prelude";');
-    expect(source.indexOf(stdioPreludeImport)).toBeLessThan(source.indexOf('import * as serverModule from "/proj/src/mcp/curator.ts";'));
+    expect(source.indexOf(stdioPreludeImport)).toBeLessThan(source.indexOf('import * as serverModule from "../src/mcp/curator.ts";'));
     // The stdio shell never imports the env-only layer: stdout is its wire.
     expect(source).not.toContain(launchEnvLayerSpecifier);
     expect(source).toContain('loadEntry: async () => serverModule,');
@@ -143,6 +143,7 @@ describe('generated entry templates', () => {
 
   it('gives hook wrappers the env-only layer, never the stdio prelude: stdout is the host envelope there (#469)', () => {
     const entry: TargetHookWrapper = {
+      projectRoot: '/project',
       event: 'sessionStart',
       hook: {
         event: 'sessionStart',
@@ -201,6 +202,7 @@ describe('generated entry templates', () => {
     };
     const command = { aliases: [], exitCode: 'zero' as const, options: [], path: ['report'], rendered: false, routeId: 'cli:report' };
     const artifactBin = entryShellModule.generatedCliBinEntrySource({
+      projectRoot: '/project',
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
       routes: [route],
@@ -213,11 +215,12 @@ describe('generated entry templates', () => {
     expect(artifactBin.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
     expect(artifactBin).not.toContain(stdioPreludeSpecifier);
     expect(artifactBin).not.toContain('applyOperatorEnv');
-    expect(artifactBin).toContain('import * as routeModule0 from "/project/src/cli/report.ts";');
+    expect(artifactBin).toContain('import * as routeModule0 from "../src/cli/report.ts";');
     // An artifact-hosted bin keeps its state out of the installed artifact:
     // the code root is the artifact, the state root the user state directory.
     expect(artifactBin).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)), stateAnchor: 'user-data' });");
     const durableBin = entryShellModule.generatedCliBinEntrySource({
+      projectRoot: '/project',
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
       providers: [{
@@ -237,14 +240,15 @@ describe('generated entry templates', () => {
     });
     expect(durableBin.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
     for (const consumer of [
-      'import stateDefinition from "/project/src/state.ts";',
-      'import * as routeModule0 from "/project/src/cli/report.ts";',
-      'load: () => import("/project/src/providers/project-auth.ts")',
+      'import stateDefinition from "../src/state.ts";',
+      'import * as routeModule0 from "../src/cli/report.ts";',
+      'load: () => import("../src/providers/project-auth.ts")',
     ]) {
       expect(durableBin).toContain(consumer);
     }
     // The npm package bin runs from the operator's own shell and reads no pack file.
     const npmBin = entryShellModule.generatedCliBinEntrySource({
+      projectRoot: '/project',
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
       routes: [route],
@@ -277,6 +281,7 @@ describe('generated entry templates', () => {
       pluginRootRelativeUrl: '../',
     };
     const routed = entryShellModule.generatedCliBinEntrySource({
+      projectRoot: '/project',
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
       routes: [route],
@@ -302,6 +307,7 @@ describe('generated entry templates', () => {
     ].join('\n'));
 
     const webOnly = entryShellModule.generatedCliBinEntrySource({
+      projectRoot: '/project',
       commands: [],
       plugin: { name: 'fixture', version: '1.0.0' },
       routes: [],
@@ -321,6 +327,7 @@ describe('generated entry templates', () => {
     // no command opens none, so the web-only bin mounts neither and their
     // modules cannot keep `<plugin> web` from starting.
     const webOnlyWithState = entryShellModule.generatedCliBinEntrySource({
+      projectRoot: '/project',
       commands: [],
       plugin: { name: 'fixture', version: '1.0.0' },
       providers: [{
@@ -347,6 +354,7 @@ describe('generated entry templates', () => {
     // moved the pin from the pre-#564 value, #637's `stateAnchor` moved it
     // again, #643's `routeInvocationExitCode` export moved it once more).
     const withoutWeb = entryShellModule.generatedCliBinEntrySource({
+      projectRoot: '/project',
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
       routes: [route],
@@ -357,14 +365,14 @@ describe('generated entry templates', () => {
   });
 
   it('generates a process envelope that adopts numeric exit codes and hands main the terminal capability (#511)', () => {
-    const source = generatedExecutableEntrySource({ entrySource: '/proj/src/cli.ts', exportName: 'main', hostSurface: 'cli' });
-    expect(source).toContain('import * as entry from "/proj/src/cli.ts"');
+    const source = generatedExecutableEntrySource({ projectRoot: '/proj', entrySource: '/proj/src/cli.ts', exportName: 'main', hostSurface: 'cli' });
+    expect(source).toContain('import * as entry from "../src/cli.ts"');
     expect(source).toContain(`import { detectProcessTerminal } from ${JSON.stringify(entryShellModule.terminalCapabilityRuntimeSpecifier)}`);
     expect(source).toContain('entry["main"]');
     expect(source).toContain('await main(process.argv.slice(2), Object.freeze({ terminal: detectProcessTerminal("cli") }))');
     expect(source).toContain("if (typeof code === 'number') process.exitCode = code;");
     // Artifact scripts default to the `script` surface; the envelope never loads the runtime.
-    const script = generatedExecutableEntrySource({ entrySource: '/e.ts', exportName: 'default' });
+    const script = generatedExecutableEntrySource({ projectRoot: '/project', entrySource: '/e.ts', exportName: 'default' });
     expect(script).toContain('entry["default"]');
     expect(script).toContain('detectProcessTerminal("script")');
     expect(script).not.toContain('@agent-bundle/runtime');
@@ -440,6 +448,7 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   if (generate === undefined) return;
 
   const source = generate({
+    projectRoot: '/project',
     artifactEpoch: 'epoch-1',
     eventRoutes: [{
       event: 'afterTool',
@@ -485,7 +494,7 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   // rather than a second copy of it (#103 stage 2).
   expect(source).toContain(`from ${JSON.stringify(mcpServerRuntimeSpecifier)}`);
   expect(source).toContain("from 'agent-bundle/mcp-apps'");
-  expect(source).toContain('import * as routeModule0 from "/project/src/mcp/curator/tools/inspect.tsx"');
+  expect(source).toContain('import * as routeModule0 from "../src/mcp/curator/tools/inspect.tsx"');
   expect(source).toContain('const ARTIFACT_EPOCH = "route-fixture@1.2.3"');
   expect(source).toContain('"tool:curator/inspect": Object.freeze({ config: {"annotations":{"readOnlyHint":true}');
   expect(source).toContain('"resource:curator/catalog"');
@@ -550,6 +559,7 @@ it('keeps the generated server behaviour in the shared runtime module the entry 
 it('fails the build on an MCP route the generated server cannot register', () => {
   const generate = entryShellModule.generatedRouteMcpEntrySource;
   const entry = (routes: readonly Readonly<Record<string, unknown>>[]): string => generate({
+    projectRoot: '/project',
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: routes as never,
     serverName: 'curator',
@@ -569,6 +579,7 @@ it('fails the build on an MCP route the generated server cannot register', () =>
     source: '/project/src/cli/migrate.tsx',
   }])).toThrow('non-MCP route');
   expect(() => generate({
+    projectRoot: '/project',
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [{
       config: {},
@@ -587,6 +598,7 @@ it('fails the build on an MCP route the generated server cannot register', () =>
     workerFile: 'mcp-curator-flight.mjs',
   })).toThrow('reserved protocol name');
   expect(() => generate({
+    projectRoot: '/project',
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [{
       config: { uri: 'agent-bundle://notices/inbox' },
@@ -609,6 +621,7 @@ it('fails the build on an MCP route the generated server cannot register', () =>
 
 it('journals the lineage registry through sqlite only for workspace-durable projects', () => {
   const source = entryShellModule.generatedRouteMcpEntrySource({
+    projectRoot: '/project',
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [{
       config: {},
@@ -646,6 +659,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(typeof generate).toBe('function');
   if (generate === undefined) return;
   const source = generate({
+    projectRoot: '/project',
     artifactEpoch: 'route-fixture@1.2.3',
     eventRoutes: [{
       event: 'afterTool',
@@ -670,8 +684,8 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain('runAgentRequest');
   expect(source).toContain('processLifetime');
   expect(source).toContain('route-fixture@1.2.3');
-  expect(source).toContain('/project/src/mcp/curator/tools/inspect.tsx');
-  expect(source).toContain('/project/src/events/tool/after.tsx');
+  expect(source).toContain('../src/mcp/curator/tools/inspect.tsx');
+  expect(source).toContain('../src/events/tool/after.tsx');
   expect(source).toContain("message.invocation.kind === 'event'");
   // The worker resolves the event route by its hook identity but mounts the
   // compiled route id as `operationId`, the same id the hook shell, the
@@ -696,6 +710,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source.indexOf("type: 'end'")).toBeGreaterThan(source.indexOf("type: 'observed-render-finish'"));
 
   expect(generate({
+    projectRoot: '/project',
     artifactEpoch: 'route-fixture@1.2.3',
     eventRoutes: [{
       event: 'afterTool',
@@ -728,6 +743,7 @@ it('generates bulk-projected MCP commands with the CLI invocation and preserves 
     source: '/project/src/mcp/curator/tools/read_item.tsx',
   };
   const source = entryShellModule.generatedCliBinEntrySource({
+    projectRoot: '/project',
     commands: [{
       aliases: [],
       exitCode: 'zero',
@@ -749,7 +765,7 @@ it('generates bulk-projected MCP commands with the CLI invocation and preserves 
     workerFile: 'route-fixture-flight.mjs',
   });
 
-  expect(source).toContain('import * as routeModule0 from "/project/src/mcp/curator/tools/read_item.tsx"');
+  expect(source).toContain('import * as routeModule0 from "../src/mcp/curator/tools/read_item.tsx"');
   expect(source).toContain("invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }");
   expect(source).toContain("request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') }");
   expect(source).toContain('props: { input: parsed }');
@@ -770,6 +786,7 @@ it('imports explicit CLI projections and maps their input before canonical valid
     source: '/project/src/mcp/curator/tools/submit.tsx',
   };
   const source = entryShellModule.generatedCliBinEntrySource({
+    projectRoot: '/project',
     commands: [{
       aliases: [],
       exitCode: 'zero',
@@ -817,7 +834,7 @@ it('imports explicit CLI projections and maps their input before canonical valid
     workerFile: 'route-fixture-flight.mjs',
   });
 
-  expect(source).toContain('import * as projection0 from "/project/src/mcp/curator/tools/submit.cli.ts";');
+  expect(source).toContain('import * as projection0 from "../src/mcp/curator/tools/submit.cli.ts";');
   expect(source).toContain(
     '"tool:curator/submit": Object.freeze({ module: route0, projection: projection0 })',
   );
@@ -843,6 +860,7 @@ it('mounts the shell-probed terminal on every routed-CLI surface and forwards it
     source: '/project/src/cli/doctor.ts',
   };
   const bin = entryShellModule.generatedCliBinEntrySource({
+    projectRoot: '/project',
     commands: [{ aliases: [], exitCode: 'zero', options: [], path: ['doctor'], rendered: false, routeId: plainRoute.id }],
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [plainRoute],
@@ -850,12 +868,13 @@ it('mounts the shell-probed terminal on every routed-CLI surface and forwards it
   // Plain commands run in the executable itself: the shell's probe is the value.
   expect(bin).toContain("terminal: available(context.terminal, 'native'),");
 
-  const worker = entryShellModule.generatedRenderedRouteWorkerSource({ routes: [plainRoute] });
+  const worker = entryShellModule.generatedRenderedRouteWorkerSource({ projectRoot: '/project', routes: [plainRoute] });
   // A worker thread's own streams are pipes to the parent; it must never probe them.
   expect(worker).toContain("terminal: message.terminal === undefined ? unavailable('not-provided') : available(message.terminal, 'native'),");
   expect(worker).not.toContain('detectProcessTerminal');
 
   const flightWorker = entryShellModule.generatedRouteFlightWorkerSource({
+    projectRoot: '/project',
     artifactEpoch: 'route-fixture@1.2.3',
     routes: [],
     serverName: 'curator',
@@ -918,6 +937,7 @@ it('forwards the dispatched invocation to the rendered worker in every rendered 
 
 it('generates deterministic per-request provider execution in the shared Flight worker', () => {
   const source = entryShellModule.generatedRouteFlightWorkerSource({
+    projectRoot: '/project',
     artifactEpoch: 'route-fixture@1.2.3',
     providers: [
       {
@@ -943,10 +963,10 @@ it('generates deterministic per-request provider execution in the shared Flight 
     serverName: 'curator',
   });
 
-  expect(source).toContain('load: () => import("/project/src/providers/alpha-value.ts")');
-  expect(source).toContain('load: () => import("/project/src/providers/zeta.ts")');
-  expect(source.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
-    source.indexOf('/project/src/providers/zeta.ts'),
+  expect(source).toContain('load: () => import("../src/providers/alpha-value.ts")');
+  expect(source).toContain('load: () => import("../src/providers/zeta.ts")');
+  expect(source.indexOf('../src/providers/alpha-value.ts')).toBeLessThan(
+    source.indexOf('../src/providers/zeta.ts'),
   );
   expect(source).toContain('key: "alphaValue"');
   expect(source).toContain('await module.default({ ...request, invocation: message.invocation })');
@@ -976,6 +996,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
     routeId: route.id,
   };
   const withProviders = entryShellModule.generatedCliBinEntrySource({
+    projectRoot: '/project',
     commands: [command],
     plugin: { name: 'route-fixture', version: '1.2.3' },
     providers: [
@@ -996,10 +1017,10 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
   });
 
   // Same registry, ordering, invocation contract, and fail-closed wrapping as the Flight workers.
-  expect(withProviders).toContain('load: () => import("/project/src/providers/alpha-value.ts")');
-  expect(withProviders).toContain('load: () => import("/project/src/providers/zeta.ts")');
-  expect(withProviders.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
-    withProviders.indexOf('/project/src/providers/zeta.ts'),
+  expect(withProviders).toContain('load: () => import("../src/providers/alpha-value.ts")');
+  expect(withProviders).toContain('load: () => import("../src/providers/zeta.ts")');
+  expect(withProviders.indexOf('../src/providers/alpha-value.ts')).toBeLessThan(
+    withProviders.indexOf('../src/providers/zeta.ts'),
   );
   expect(withProviders).toContain('key: "alphaValue"');
   expect(withProviders).toContain(
@@ -1026,6 +1047,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
 
   // A project without providers still mounts only the framework-owned process identity.
   const withoutProviders = entryShellModule.generatedCliBinEntrySource({
+    projectRoot: '/project',
     commands: [command],
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [route],
@@ -1037,6 +1059,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
 
 it('mounts deterministic per-request providers in rendered route workers', () => {
   const source = entryShellModule.generatedRenderedRouteWorkerSource({
+    projectRoot: '/project',
     providers: [
       {
         id: 'provider:zeta',
@@ -1060,10 +1083,10 @@ it('mounts deterministic per-request providers in rendered route workers', () =>
     }],
   });
 
-  expect(source).toContain('load: () => import("/project/src/providers/alpha-value.ts")');
-  expect(source).toContain('load: () => import("/project/src/providers/zeta.ts")');
-  expect(source.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
-    source.indexOf('/project/src/providers/zeta.ts'),
+  expect(source).toContain('load: () => import("../src/providers/alpha-value.ts")');
+  expect(source).toContain('load: () => import("../src/providers/zeta.ts")');
+  expect(source.indexOf('../src/providers/alpha-value.ts')).toBeLessThan(
+    source.indexOf('../src/providers/zeta.ts'),
   );
   expect(source).toContain('await module.default({ ...request, invocation: message.invocation })');
   expect(source).toContain('resolveProvider: async (key, request) => {');
@@ -1095,6 +1118,7 @@ it('keeps the generated provider loop and the in-process execution helper identi
     },
   ];
   const source = entryShellModule.generatedRenderedRouteWorkerSource({
+    projectRoot: '/project',
     providers,
     routes: [{
       config: {},
@@ -1186,6 +1210,7 @@ const layoutFixtures = [
 
 it('composes the root and server layout chain around generated MCP routes and never around event routes', () => {
   const source = entryShellModule.generatedRouteFlightWorkerSource({
+    projectRoot: '/project',
     artifactEpoch: 'route-fixture@1.2.3',
     eventRoutes: [{
       event: 'afterTool',
@@ -1220,8 +1245,8 @@ it('composes the root and server layout chain around generated MCP routes and ne
   });
 
   // Layout imports are ordered by id so the emitted worker is deterministic.
-  expect(source).toContain('import * as layout0 from "/project/src/mcp/curator/layout.tsx"');
-  expect(source).toContain('import * as layout1 from "/project/src/layout.tsx"');
+  expect(source).toContain('import * as layout0 from "../src/mcp/curator/layout.tsx"');
+  expect(source).toContain('import * as layout1 from "../src/layout.tsx"');
   // Root first, then the owning server's layout — the outer-to-inner chain.
   expect(source).toContain('id: "tool:curator/inspect", kind: "tool", layouts: Object.freeze([1,0])');
   expect(source).toContain('serverId: "mcp:curator"');
@@ -1243,6 +1268,7 @@ it('imports only the layouts some route of the worker composes through, never an
   // only root layouts apply to its routes; the curator server layout must not
   // be evaluated in that process at all.
   const rendered = entryShellModule.generatedRenderedRouteWorkerSource({
+    projectRoot: '/project',
     layouts: layoutFixtures,
     routes: [
       {
@@ -1261,13 +1287,14 @@ it('imports only the layouts some route of the worker composes through, never an
       },
     ],
   });
-  expect(rendered).toContain('import * as layout0 from "/project/src/layout.tsx"');
-  expect(rendered).not.toContain('/project/src/mcp/curator/layout.tsx');
+  expect(rendered).toContain('import * as layout0 from "../src/layout.tsx"');
+  expect(rendered).not.toContain('../src/mcp/curator/layout.tsx');
   expect(rendered).toContain('"cli:library/audit": Object.freeze({ id: "cli:library/audit", kind: "cli", name: "library audit", module: route0, layouts: Object.freeze([0]) })');
   expect(rendered).toContain('"script:rebuild-index": Object.freeze({ id: "script:rebuild-index", kind: "script", name: "rebuild-index", module: route1, layouts: Object.freeze([0]) })');
 
   // Another generated server's worker likewise skips the curator layout.
   const otherServer = entryShellModule.generatedRouteFlightWorkerSource({
+    projectRoot: '/project',
     artifactEpoch: 'route-fixture@1.2.3',
     layouts: layoutFixtures,
     routes: [{
@@ -1280,8 +1307,8 @@ it('imports only the layouts some route of the worker composes through, never an
     }],
     serverName: 'other',
   });
-  expect(otherServer).toContain('import * as layout0 from "/project/src/layout.tsx"');
-  expect(otherServer).not.toContain('/project/src/mcp/curator/layout.tsx');
+  expect(otherServer).toContain('import * as layout0 from "../src/layout.tsx"');
+  expect(otherServer).not.toContain('../src/mcp/curator/layout.tsx');
   expect(otherServer).toContain('id: "resource:other/catalog", kind: "resource", layouts: Object.freeze([0])');
 
   // A server layout alone, for a worker whose routes never take it, leaves the
@@ -1294,12 +1321,13 @@ it('imports only the layouts some route of the worker composes through, never an
     provenance: { kind: 'conventional' as const, relativePath: 'src/cli/library/audit.tsx' },
     source: '/project/src/cli/library/audit.tsx',
   }];
-  expect(entryShellModule.generatedRenderedRouteWorkerSource({ layouts: serverOnly, routes: cliRoutes }))
-    .toBe(entryShellModule.generatedRenderedRouteWorkerSource({ routes: cliRoutes }));
+  expect(entryShellModule.generatedRenderedRouteWorkerSource({ projectRoot: '/project', layouts: serverOnly, routes: cliRoutes }))
+    .toBe(entryShellModule.generatedRenderedRouteWorkerSource({ projectRoot: '/project', routes: cliRoutes }));
 });
 
 it('emits an identity composition when no layout exists so layout-free workers render exactly the route element', () => {
   const source = entryShellModule.generatedRouteFlightWorkerSource({
+    projectRoot: '/project',
     artifactEpoch: 'route-fixture@1.2.3',
     routes: [{
       config: {},
@@ -1319,6 +1347,7 @@ it('emits an identity composition when no layout exists so layout-free workers r
 
 it('hands rendered CLI, projected MCP, and script routes their layout chain and protocol-facing name', () => {
   const source = entryShellModule.generatedRenderedRouteWorkerSource({
+    projectRoot: '/project',
     layouts: layoutFixtures,
     routes: [
       {
@@ -1367,6 +1396,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   });
   const base = {
     artifactEpoch: 'route-fixture@1.2.3',
+    projectRoot: '/project',
     routes: [route],
     serverName: 'curator',
   };
@@ -1386,7 +1416,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     noticeDelivery: claudeAdapter.noticeDelivery!,
     state: state('process'),
   });
-  expect(volatile).toContain('import stateDefinition from "/project/src/state.ts"');
+  expect(volatile).toContain('import stateDefinition from "../src/state.ts"');
   expect(volatile).toContain("createGeneratedRuntimeState");
   expect(volatile).toContain('createMemoryStateDriver({ lifetime: "process" })');
   expect(volatile).toContain('noticeLedger');
@@ -1398,6 +1428,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(stateless).not.toContain('agent-bundle:notice-inbox');
 
   const statelessEntry = entryShellModule.generatedRouteMcpEntrySource({
+    projectRoot: '/project',
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [route],
     serverName: 'curator',
@@ -1406,6 +1437,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(statelessEntry).not.toContain('@agent-bundle/runtime/notices/inbox-route');
   expect(statelessEntry).not.toContain('agent-bundle:notice-inbox');
   const volatileEntry = entryShellModule.generatedRouteMcpEntrySource({
+    projectRoot: '/project',
     noticeDelivery: claudeAdapter.noticeDelivery!,
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [route],
@@ -1430,6 +1462,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   }
 
   const durableEntry = entryShellModule.generatedRouteMcpEntrySource({
+    projectRoot: '/project',
     noticeDelivery: claudeAdapter.noticeDelivery!,
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [route],
@@ -1449,6 +1482,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(durableEntry).toContain('  notices: noticeDelivery,');
   // A declared `notices.retention` travels as one frozen literal too.
   const retainingEntry = entryShellModule.generatedRouteMcpEntrySource({
+    projectRoot: '/project',
     noticeDelivery: claudeAdapter.noticeDelivery!,
     noticeRetention: { maxJournalBytes: 1024, maxTerminal: 3, terminalTtlMs: 60_000 },
     plugin: { name: 'route-fixture', version: '1.2.3' },
@@ -1474,6 +1508,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     }),
   });
   const unsupportedEntry = entryShellModule.generatedRouteMcpEntrySource({
+    projectRoot: '/project',
     noticeDelivery: withoutResourceUpdated,
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [route],
@@ -1506,6 +1541,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     }),
   });
   const unadvertisedEntry = entryShellModule.generatedRouteMcpEntrySource({
+    projectRoot: '/project',
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [route],
     serverName: 'curator',
@@ -1513,6 +1549,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     workerFile: 'mcp-curator-flight.mjs',
   });
   const noInboxEntry = entryShellModule.generatedRouteMcpEntrySource({
+    projectRoot: '/project',
     noticeDelivery: withoutInbox,
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [route],
@@ -1549,6 +1586,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   // The reserved inbox name stays reserved so a host that later advertises the
   // route cannot collide with an authored one.
   expect(() => entryShellModule.generatedRouteMcpEntrySource({
+    projectRoot: '/project',
     noticeDelivery: withoutInbox,
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [{ ...route, config: { uri: 'agent-bundle://notices/inbox' }, id: 'resource:curator/inbox', kind: 'resource' }],
@@ -1568,6 +1606,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(durable).not.toContain('AGENT_BUNDLE_PLUGIN_ROOT');
 
   const renderedWorker = entryShellModule.generatedRenderedRouteWorkerSource({
+    projectRoot: '/project',
     routes: [{ ...route, id: 'script:report', kind: 'script' }],
     state: state('workspace-durable'),
   });
@@ -1585,6 +1624,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   } as const;
   const cliRoute = { ...route, id: command.routeId, kind: 'cli' as const };
   const statelessCli = entryShellModule.generatedCliBinEntrySource({
+    projectRoot: '/project',
     commands: [command],
     plugin: { name: 'fixture', version: '1.0.0' },
     routes: [cliRoute],
@@ -1592,6 +1632,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(statelessCli).not.toContain('@agent-bundle/runtime/mount');
   expect(statelessCli).not.toContain('noticeLedger');
   const volatileCli = entryShellModule.generatedCliBinEntrySource({
+    projectRoot: '/project',
     commands: [command],
     plugin: { name: 'fixture', version: '1.0.0' },
     routes: [cliRoute],

@@ -221,6 +221,7 @@ export const planScriptsSurface = async (
             source,
             sourceInputs: workerSourceInputs,
             virtualSource: generatedRenderedRouteWorkerSource({
+              projectRoot: options.cwd,
               ...(options.layouts === undefined ? {} : { layouts: options.layouts }),
               ...(options.providers === undefined ? {} : { providers: options.providers }),
               routes: [{
@@ -252,7 +253,7 @@ export const planScriptsSurface = async (
         ...(mainExports.get(source) === true
           ? {
             aliases: { [terminalCapabilityRuntimeSpecifier]: terminalProbe! },
-            virtualSource: generatedExecutableEntrySource({ entrySource: source, exportName: 'main', hostSurface: 'script' }),
+            virtualSource: generatedExecutableEntrySource({ projectRoot: options.cwd, entrySource: source, exportName: 'main', hostSurface: 'script' }),
           }
           : {}),
       })];
@@ -395,6 +396,7 @@ export const planMcpEntriesSurface = async (
     readonly noticeDelivery?: NoticeDeliveryAdvertisement;
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
+    readonly projectRoot: string;
     readonly providers?: readonly CompiledProvider[];
     readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
@@ -429,6 +431,7 @@ export const planMcpEntriesSurface = async (
     return server?.generatedRoutes === undefined
       ? undefined
       : generatedRouteMcpEntrySource({
+        projectRoot: options.projectRoot,
         artifactEpoch: options.artifactEpoch,
         eventRoutes: hostsRuntime(entry.id) ? options.eventHooks : [],
         ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
@@ -447,6 +450,7 @@ export const planMcpEntriesSurface = async (
     return server?.generatedRoutes === undefined
       ? undefined
       : generatedRouteFlightWorkerSource({
+        projectRoot: options.projectRoot,
         artifactEpoch: generatedRouteArtifactEpoch(options.plugin),
         eventRoutes: hostsRuntime(entry.id) ? options.eventHooks : [],
         layouts: options.layouts ?? [],
@@ -465,10 +469,10 @@ export const planMcpEntriesSurface = async (
   const entryShells = await Promise.all(compiled.map(async (entry, index) => {
     const serverName = entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name;
     if (generatedRouteSources[index] !== undefined) {
-      return generatedStdioMcpEntrySource({ entrySource: routeModuleSpecifier, serverName });
+      return generatedStdioMcpEntrySource({ projectRoot: options.projectRoot, entrySource: routeModuleSpecifier, serverName });
     }
     return (await scanEntryExports(entry.source)).hasDefaultExport
-      ? generatedStdioMcpEntrySource({ entrySource: entry.source, serverName })
+      ? generatedStdioMcpEntrySource({ projectRoot: options.projectRoot, entrySource: entry.source, serverName })
       : undefined;
   }));
   const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
@@ -636,6 +640,7 @@ export const planHooksSurface = (
     readonly noticeDelivery?: NoticeDeliveryAdvertisement;
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
+    readonly projectRoot: string;
     readonly providers?: readonly CompiledProvider[];
     readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
@@ -669,6 +674,7 @@ export const planHooksSurface = (
       ]),
     ]),
     virtualSource: generatedRouteFlightWorkerSource({
+      projectRoot: options.projectRoot,
       artifactEpoch: workerArtifactEpoch,
       eventRoutes: standaloneEventRoutes,
       ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
@@ -706,7 +712,7 @@ export const planHooksSurface = (
           source: entry.source,
           sourceInputs: entry.sourceInputs,
           virtualSource: hook.virtualSource
-            .replace(eventProviderRegistryToken, [...eventHandlerStateSource(options.state, options), ...providerRegistrySource(options.providers ?? [])].join('\n'))
+            .replace(eventProviderRegistryToken, [...eventHandlerStateSource(options.projectRoot, options.state, options), ...providerRegistrySource(options.projectRoot, options.providers ?? [])].join('\n'))
             .replace(eventProviderFieldsToken, providersFieldSource(options.providers ?? [], { indent: '    ', invocation: '{ kind: "event", props: { event: canonicalEvent, payload: native } }', observe: 'true', observer: 'observeProvider' }).join('\n'))
             .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
             .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
