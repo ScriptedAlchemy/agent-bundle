@@ -94,7 +94,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 在 `mcp run` 之下，**env 取值**中的 plugin-root 锚点默认展开到项目根目录，而不是产物：在那里产物只是
 一个临时构建产物，把持久状态锚定其上会让状态在每次重建时被割裂。若要按字节忠实地演练一次「复制产物后
-启动」，请传入指向产物根目录本身，组合插件根目录，而不是某个宿主子目录，的 `--plugin-root <path>`。
+启动」，请传入指向产物根目录本身（组合插件根目录，而不是某个宿主子目录）的 `--plugin-root <path>`。
 除非 `AGENT_BUNDLE_STATE_ROOT` 指定了位置，状态根目录随后从展开后的代码根目录推导
 （`~/.agent-bundle/state/<project>-<digest>`）。由 `agent-bundle dev` 启动的 Workbench MCP 会话与
 Workbench 路由调用会把 `AGENT_BUNDLE_STATE_ROOT` 固定为 `<project>/.agent-bundle/state`，每个项目
