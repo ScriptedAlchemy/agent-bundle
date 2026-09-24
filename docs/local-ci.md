@@ -246,7 +246,7 @@ then treat a repeat as a real signal.
 
 - **Registry 5xx while setting up the job.** Every hosted job installs pnpm,
   Node, and dependencies through the shared `.github/actions/setup-workspace`
-  action. `pnpm/setup@v2` downloads the pnpm executable from the npm registry
+  action. `pnpm/setup@v3` downloads the pnpm executable from the npm registry
   as its first network call and exposes no retry input, so the action retries
   it once after 15 s, then runs `pnpm install --frozen-lockfile` up to three
   times (10 s, then 20 s back-off). A persistent outage still fails the job
