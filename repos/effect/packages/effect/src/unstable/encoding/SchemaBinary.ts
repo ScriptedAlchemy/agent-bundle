@@ -23,7 +23,7 @@ import { dual, memoize } from "../../Function.ts"
 import * as HashMap from "../../HashMap.ts"
 import * as HashSet from "../../HashSet.ts"
 import { assignProperty } from "../../internal/record.ts"
-import * as InternalParser from "../../internal/schema/parser.ts"
+import * as InternalParserProtocol from "../../internal/schema/parser.ts"
 import * as Option from "../../Option.ts"
 import * as Predicate from "../../Predicate.ts"
 import * as Pull from "../../Pull.ts"
@@ -921,7 +921,7 @@ const BIGINT_U32_MASK = BigInt(0xFFFFFFFF)
 const BIGINT_THIRTY_TWO = BigInt(32)
 
 const utf8Encode = new TextEncoder()
-const utf8DecodeFatal = new TextDecoder("utf-8", { fatal: true })
+const utf8DecodeFatal = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
 
 // General numbers use up to seven varint bytes, a varint mantissa with a
 // decimal scale byte, or an eight-byte f64.
@@ -2112,8 +2112,7 @@ function resolveSuspend(ast: SchemaAST.AST): SchemaAST.AST {
 
 function enumsToLiterals(ast: SchemaAST.Enum): SchemaAST.Union<SchemaAST.Literal> {
   return new SchemaAST.Union(
-    ast.enums.map((e) => new SchemaAST.Literal(e[1], { title: e[0] })),
-    "anyOf"
+    ast.enums.map((e) => new SchemaAST.Literal(e[1], { title: e[0] }))
   )
 }
 
@@ -2625,8 +2624,7 @@ function isExact(root: SchemaAST.AST): boolean {
   const exact = (ast: SchemaAST.AST): boolean => {
     if (
       ast.encoding !== undefined || ast.checks !== undefined ||
-      (ast as { readonly encodingChecks?: SchemaAST.Checks }).encodingChecks !== undefined ||
-      ast.annotations?.parseOptions !== undefined
+      (ast as { readonly encodingChecks?: SchemaAST.Checks }).encodingChecks !== undefined
     ) {
       return false
     }
@@ -2660,7 +2658,7 @@ function isExact(root: SchemaAST.AST): boolean {
             signature.parameter._tag === "String" && exact(signature.parameter) && exact(signature.type)
           )
       case "Union":
-        return ast.mode === "anyOf" && ast.types.every(exact)
+        return (ast.options?.mode ?? "anyOf") === "anyOf" && ast.types.every(exact)
       // The layout compiles straight through a suspend, so the binary layer
       // validates whatever the thunk returns. Only decoding gets to act on
       // this: encoding a recursive schema still needs the cycle walk, which is
@@ -2693,7 +2691,6 @@ function isExitWithExactSuccess(root: SchemaAST.AST): boolean {
   return root._tag === "Declaration" &&
     root.encoding === undefined && root.checks === undefined &&
     (root as { readonly encodingChecks?: SchemaAST.Checks }).encodingChecks === undefined &&
-    root.annotations?.parseOptions === undefined &&
     representationId(root) === "effect/schema/Exit" &&
     isExact(root.typeParameters[0])
 }
@@ -5080,7 +5077,7 @@ function makeTransformation(
   trusted: Trusted | undefined,
   successOnly = false
 ): SchemaTransformation.Transformation<unknown, Uint8Array<ArrayBuffer>> {
-  return SchemaTransformation.transformOrFail({
+  return SchemaTransformation.transformEffect({
     decode: (bytes: Uint8Array<ArrayBuffer>, options) => {
       try {
         const value = decodeOneShot(layout, bytes, options, mode)
@@ -5159,9 +5156,9 @@ function bypassPass(
   // says without allocating one per call.
   const run = (
     accept: (input: unknown, options: SchemaAST.ParseOptions) => boolean
-  ): SchemaAST.DeclarationRun =>
+  ): SchemaAST.Declaration["run"] =>
   () =>
-  (input, _ast, options) => accept(input, options) ? InternalParser.sameExit : parse(input, options)
+  (input, _ast, options) => accept(input, options) ? InternalParserProtocol.sameExit : parse(input, options)
   return Schema.make(
     new SchemaAST.Declaration(
       [type.ast],

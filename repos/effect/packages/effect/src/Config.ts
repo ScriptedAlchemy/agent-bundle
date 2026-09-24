@@ -12,7 +12,6 @@ import * as ConfigProvider from "./ConfigProvider.ts"
 import * as Effect from "./Effect.ts"
 import * as Effectable from "./Effectable.ts"
 import { dual, memoize } from "./Function.ts"
-import * as InternalConfig from "./internal/config.ts"
 import * as InternalRecord from "./internal/record.ts"
 import * as LogLevel_ from "./LogLevel.ts"
 import * as Option from "./Option.ts"
@@ -692,7 +691,7 @@ const decodeFromCursor = (
     SchemaAST.unknown,
     ast,
     new SchemaTransformation.Transformation(
-      SchemaGetter.transformOrFail((input: unknown) => decode(input as ConfigCursor)),
+      SchemaGetter.transformEffect((input: unknown) => decode(input as ConfigCursor)),
       SchemaGetter.passthrough()
     )
   )
@@ -1194,7 +1193,8 @@ export function Array<V extends Schema.ConstraintCodec<unknown, unknown>>(
   const arrayString = Schema.String.pipe(
     Schema.decodeTo(Schema.toCodecStringTree(array), {
       decode: SchemaGetter.split(resolvedOptions),
-      encode: SchemaGetter.passthrough<ReadonlyArray<string>, Schema.StringTree>({ strict: false }).compose(
+      encode: SchemaGetter.compose(
+        SchemaGetter.passthrough<ReadonlyArray<string>, Schema.StringTree>({ strict: false }),
         SchemaGetter.transform((input) => input.join(separator))
       )
     })
@@ -1271,7 +1271,8 @@ export function Record<
   const recordString = Schema.String.pipe(
     Schema.decodeTo(Schema.toCodecStringTree(record), {
       decode: split.decode,
-      encode: SchemaGetter.passthrough<Record<string, string>, Schema.StringTree>({ strict: false }).compose(
+      encode: SchemaGetter.compose(
+        SchemaGetter.passthrough<Record<string, string>, Schema.StringTree>({ strict: false }),
         split.encode
       )
     })
@@ -1314,7 +1315,7 @@ export function Record<
  * @since 2.0.0
  */
 export function Boolean(name?: string) {
-  return schema(InternalConfig.boolean, name)
+  return schema(Schema.BooleanLiterals, name)
 }
 
 /**
