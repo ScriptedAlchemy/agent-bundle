@@ -270,6 +270,28 @@ it('accepts shorthand maxRetries and ignores a shadowed local rm', () => {
   ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
 });
 
+it('ignores loop, switch-case, and named function expression shadows only in their scope', () => {
+  expect(recursiveRmCalls(sample([
+    "import { promises as fs } from 'node:fs';",
+    `for (const fs of mockFilesystems) await fs.rm(root, { ${recursiveTrue} });`,
+    `for (const [, fs] of entries) { await fs.rm(root, { ${recursiveTrue} }); }`,
+    `for (let fs = mock; fs; fs = undefined) await fs.rm(root, { ${recursiveTrue} });`,
+    `await fs.rm(root, { ${recursiveTrue} });`,
+  ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 5 })]);
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    'switch (mode) {',
+    '  case 1:',
+    '    const rm = mockRm;',
+    `    await rm(root, { ${recursiveTrue} });`,
+    '}',
+    `const again = async function rm() { await rm(root, { ${recursiveTrue} }); };`,
+    `const inner = () => { const rm = mockRm; return rm(root, { ${recursiveTrue} }); };`,
+    `await rm(root, { ${recursiveTrue} });`,
+  ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 9 })]);
+});
+
 it('flags promises-namespace and asserted options without maxRetries', () => {
   expect(removalBindings(`import { promises as fs } from 'node:fs';`)).toEqual({
     bareNames: new Set(),
