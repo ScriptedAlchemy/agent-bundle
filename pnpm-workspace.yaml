@@ -20,17 +20,7 @@ overrides:
   'typedoc>typescript': npm:typescript@6.0.3
 allowBuilds:
   '@google/genai': false
-  msgpackr-extract: false
   protobufjs: false
-minimumReleaseAgeExclude:
-  - '@effect/tsgo-darwin-arm64@0.39.0'
-  - '@effect/tsgo-darwin-x64@0.39.0'
-  - '@effect/tsgo-linux-arm64@0.39.0'
-  - '@effect/tsgo-linux-arm@0.39.0'
-  - '@effect/tsgo-linux-x64@0.39.0'
-  - '@effect/tsgo-win32-arm64@0.39.0'
-  - '@effect/tsgo-win32-x64@0.39.0'
-  - '@effect/tsgo@0.39.0'
 # LocalProvider.init() awaits FlexSearch addAsync so the first search query
 # cannot race the index build (#590; upstream web-infra-dev/rspress#3658).
 # Drop the patch once a release awaits the adds.

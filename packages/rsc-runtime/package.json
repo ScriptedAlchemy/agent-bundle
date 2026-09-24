@@ -92,7 +92,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
-    "effect": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.117",
     "flare-redact": "1.6.1",
     "react-server-dom-rspack": "0.1.0",
     "rsc-markdown-stream": "workspace:^"
