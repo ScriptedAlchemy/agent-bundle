@@ -108,7 +108,8 @@ beforeAll(async () => {
     writeFile(join(project, 'agent-bundle.config.ts'), [
       'export default {',
       `  bin: { '${binName}': './src/install-bin.ts' },`,
-      "  output: { distPath: 'artifact' },",
+      "  marketplace: true,",
+      "  output: { distPath: 'artifact', repositoryMarketplace: true },",
       `  plugin: { description: 'Installs itself through agent-bundle/install.', name: '${packageName}' },`,
       "  targets: ['cursor'],",
       '};',
@@ -138,6 +139,8 @@ beforeAll(async () => {
     cwd: project,
     env: installEnv,
   });
+  const marketplace = JSON.parse(await readFile(join(project, '.cursor-plugin/marketplace.json'), 'utf8'));
+  expect(marketplace.plugins).toEqual([expect.objectContaining({ name: packageName, source: './artifact' })]);
 
   const tarballs = join(consumer, 'tarballs');
   const installed = join(consumer, 'installed');

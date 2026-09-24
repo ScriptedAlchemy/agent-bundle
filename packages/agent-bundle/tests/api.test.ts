@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { TargetRegistry, build, createDefaultRegistry, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
+import { TargetRegistry, build, createDefaultRegistry, inspect, invokeMcp, listHooks, listMcp, serveApp, simulateHook, validate } from '../src/api.ts';
 import { unavailableCapability } from '../src/adapters/capability-state.ts';
 import {
   nativeHookWrapperSource,
@@ -371,6 +371,82 @@ it('reports one modern-MCP source diagnostic for a legacy SSE declaration', asyn
     expect(Object.isFrozen(diagnostics[0])).toBe(true);
   } finally {
     await removeTree(join(root, '..'));
+  }
+});
+
+it('emits repository marketplaces from the selected host plans without making outputs source inputs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-repository-'));
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), `export default {
+      plugin: { name: 'repository-fixture', version: '1.0.0' },
+      marketplace: true,
+      output: { distPath: 'artifact', repositoryMarketplace: true },
+      targets: ['claude', 'codex', 'cursor'],
+    };`);
+    const first = await build({ root });
+    const second = await build({ root });
+    expect(second.projectContext.sourceInputs).toEqual(first.projectContext.sourceInputs);
+    const marketplaceBeforeOperations = await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8');
+    await listHooks({ root, target: 'cursor' });
+    expect(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(marketplaceBeforeOperations);
+    const serveEvents: string[] = [];
+    await expect(serveApp({
+      app: 'missing/missing',
+      logger: { log: (event) => { serveEvents.push(event); } },
+      root,
+      target: 'cursor',
+    })).rejects.toThrow();
+    expect(serveEvents).toContain('artifact.build');
+    expect(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(marketplaceBeforeOperations);
+    for (const path of ['.claude-plugin/marketplace.json', '.cursor-plugin/marketplace.json', '.agents/plugins/marketplace.json']) {
+      const repository = JSON.parse(await readFile(join(root, path), 'utf8'));
+      const artifact = JSON.parse(await readFile(join(root, 'artifact', path), 'utf8'));
+      expect(repository.plugins[0].source).toEqual(path.startsWith('.agents')
+        ? { source: 'local', path: './artifact' }
+        : './artifact');
+      expect(artifact.plugins[0].source).toEqual(path.startsWith('.agents')
+        ? { source: 'local', path: './' }
+        : './');
+      repository.plugins[0].source = artifact.plugins[0].source;
+      expect(repository).toEqual(artifact);
+      expect(second.projectContext.sourceInputs.some((input) => input.path === path)).toBe(false);
+    }
+    await expect(validate({ artifact: join(root, 'artifact'), root })).resolves.toEqual({ diagnostics: [] });
+    await build({ output: 'release/plugin', root });
+    expect(JSON.parse(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).plugins[0].source)
+      .toBe('./release/plugin');
+    await build({ output: '.agent-bundle/eval/artifact', repositoryMarketplaces: false, root });
+    expect(JSON.parse(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).plugins[0].source)
+      .toBe('./release/plugin');
+    await expect(build({ output: '.cursor-plugin', root })).rejects.toThrow('overlaps the artifact output');
+    await symlink(join(root, 'artifact'), join(root, 'linked-artifact'), 'dir');
+    await expect(build({ output: 'linked-artifact', root })).rejects.toThrow('real artifact output directory');
+    await symlink(root, join(root, 'alias'), 'dir');
+    await expect(build({ output: 'alias/.cursor-plugin', root })).rejects.toThrow('overlaps the artifact output');
+    await build({ output: 'alias/release/plugin', root });
+    expect(JSON.parse(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).plugins[0].source)
+      .toBe('./release/plugin');
+  } finally {
+    await removeTree(root);
+  }
+});
+
+it('leaves repository marketplaces alone by default and refuses symlinked output parents when enabled', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-repository-symlink-'));
+  try {
+    const config = { plugin: { name: 'repository-fixture', version: '1.0.0' }, marketplace: true, targets: ['cursor'] };
+    await writeFile(join(root, 'agent-bundle.config.ts'), `export default ${JSON.stringify(config)};`);
+    await build({ root });
+    await expect(stat(join(root, '.cursor-plugin'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const other = join(root, 'authored');
+    await mkdir(other);
+    await writeFile(join(other, 'marketplace.json'), 'preserve me');
+    await symlink(other, join(root, '.cursor-plugin'), 'dir');
+    await writeFile(join(root, 'agent-bundle.config.ts'), `export default ${JSON.stringify({ ...config, output: { repositoryMarketplace: true } })};`);
+    await expect(build({ root })).rejects.toThrow('cannot replace or traverse');
+    expect(await readFile(join(other, 'marketplace.json'), 'utf8')).toBe('preserve me');
+  } finally {
+    await removeTree(root);
   }
 });
 

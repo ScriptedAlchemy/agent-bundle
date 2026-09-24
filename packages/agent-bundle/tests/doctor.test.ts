@@ -1160,12 +1160,13 @@ it('validates --from Codex bytes without running the live schema generator', asy
         return commandResult({ stdout: 'codex 0.147.0\n' });
       },
       endpointDirectory: fixture.endpointDirectory,
+      environment: {},
       from: bundle,
       home: fixture.home,
       hosts: ['codex'],
     });
 
-    // Read-only inventory only: the version probe and the pinned `plugin list --json`, never the schema generator.
+    // Read-only version and inventory probes, never the schema generator.
     expect(calls).toEqual([
       expect.objectContaining({ args: ['--version'], executable: 'codex' }),
       expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle, executable: 'codex' }),

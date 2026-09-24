@@ -121,7 +121,13 @@ it('validates and reads an explicit artifact exactly and builds one run-owned co
   await withWorkspace(async () => {
     try {
       const output = join(project.root, 'explicit-artifact');
+      await writeFile(join(project.root, 'agent-bundle.config.ts'), `export default {
+        plugin: { name: 'eval-repository-fixture', version: '1.0.0' },
+        targets: ['cursor'], marketplace: true,
+        output: { repositoryMarketplace: true },
+      };`);
       await build({ output, root: project.root });
+      const repositoryMarketplace = await readFile(join(project.root, '.cursor-plugin/marketplace.json'), 'utf8');
 
       const explicitWriter = await createEvalRun({
         artifact: { manifestPath: 'pending', source: 'explicit', targetDigests: { portable: 'pending' } },
@@ -154,6 +160,7 @@ it('validates and reads an explicit artifact exactly and builds one run-owned co
       expect(current.binding.source).toBe('run-owned');
       expect(current.root).toBe(join(sourceWriter.directory, 'artifacts', 'target'));
       expect(current.binding.targetDigests).toEqual(explicit.binding.targetDigests);
+      expect(await readFile(join(project.root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(repositoryMarketplace);
       await expect(prepareEvalArtifact({
         artifact: join(project.root, 'absent'),
         projectRoot: project.root,

@@ -21,6 +21,23 @@ project. They deliberately do not fetch a package by the unqualified `agent-bund
 
 ## The pipeline
 
+For installation from a source repository, configure the compiler to emit its root marketplace:
+
+```ts
+export default defineConfig({
+  plugin: { name: 'my-plugin' },
+  targets: ['cursor', 'portable'],
+  marketplace: true,
+  output: { distPath: 'artifact', repositoryMarketplace: true },
+});
+```
+
+After building, commit `artifact/` and `.cursor-plugin/marketplace.json` (use `git add -f`
+for ignored generated output). The root marketplace points to `./artifact`; every plugin
+manifest, script, skill, and installer is emitted by Agent Bundle. Consumers do not build.
+The same option emits `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`
+when Claude and Codex are selected. CI only needs to build, validate, and commit the output.
+
 ```sh
 npx --no-install agent-bundle build --output artifact
 npx --no-install agent-bundle validate --artifact artifact --strict
