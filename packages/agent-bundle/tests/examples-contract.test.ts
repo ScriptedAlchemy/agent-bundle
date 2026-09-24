@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,6 +10,7 @@ import { expect, it } from '@rstest/core';
 
 import { build, inspect, invokeMcp, listHooks, listMcp, runEvals, simulateHook, validate } from '../src/api.ts';
 import { projectVersionLabel } from '../src/core/project-context.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const examplesRoot = join(process.cwd(), 'examples');
@@ -17,7 +18,7 @@ const examplesRoot = join(process.cwd(), 'examples');
 it('builds the Skills Starter through public Agent Bundle APIs', async () => {
   const root = join(examplesRoot, 'skills-starter');
   const output = join(root, '.agent-bundle', 'example-contract');
-  await rm(output, { force: true, recursive: true });
+  await removeTree(output);
 
   try {
     const inspection = await inspect({ root });
@@ -97,7 +98,7 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
       }],
     });
   } finally {
-    await rm(output, { force: true, recursive: true });
+    await removeTree(output);
   }
 });
 
@@ -106,7 +107,7 @@ it('publishes the MCP App example service readiness across targets and returns d
   const stateRoot = join(root, '.agent-bundle');
   const output = join(stateRoot, 'example-contract');
   const unrelatedCwd = await mkdtemp(join(tmpdir(), 'mcp-app-fixture-check-'));
-  await rm(stateRoot, { force: true, recursive: true });
+  await removeTree(stateRoot);
 
   try {
     const built = await build({ output, root });
@@ -235,8 +236,8 @@ it('publishes the MCP App example service readiness across targets and returns d
     });
   } finally {
     await Promise.all([
-      rm(stateRoot, { force: true, recursive: true }),
-      rm(unrelatedCwd, { force: true, recursive: true }),
+      removeTree(stateRoot),
+      removeTree(unrelatedCwd),
     ]);
   }
 }, 30_000);
@@ -245,7 +246,7 @@ it('simulates the Hooks example and executes release checks', async () => {
   const root = join(examplesRoot, 'hooks-and-scripts');
   const output = join(root, '.agent-bundle', 'example-contract');
   const unrelatedCwd = await mkdtemp(join(tmpdir(), 'hooks-and-scripts-contract-'));
-  await rm(output, { force: true, recursive: true });
+  await removeTree(output);
 
   try {
     const built = await build({ output, root });
@@ -289,8 +290,8 @@ it('simulates the Hooks example and executes release checks', async () => {
     expect(blocker.code).toBe(2);
   } finally {
     await Promise.all([
-      rm(output, { force: true, recursive: true }),
-      rm(unrelatedCwd, { force: true, recursive: true }),
+      removeTree(output),
+      removeTree(unrelatedCwd),
     ]);
   }
 });
@@ -329,7 +330,7 @@ it('serves the routed Audiobook Curator artifact through a real MCP client and i
   let client: Client | undefined;
   try {
     const compiled = await build({ output, root, targets: ['claude'] });
-    await rm(join(root, 'src'), { force: true, recursive: true });
+    await removeTree(join(root, 'src'));
     const server = compiled.model.mcpServers.find((candidate) => candidate.name === 'curator');
     expect(server?.generatedRoutes).toHaveLength(18);
     const entry = join(output, server!.args![0]!);
@@ -375,6 +376,6 @@ it('serves the routed Audiobook Curator artifact through a real MCP client and i
     });
   } finally {
     await client?.close();
-    await rm(fixtureRoot, { force: true, recursive: true });
+    await removeTree(fixtureRoot);
   }
 });

@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ import {
   removeProjectSource,
   type DeletedSourceReceipt,
 } from '../src/test/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 describe('deleted-source artifact evidence', () => {
   it('removes conventional project source and returns a frozen relative receipt', async () => {
@@ -33,7 +34,7 @@ describe('deleted-source artifact evidence', () => {
       await expect(access(join(projectRoot, 'agent-bundle.config.ts'))).rejects.toThrow();
       await expect(access(join(projectRoot, 'src'))).rejects.toThrow();
     } finally {
-      await rm(projectRoot, { force: true, recursive: true });
+      await removeTree(projectRoot);
     }
   });
 
@@ -45,7 +46,7 @@ describe('deleted-source artifact evidence', () => {
       expect(error).toBeInstanceOf(AgentTestError);
       expect((error as AgentTestError).code).toBe('deleted-source-unverified');
     } finally {
-      await rm(projectRoot, { force: true, recursive: true });
+      await removeTree(projectRoot);
     }
   });
 
@@ -66,7 +67,7 @@ describe('deleted-source artifact evidence', () => {
       expect((error as AgentTestError).code).toBe('deleted-source-unverified');
       expect((error as AgentTestError).message).toContain(proofLevelLabel('packed-deleted-source'));
     } finally {
-      await rm(projectRoot, { force: true, recursive: true });
+      await removeTree(projectRoot);
     }
   });
 
@@ -94,7 +95,7 @@ describe('deleted-source artifact evidence', () => {
       expect((error as AgentTestError).message).toContain(projectA);
       expect((error as AgentTestError).message).toContain(entry);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 
@@ -122,7 +123,7 @@ describe('deleted-source artifact evidence', () => {
       expect((error as AgentTestError).message).toContain(projectA);
       expect((error as AgentTestError).message).toContain(projectB);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 });

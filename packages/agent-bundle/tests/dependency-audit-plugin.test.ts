@@ -1,7 +1,7 @@
 import type { Rspack } from '@rsbuild/core';
 import { createRslib } from '@rslib/core';
 import { describe, expect, it } from '@rstest/core';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import type { CompilationEvidence } from '../src/build/compile-result.ts';
 import { ArtifactDependencyAuditPlugin } from '../src/build/dependency-audit-plugin.ts';
 import { composeEntryLibConfig, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const testMeta: AgentBundleMeta = Object.freeze({
   name: 'dependency-audit-probe-plugin',
@@ -114,7 +115,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
       expect(Object.isFrozen(record?.externals)).toBe(true);
       expect(Object.isFrozen(record?.modules)).toBe(true);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -124,7 +125,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
       const [record] = await buildRecording(root, [entry], withExternals('left-pad'));
       expectLeftPadExternal(record, source, 'module');
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -137,7 +138,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
       });
       expectLeftPadExternal(record, source, 'node-commonjs');
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -150,7 +151,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
       }));
       expectLeftPadExternal(record, source, 'module');
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -166,7 +167,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
         { externalType: 'module', issuers: [source], request: 'lp', userRequest: 'left-pad' },
       ]);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -178,7 +179,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
         { externalType: 'module', issuers: [source], request: 'lp|"x', userRequest: 'left-pad' },
       ]);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -202,7 +203,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
         { externalType: 'module', issuers: [source], request: 'lp', userRequest: 'left-pad' },
       ]);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -213,7 +214,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
       expect(record?.externals).toEqual([{ externalType: 'module', issuers: [source], request: './sibling.js', userRequest: './sibling.js' }]);
       expect(record?.modules.map((module) => module.resource)).toEqual([source]);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -232,7 +233,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
         source,
       ]);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -253,7 +254,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
       await expect(readFile(join(root, 'dist', 'scripts', 'probe.mjs'), 'utf8')).resolves
         .toContain('import(process.argv[2])');
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 
@@ -267,7 +268,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
         expect(record.externals.map((external) => external.request)).toEqual(['node:fs']);
       }
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }, 20_000);
 });
@@ -295,6 +296,6 @@ it('uses transformed dependencies to allow types and reject direct or aliased co
       expect(diagnostics).toEqual([expect.objectContaining({ code: 'AB4837', sourcePath: source })]);
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 60_000);

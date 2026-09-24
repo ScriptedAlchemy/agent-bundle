@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,6 +21,7 @@ import {
   type RuntimeMcpExecutionContext,
   type RuntimeMcpExecutionValue,
 } from '../src/dev/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const deferred = <T = void>(): Readonly<{
   readonly promise: Promise<T>;
@@ -240,7 +241,7 @@ const createGenerationStore = async (retainInactive?: number): Promise<Readonly<
   }> = {
     close: async () => {
       await store.close().catch(() => undefined);
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     },
     commit: async (id) => {
       const candidate = await store.begin({ id, sourceRevision: `source-${id}` });

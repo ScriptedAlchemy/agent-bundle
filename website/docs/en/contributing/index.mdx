@@ -70,17 +70,14 @@ pnpm changeset
 
 Pick the affected packages and the bump, and describe the change from the reader's side — a
 changeset is release-note copy, not a commit message. `pnpm version-packages` applies pending
-changesets, and publishing runs `pnpm check:release` before `changeset publish`. Private
-workspace packages, including the examples and this site, are not versioned or tagged.
+changesets, and a Version Packages merge runs `pnpm check:release` after its pkg.pr.new previews
+resolve. Private workspace packages, including the examples and this site, are not versioned.
 
-Nothing is published to npm yet. The current release channel is the pkg.pr.new preview
+The package distribution channel is the pkg.pr.new preview
 tarballs described in [Preview packages](../guide/distribution/preview-packages.mdx).
 Each `Release packages` run writes an explicit outcome to the workflow summary:
-`version-maintenance-only` (Version Packages PR refreshed), `published` (every publishable
-`package.json` version resolved on npm; the stage list says whether this run published or
-the versions were already on the registry), or `failed`. A Version Packages merge whose versions
-are not on npm — publishing disabled, token missing, or a silent `changeset publish`
-failure — is `failed` and **NOT PUBLISHED**, never a green qualification.
+`version-maintenance-only` (Version Packages PR refreshed), `preview-release` (the merge commit
+passed release gates and all four commit-addressed pkg.pr.new URLs resolved), or `failed`.
 
 ## Native host smokes are opt-in
 
@@ -101,9 +98,9 @@ rather than reporting a pass it did not earn. That boundary is the whole point o
 levels in [Testing](../guide/development/testing.mdx): a level is never reported as a receipt for
 a stronger one.
 
-Dependency review, package previews, and the release publish workflow are hosted-only for
+Dependency review, package previews, and the Release packages workflow are hosted-only for
 structural reasons — the first reads GitHub's advisory database against the pull-request diff,
-and the other two are publish-side effects rather than checks.
+and the other two publish to pkg.pr.new; Release packages also verifies the remote commit URLs.
 
 ## Working on the Workbench UI
 

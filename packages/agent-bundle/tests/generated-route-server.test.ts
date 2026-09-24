@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -16,11 +16,12 @@ import {
   requestEventRuntimeStatus,
 } from '../src/events/ipc.ts';
 import { eventuallyPasses } from './support/eventually.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const writeProjectFile = async (root: string, path: string, contents: string): Promise<void> => {
@@ -115,7 +116,7 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
     writeProjectFile(root, 'src/mcp/curator/tools/inspect.tsx', [
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { z } from 'zod';",
-      "export const config = { annotations: { readOnlyHint: true }, description: 'Inspect one source.' };",
+      "export const config = { annotations: { readOnlyHint: true }, description: 'Inspect one source.', excludeClients: ['codex'] };",
       "export const inputSchema = z.object({ source: z.string() }).strict();",
       "export const resultSchema = z.object({ actor: z.unknown(), host: z.unknown(), invocationKind: z.literal('tool'), lineage: z.unknown(), session: z.unknown(), source: z.string(), workspace: z.unknown() }).strict();",
       'export default async function Inspect({ input, signal }) {',
@@ -209,6 +210,14 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
     });
   } finally {
     await client.close();
+  }
+  const excludedClient = new Client({ name: 'Codex_cli_rs', version: '0.0.0' });
+  try {
+    await excludedClient.connect(new StdioClientTransport({ args: [entry], command: process.execPath, stderr: 'pipe' }));
+    expect((await excludedClient.listTools()).tools.map(tool => tool.name)).not.toContain('inspect');
+    await expect(excludedClient.callTool({ arguments: { source: 'library' }, name: 'inspect' })).rejects.toThrow(/disabled|not found/i);
+  } finally {
+    await excludedClient.close();
   }
 });
 

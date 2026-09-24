@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import type { Dirent } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { promisify } from 'node:util';
@@ -14,6 +14,7 @@ import {
   packOutputFromJson,
   sharedPackedTarball,
 } from '../../agent-bundle/tests/support/shared-pack.ts';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -190,7 +191,7 @@ describe.sequential('packed @agent-bundle/runtime zod peer', () => {
         throw new Error(`Packed defineState typecheck failed.\n${typecheck.output}`);
       }
     } finally {
-      await rm(consumer, { force: true, recursive: true });
+      await removeTree(consumer);
     }
   }, 180_000);
 
@@ -217,7 +218,7 @@ describe.sequential('packed @agent-bundle/runtime zod peer', () => {
       expect(typecheck.output).toContain("Type '6' is not assignable to type '5'");
       expect(typecheck.output).toContain('_zod.version.minor');
     } finally {
-      await rm(workspace, { force: true, recursive: true });
+      await removeTree(workspace);
     }
   }, 180_000);
 });

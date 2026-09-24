@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,6 +9,7 @@ import { pluginPublint } from 'rsbuild-plugin-publint';
 import agentBundleConfig from '../rslib.config.ts';
 import createAgentBundleConfig from '../../create-agent-bundle/rslib.config.ts';
 import rscRuntimeConfig from '../../rsc-runtime/rslib.config.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * publint is not a separate CI step: every publishable package's `rslib
@@ -36,7 +37,7 @@ describe('publint build gate', () => {
 
   const roots: string[] = [];
   afterEach(async () => {
-    await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+    await Promise.all(roots.splice(0).map((root) => removeTree(root)));
   });
 
   const probePackage = async (manifest: Readonly<Record<string, unknown>>): Promise<string> => {

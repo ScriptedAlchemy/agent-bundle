@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import {
   codexPluginObserved,
   readCodexCandidatePlugin,
 } from '../src/eval/codex-plugins.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const fixtureRoot = new URL('../fixtures/eval/codex/', import.meta.url);
 
@@ -27,7 +28,7 @@ const withCandidate = async (
     await build(root);
     await task(root);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 

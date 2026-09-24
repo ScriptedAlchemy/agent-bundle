@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { requestRecorder } from './support/http.ts';
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { browserLaunchOptions } from './support/workbench-e2e.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const previewComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-app-preview.tsx');
@@ -124,7 +125,7 @@ const mountedPreviewFixture = async () => {
           reject(error);
         });
       });
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     },
     url: `http://127.0.0.1:${address.port}/preview.html`,
   };

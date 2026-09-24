@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -6,11 +6,12 @@ import { afterEach, expect, it } from '@rstest/core';
 import ts from 'typescript-5';
 
 import { inspect } from '../src/api.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const writeProjectFile = async (root: string, path: string, contents: string): Promise<void> => {

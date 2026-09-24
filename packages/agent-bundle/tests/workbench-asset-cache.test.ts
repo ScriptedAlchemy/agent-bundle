@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,7 @@ import {
   workbenchDocumentCacheControl,
   workbenchHashedAssetCacheControl,
 } from '../src/dev/workbench-assets.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const status = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -83,6 +84,6 @@ it('serves hashed workbench assets as immutable and documents as no-store', asyn
     expect(notices.headers.get('cache-control')).toBe('no-store');
   } finally {
     await server.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

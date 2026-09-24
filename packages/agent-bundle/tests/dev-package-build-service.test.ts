@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,11 +9,12 @@ import type { AgentBundleToolsConfig, NormalizedPlugin } from '../src/core/types
 import { DevPackageBuildService } from '../src/dev/package-build-service.ts';
 import type { PreparedProject } from '../src/dev/project-service.ts';
 import type { Invalidation } from '../src/dev/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 type BuildOutputs = typeof buildPackageOutputs;

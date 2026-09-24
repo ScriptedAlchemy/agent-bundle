@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -16,6 +16,7 @@ import { projectEventDocument } from '../src/events/projection.ts';
 import { compileRouteGraph, emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const configPath = '/workspace/agent-bundle.config.ts';
 const skillSource = '/workspace/src/skills/review/SKILL.md';
@@ -200,7 +201,7 @@ it('emits compilable private factory names for punctuation and reserved bindings
       expect(typeof loaded.default).toBe('function');
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -540,7 +541,7 @@ it('registers inline documented callbacks and maps every native result exactly',
   } finally {
     if (previousBun === undefined) Reflect.deleteProperty(globalThis, 'Bun');
     else Reflect.set(globalThis, 'Bun', previousBun);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -683,7 +684,7 @@ it('builds a relocatable self-contained Amp artifact with manifest and evidence 
     });
     expect(registrations).toEqual(['skills/review']);
   } finally {
-    await rm(projectRoot, { force: true, recursive: true });
+    await removeTree(projectRoot);
   }
 });
 
@@ -747,7 +748,7 @@ it('compiles a nested Amp hook wrapper that returns the documented tool.call dec
       stdout: '{"action":"reject-and-continue","message":"blocked"}',
     });
   } finally {
-    await rm(projectRoot, { force: true, recursive: true });
+    await removeTree(projectRoot);
   }
 });
 
@@ -832,6 +833,6 @@ it('runs a relocated standalone event route with its worker inside the Amp plugi
       stdout: '{"action":"reject-and-continue","message":"blocked"}',
     });
   } finally {
-    await rm(projectRoot, { force: true, recursive: true });
+    await removeTree(projectRoot);
   }
 });

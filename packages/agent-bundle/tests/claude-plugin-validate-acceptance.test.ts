@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { emitPlanEntries } from '../src/build/emit.ts';
 import { pathTokens, type NormalizedHook, type NormalizedPlugin } from '../src/core/types.ts';
 import { validateClaudePluginFiles } from '../src/host-contracts/claude-plugin-validation.ts';
 import { claudePluginRowErrors } from '../src/install/install.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const configPath = '/workspace/agent-bundle.config.ts';
 
@@ -90,7 +91,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(root, { force: true, recursive: true });
+  await removeTree(root);
 });
 
 /** Runs the real Claude Code CLI against an isolated config dir so the user's plugin state is never read or written. */

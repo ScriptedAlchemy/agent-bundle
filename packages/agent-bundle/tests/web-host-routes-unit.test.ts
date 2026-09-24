@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,6 +11,7 @@ import type { McpAppRoutePreviewService } from '../src/dev/mcp-apps/mcp-app-rout
 import type { McpSession } from '../src/dev/mcp-session/mcp-session.ts';
 import type { McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
 import { WebHostRoutes, type WebHostEpochSource } from '../src/dev/web-host-routes.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const registry = createDefaultRegistry();
 const roots: string[] = [];
@@ -24,7 +25,7 @@ const artifactRoot = async (): Promise<string> => {
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))));
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const resourceUri = 'ui://status/status.html';

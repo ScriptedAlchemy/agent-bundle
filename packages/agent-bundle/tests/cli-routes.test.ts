@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -24,11 +24,12 @@ import type { AgentBundleConfig } from '../src/core/types.ts';
 import { projectInputSchemaOptions } from '../src/routes/cli-argv.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
 import type { CompiledCliCommand, CompiledCliSurface, RouteInputSchema } from '../src/routes/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const createRoot = async (): Promise<string> => {

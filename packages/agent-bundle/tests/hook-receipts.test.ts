@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -37,6 +37,7 @@ import {
 } from '../src/events/trace-receipt.ts';
 import { createEventTracer, eventTraceExecution } from '../src/events/trace.ts';
 import { isLoopbackHttpOrigin } from '../src/core/loopback-origin.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 
@@ -377,7 +378,7 @@ it('refuses receipts without the token, with an Origin header, over the size cap
 
 it('publishes an owner-only endpoint record under the project and removes it on close', async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-receipts-'));
-  cleanups.push(() => rm(projectRoot, { force: true, recursive: true }));
+  cleanups.push(() => removeTree(projectRoot));
   const hub = new TraceHub({ projectRoot: '/work/project' });
   const attachment = attachHookReceipts({ projectRoot, trace: hub });
   expect(attachment.token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
@@ -406,7 +407,7 @@ it('publishes an owner-only endpoint record under the project and removes it on 
 
 it('resolves the wrapper endpoint from the environment, else the dev install marker beside the wrapper', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-receipt-resolve-'));
-  cleanups.push(() => rm(root, { force: true, recursive: true }));
+  cleanups.push(() => removeTree(root));
   const anchor = pathToFileURL(join(root, 'bundle', 'hooks', 'before-tool.claude.mjs')).href;
   const fromEnv = await resolveEventTraceReceiptEndpoint({
     anchor,

@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,6 +21,7 @@ import {
   unreachedFiles,
   type RuntimeEntrySubpath,
 } from './support/dist-graph.ts';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 
@@ -179,7 +180,7 @@ describe.sequential('state kernel packaging boundaries', () => {
       expect(report.sqliteRevisionError).toEqual({ code: 'invalid-input', instanceOfStateError: true, name: 'AgentStateError' });
       expect(report.mountLedgerError).toEqual({ code: 'lifetime-mismatch', instanceOfStateError: true, name: 'AgentStateError' });
     } finally {
-      await rm(stateRoot, { force: true, recursive: true });
+      await removeTree(stateRoot);
     }
   });
 });

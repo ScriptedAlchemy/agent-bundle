@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import {
   type ClaudePluginValidationReport,
 } from '../src/host-contracts/claude-plugin-validation.ts';
 import { parseCliVersion } from '../../../scripts/host-cli-pins.mjs';
+import { removeTree } from './support/remove-tree.ts';
 
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_HOST_CONTRACTS === '1' ? it : it.skip;
 
@@ -327,7 +328,7 @@ nativeIt('registers an emitted Codex plugin carrying authored package metadata',
     expect(listedDocument.installed[0]).not.toHaveProperty('license');
     expect(listedDocument.installed[0]).not.toHaveProperty('repository');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -401,7 +402,7 @@ nativeIt('installs and lists an emitted Codex plugin carrying the complete inter
     expect(listed.code, listed.stderr).toBe(0);
     expect(`${listed.stdout}${listed.stderr}`).toContain('review-tools');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -520,7 +521,7 @@ nativeIt('pins the Codex plugin and marketplace CLI JSON contracts, cache layout
     expect(cleared).not.toContain(pluginId);
     expect(cleared).not.toContain('[marketplaces.review-tools-marketplace]');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -568,7 +569,7 @@ nativeIt('pins Claude plugin and marketplace lifecycle command help', async () =
       expect(validateHelp.output).toContain('--json      Output the validation report as JSON (same exit codes)');
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -620,7 +621,7 @@ nativeIt('adds, lists, and removes a marketplace only in an isolated config dire
     expect(listedAfterRemoval.code, listedAfterRemoval.output).toBe(0);
     expect(listedAfterRemoval.output).not.toContain(marketplaceName);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -632,7 +633,7 @@ nativeIt('accepts the emitted Claude marketplace under strict native validation'
     const validation = await runClaudeValidation(root, join(root, '.claude-plugin', 'marketplace.json'));
     expect(validation.code, validation.output).toBe(0);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -668,7 +669,7 @@ nativeIt('records that strict validation accepts package metadata without runnin
     expect(validation.output).not.toContain('package-lock.json');
     await expect(access(join(root, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -712,8 +713,8 @@ nativeIt('records that plugin-mode validation warns about a symlinked skill entr
     expect(marketplaceRun.output).not.toMatch(/is a symlink and was not read/u);
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(externalSkill, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(externalSkill),
     ]);
   }
 });
@@ -760,7 +761,7 @@ nativeIt('accepts the enriched Claude marketplace under strict native validation
     expect(validation.code, validation.output).toBe(0);
     expect(validation.output).toContain('Validation passed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -859,7 +860,7 @@ nativeIt('accepts every documented Claude marketplace plugin source form', async
       expect(validation.code, `${label}: ${validation.output}`).toBe(0);
       expect(validation.output).toContain('Validation passed');
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }
 });
@@ -915,7 +916,7 @@ nativeIt('records which source constraints strict Claude marketplace validation 
       expect(validation.code, `${label}: ${validation.output}`).toBe(expectedCode);
       expect(validation.output).toContain(output);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }
 });
@@ -935,7 +936,7 @@ nativeIt('records whether strict native validation enforces marketplace allowlis
     expect(validation.output).toContain('Validation passed');
     expect(validation.output).not.toContain('allowCrossMarketplaceDependenciesOn');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -962,7 +963,7 @@ nativeIt('records that strict native validation rejects archive authentication o
     expect(validation.output).toContain('only apply to "archive" sources');
     expect(validation.output).toContain('--strict treats warnings as errors');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -984,7 +985,7 @@ nativeIt('accepts an emitted Claude artifact whose plugin root carries settings.
     const plugin = await validateClaudePluginRoot(root);
     expect(plugin.report.status, plugin.output).toBe('passed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1008,7 +1009,7 @@ nativeIt('records that strict native validation never inspects plugin settings.j
     expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('settings.json');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1070,7 +1071,7 @@ nativeIt('records strict native validation behavior for documented and security-
       }
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1103,7 +1104,7 @@ nativeIt('accepts emitted Claude experimental themes and monitors under strict n
 
     expect(validation.report.status, validation.output).toBe('passed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1136,7 +1137,7 @@ nativeIt('records whether strict native validation inspects monitors/monitors.js
       severity: 'error',
     })]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1156,7 +1157,7 @@ nativeIt('records whether strict native validation inspects plugin theme content
     expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('invalid.json');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1174,7 +1175,7 @@ nativeIt('records that strict native validation rejects the deprecated top-level
     expect(validation.report.status, validation.output).not.toBe('passed');
     expect(validation.output).toContain('monitors');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1210,7 +1211,7 @@ nativeIt('accepts an emitted Claude plugin with bin under strict native validati
     );
     expect(validation.code, validation.output).toBe(0);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1266,7 +1267,7 @@ nativeIt('accepts emitted Claude workflows and output styles under strict native
 
     expect(validation.report.status, validation.output).toBe('passed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1283,7 +1284,7 @@ nativeIt('records whether strict native validation inspects output-style frontma
     expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('missing-frontmatter.md');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1348,7 +1349,7 @@ nativeIt('accepts emitted Claude userConfig under strict native validation', asy
     expect(result.code, result.output).toBe(0);
     expect(result.output).toContain('Validation passed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1362,7 +1363,7 @@ nativeIt('accepts emitted Claude channels bound to a plugin MCP server under str
 
     expect(validation.report.status, validation.output).toBe('passed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1382,7 +1383,7 @@ nativeIt('records whether strict native validation catches a dangling Claude cha
     expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('missing');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1411,7 +1412,7 @@ nativeIt('accepts emitted Claude plugin dependencies under strict native validat
     })]);
     expect((await validateClaudePluginRoot(root, { strict: true })).report.status).toBe('failed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1436,7 +1437,7 @@ nativeIt('accepts emitted Claude manifest metadata fields under strict native va
     const validation = await validateClaudePluginRoot(root);
     expect(validation.report.status, validation.output).toBe('passed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1459,6 +1460,6 @@ nativeIt('accepts a custom flat command path without a default commands director
     const validation = await validateClaudePluginRoot(root);
     expect(validation.report.status, validation.output).toBe('passed');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

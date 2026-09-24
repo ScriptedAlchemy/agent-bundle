@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -26,6 +26,7 @@ import {
   HOST_INSTALL_PROOF_LEVEL,
   proofLevelLabel,
 } from '../src/test/manifest.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const proofLabel = proofLevelLabel(HOST_INSTALL_PROOF_LEVEL);
 const simulatedProofLabel =
@@ -219,7 +220,7 @@ it('does not execute a tampered installed MCP command after static integrity che
     expect((error as AgentTestError).message).toContain('version-digests');
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(markerRoot, { force: true, recursive: true });
+    await removeTree(markerRoot);
   }
 }, 180_000);
 
@@ -257,7 +258,7 @@ it('accepts an installed artifact whose manifest declares no resource components
 
     expect(report.checks.resources).toEqual({ status: 'passed' });
   } finally {
-    await rm(cloneParent, { force: true, recursive: true });
+    await removeTree(cloneParent);
   }
 }, 180_000);
 

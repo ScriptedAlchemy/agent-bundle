@@ -88,7 +88,7 @@ const handleHostCommand = async (host, args) => {
     const marketplace = await readJson(join(source, '.claude-plugin', 'marketplace.json'));
     const destination = join(cacheRoot(host), marketplace.name, plugin.name, plugin.version);
     await mkdir(dirname(destination), { recursive: true });
-    await rm(destination, { force: true, recursive: true });
+    await rm(destination, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
     await cp(source, destination, { recursive: true, verbatimSymlinks: true });
     return;
   }

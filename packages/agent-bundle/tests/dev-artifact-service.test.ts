@@ -15,6 +15,7 @@ import { ProjectService } from '../src/dev/project-service.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const sha256 = (value: string | Uint8Array): string =>
   createHash('sha256').update(value).digest('hex');
@@ -80,7 +81,7 @@ it('publishes one validated prepared project as an immutable epoch and removes i
       now: () => new Date('2026-08-14T12:00:00.000Z'),
       removeAttempt: async (path) => {
         removedAttempts.push(path);
-        await rm(path, { force: true, recursive: true });
+        await removeTree(path);
       },
     });
 
@@ -115,7 +116,7 @@ it('publishes one validated prepared project as an immutable epoch and removes i
     expect(removedAttempts).toEqual([attemptRoot]);
     await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -169,7 +170,7 @@ it('reports active-metadata durability uncertainty as a committed build warning'
     ]));
     await expect(store.readActiveEpoch()).resolves.toEqual(result.epoch);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -239,7 +240,7 @@ it('allows only an exact epoch store marker as an extra staged artifact file', a
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -289,7 +290,7 @@ it.each(['added', 'changed', 'removed'] as const)(
       });
       await expect(store.readActiveEpoch()).resolves.toBeUndefined();
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   },
 );
@@ -317,7 +318,7 @@ it('rejects publication when an executable source loses its execute bit after co
     });
     await expect(store.readActiveEpoch()).resolves.toBeUndefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -342,7 +343,7 @@ it('uses the prepared output exclusions when checking source changes after compi
 
     expect(result.outcome).toBe('succeeded');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -375,7 +376,7 @@ it('compiles in development mode and carries MCP App compile advisories onto the
     expect(result.epoch.diagnostics).toEqual({ errors: 0, infos: 0, warnings: 1 });
     await expect(store.readActiveEpoch()).resolves.toEqual(result.epoch);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -398,7 +399,7 @@ it('reports a failed MCP App compile as the compiler\'s own AB4770 diagnostics, 
     expect(result).toEqual({ diagnostics: [compileError], outcome: 'failed' });
     await expect(store.readActiveEpoch()).resolves.toBeUndefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -422,7 +423,7 @@ it('keeps AB7100 for compiler throws that carry no diagnostics', async () => {
       outcome: 'failed',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -447,8 +448,8 @@ it('uses a root-independent digest for equivalent normalized project models', as
     expect(left.epoch.modelDigest).toBe(right.epoch.modelDigest);
   } finally {
     await Promise.all([
-      rm(leftRoot, { force: true, recursive: true }),
-      rm(rightRoot, { force: true, recursive: true }),
+      removeTree(leftRoot),
+      removeTree(rightRoot),
     ]);
   }
 });
@@ -492,8 +493,8 @@ it('changes the canonical model digest when a registered extension changes', asy
     expect(left.epoch.modelDigest).not.toBe(right.epoch.modelDigest);
   } finally {
     await Promise.all([
-      rm(leftRoot, { force: true, recursive: true }),
-      rm(rightRoot, { force: true, recursive: true }),
+      removeTree(leftRoot),
+      removeTree(rightRoot),
     ]);
   }
 });
@@ -525,7 +526,7 @@ it('rejects a tampered staging transfer, retains the last good epoch, and cleans
       },
       removeAttempt: async (path) => {
         removedAttempts.push(path);
-        await rm(path, { force: true, recursive: true });
+        await removeTree(path);
       },
     });
 
@@ -546,7 +547,7 @@ it('rejects a tampered staging transfer, retains the last good epoch, and cleans
     await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-tampered', 'plugin.json'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -568,7 +569,7 @@ it('settles staging and attempt cleanup failures into diagnostics without maskin
       move: async () => { throw new Error('transfer failed'); },
       removeAttempt: async (path) => {
         removedAttempts.push(path);
-        await rm(path, { force: true, recursive: true });
+        await removeTree(path);
         throw new Error('attempt cleanup rejected');
       },
     });
@@ -583,7 +584,7 @@ it('settles staging and attempt cleanup failures into diagnostics without maskin
     expect(removedAttempts).toEqual([attemptRoot]);
     await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -603,7 +604,7 @@ it('retains a published epoch and reports attempt cleanup failure as a warning',
       createEpochId: () => 'epoch-cleanup-warning',
       epochStore: store,
       removeAttempt: async (path) => {
-        await rm(path, { force: true, recursive: true });
+        await removeTree(path);
         throw new Error('published attempt cleanup rejected');
       },
     });
@@ -620,6 +621,6 @@ it('retains a published epoch and reports attempt cleanup failure as a warning',
     ]));
     await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

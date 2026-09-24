@@ -1,8 +1,9 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
+import { removeTree } from './support/remove-tree.ts';
 
 const fixtureRoot = new URL('../../../fixtures/contracts/hosts/codex/', import.meta.url);
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_CODEX_SMOKE === '1' ? it : it.skip;
@@ -139,7 +140,7 @@ it('infers automatic activation only from the candidate Skill sentinel', async (
     });
     expect(JSON.stringify(result)).not.toContain('agent-bundle-codex-skill-sentinel');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -187,7 +188,7 @@ it('copies auth bytes opaquely with the source mode preserved', async () => {
     expect(await readFile(destination, 'utf8')).toBe('{"opaque":"state"}\n');
     expect((await stat(destination)).mode & 0o777).toBe((await stat(source)).mode & 0o777);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -244,7 +245,7 @@ it('uses and removes an isolated temporary home while retaining only redacted ev
     await expect(stat(temporaryHomes[0]!)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(JSON.stringify(result)).not.toContain('unretained local stderr');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -289,7 +290,7 @@ it('retains a failed exec JSONL error only as a redacted envelope', async () => 
     });
     expect(JSON.stringify(result)).not.toContain('unretained local stderr');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -333,7 +334,7 @@ it('times out a slow Codex step and bounds oversized process output', async () =
       expect(JSON.stringify(result)).not.toContain('x'.repeat(128));
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -414,7 +415,7 @@ it('contains snapshot, temporary-home, candidate-copy, and cleanup failures in h
     });
     expect(JSON.stringify(result)).not.toContain('do not retain this cleanup detail');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import { availablePort } from './support/available-port.ts';
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -63,7 +64,7 @@ it('prunes stale copied workbench assets without removing the package library ou
     await expect(access(join(isolatedDist, 'cli.js'))).resolves.toBeUndefined();
     expect(await readdir(workbench, { recursive: true })).not.toContain('index.js.map');
   } finally {
-    await rm(isolatedRoot, { force: true, recursive: true });
+    await removeTree(isolatedRoot);
   }
 }, 60_000);
 
@@ -103,7 +104,7 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
       status: 200,
     });
   } finally {
-    await rm(consumer, { force: true, recursive: true });
+    await removeTree(consumer);
   }
 }, 60_000);
 
@@ -186,7 +187,7 @@ it('packages both react-server render children and renders a route invocation fr
       status: 200,
     });
   } finally {
-    await rm(consumer, { force: true, recursive: true });
+    await removeTree(consumer);
   }
 }, 180_000);
 
@@ -233,7 +234,7 @@ it('runs the Agent API from an omit-dev installed tarball with its runtime MCP d
       status: expect.objectContaining({ status: expect.any(Object) }),
     });
   } finally {
-    await rm(consumer, { force: true, recursive: true });
+    await removeTree(consumer);
   }
 }, 60_000);
 });

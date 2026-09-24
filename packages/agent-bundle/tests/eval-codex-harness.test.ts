@@ -21,6 +21,7 @@ import {
   type EvalCase,
   type EvalTrialRecord,
 } from '../src/eval/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const streamFixtureRoot = new URL('../fixtures/eval/codex/', import.meta.url);
 
@@ -167,7 +168,7 @@ const withWorld = async (task: (world: TrialWorld) => Promise<void>): Promise<vo
   try {
     await task(world);
   } finally {
-    await rm(world.root, { force: true, recursive: true });
+    await removeTree(world.root);
   }
 };
 

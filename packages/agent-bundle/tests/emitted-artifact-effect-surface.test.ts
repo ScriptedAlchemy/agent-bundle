@@ -1,10 +1,11 @@
-import { cp, mkdtemp, readdir, readFile, rm, symlink } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * Emitted artifacts never bundle the yieldable framework error bases
@@ -120,7 +121,7 @@ beforeAll(async () => {
 }, 240_000);
 
 afterAll(async () => {
-  if (projectRoot !== undefined) await rm(projectRoot, { force: true, recursive: true });
+  if (projectRoot !== undefined) await removeTree(projectRoot);
 });
 
 describe('emitted artifacts and the yieldable framework error bases', () => {

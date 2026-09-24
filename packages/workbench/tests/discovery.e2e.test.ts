@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,7 @@ import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixt
 import { replaceWatchedSource } from './support/watched-files.ts';
 import { browserLaunchOptions, browserTrace, workbenchUrl } from './support/workbench-e2e.ts';
 import { expectHeading } from './support/workbench-acceptance.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const browserTimeout = 30_000 * timeScale;
 
@@ -199,7 +200,7 @@ ${outputAnchor}`));
       expect(pageErrors).toEqual([]);
     } finally {
       await fixture?.close();
-      await rm(doctorRoot, { force: true, recursive: true });
+      await removeTree(doctorRoot);
     }
   },
 );

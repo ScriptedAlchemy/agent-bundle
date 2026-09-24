@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,6 +24,7 @@ import {
   type McpProbeTimers,
   type McpProbeTransport,
 } from '../src/dev/playground/mcp-probe-service.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface ManualTimer {
   readonly callback: () => void;
@@ -281,7 +282,7 @@ it('maps a bounded, frozen successful probe snapshot and redacted launch', async
     expect(Object.isFrozen(report.snapshot)).toBe(true);
     expect(Object.isFrozen(report.snapshot?.tools)).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -316,7 +317,7 @@ it('redacts absolute paths after key-value and list separators', async () => {
       '[REDACTED]',
     ]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -476,7 +477,7 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
       expect(serialized).not.toContain(secret);
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -496,7 +497,7 @@ it('truncates server instructions to the named text budget', async () => {
     expect(instructions).toHaveLength(mcpProbeInstructionTextLimit);
     expect(instructions?.endsWith('…')).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -521,7 +522,7 @@ it('reports connect rejection as an honest unreachable probe result', async () =
     });
     expect(report).not.toHaveProperty('snapshot');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -543,7 +544,7 @@ it('times out within the total budget and destroys the transport', async () => {
     expect(report.failure?.kind).toBe('connect');
     expect(transportCloses).toBeGreaterThan(0);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -592,7 +593,7 @@ it('returns a timed-out report without awaiting stalled teardown', async () => {
     await service.settle();
     expect(timers.pending()).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -633,7 +634,7 @@ it('returns a timed-out report without awaiting stalled teardown when the budget
     await service.settle();
     expect(timers.pending()).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -680,8 +681,8 @@ it('chains plugin-data removal to the close a timeout already started, not a dup
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     releaseClose();
-    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    if (pluginData !== undefined) await removeTree(pluginData);
+    await removeTree(root);
   }
 });
 
@@ -716,7 +717,7 @@ it('coalesces only identical in-flight probes and clears them after settlement',
     await service.probe({ host: 'claude', serverName: 'timeline' });
     expect(clients).toBe(2);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -739,7 +740,7 @@ it('throws typed not-found errors for unavailable trusted probe targets', async 
       serverName: 'timeline',
     })).rejects.toBeInstanceOf(McpProbeTargetNotFoundError);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -792,8 +793,8 @@ it('removes plugin data only after a slow transport teardown settles (#316 revie
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(events).toEqual(['report-returned', 'transport-closed', 'plugin-data-removed']);
   } finally {
-    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    if (pluginData !== undefined) await removeTree(pluginData);
+    await removeTree(root);
   }
 });
 
@@ -853,8 +854,8 @@ it('settle() fences in-flight probes, not only already-registered teardowns (#39
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(events).toEqual(['report-returned', 'transport-closed', 'settled']);
   } finally {
-    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    if (pluginData !== undefined) await removeTree(pluginData);
+    await removeTree(root);
   }
 });
 
@@ -886,8 +887,8 @@ it('still closes the transport and removes plugin data when a close() throws syn
     expect(transportClosed).toBe(true);
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    if (pluginData !== undefined) await removeTree(pluginData);
+    await removeTree(root);
   }
 });
 
@@ -917,8 +918,8 @@ it('reports a timeout even when the timeout teardown throws synchronously', asyn
     await service.settle();
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    if (pluginData !== undefined) await removeTree(pluginData);
+    await removeTree(root);
   }
 });
 
@@ -954,7 +955,7 @@ it('retries plugin-data removal once a capped teardown finally settles (#397 rev
           events.push('removal-rejected');
           throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
         }
-        await rm(target, { force: true, recursive: true });
+        await removeTree(target);
       },
     });
 
@@ -993,8 +994,8 @@ it('retries plugin-data removal once a capped teardown finally settles (#397 rev
     expect(events).toEqual(['removal-rejected', 'settled', 'transport-closed', 'plugin-data-removed']);
     await expect(readFile(join(pluginData, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(parent, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    await removeTree(parent);
+    await removeTree(root);
   }
 });
 
@@ -1017,7 +1018,7 @@ it('retries removal once, fenced, when the teardown settled but the directory wa
         if (removals === 1) {
           throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
         }
-        await rm(target, { force: true, recursive: true });
+        await removeTree(target);
       },
     });
 
@@ -1028,8 +1029,8 @@ it('retries removal once, fenced, when the teardown settled but the directory wa
     expect(removals).toBe(2);
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    if (pluginData !== undefined) await removeTree(pluginData);
+    await removeTree(root);
   }
 });
 
@@ -1049,7 +1050,7 @@ it('removes the fresh plugin data directory after every probe', async () => {
 
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    if (pluginData !== undefined) await removeTree(pluginData);
+    await removeTree(root);
   }
 });

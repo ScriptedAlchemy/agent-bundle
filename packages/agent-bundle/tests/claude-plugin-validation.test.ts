@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -10,6 +10,7 @@ import {
   validateClaudePluginFiles,
   type ClaudePluginCommandRunner,
 } from '../src/host-contracts/claude-plugin-validation.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const fixtureRoots: string[] = [];
 
@@ -68,7 +69,7 @@ const runByTarget = (
 };
 
 afterEach(async () => {
-  await Promise.all(fixtureRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(fixtureRoots.splice(0).map((root) => removeTree(root)));
 });
 
 const pluginWithNumberOption = async (

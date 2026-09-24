@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -14,6 +14,7 @@ import { runCli } from '../src/cli.ts';
 import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { mcpServerStateDirectory } from '../src/core/mcp-state-directory.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceNodeModules = join(process.cwd(), 'node_modules');
@@ -27,7 +28,7 @@ const installTypescriptToolchain = async (root: string): Promise<void> => {
 };
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const fixtureRoot = async (files: Readonly<Record<string, string>>): Promise<string> => {

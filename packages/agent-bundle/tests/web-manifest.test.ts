@@ -1,5 +1,5 @@
 import { expect, it } from '@rstest/core';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ import {
   type ArtifactManifestLaunch,
   type WebManifest,
 } from '../src/web-host/manifest.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const validWeb = (): WebManifest => ({
   apps: [{
@@ -115,7 +116,7 @@ const withDocument = async (
   try {
     await run(path, (value) => writeFile(path, JSON.stringify(value)));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 

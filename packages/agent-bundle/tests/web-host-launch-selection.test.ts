@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -10,6 +10,7 @@ import {
   WebLaunchSelectionError,
   type SelectWebLaunchOptions,
 } from '../src/dev/web-host-launch-selection.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const registry = createDefaultRegistry();
 const roots: string[] = [];
@@ -21,7 +22,7 @@ const artifactRoot = async (): Promise<string> => {
 };
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const writeManifest = async (root: string, relativePath: string, servers: Readonly<Record<string, unknown>>): Promise<void> => {

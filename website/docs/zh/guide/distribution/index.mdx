@@ -19,6 +19,23 @@ description: '构建并校验组合插件，按需打包生成的 npm 根目录�
 
 ## 流水线
 
+要从源码仓库直接安装，可配置编译器生成仓库根目录市场清单：
+
+```ts
+export default defineConfig({
+  plugin: { name: 'my-plugin' },
+  targets: ['cursor', 'portable'],
+  marketplace: true,
+  output: { distPath: 'artifact', repositoryMarketplace: true },
+});
+```
+
+构建后提交 `artifact/` 和 `.cursor-plugin/marketplace.json`（对于被忽略的生成文件，使用
+`git add -f`）。根目录市场指向 `./artifact`；插件清单、脚本、技能和安装器均由 Agent Bundle
+生成，使用者无需构建。选择 Claude 和 Codex 时，同一选项也会生成
+`.claude-plugin/marketplace.json` 和 `.agents/plugins/marketplace.json`。
+CI 只需构建、校验并提交输出。
+
 ```sh
 npx --no-install agent-bundle build --output artifact
 npx --no-install agent-bundle validate --artifact artifact --strict

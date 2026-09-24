@@ -14,6 +14,7 @@ import type {
 } from '../src/host-contracts/native-claude-contract.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const claudeModel = 'claude-sonnet-4-5';
 const codexModel = 'gpt-5-codex';
@@ -536,7 +537,7 @@ it('keeps native Claude plugin and fixture failures path-free after they are mou
       claudeRun: async (request) => {
         if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
         if (request.args[0] === 'auth') {
-          await rm(join(request.cwd, '.claude-plugin'), { force: true, recursive: true });
+          await removeTree(join(request.cwd, '.claude-plugin'));
           return {
             exitCode: 0,
             stderr: '',

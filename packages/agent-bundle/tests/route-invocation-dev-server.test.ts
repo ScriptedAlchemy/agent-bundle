@@ -27,6 +27,7 @@ import { createProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 import { replaceWatchedSourceAndAwaitRebuild } from './support/watched-files.ts';
 import { runNodeScript } from './support/run-node-script.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const readEvent = async (
   response: Response,
@@ -1452,7 +1453,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     });
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });
 
@@ -1554,7 +1555,7 @@ it('fails closed when a valid host is ineligible for the compiled event route', 
     expect(existsSync(handlerMarker)).toBe(false);
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });
 
@@ -1688,7 +1689,7 @@ it('enforces compiled handler, MCP schemas, and operator env across production s
     expect(denied.invocation.providers).toEqual([]);
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });
 
@@ -1851,7 +1852,7 @@ it('publishes invocation routes only after a successful initial or recovered bui
     });
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });
 
@@ -1995,6 +1996,6 @@ it('bounds the render history a compiled child produces by count and bytes acros
     expect(renderEvents(live.seen).length).toBeGreaterThan(routeInvocationRenderHistoryLimits.maxEvents);
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });

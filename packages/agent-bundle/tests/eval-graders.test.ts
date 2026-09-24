@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
 import { evalScriptGraderSpec, runEvalGraders } from '../src/eval/graders.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('replaces a thrown grader fixture path with stable inconclusive evidence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-eval-grader-'));
@@ -36,6 +37,6 @@ it('replaces a thrown grader fixture path with stable inconclusive evidence', as
     });
     expect(JSON.stringify(result)).not.toContain(fixturePath);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

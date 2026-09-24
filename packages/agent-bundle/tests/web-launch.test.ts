@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { pathTokens, pluginRootEnvAnchor } from '../src/core/types.ts';
 import { installedWebDataRoot } from '../src/install/state-root.ts';
 import { resolveWebLaunch, WebLaunchError, webPluginDataDirectory } from '../src/web-host/launch.ts';
 import type { ArtifactManifestLaunch, WebManifestApp } from '../src/web-host/manifest.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
@@ -31,7 +32,7 @@ const homeRoot = async (): Promise<string> => {
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(async (root) => {
     await chmod(root, 0o755).catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }));
 });
 

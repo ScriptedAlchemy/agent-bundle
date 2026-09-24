@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -9,6 +9,7 @@ import { ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
 import { SkillDocumentService } from '../src/dev/skill-document-service.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 class TrackingEpochStore extends EpochStore {
   acquisitions = 0;
@@ -90,7 +91,7 @@ it('serves parsed source documents and exact source resources by a model-owned S
     expect(binary.body).toEqual(new Uint8Array([0, 255, 17, 9]));
     expect([...await readFile(join(root, 'src', 'skills', 'review', 'assets', 'pixel.bin'))]).toEqual([...binary.body]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -112,7 +113,7 @@ it('marks active Skill resources for download while preserving their exact bytes
     });
     expect(new TextDecoder().decode(resource.body)).toBe('<script>window.__skillResourceExecuted = true</script>\n');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -154,7 +155,7 @@ it('serves the generated parser result and byte-identical resources while pinnin
     expect(binary.body).toEqual(new Uint8Array([0, 255, 17, 9]));
     expect(binary.contentType).toBe('application/octet-stream');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -188,8 +189,8 @@ it('reads generated documents from the acquired epoch reference root, never a si
     await expect(readFile(join(alternateSkill, 'SKILL.md'), 'utf8')).resolves.toContain('# Alternate');
   } finally {
     await Promise.all([
-      rm(protectedRoot, { force: true, recursive: true }),
-      rm(alternateRoot, { force: true, recursive: true }),
+      removeTree(protectedRoot),
+      removeTree(alternateRoot),
     ]);
   }
 });
@@ -243,7 +244,7 @@ it('serves only typed source Skill routes and rejects encoded resource separator
       await server.close();
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -268,7 +269,7 @@ it('rejects traversal and symlink resource mutations after exact model membershi
       code: 'SKILL_RESOURCE_UNAVAILABLE',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -288,6 +289,6 @@ it('releases every acquired epoch reference after generated document and resourc
     expect(epochStore.acquisitions).toBe(2);
     expect(epochStore.releases).toBe(2);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

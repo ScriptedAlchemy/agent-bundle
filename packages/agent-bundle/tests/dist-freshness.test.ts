@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -19,6 +19,7 @@ import {
   type DistFreshness,
 } from '../../../scripts/dist-freshness.mjs';
 import { digestTree } from './support/tree-snapshot.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const workspaceRoot = process.cwd();
 
@@ -30,7 +31,7 @@ const editTime = new Date('2026-01-03T00:00:00Z');
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(temporaryRoots.splice(0).map((root) => removeTree(root)));
 });
 
 /** Writes empty files at `paths` (creating directories) under `root`. */
@@ -123,7 +124,7 @@ describe('distFreshness', () => {
 
   it('is missing when the dist is absent, empty, or holds only empty directories', async () => {
     const { descriptor, root } = await createPackageFixture();
-    await rm(join(root, 'dist'), { recursive: true });
+    await removeTree(join(root, 'dist'));
     expect(distFreshness(descriptor)).toMatchObject({ newestOutput: undefined, status: 'missing' });
     await mkdir(join(root, 'dist'));
     expect(distFreshness(descriptor).status).toBe('missing');

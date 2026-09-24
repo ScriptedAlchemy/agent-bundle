@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,6 +23,7 @@ import {
 } from '../src/index.js';
 import { createMemoryStateDriver, type AgentStateDriver, type AgentStateStore } from '../src/state/index.js';
 import { createSqliteStateDriver } from '../src/state/sqlite.js';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 const document = (text: string) => ({
   root: { kind: 'text' as const, text },
@@ -311,7 +312,7 @@ describe('durable retention', () => {
       expect(deliveries.map((delivery) => delivery.notice.id)).toEqual([live.notice.id]);
       await second.driver.close();
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 });

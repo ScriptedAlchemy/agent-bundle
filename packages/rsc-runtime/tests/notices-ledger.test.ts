@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,6 +33,7 @@ import {
 } from '../src/index.js';
 import { createMemoryStateDriver, defineState } from '../src/state/index.js';
 import { createSqliteStateDriver } from '../src/state/sqlite.js';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 const document = (text: string) => ({
   root: { kind: 'text' as const, text },
@@ -1441,7 +1442,7 @@ describe('notice ledger schema version', () => {
       expect(recorded.notices[0]).toMatchObject({ availability: { count: 1 }, state: 'acknowledged' });
       await driver.close();
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 });

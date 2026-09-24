@@ -13,6 +13,7 @@ import {
   planEvalFixture,
   type EvalCase,
 } from '../src/eval/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const run = promisify(execFile);
 
@@ -30,7 +31,7 @@ const withProject = async (task: (root: string) => Promise<void>): Promise<void>
   try {
     await task(root);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
