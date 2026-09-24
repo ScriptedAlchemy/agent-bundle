@@ -1,5 +1,0 @@
-Usage: codex exec [OPTIONS] [PROMPT]
-
-Options:
-  --ephemeral  Do not persist the thread.
-  --json       Emit events as JSONL.

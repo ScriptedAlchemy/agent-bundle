@@ -1,51 +1,50 @@
-name: Release packages
-
+name: Release
 on:
   push:
-    branches:
-      - main
-
-# id-token is required for npm package provenance once publishing starts; it is
-# inert while the NPM_TOKEN gate below keeps the publish steps skipped.
-permissions:
-  contents: write
-  id-token: write
-  pull-requests: write
+    branches: [main]
 
 concurrency:
-  group: package-release
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # Prevent newer push from interrupting active release
+
+permissions: {}
 
 jobs:
   release:
+    if: github.repository_owner == 'Effect-Ts'
+    name: Release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v7
-      # No npm release is cut yet; skip publishing until an NPM_TOKEN secret
-      # exists instead of failing every push to main. Previews stay on
-      # pkg.pr.new (docs/preview-packages.md).
-      - id: gate
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: echo "enabled=${{ env.NPM_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
-      - if: steps.gate.outputs.enabled == 'true'
-        uses: pnpm/setup@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - if: steps.gate.outputs.enabled == 'true'
-        run: pnpm install --frozen-lockfile
-      # changesets/action v2 no longer writes .npmrc from an NPM_TOKEN env
-      # variable; expose the token via npm config so `changeset publish`
-      # (pnpm publish) can authenticate. The ${NPM_TOKEN} placeholder is kept
-      # literal here and expanded by npm/pnpm from the step environment.
-      - if: steps.gate.outputs.enabled == 'true'
-        run: echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' >> "$HOME/.npmrc"
-      - if: steps.gate.outputs.enabled == 'true'
-        uses: changesets/action@v2
+          # This is required to ensure the `GITHUB_TOKEN` we provide below is
+          # **always** used when pushing updates to the changesets release branch.
+          # Otherwise the default token will be used, and actions on that versioned
+          # release branch will not be triggered.
+          persist-credentials: false
+      - name: Install dependencies
+        uses: ./.github/actions/setup
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@11
+      - name: Create Release Pull Request or Publish
+        id: changesets
+        uses: changesets/action@d0ee272882939fa35f22d979828acb7e61e0bd47 # v2.0.0-next.4
         with:
-          publish-script: pnpm release
-          version-script: pnpm version-packages
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          version-script: pnpm changeset-version
+          publish-script: pnpm changeset-publish
+          # Use a personal access token instead of the one that GitHub generates
+          # automatically to ensure workflows get triggered on the changesets
+          # release branch.
+          github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN }}
+      - name: Deploy website
+        if: steps.changesets.outputs.published == 'true'
+        uses: ./.github/actions/deploy-website
+        with:
+          channel: v4
+          dispatch-token: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+          revision: ${{ github.sha }}

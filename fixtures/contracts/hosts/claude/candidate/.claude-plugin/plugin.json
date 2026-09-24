@@ -1,6 +1,0 @@
-{
-  "author": { "name": "agent-bundle" },
-  "description": "Bounded Claude native contract smoke candidate.",
-  "name": "agent-bundle-native-smoke",
-  "version": "1.0.0"
-}

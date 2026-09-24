@@ -1,24 +1,51 @@
 {
-  "files.exclude": {
-    "repos/**": true
+  "dprint.path": "node_modules/.bin/dprint",
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "dprint.dprint",
+  "editor.formatOnSaveMode": "file",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.oxc": "explicit"
   },
-  "files.watcherExclude": {
-    "repos/**": true
+  "editor.quickSuggestions": {
+    "other": true,
+    "comments": false,
+    "strings": false
   },
-  "javascript.preferences.autoImportFileExcludePatterns": [
-    "**/repos/**"
-  ],
-  "js/ts.experimental.useTsgo": true,
-  "js/ts.tsdk.additionalLocations": [
-    "./node_modules/typescript/lib"
+  "editor.acceptSuggestionOnCommitCharacter": true,
+  "editor.acceptSuggestionOnEnter": "on",
+  "editor.quickSuggestionsDelay": 10,
+  "editor.suggestOnTriggerCharacters": true,
+  "editor.tabCompletion": "off",
+  "editor.suggest.localityBonus": true,
+  "editor.suggestSelection": "recentlyUsed",
+  "editor.wordBasedSuggestions": "matchingDocuments",
+  "editor.parameterHints.enabled": true,
+  "files.insertFinalNewline": true,
+  "[typescript]": {
+    "editor.defaultFormatter": "dprint.dprint"
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "dprint.dprint"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "dprint.dprint"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "dprint.dprint"
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "dprint.dprint"
+  },
+  "[markdown]": {
+    "editor.defaultFormatter": "dprint.dprint"
+  },
+  "deno.enable": true,
+  "deno.lint": false,
+  "deno.enablePaths": [
+    "./packages/platform/deno"
   ],
   "js/ts.tsdk.path": "./node_modules/typescript/lib",
+  "js/ts.tsdk.additionalLocations": ["./node_modules/typescript/lib"],
   "js/ts.tsdk.promptToUseWorkspaceVersion": true,
-  "search.exclude": {
-    "repos": true,
-    "repos/**": true
-  },
-  "typescript.preferences.autoImportFileExcludePatterns": [
-    "**/repos/**"
-  ]
+  "js/ts.experimental.useTsgo": true
 }

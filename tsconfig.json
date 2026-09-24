@@ -1,20 +1,8 @@
 {
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "types": [
-      "node"
-    ]
-  },
-  "exclude": [
-    "repos"
-  ],
-  "include": [
-    "*.ts",
-    "fixtures/**/*.ts",
-    "packages/agent-bundle/fixtures/**/*.ts",
-    "packages/agent-bundle/fixtures/**/*.tsx",
-    "packages/agent-bundle/src/**/*.ts",
-    "packages/agent-bundle/tests/**/*.ts",
-    "scripts/**/*.ts"
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "include": [],
+  "references": [
+    { "path": "tsconfig.packages.json" },
+    { "path": "tsconfig.tests.json" }
   ]
 }
