@@ -146,8 +146,8 @@ Claude 兼容、内置、个人或工作区来源发现的裸 Skill 名竞争。
 
 ## 渲染式 Skill
 
-当一份 Skill 文档是生成出来的而不是手写的，例如逐环境重复的同一张检查表，或从某个契约推导出的表格
-，请在 `src/skills/<name>/SKILL.tsx`（或 `.ts`）放一个组件。它默认导出一个组件并导出一个
+当一份 Skill 文档是生成出来的而不是手写的，例如逐环境重复的同一张检查表，或从某个契约推导出的表格，
+请在 `src/skills/<name>/SKILL.tsx`（或 `.ts`）放一个组件。它默认导出一个组件并导出一个
 `frontmatter` 记录；构建会把渲染树编译成宿主消费的 `SKILL.md` 文档：
 
 ```tsx
@@ -208,5 +208,5 @@ Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器�
 
 ## 下一步
 
-- [钩子](./hooks.mdx) ， 对生命周期事件作出反应。
-- [MCP 服务器与 MCP App](./mcp.mdx) ， 暴露工具、资源与提示词。
+- [钩子](./hooks.mdx)：对生命周期事件作出反应。
+- [MCP 服务器与 MCP App](./mcp.mdx)：暴露工具、资源与提示词。

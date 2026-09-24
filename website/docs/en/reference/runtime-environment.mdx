@@ -20,8 +20,8 @@ host's own documents rather than assuming one:
 | Host | Plugin root | Plugin data |
 | --- | --- | --- |
 | Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
-| Cursor | `${CURSOR_PLUGIN_ROOT}` |, (rejected: no documented host equivalent) |
-| Codex | `${PLUGIN_ROOT}` (hook commands only) |, (rejected: no documented host equivalent) |
+| Cursor | `${CURSOR_PLUGIN_ROOT}` | none (rejected: no documented host equivalent) |
+| Codex | `${PLUGIN_ROOT}` (hook commands only) | none (rejected: no documented host equivalent) |
 | portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
 
 Substitution is **positional, not global**. Codex's `${PLUGIN_ROOT}` is the command root of its
@@ -64,8 +64,8 @@ part of an ordinary test run.
 2. The **`.env` file layer**.
 3. The operator's real `process.env`, so an exported variable always wins.
 
-The `.env` layer is the conventional Rsbuild set at the project root (the runtime calls this the
-workspace root), `.env`, `.env.local`, `.env.<mode>`, `.env.<mode>.local`, unless
+The `.env` layer is the conventional Rsbuild set (`.env`, `.env.local`, `.env.<mode>`,
+`.env.<mode>.local`) at the project root, which the runtime calls the workspace root, unless
 `--env-file <path>` replaces it with exactly the files you name, or `--no-env` removes it. The two flags are mutually exclusive. Files are read into a
 scratch object, so the real `process.env` is never mutated.
 

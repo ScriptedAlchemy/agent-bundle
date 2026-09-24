@@ -4,7 +4,7 @@ Source: `repos/effect/packages/effect/src/Fiber.ts`, `Semaphore.ts`,
 `Latch.ts`, `Queue.ts`, `PubSub.ts`, `Deferred.ts`, and `Effect.ts`
 (`forkChild`, `forEach`, `all`, `raceFirst`). Refresh when the subtree moves.
 
-Waves 4 to 6 grow the biggest concurrency surfaces (hook thin-clients under
+Waves 4–6 grow the biggest concurrency surfaces (hook thin-clients under
 host deadlines, MCP progress projector, notices ledger, warm-runtime
 lifecycle). Build those Effect-native from day one behind Promise edges.
 

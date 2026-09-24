@@ -316,7 +316,7 @@ export default () => (
 );
 ```
 
-The renderer supports a documented element subset (`h1` to `h6`, `p`,
+The renderer supports a documented element subset (`h1`–`h6`, `p`,
 `ul`/`ol`/`li`, `strong`/`b`, `em`/`i`, `code`, `pre`, `blockquote`, `a`,
 `hr`, `br`, fragments, strings and numbers) and rejects anything outside it by
 name (`AB3005`), never a silent approximation; a module that fails to load or

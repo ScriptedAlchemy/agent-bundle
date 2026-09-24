@@ -26,11 +26,11 @@ npx agent-bundle dev --root . --port 3100 --no-open
 
 主导航有五个目的地：
 
-- **Application** ， 已编译的应用树，以及所选叶子的工作区。
-- **Trace** ， 本次前台开发会话中观察到的应用活动关联时间线。
-- **Host sessions** ， 显式启动并附加到当前开发插件的 Claude Code 与 Codex 终端。
-- **Problems** ， 当前的编译器、运行时与契约诊断。
-- **Advanced** ， Evals、Artifact、Protocol、Host diagnostics 与 Raw logs。
+- **Application**：已编译的应用树，以及所选叶子的工作区。
+- **Trace**：本次前台开发会话中观察到的应用活动关联时间线。
+- **Host sessions**：显式启动并附加到当前开发插件的 Claude Code 与 Codex 终端。
+- **Problems**：当前的编译器、运行时与契约诊断。
+- **Advanced**：Evals、Artifact、Protocol、Host diagnostics 与 Raw logs。
 
 页眉在这些目的地之间始终可见。它显示项目名、构建状态与 epoch、契约门控与诊断失败计数（链接到
 Problems），以及前台连接状态。
@@ -507,14 +507,14 @@ Agent API 的 origin 规则也保持不变。每个取值都必须是裸的 loop
 origin、或出现在 `devOrigins` 中时接受该会话。不带该标志时，这道守卫逐字节保持不变：这份放行列表绝不会
 默认开启。
 
-`Origin` 守卫保护 loopback 前台服务器不受来自任何其他 origin 的请求伪造，包括其他 loopback origin，
-MCP App 沙箱 iframe 在独立的 loopback 端口上运行第三方插件代码，而 Rsbuild 开发服务器的默认 CORS 策略
-放行所有 loopback origin，因此这份放行列表只点名你自己的那个 Rsbuild origin，并且前台看到的仍然是浏览器
+`Origin` 守卫保护 loopback 前台服务器不受来自任何其他 origin 的请求伪造，包括其他 loopback origin
+（MCP App 沙箱 iframe 在独立的 loopback 端口上运行第三方插件代码，而 Rsbuild 开发服务器的默认 CORS 策略
+放行所有 loopback origin），因此这份放行列表只点名你自己的那个 Rsbuild origin，并且前台看到的仍然是浏览器
 真实的 `Origin`。
 
 不带 `--workbench-dev-origin` 时，位于 `http://localhost:3000` 的界面会以 `AB8003` 拒绝自己的引导
 （会话响应体中写的是前台 origin，而不是页面的 origin），并停留在"Foreground connection unavailable"
-门控页上，显示 `AB8003 ， Origin http://localhost:3000 is not allowed by the foreground server at
+门控页上，显示 `AB8003 — Origin http://localhost:3000 is not allowed by the foreground server at
 http://127.0.0.1:3100. Open http://127.0.0.1:3100 instead, or start agent-bundle dev with
 --workbench-dev-origin http://localhost:3000 to allow this origin.`。门控页只在前台响应本身失败时才会
 追加 `(HTTP <status>)`，例如前台回以 403 的 `AB8003` 会显示为
@@ -534,5 +534,5 @@ http://127.0.0.1:3100. Open http://127.0.0.1:3100 instead, or start agent-bundle
 
 ## 下一步
 
-- [测试](./testing.mdx) ， Workbench 所演练表面背后的证明级别。
-- [评测](./evaluations.mdx) ， Advanced 下的 eval 运行与对比。
+- [测试](./testing.mdx)：Workbench 所演练表面背后的证明级别。
+- [评测](./evaluations.mdx)：Advanced 下的 eval 运行与对比。

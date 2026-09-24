@@ -98,20 +98,20 @@ src/scripts/**/*.{ts,tsx,jsx}
 
 冻结后的结果是一个 `CompiledRouteGraph`（`routes/types.ts`）：
 
-- `servers[]` ， `CompiledServerSurface`（`generated` / `custom` / `command` /
+- `servers[]`，`CompiledServerSurface`（`generated` / `custom` / `command` /
   `remote` / `conflict`），每个都持有 kind 为 `tool`、`resource`、`prompt` 或 `app` 的
   `CompiledAgentRoute` 行。
-- `cli?` ， `CompiledCliSurface`（`generated` / `conventional` / `conflict`），带有
+- `cli?`，`CompiledCliSurface`（`generated` / `conventional` / `conflict`），带有
   `CompiledCliCommand` 行，其 argv 语法来自字面量 `config.inputJsonSchema` 或 JSON 输入。
-- `events[]` ， kind 为 `event-route` 的 `CompiledAgentRoute` 行。
-- `scripts[]` ， kind 为 `script`。
-- `providers[]` ， `CompiledProvider`（不是路由 kind；它们包裹执行）。
-- `layouts?` ， `CompiledLayout`（`root` 或 `server` 作用域）。事件路由与浏览器 App
+- `events[]`，kind 为 `event-route` 的 `CompiledAgentRoute` 行。
+- `scripts[]`，kind 为 `script`。
+- `providers[]`，`CompiledProvider`（不是路由 kind；它们包裹执行）。
+- `layouts?`，`CompiledLayout`（`root` 或 `server` 作用域）。事件路由与浏览器 App
   永不被包裹。
-- `contracts?` ， 路由本地的 `config.inputJsonSchema` 元数据，id 为
+- `contracts?`，路由本地的 `config.inputJsonSchema` 元数据，id 为
   `contract:<module>#inputJsonSchema`。
-- `digest` ， 根据项目相对身份和声明元数据计算的 sha256。
-- `diagnostics` ， 路由图错误（`AB48xx` 与 `AB494x`）。
+- `digest`，根据项目相对身份和声明元数据计算的 sha256。
+- `diagnostics`，路由图错误（`AB48xx` 与 `AB494x`）。
 
 每个 `CompiledAgentRoute` 携带 `id`、`kind`、`source`、约定式的 `provenance`、一份静态
 提取的 `config`（或 `emptyRouteConfig`）、可选的有界 `inputSchema`、可选的 `contract`
@@ -523,12 +523,12 @@ Amp 可执行入口指针把它推进到 4，JSON 输入的 CLI 投影模式（`
 
 ## 下一步
 
-- [项目结构](../start/project-structure.mdx) ， 发现所遍历的 `src/` 根目录。
-- [配置模型](../authoring/index.mdx) ， 这些根目录所填充的配置。
-- [MCP 服务器与 MCP App](../authoring/mcp.mdx) 与[钩子](../authoring/hooks.mdx) ， 大多数
+- [项目结构](../start/project-structure.mdx)：发现所遍历的 `src/` 根目录。
+- [配置模型](../authoring/index.mdx)：这些根目录所填充的配置。
+- [MCP 服务器与 MCP App](../authoring/mcp.mdx) 与[钩子](../authoring/hooks.mdx)，大多数
   作者最先遇到的两个可执行表面。
-- [产物清单](../../reference/artifact-manifest.mdx) ， `agent-bundle.manifest.json`
+- [产物清单](../../reference/artifact-manifest.mdx)：`agent-bundle.manifest.json`
   的每一个分节与字段。
-- [Target 与产物](../../reference/targets-artifacts.mdx) ， 复合根目录。
-- [交付捆绑包](../distribution/index.mdx) ， 根目录如何编译，以及其中装了什么。
-- [产物校验](../distribution/validation.mdx) ， 重新读取这份清单的那些检查。
+- [Target 与产物](../../reference/targets-artifacts.mdx)：复合根目录。
+- [交付捆绑包](../distribution/index.mdx)：根目录如何编译，以及其中装了什么。
+- [产物校验](../distribution/validation.mdx)：重新读取这份清单的那些检查。

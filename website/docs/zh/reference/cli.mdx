@@ -30,7 +30,7 @@ npx agent-bundle --version
 
 ## 共享选项组
 
-**源码命令** ， `build`、`prepack`、`validate`、`eval`：
+**源码命令**（`build`、`prepack`、`validate`、`eval`）：
 
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
@@ -40,7 +40,7 @@ npx agent-bundle --version
 | `--target <target>` | 配置中的 `targets`，否则为 `portable` | 要选择的宿主投影：`amp`、`claude`、`codex`、`cursor` 或 `portable`。可重复；本次运行中该选择替换配置里的 `targets`，无论顺序如何，所有所选宿主都落入同一个组合根目录。其他任何名字（包括 `plugin`）都是 `AB4100`。 |
 | `--json` | 关闭 | 写出一份机器可读的 JSON 文档。 |
 
-**产物命令** ， `mcp list`、`mcp invoke`、`mcp run`、`serve-app`、`hooks list`、`hooks simulate`：同样的
+**产物命令**（`mcp list`、`mcp invoke`、`mcp run`、`serve-app`、`hooks list`、`hooks simulate`）：同样的
 `--root`、`--config`、`--mode` 与 `--json`，外加 `--artifact <path>`（精确使用某一份已构建产物）与
 `--target <target>`（选择宿主投影）。对 `mcp list`、`mcp invoke`、`mcp run` 与 `serve-app` 来说，
 `--target` 是**可选**的：省略时，产物的 `agent-bundle.manifest.json` `projections[]` 会给出运行该服务器的

@@ -269,7 +269,7 @@ Claude 与 Codex 二进制文件还会证明它们各自公开的安装路径，
 ## 契约矩阵
 
 契约矩阵是框架自有的生成式插件线上契约测试套件。三个入口共享同一份实现；边界差异是显式的能力标记，而
-不是分叉的检查逻辑。项目只需提供 fixture ，合法输入、为每个内存内工具路由声明的 `resultCompat` 策略、
+不是分叉的检查逻辑。项目只需提供 fixture，合法输入、为每个内存内工具路由声明的 `resultCompat` 策略、
 可选的 `previousResults` 负载、可选的 `cancellation` case，以及一个可选的、带声明式预期的确定性生命
 周期状态转换驱动。
 
@@ -345,5 +345,5 @@ export const matrix = async (): Promise<void> => {
 
 ## 下一步
 
-- [评测](./evaluations.mdx) ， 追问智能体是否根本抵达了插件的那个表面。
-- [产物校验](../distribution/validation.mdx) ， 为已构建捆绑包把关的那些检查。
+- [评测](./evaluations.mdx)：追问智能体是否根本抵达了插件的那个表面。
+- [产物校验](../distribution/validation.mdx)：为已构建捆绑包把关的那些检查。

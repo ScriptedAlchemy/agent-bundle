@@ -504,7 +504,7 @@ npx agent-bundle inspect --bundler --root . --target claude --json
 真实编译结果发生漂移。你能看到解析后的 `resolve.alias` 映射（框架运行时模块与你自己的别名并列）、
 `externals` 列表、以 `[object <ClassName>]` 渲染的插件、以 `[function <name>]` 渲染的函数，以及
 `output.path`：产物根目录显示为 `<output>`，包构建显示为 `<项目根>/dist`。被构建不变量拒绝的逃生舱值
-，例如给保留的 `agent-bundle/*` 说明符设置别名，会让检查变为无效，并以 `AB7001` 指出被拒绝的原因。
+（例如给保留的 `agent-bundle/*` 说明符设置别名）会让检查变为无效，并以 `AB7001` 指出被拒绝的原因。
 被框架包装的入口还会附带生成的包装模块源码。
 
 本页所有内容的完整契约见
@@ -512,5 +512,5 @@ npx agent-bundle inspect --bundler --root . --target claude --json
 
 ## 下一步
 
-- [配置模型](./index.mdx) ， 其余的配置表面。
-- [项目结构](../start/project-structure.mdx) ， 这些入口各自的位置。
+- [配置模型](./index.mdx)：其余的配置表面。
+- [项目结构](../start/project-structure.mdx)：这些入口各自的位置。

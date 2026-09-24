@@ -193,7 +193,7 @@ payload 树按字节逐一复制，并且对编译器而言是**不透明的**�
 | `runsDir` | `.agent-bundle/runs` | 项目根目录下的相对子目录。 |
 | `semanticGrader` | 无 | 必须恰好包含 `harness` 与 `model`。`harness` 必须是 `'claude'`；`model` 必须是安全的模型标识符，而不是路径。 |
 
-`evals` 块中的提供方凭据材料会被直接拒绝（`EVAL_CREDENTIAL_REJECTED`）， Agent Bundle 复用宿主 CLI 已有
+`evals` 块中的提供方凭据材料会被直接拒绝（`EVAL_CREDENTIAL_REJECTED`），Agent Bundle 复用宿主 CLI 已有
 的已登录会话。见[安全](./security.mdx)。
 
 ```ts twoslash

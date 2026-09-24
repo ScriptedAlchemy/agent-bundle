@@ -42,7 +42,7 @@ route-free preparation removes it. The declaration only types `renderRoute`, the
 provider values in a TypeScript program that compiles it: keep `".agent-bundle/routes.d.ts"` in
 the `include` of every tsconfig that imports `agent-bundle/test`, `agent-bundle/app`,
 `agent-bundle/eval`, or `@agent-bundle/runtime`. Include it in each consuming project of a
-solution-style workspace and run that project's actual TypeScript check; framework validation
+solution-style workspace and run that project’s actual TypeScript check; framework validation
 does not reconstruct TypeScript programs. `validate` is also the
 lightweight way to publish current declarations before an isolated type check, no dev server or
 production bundle needed, which is why the routed templates' `typecheck` script runs

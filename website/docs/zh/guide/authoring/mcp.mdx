@@ -232,7 +232,7 @@ interface AgentTerminal {
 | 生成的 MCP 服务器 | `mcp` | 两者均为 `none`，stdout 是协议线路，stderr 是宿主的日志。从不探测，也从不猜测。 |
 | 事件路由（共享运行时或独立钩子进程） | `hook` | 两者均为 `none`，stdout 是宿主的钩子信封。 |
 | Workbench 生命周期回放 | `workbench` | 两者均为 `none`。 |
-| 未挂载该轴的自定义宿主 | 无 | `unavailable`（`not-provided`）。 |
+| 未挂载该轴的自定义宿主 | 不适用 | `unavailable`（`not-provided`）。 |
 
 导出 `main` 的普通脚本或 bin 没有请求作用域；其封套会把同一个值作为 `main` 的第二个参数传入（见
 [包入口](./package-entries.mdx#可执行封套)）。在测试中，`invokeCli` 与 `runScript` 的 `tty` 开关会塑造
@@ -297,7 +297,7 @@ export const MeasuredFiles = ({ files }: { readonly files: readonly MeasuredFile
 );
 ```
 
-标题 `h1`到`h6`、段落、`strong`/`em`/`del`、`code` 与 `pre`、链接与图片、引用块、`ul`/`ol`（可嵌套，
+标题 `h1`–`h6`、段落、`strong`/`em`/`del`、`code` 与 `pre`、链接与图片、引用块、`ul`/`ol`（可嵌套，
 `ol` 支持 `start`）、GFM 任务列表（`li` 内的 `<input type="checkbox">`）、单元格带 `align` 的
 `table`、`dt`/`dd`、`br` 与 `hr` 都会序列化为对应的 Markdown 形式；未知元素直接透传其子节点。子节点中
 任何位置的同步与异步组件，包括调用 `React.use` 的组件，都会在该块发出前解析完成。文本会被转义，因此
@@ -1057,7 +1057,7 @@ HTTP 端点。`--target` 默认为 `portable`，`--url` 可覆盖发现过程。
 
 ## 下一步
 
-- [脚本与资源](./scripts-assets.mdx) ， 产物中非协议类的可执行文件。
-- [包入口](./package-entries.mdx) ， `bin`、`lib` 与路由式 CLI。
-- [编译器架构](../concepts/architecture.mdx) ， 生成式路由如何进入应用图、
+- [脚本与资源](./scripts-assets.mdx)：产物中非协议类的可执行文件。
+- [包入口](./package-entries.mdx)：`bin`、`lib` 与路由式 CLI。
+- [编译器架构](../concepts/architecture.mdx)：生成式路由如何进入应用图、
   宿主投影与产物。

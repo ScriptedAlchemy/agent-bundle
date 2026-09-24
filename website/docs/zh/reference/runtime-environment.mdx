@@ -18,8 +18,8 @@ description: '生成式 agent-bundle 可执行文件的运行时契约：Node.js
 | 宿主 | 插件根 | 插件数据 |
 | --- | --- | --- |
 | Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
-| Cursor | `${CURSOR_PLUGIN_ROOT}` | ， （拒绝：没有文档化的宿主等价物） |
-| Codex | `${PLUGIN_ROOT}`（仅钩子命令） | ， （拒绝：没有文档化的宿主等价物） |
+| Cursor | `${CURSOR_PLUGIN_ROOT}` | 无（拒绝：没有文档化的宿主等价物） |
+| Codex | `${PLUGIN_ROOT}`（仅钩子命令） | 无（拒绝：没有文档化的宿主等价物） |
 | portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
 
 替换是**按位置的，而不是全局的**。Codex 的 `${PLUGIN_ROOT}` 只是其生成的钩子命令的命令根，别无他用：
@@ -60,8 +60,8 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 2. **`.env` 文件层**。
 3. 操作者真实的 `process.env`，因此已导出的变量总是胜出。
 
-`.env` 层是项目根目录下（运行时称之为工作区根目录）Rsbuild 的约定集合 ， `.env`、`.env.local`、
-`.env.<mode>`、`.env.<mode>.local` ， 除非 `--env-file <path>` 用你指定的那些文件替换它，或者
+`.env` 层是项目根目录下（运行时称之为工作区根目录）Rsbuild 的约定集合（`.env`、`.env.local`、
+`.env.<mode>`、`.env.<mode>.local`），除非 `--env-file <path>` 用你指定的那些文件替换它，或者
 `--no-env` 把它移除。
 这两个标志互斥。文件被读入一个临时对象，因此真实的 `process.env` 绝不会被改动。
 
@@ -109,5 +109,5 @@ Workbench 路由调用会把 `AGENT_BUNDLE_STATE_ROOT` 固定为 `<project>/.age
 
 ## 下一步
 
-- [安全](./security.mdx) ， 这些进程周围的凭据与网络边界。
-- [命令行](./cli.mdx) ， 上文引用的那些标志。
+- [安全](./security.mdx)：这些进程周围的凭据与网络边界。
+- [命令行](./cli.mdx)：上文引用的那些标志。

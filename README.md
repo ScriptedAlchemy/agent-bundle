@@ -1,6 +1,6 @@
 # agent-bundle
 
-agent-bundle compiles an agent plugin, skills, hooks, MCP servers, and scripts, described by one typed config, into installable output for Claude Code, Codex, Cursor, portable Agent Plugins clients, and experimental Amp. You write the plugin once; the compiler emits each selected host's entry, manifests, and wrappers into one composite root. Amp is contract-verified against the pinned PluginAPI and install layout; live activation, tools, and events are runtime-unverified (no Amp account in CI).
+agent-bundle compiles an agent plugin (skills, hooks, MCP servers, and scripts, described by one typed config) into installable output for Claude Code, Codex, Cursor, portable Agent Plugins clients, and experimental Amp. You write the plugin once; the compiler emits each selected host's entry, manifests, and wrappers into one composite root. Amp is contract-verified against the pinned PluginAPI and install layout; live activation, tools, and events are runtime-unverified (no Amp account in CI).
 
 Documentation: [scriptedalchemy.github.io/agent-bundle](https://scriptedalchemy.github.io/agent-bundle/) (English and 简体中文; guide, reference, generated type API, host capability matrices).
 

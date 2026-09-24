@@ -265,7 +265,7 @@ advertise while a pipe renders none. `COLUMNS`/`LINES` override the reported siz
 | Generated MCP server | `mcp` | `none` on both, stdout is the protocol wire, stderr the host's log. Never probed, never guessed. |
 | Event route (shared runtime or standalone hook) | `hook` | `none` on both, stdout is the host's hook envelope. |
 | Workbench lifecycle replay | `workbench` | `none` on both. |
-| A custom host that mounts none | none | `unavailable` (`not-provided`). |
+| A custom host that mounts none | not applicable | `unavailable` (`not-provided`). |
 
 A plain `main`-exporting script or bin has no request scope; its envelope passes the same value
 as the second argument of `main` (see [Package entries](./package-entries.mdx#the-executable-envelope)).
@@ -335,7 +335,7 @@ export const MeasuredFiles = ({ files }: { readonly files: readonly MeasuredFile
 );
 ```
 
-Headings `h1` to `h6`, paragraphs, `strong`/`em`/`del`, `code` and `pre`, links and images,
+Headings `h1`–`h6`, paragraphs, `strong`/`em`/`del`, `code` and `pre`, links and images,
 blockquotes, `ul`/`ol` (nested, and `start` on `ol`), GFM task lists (`<input type="checkbox">`
 inside `li`), `table` with `align` on its cells, `dt`/`dd`, `br`, and `hr` serialize to their
 Markdown forms; unknown elements pass their children through. Sync and async components anywhere

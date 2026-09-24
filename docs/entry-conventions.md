@@ -37,7 +37,7 @@ package-only entries:
   `npm publish ./dist --ignore-scripts`.
 - The package build runs for `agent-bundle build` (CLI, or
   `build({ packageOutputs: true })` through the API) and inside the
-  `agent-bundle dev` rebuild loop (see "Dev-watch of the package build"
+  `agent-bundle dev` rebuild loop (see “Dev-watch of the package build”
   below). Other programmatic artifact operations, temporary artifacts,
   evals, never write `dist/`.
 - Outputs are staged and published atomically, and their provenance
@@ -693,7 +693,7 @@ Per surface, the value the generated request scope mounts:
 | Generated MCP server (any transport) | `mcp` | `none` on both, `color: 'none'`, `sharesTarget: false`, stdout is the protocol wire and stderr the host's log. Never probed, whatever the descriptors are. | `derived` |
 | Event route (shared runtime or standalone hook process) | `hook` | `none` on both, stdout is the host's hook envelope. Never probed. | `derived` |
 | Workbench lifecycle replay | `workbench` | `none` on both, the document renders into a panel. | `derived` |
-| Custom host calling `runAgentRequest` without `terminal` | none | `unavailable` (`not-provided`) | none |
+| Custom host calling `runAgentRequest` without `terminal` | not applicable | `unavailable` (`not-provided`) | not applicable |
 
 Plain `main`-exporting scripts and bins have no request scope, so the
 executable envelope hands them the same probe directly as the second argument

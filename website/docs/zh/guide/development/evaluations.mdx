@@ -96,7 +96,7 @@ export default grade;
 ## 三种结果，而不是两种
 
 每个断言都解析为 `pass`、`fail` 或 **`inconclusive`**，并声明它所接受的最低证据。当断言所需的证据强于
-harness 实际产生的证据时，它是 inconclusive ，绝不会被悄悄判为通过。
+harness 实际产生的证据时，它是 inconclusive，绝不会被悄悄判为通过。
 
 | 证据 | 含义 |
 | --- | --- |
@@ -118,7 +118,7 @@ inconclusive 的试验，`agent-bundle eval` 就以非零退出。
 一个比率。
 
 只有当以下每个 facet 都匹配时，对比行才算对齐：case、fixture、语义 grader 身份、harness、宿主 CLI
-版本、invocation 与 model。产物 target 摘要刻意*不是*对齐 facet ，它正是被对比的那个对象。运行中未
+版本、invocation 与 model。产物 target 摘要刻意*不是*对齐 facet，它正是被对比的那个对象。运行中未
 记录的 facet 会被标注为未核实（unverified），而不是被假定为对齐；某个 facet 不匹配会让该行变为
 non-comparable，而不是产出一个没人该信的差值。
 
@@ -183,5 +183,5 @@ npx agent-bundle eval --harness codex --trials 1
 
 ## 下一步
 
-- [分发](../distribution/index.mdx) ， 把一份已校验的产物变成可安装的捆绑包。
-- [已知限制](../../reference/limitations.mdx) ， eval 与 harness 目前不能证明什么。
+- [分发](../distribution/index.mdx)：把一份已校验的产物变成可安装的捆绑包。
+- [已知限制](../../reference/limitations.mdx)：eval 与 harness 目前不能证明什么。

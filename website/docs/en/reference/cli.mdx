@@ -30,7 +30,7 @@ npx agent-bundle --version
 
 ## Shared option groups
 
-**Source commands**, `build`, `prepack`, `validate`, `eval`:
+**Source commands** (`build`, `prepack`, `validate`, `eval`):
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -40,7 +40,7 @@ npx agent-bundle --version
 | `--target <target>` | config `targets`, else `portable` | Host projection to select: `amp`, `claude`, `codex`, `cursor`, or `portable`. Repeatable; the selection replaces the configured `targets` for this run, and every selected host lands in the one composite root whatever the order. Any other name, `plugin` included, is `AB4100`. |
 | `--json` | off | Write one machine-readable JSON document. |
 
-**Artifact commands**, `mcp list`, `mcp invoke`, `mcp run`, `serve-app`, `hooks list`, `hooks simulate`:
+**Artifact commands** (`mcp list`, `mcp invoke`, `mcp run`, `serve-app`, `hooks list`, `hooks simulate`):
 the same `--root`, `--config`, `--mode`, and `--json`, plus `--artifact <path>` to use exactly
 one built artifact and `--target <target>` to select the host projection. For `mcp list`,
 `mcp invoke`, `mcp run`, and `serve-app`, `--target` is **optional**: when omitted, the artifact's

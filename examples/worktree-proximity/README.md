@@ -205,5 +205,5 @@ or displays projected context in production.
 
 Version 1 connects no external driver adapter and claims none. A future
 external adapter must pass the framework state-driver conformance suite
-before any "integrated" claim. The generated runtime's SQLite driver is the
+before any “integrated” claim. The generated runtime's SQLite driver is the
 only durable driver used by this example.
