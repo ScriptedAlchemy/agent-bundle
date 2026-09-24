@@ -56,8 +56,12 @@ describe('@agent-bundle/runtime manifest', () => {
     expect(atLeast(versionOf(exactVersion, pinnedReact), versionOf(caretRange, peers.react))).toBe(true);
   });
 
-  it('depends on the workspace rsc-markdown-stream, which the packer rewrites to a caret', () => {
-    expect(runtimeManifest.dependencies['rsc-markdown-stream']).toBe('workspace:^');
+  // pkg-pr-new rewrites a `workspace:` dependency to a tarball URL, which
+  // pnpm 11 refuses as a subdependency (`ERR_PNPM_EXOTIC_SUBDEP`, #831).
+  it('declares every dependency as a registry version range', () => {
+    for (const [name, range] of Object.entries(runtimeManifest.dependencies)) {
+      expect(range, name).toMatch(/^[~^]?\d+\.\d+\.\d+(?:-[\w.-]+)?$/u);
+    }
   });
 
   it('declares zod as a required caret peer at the proven 4.5.4 floor', () => {
