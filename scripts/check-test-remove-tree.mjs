@@ -154,7 +154,8 @@ const statementDeclares = (statement, name) => {
   return false;
 };
 
-const functionLikeDeclares = (node, name) => {
+/** `from` is the child the walk came up through; names, computed keys, and decorators sit outside the function scope. */
+const functionLikeDeclares = (node, from, name) => {
   if (
     !(
       ts.isFunctionDeclaration(node)
@@ -166,6 +167,7 @@ const functionLikeDeclares = (node, name) => {
   ) {
     return false;
   }
+  if (from !== node.body && !node.parameters.includes(from)) return false;
   if (
     (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node))
     && node.name !== undefined
@@ -176,9 +178,15 @@ const functionLikeDeclares = (node, name) => {
   return node.parameters.some((parameter) => declarationNameIs(parameter.name, name));
 };
 
-/** True when a later/inner local binding hides the Node fs import of `name`. */
+/**
+ * True when a later/inner local binding hides the Node fs import of `name`.
+ * ponytail: `var` is treated as block-scoped, so a `var` hoisted out of a nested
+ * block is missed and its call still fails the gate (false positive, never a
+ * false negative). Track function-scoped `var` if that ever bites.
+ */
 const identifierIsLocallyShadowed = (identifier) => {
   const name = identifier.text;
+  let from = identifier;
   let current = identifier.parent;
   while (current !== undefined) {
     if (
@@ -202,7 +210,7 @@ const identifierIsLocallyShadowed = (identifier) => {
     ) {
       return true;
     }
-    if (functionLikeDeclares(current, name)) return true;
+    if (functionLikeDeclares(current, from, name)) return true;
     if (
       ts.isCatchClause(current)
       && current.variableDeclaration !== undefined
@@ -210,6 +218,7 @@ const identifierIsLocallyShadowed = (identifier) => {
     ) {
       return true;
     }
+    from = current;
     current = current.parent;
   }
   return false;
