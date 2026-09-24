@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,7 @@ import {
 import { normalizePackageBuild } from '../src/config/normalize.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -25,7 +26,7 @@ const registry: NormalizationTargetRegistry = {
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const projectRoot = async (files: Readonly<Record<string, string>>): Promise<string> => {
@@ -468,6 +469,7 @@ describe('artifact output validation', () => {
     { code: 'AB4707', label: 'an undefined block', output: undefined },
     { code: 'AB4707', label: 'an array block', output: [] },
     { code: 'AB4707', label: 'a string block', output: 'artifact' },
+    { code: 'AB4707', label: 'a non-boolean repository marketplace option', output: { repositoryMarketplace: 'yes' } },
     { code: 'AB4707', label: 'an undefined path', output: { distPath: undefined } },
     { code: 'AB4707', label: 'a non-string path', output: { distPath: 7 } },
     { code: 'AB4707', label: 'an empty path', output: { distPath: '' } },

@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { liftPromise } from '../src/effect/lift.ts';
 import { platformLayer, runWithPlatform, unwrapPlatformError, withTempDirectory } from '../src/effect/platform.ts';
 import * as devApi from '../src/dev/index.ts';
 import * as rootApi from '../src/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * `runWithPlatform` is the Promise edge for platform-dependent programs:
@@ -75,7 +76,7 @@ describe('effect platform layer (agent-bundle)', () => {
       ));
       await expect(access(directory)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
-      await rm(parent, { force: true, recursive: true });
+      await removeTree(parent);
     }
   });
 
@@ -94,7 +95,7 @@ describe('effect platform layer (agent-bundle)', () => {
       expect(directory).toBeDefined();
       await expect(access(directory!)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
-      await rm(parent, { force: true, recursive: true });
+      await removeTree(parent);
     }
   });
 
@@ -111,7 +112,7 @@ describe('effect platform layer (agent-bundle)', () => {
       ));
       expect(result).toBe('settled');
     } finally {
-      await rm(parent, { force: true, recursive: true });
+      await removeTree(parent);
     }
   });
 
@@ -130,7 +131,7 @@ describe('effect platform layer (agent-bundle)', () => {
       expect(directory).toBeDefined();
       await expect(access(directory!)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
-      await rm(parent, { force: true, recursive: true });
+      await removeTree(parent);
     }
   });
 
@@ -157,7 +158,7 @@ describe('effect platform layer (agent-bundle)', () => {
       expect(Option.isSome(outcome.exit) && Exit.isFailure(outcome.exit.value) && Cause.hasInterrupts(outcome.exit.value.cause)).toBe(true);
       await expect(access(outcome.directory)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
-      await rm(parent, { force: true, recursive: true });
+      await removeTree(parent);
     }
   });
 

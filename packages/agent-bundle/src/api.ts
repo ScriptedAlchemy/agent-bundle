@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -26,7 +26,7 @@ import {
   featureCapabilityName,
   type AgentComponentKind,
 } from './core/components.ts';
-import { errorMessage } from './core/errors.ts';
+import { errorMessage, isErrno } from './core/errors.ts';
 import { resolveProcessNpmCliJs } from './core/npm-cli.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import {
@@ -265,6 +265,7 @@ export type {
 } from './dev/eval/eval-service.ts';
 import {
   ProjectService,
+  resolveOutputRoots,
   projectDiagnostic,
   type PreparedProject,
 } from './dev/project-service.ts';
@@ -619,6 +620,8 @@ export interface InvalidInspectResult {
 export type InspectResult = ReadyInspectResult | InvalidInspectResult;
 
 export interface BuildOptions extends ProjectOptions {
+  /** Set false for temporary builds that must not replace configured repository marketplaces. */
+  readonly repositoryMarketplaces?: boolean;
   /**
    * After the artifact is written, run the installed Claude developer
    * validator (`claude plugin validate --strict` against the emitted
@@ -788,6 +791,7 @@ const temporaryArtifact = async <Result>(
         logger: options.logger,
         mode: options.mode,
         output: artifact,
+        repositoryMarketplaces: false,
         registry: options.registry,
         root: options.root,
         targets: options.targets,
@@ -1286,8 +1290,21 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     }]);
   }
   log(options.logger, 'artifact.build', { output, root: prepared.root });
+  if (model.repositoryMarketplace === true && options.repositoryMarketplaces !== false) {
+    try {
+      if ((await lstat(output)).isSymbolicLink()) {
+        throw new Error('Repository marketplaces require a real artifact output directory, not a symlink.');
+      }
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+    }
+  }
+  const repositoryOutputRoot = model.repositoryMarketplace === true && options.repositoryMarketplaces !== false
+    ? (await resolveOutputRoots(root, prepared.root, [output]))[0]
+    : undefined;
   const result = await buildArtifact({
     model,
+    ...(repositoryOutputRoot === undefined ? {} : { repositoryOutputRoot }),
     outputRoot: output,
     projectContext,
     projectRoot: prepared.root,
@@ -1604,6 +1621,7 @@ const scopedThrowawayArtifact = (
   logger: options.logger,
   mode: options.mode,
   output: artifact,
+  repositoryMarketplaces: false,
   registry: options.registry,
   root: options.root,
   targets: options.targets,

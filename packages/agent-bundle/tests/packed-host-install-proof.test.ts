@@ -1,6 +1,6 @@
 import { execFile as executeFile, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -26,6 +26,7 @@ import {
   HOST_INSTALL_PROOF_LEVEL,
   proofLevelLabel,
 } from '../src/test/manifest.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const proofLabel = proofLevelLabel(HOST_INSTALL_PROOF_LEVEL);
@@ -190,7 +191,7 @@ beforeAll(async () => {
     access(join(installedArtifactRoot, '.cursor-plugin', 'plugin.json')),
   ]);
 
-  await rm(projectRoot, { force: true, recursive: true });
+  await removeTree(projectRoot);
   await expect(stat(projectRoot), proofLabel).rejects.toMatchObject({ code: 'ENOENT' });
   await expect(access(join(projectRoot, 'dist', 'bin', `${pluginName}.mjs`)), proofLabel)
     .rejects.toMatchObject({ code: 'ENOENT' });
@@ -209,7 +210,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await Promise.all([
-    cleanupRoot === undefined ? Promise.resolve() : rm(cleanupRoot, { force: true, recursive: true }),
+    cleanupRoot === undefined ? Promise.resolve() : removeTree(cleanupRoot),
     sourceFixture === undefined ? Promise.resolve() : disposeHostInstallFixture(sourceFixture),
   ]);
 });

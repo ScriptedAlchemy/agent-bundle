@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 import type { AgentBundleConfig } from '../src/core/types.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
 import { routeTaskSupport, toolTaskSupportValues } from '../src/routes/task-support.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * `config.execution.taskSupport` (#369): the compiler validates the value once
@@ -18,7 +19,7 @@ import { routeTaskSupport, toolTaskSupportValues } from '../src/routes/task-supp
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const createRoot = async (): Promise<string> => {

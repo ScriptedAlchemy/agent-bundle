@@ -8,7 +8,8 @@ Requires Node.js 22.19 or later.
 
 ## Install
 
-Nothing is published to npm yet (the `agent-bundle` name on npm currently belongs to an unrelated project). Until the first release, install the preview tarballs CI publishes for every commit and pull request:
+Packages are distributed through pkg.pr.new, not the npm registry. Install the
+preview tarballs CI publishes for every commit and pull request:
 
 ```sh
 npm i -D https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@<sha-or-pr>
@@ -26,9 +27,8 @@ project that already passes its own `check`:
 npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
 ```
 
-(`npm create agent-bundle` once npm releases exist. See the
-[create-agent-bundle README](packages/create-agent-bundle/README.md) for
-templates and flags.)
+See the [create-agent-bundle README](packages/create-agent-bundle/README.md)
+for templates and flags.
 
 Or describe the plugin by hand in `agent-bundle.config.ts` at the project root:
 

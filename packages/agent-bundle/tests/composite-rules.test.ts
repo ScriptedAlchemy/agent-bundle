@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -9,6 +9,7 @@ import { cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import { build, type BuildProjectResult, inspect, validate } from '../src/api.ts';
 import { type ArtifactManifest, parseArtifactManifest } from '../src/build/manifest.ts';
 import { type Diagnostic, DiagnosticError } from '../src/core/diagnostics.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * Composite-root rules ported from the superseded #569 (#555): the ones that
@@ -22,7 +23,7 @@ import { type Diagnostic, DiagnosticError } from '../src/core/diagnostics.ts';
 
 const roots: string[] = [];
 afterAll(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const writeProjectFile = async (root: string, path: string, content: string): Promise<void> => {

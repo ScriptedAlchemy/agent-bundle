@@ -109,6 +109,33 @@ const stubs = (options: {
 };
 
 describe('generated server lineage correlation', () => {
+  it('excludes same-client tools from listing and direct calls without leaking across sessions', async () => {
+    const routes = Object.fromEntries([
+      ['codex_send', ['codex']], ['gbot_send', ['grok bot', 'grokbot', 'grok-bot']], ['common', []],
+    ].map(([name, excludeClients]) => [String(name), {
+      config: { excludeClients }, id: String(name), kind: 'tool' as const, name: String(name),
+      module: { default: () => undefined, inputSchema: z.object({}).strict(), resultSchema: z.object({ ok: z.boolean() }) },
+    }]));
+    await Promise.all([
+      ['codex_cli_rs', 'codex_send'], ['Grok Bot', 'gbot_send'], ['Cursor', undefined], ['unknown', undefined],
+    ].map(async ([name, hidden]) => {
+      const { host } = stubs();
+      const server = await createGeneratedRouteMcpServer({ artifactEpoch: 'epoch', host,
+        plugin: { name: 'client-tools', version: '0.0.0' }, routes });
+      const client = new Client({ name: name!, version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const listed = (await client.listTools()).tools.map(tool => tool.name).sort();
+        expect(listed).toEqual(['codex_send', 'gbot_send', 'common'].filter(tool => tool !== hidden).sort());
+        if (hidden) await expect(client.callTool({ name: hidden, arguments: {} })).rejects.toThrow(/disabled|not found/i);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    }));
+  });
+
   it('hands the registry the raw tools/call arguments, not the schema-parsed input with defaults applied', async () => {
     // Cursor's hook records the arguments as sent (`tool_input`); a schema default
     // would make `{}` and `{ label: 'probe' }` parse alike and misattribute the

@@ -1,5 +1,5 @@
 import { execFile as executeFile, type ChildProcess } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -20,6 +20,7 @@ import {
   sharedPackedTarball,
 } from './support/shared-pack.ts';
 import { timeScale } from './support/time-scale.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/web-surface');
@@ -145,7 +146,7 @@ beforeAll(async () => {
       'approve',
       pluginName,
     ], { cwd: installedConsumer, env: installedEnvironment() });
-    await rm(join(installedConsumer, 'node_modules'), { force: true, recursive: true });
+    await removeTree(join(installedConsumer, 'node_modules'));
   }
   await execFile('npm', [
     'install',
@@ -180,7 +181,7 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const child of spawned) child.kill('SIGKILL');
   killAll(observedProcessIds);
-  if (consumer.length > 0) await rm(consumer, { force: true, recursive: true });
+  if (consumer.length > 0) await removeTree(consumer);
 });
 
 it('builds the exposed App into the composite root: a manifest web section, one launch record on the server row, and one self-contained bin carrying the host', { timeout: 60_000 }, async () => {

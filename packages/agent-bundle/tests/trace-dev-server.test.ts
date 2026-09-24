@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { cp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -13,6 +13,7 @@ import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
 import { exampleNodeModules } from './helpers/workspace-paths.ts';
 import { replaceWatchedSourceAndAwaitRebuild } from './support/watched-files.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const runHook = (
   entry: string,
@@ -260,6 +261,6 @@ it('serves replay and live trace entries and lowers build failures', { timeout: 
     await expect(readFile(receiptRecordPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });

@@ -10,6 +10,7 @@ import { artifactManifestName, parseArtifactManifest } from '../src/build/manife
 import { reindexArtifactManifest } from '../src/build/manifest-reindex.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('reindexes changed, added, and removed artifact files canonically', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-manifest-reindex-'));
@@ -72,7 +73,7 @@ it('reindexes changed, added, and removed artifact files canonically', async () 
     });
     expect(await readFile(manifestPath, 'utf8')).toBe(originalBytes);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -120,6 +121,6 @@ it('refuses to reindex compiled files and the compile evidence record: only a re
     }
     expect(await readFile(join(root, artifactManifestName), 'utf8')).toBe(before);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

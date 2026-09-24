@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -16,6 +16,7 @@ import {
   npmRun,
   scaffoldProject,
 } from './support/scaffold-fixture.ts';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 
@@ -168,6 +169,6 @@ it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artif
     expect(packedPaths).toContain('.claude-plugin/plugin.json');
     expect(packedPaths).toContain('bin/greeter.mjs');
   } finally {
-    await rm(packDestination, { force: true, recursive: true });
+    await removeTree(packDestination);
   }
 }, 600_000);

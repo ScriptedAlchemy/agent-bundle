@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,13 +13,14 @@ import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { build } from './support/build.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 type RspackMutator = (config: Rspack.Configuration) => void;
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const fixtureRoot = async (files: Readonly<Record<string, string>>): Promise<string> => {

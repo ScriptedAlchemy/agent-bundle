@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { cp, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { describe, expect, it } from '@rstest/core';
 
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -107,7 +108,7 @@ describe.sequential('optional RSC runtime package boundary', () => {
       expect(await namedFiles(consumer, '.runtime-provider-loaded')).toEqual([]);
       expect(await namedFiles(project, '.runtime-provider-loaded')).toEqual([]);
     } finally {
-      await rm(consumer, { force: true, recursive: true });
+      await removeTree(consumer);
     }
   }, 120_000);
 });

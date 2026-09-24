@@ -1,6 +1,6 @@
 import { execFile as executeFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,6 +13,7 @@ import { runCli as runSourceCli, type CliDependencies } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { cachedNpmInstallArguments, packOutputFromJson } from './support/shared-pack.ts';
 import { timeScale } from './support/time-scale.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -301,7 +302,7 @@ it('builds a selected target through the built executable from a path containing
       projections: [{ host: 'codex' }, { host: 'portable' }],
     });
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 30_000 * timeScale);
 
@@ -322,7 +323,7 @@ it('rejects --target plugin as an unknown target (#555 acceptance 3)', async () 
       target: 'plugin',
     })]);
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 });
 
@@ -352,7 +353,7 @@ const runCliRecordingModuleLoads = async (
     const modules = (await readFile(recordPath, 'utf8')).split('\n').filter((line) => line.length > 0);
     return { code, modules, stderr, stdout };
   } finally {
-    await rm(recordRoot, { force: true, recursive: true });
+    await removeTree(recordRoot);
   }
 };
 
@@ -538,8 +539,8 @@ it('runs MCP and hook operations from a packed consumer with explicit and tempor
     expect(missingHook).toMatchObject({ code: 2, stdout: '' });
   } finally {
     await Promise.all([
-      rm(join(source, '..'), { force: true, recursive: true }),
-      rm(consumer.root, { force: true, recursive: true }),
+      removeTree(join(source, '..')),
+      removeTree(consumer.root),
     ]);
   }
 }, 60_000 * timeScale);
@@ -600,7 +601,7 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     ]);
     expect(humanValidation).toEqual({ code: 0, stderr: '', stdout: 'Validation succeeded\n' });
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 30_000 * timeScale);
 
@@ -640,7 +641,7 @@ it('includes a built-manifest summary on inspect --json after a build, and omits
     expect(JSON.parse(artifact.stdout).manifest.application.id).toBe('plugin:cli-fixture');
     expect(JSON.parse(artifact.stdout).application.identity.id).toBe('plugin:cli-fixture');
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 30_000 * timeScale);
 
@@ -756,7 +757,7 @@ it('build compiles a declared MCP App view and reports its document and measured
       /^MCP App dashboard \(codex\+portable\): mcp-apps\/dashboard\.html \d+(?:\.\d)? [KM]iB \(\d+(?:\.\d)? [KM]iB gzip\)$/mu,
     );
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 60_000 * timeScale);
 
@@ -816,7 +817,7 @@ it('prints a complete invalid inspection on JSON and human output', async () => 
     expect(human.stdout).toContain('Recovery:');
     expect(human.stdout).not.toContain('opaque cli inspect sentinel');
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 30_000 * timeScale);
 
@@ -851,7 +852,7 @@ it('explains selected and omitted components per target on human inspect output'
     expect(withCursor).toMatchObject({ code: 0, stderr: '' });
     expect(withCursor.stdout).toMatch(/^ {2}command deploy omits argumentHint: commands\.argumentHint unavailable — .*frontmatter-free.*$/mu);
     await Promise.all([
-      rm(join(project.root, 'src', 'commands'), { force: true, recursive: true }),
+      removeTree(join(project.root, 'src', 'commands')),
       writeFile(join(project.root, 'agent-bundle.config.ts'), originalConfig),
     ]);
     // The canonical kind matrix names every kind a host cannot emit, even
@@ -887,7 +888,7 @@ it('explains selected and omitted components per target on human inspect output'
       state: 'ready',
     });
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 30_000 * timeScale);
 
@@ -921,7 +922,7 @@ it('reports an unselected inspect target on JSON and human output', async () => 
     expect(human.stdout).toContain('portabl');
     expect(human.stdout).toContain('Recovery:');
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 30_000 * timeScale);
 
@@ -994,7 +995,7 @@ it('dumps the lowered Rspack configuration of every output with inspect --bundle
     expect(ambiguous.code).toBe(1);
     expect(JSON.parse(ambiguous.stderr)).toMatchObject([{ code: 'AB5000', severity: 'error' }]);
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 30_000 * timeScale);
 
@@ -1026,7 +1027,7 @@ it('reports source validation diagnostics on stderr before staging an artifact',
     expect(validation.stdout).toBe('');
     expect(JSON.parse(validation.stderr)).toMatchObject([{ code: 'AB4000', severity: 'error' }]);
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 30_000 * timeScale);
 
@@ -1061,7 +1062,7 @@ it('reports a generated Flight worker collision before compiling scripts', async
       severity: 'error',
     }]);
   } finally {
-    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+    await removeTree(resolve(project.root, '..'));
   }
 }, 30_000 * timeScale);
 

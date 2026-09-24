@@ -44,6 +44,20 @@ The tool routes under `examples/*/src/mcp/**/tools/` and the `mcp-server` scaffo
 shape directly. The examples keep named schema exports beside the helper so colocated CLI
 projections and route tests can import their types.
 
+## Client-specific tool inventory
+
+Set a tool's static `excludeClients` to negotiated MCP client-name prefixes where the tool
+should be unavailable, for example `excludeClients: ['codex']` for a tool that messages
+Codex. Matching is case-insensitive and happens after MCP initialization, separately for
+each server session. An excluded tool disappears from `tools/list` and rejects direct
+`tools/call` requests. Tools without this option and clients with unmatched names retain
+the normal inventory. Prefixes must be non-empty strings of at most 128 characters.
+
+Use the client's actual identity. A client identifying itself as `Cursor` cannot be
+distinguished from another Cursor client; do not assume it is Grok Bot. Client names are
+self-reported, so this feature selects the interface and does not replace authorization.
+CLI and browser projections are unaffected.
+
 ## Generated route servers
 
 Put one module per route under `src/mcp/<server>/`:

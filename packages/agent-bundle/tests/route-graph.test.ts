@@ -1,5 +1,5 @@
 import { mkdirSync, unlinkSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -15,11 +15,12 @@ import type { AgentBundleConfig } from '../src/core/types.ts';
 import { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from '../src/routes/graph.ts';
 import * as routesModule from '../src/routes/index.ts';
 import { emptyRouteConfig, type CompiledAgentRoute, type CompiledRouteGraph } from '../src/routes/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const createRoot = async (): Promise<string> => {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,6 +7,7 @@ import { expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const mutateStageEnv = 'AB7101_MUTATE_STAGE';
 
@@ -138,7 +139,7 @@ it('rejects a first artifact build with AB7101 before publishing any output', as
     expect(await readFile(join(root, 'src', 'mcp', 'echoer.ts'), 'utf8')).toBe(changedEchoer);
   } finally {
     delete process.env[mutateStageEnv];
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 60_000);
 
@@ -156,7 +157,7 @@ it('rejects a later artifact build with AB7101 and leaves the previous artifact 
     expect(await compilerOwnedTempEntries(root)).toEqual([]);
   } finally {
     delete process.env[mutateStageEnv];
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 60_000);
 
@@ -177,6 +178,6 @@ it('rejects a package-stage race with AB7101 before replacing the previous packa
     expect(await readFile(join(root, 'src', 'library.ts'), 'utf8')).toBe('export const value = 2;\n');
   } finally {
     delete process.env[mutateStageEnv];
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 60_000);

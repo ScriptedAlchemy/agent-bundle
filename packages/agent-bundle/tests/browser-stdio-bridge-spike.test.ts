@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -15,6 +15,7 @@ import { normalizeProject } from '../src/config/normalize.ts';
 
 import { resolveMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
 import { readTargetMcpServer } from '../src/services/mcp-runtime.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface BridgeFixture {
   readonly binding: { readonly serverName: string; readonly sessionId: string; readonly target: string };
@@ -281,6 +282,6 @@ it('bridges a browser-bound session to a generated stdio artifact without exposi
     expect(stderr.join('')).toContain(fixture.stderr);
     expect(frames).toEqual(fixture.frames);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);

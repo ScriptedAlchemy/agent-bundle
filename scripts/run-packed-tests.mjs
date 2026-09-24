@@ -1,6 +1,6 @@
 /**
- * Builds once, packs each public package once with `pnpm pack` (the packer
- * `changeset publish` ships through, scripts/pnpm-pack.mjs), and runs the
+ * Builds once, packs each public package once with `pnpm pack` (the same
+ * workspace-aware packer used for pkg.pr.new, scripts/pnpm-pack.mjs), and runs the
  * packed pool against the shared tarballs (tests/support/shared-pack.ts)
  * with the prebuilt seams set instead of every test file rebuilding the
  * workspace for itself. Build and pack run with NODE_ENV=production like the

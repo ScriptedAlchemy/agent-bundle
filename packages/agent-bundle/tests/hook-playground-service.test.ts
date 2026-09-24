@@ -1,5 +1,5 @@
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
-import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -25,6 +25,7 @@ import {
 } from '../src/dev/playground/hook-playground-service.ts';
 import { HookService } from '../src/services/hook-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -372,7 +373,7 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
       }],
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -468,7 +469,7 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
       stdout: JSON.stringify(inline.nativeOutput),
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -520,7 +521,7 @@ it('returns target diagnostics from simulation and replay for an unknown string 
       }],
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -556,7 +557,7 @@ it('projects every emitted Codex and Claude event deterministically and exposes 
       }
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -617,7 +618,7 @@ it('isolates malicious relative writes from the referenced epoch and rejects coo
     await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
     await expect(service.simulate(request)).rejects.toThrow(/stored digest/i);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -653,7 +654,7 @@ it('settles route cancellation and cleans the per-simulation clone before releas
     expect(runnableArtifact).not.toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
     await expect(access(runnableArtifact)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -693,8 +694,8 @@ it('settles clone copies before cleanup and reference release when an injected c
     await expect(access(store.cloneRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 75); });
-    if (store.cloneRoot !== undefined) await rm(store.cloneRoot, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    if (store.cloneRoot !== undefined) await removeTree(store.cloneRoot);
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -734,7 +735,7 @@ it('distinguishes an unsupported canonical event from an unsupported target', as
       }],
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -768,6 +769,6 @@ it('returns a diagnostic for a target without a hook event mapping', async () =>
       }],
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);

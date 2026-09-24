@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import {
   isDocsOnlyPath,
   parseGhFilesListing,
 } from '../../../scripts/classify-docs-only.mjs';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const scriptPath = join(dirname(fileURLToPath(import.meta.url)), '../../../scripts/classify-docs-only.mjs');
@@ -182,6 +183,6 @@ it('writes docs_only to GITHUB_OUTPUT and always exits 0', async () => {
     expect(failedListing.stdout).toContain('listing-error');
     expect(await readFile(outputPath, 'utf8')).toBe('docs_only=false\n');
   } finally {
-    await rm(fixtureRoot, { force: true, recursive: true });
+    await removeTree(fixtureRoot);
   }
 });

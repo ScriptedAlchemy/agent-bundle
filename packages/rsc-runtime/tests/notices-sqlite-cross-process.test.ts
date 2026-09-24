@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import {
   createAgentNoticeLedger,
 } from '../src/notices/index.js';
 import { createSqliteStateDriver } from '../src/state/sqlite.js';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const fixture = join(packageRoot, 'tests', 'fixtures', 'notices-sqlite-process.mjs');
@@ -96,7 +97,7 @@ describe.sequential('notice ledger cross-process proof', () => {
       await expect(store.read({ revision: 1 })).rejects.toMatchObject({ code: 'revision-unavailable' });
       await driver.close();
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 });

@@ -22,6 +22,7 @@ import { init, parse } from 'es-module-lexer/minimal';
 
 import { sha256Hex } from '../src/core/digest.ts';
 import { cachedNpmInstallArguments, installedEnvironment, linkWorkspaceTypes, packOutputFromJson } from './support/shared-pack.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -180,7 +181,7 @@ it('uses only an installed tarball after source deletion', async () => {
     const installedPackage = await realpath(join(projectRoot, 'node_modules', 'agent-bundle'));
     expect(installedPackage.startsWith(workspaceRoot)).toBe(false);
     expect(installedEnvironment().NODE_PATH).toBeUndefined();
-    await rm(packedPackageRoot, { force: true, recursive: true });
+    await removeTree(packedPackageRoot);
 
     const scriptPackage = await realpath(join(scriptProjectRoot, 'node_modules', 'agent-bundle'));
     expect(scriptPackage.startsWith(workspaceRoot)).toBe(false);
@@ -276,11 +277,11 @@ it('uses only an installed tarball after source deletion', async () => {
 
     await Promise.all([
       rm(join(projectRoot, 'agent-bundle.config.ts')),
-      rm(join(projectRoot, 'native'), { force: true, recursive: true }),
+      removeTree(join(projectRoot, 'native')),
       rm(join(projectRoot, 'package.json')),
-      rm(join(projectRoot, 'skills'), { force: true, recursive: true }),
-      rm(join(projectRoot, 'src'), { force: true, recursive: true }),
-      rm(join(projectRoot, 'views'), { force: true, recursive: true }),
+      removeTree(join(projectRoot, 'skills')),
+      removeTree(join(projectRoot, 'src')),
+      removeTree(join(projectRoot, 'views')),
     ]);
     await expect(access(join(projectRoot, 'agent-bundle.config.ts'))).rejects.toThrow();
 
@@ -510,6 +511,6 @@ it('uses only an installed tarball after source deletion', async () => {
       }],
     });
   } finally {
-    await rm(consumerRoot, { force: true, recursive: true });
+    await removeTree(consumerRoot);
   }
 }, 240_000);

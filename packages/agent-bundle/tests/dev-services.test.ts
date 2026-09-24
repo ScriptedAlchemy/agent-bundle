@@ -17,6 +17,7 @@ import {
   snapshotProjectSource,
   type RslintEngine,
 } from '../src/dev/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('rejects an absolute Windows path outside its project', () => {
   expect(containedPathComponents('C:\\project', 'C:\\outside', win32)).toBeUndefined();
@@ -144,7 +145,7 @@ it('prepares a frozen server-only runtime declaration only for development calle
     expect(Object.isFrozen(runtime.devRuntime?.apps[0]!._meta?.labels)).toBe(true);
     expect('provenance' in runtime.devRuntime!.apps[0]!).toBe(false);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -163,8 +164,8 @@ it('keeps supplemental runtime declaration and App metadata failures out of the 
     expect(metadata.devRuntimeDiagnostic).toMatchObject({ code: 'AB8200' });
   } finally {
     await Promise.all([
-      rm(malformedDeclaration.root, { force: true, recursive: true }),
-      rm(nonfiniteMetadata.root, { force: true, recursive: true }),
+      removeTree(malformedDeclaration.root),
+      removeTree(nonfiniteMetadata.root),
     ]);
   }
 });
@@ -188,7 +189,7 @@ it('surfaces a non-finite registered config extension as the closed AB4500 proje
     });
     expect(JSON.stringify(prepared.source)).not.toContain('NaN');
   } finally {
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -214,7 +215,7 @@ it('keeps constructor-shaped extension failures from config proxies behind AB700
     }]);
     expect(JSON.stringify(prepared.source)).not.toContain('forged-extension-secret');
   } finally {
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -285,8 +286,8 @@ it('keeps lookalike proxy failures and control-character extension keys redacted
     expect(keyedPrepared.source.diagnostics[0]!.message.length).toBeLessThan(128);
   } finally {
     await Promise.all([
-      rm(proxyProject.root, { force: true, recursive: true }),
-      rm(keyedProject, { force: true, recursive: true }),
+      removeTree(proxyProject.root),
+      removeTree(keyedProject),
     ]);
   }
 });
@@ -314,7 +315,7 @@ it('keeps hostile config-extension accessors redacted behind AB7001', async () =
     }]);
     expect(JSON.stringify(prepared.source)).not.toContain('hostile-extension-secret');
   } finally {
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -346,8 +347,8 @@ it('sanitizes top-level MCP App metadata accessors before source validation with
     }
   } finally {
     await Promise.all([
-      rm(returned.root, { force: true, recursive: true }),
-      rm(thrown.root, { force: true, recursive: true }),
+      removeTree(returned.root),
+      removeTree(thrown.root),
     ]);
   }
 });
@@ -364,7 +365,7 @@ it('does not let supplemental metadata sanitization suppress unrelated source di
     });
     expect(prepared.model).toBeUndefined();
   } finally {
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -386,7 +387,7 @@ it('stops the shared project pipeline on source errors with a frozen structured 
     expect(Object.isFrozen(prepared.source)).toBe(true);
     expect(Object.isFrozen(prepared.source.diagnostics)).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -405,7 +406,7 @@ it('returns a frozen source diagnostic when configuration loading fails', async 
     expect(Object.isFrozen(prepared)).toBe(true);
     expect(Object.isFrozen(prepared.source.diagnostics[0])).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -433,7 +434,7 @@ it('retains the resolved configuration path in the prepared project', async () =
     ]));
     expect(Object.isFrozen(prepared.projectContext?.sourceInputs)).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -603,10 +604,10 @@ it('creates an exact deeply frozen root-independent project context', async () =
     }
   } finally {
     await Promise.all([
-      rm(leftRoot, { force: true, recursive: true }),
-      rm(rightRoot, { force: true, recursive: true }),
+      removeTree(leftRoot),
+      removeTree(rightRoot),
       rm(`${leftRoot}-external-source.ts`, { force: true }),
-      rm(`${leftRoot}-external-dir`, { force: true, recursive: true }),
+      removeTree(`${leftRoot}-external-dir`),
     ]);
   }
 });
@@ -636,7 +637,7 @@ it('refuses a deleted configuration path after canonical containment', async () 
       sourceInputs,
     })).toThrow(/ENOENT/i);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -667,7 +668,7 @@ it('refuses a deleted recorded source input after canonical containment', async 
       sourceInputs,
     })).toThrow(/ENOENT/i);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -692,8 +693,8 @@ it('prepares a symlinked project root from its canonical filesystem identity', a
     expect(JSON.stringify(prepared.projectContext)).not.toContain(root);
   } finally {
     await Promise.all([
-      rm(linkedRoot, { force: true, recursive: true }),
-      rm(root, { force: true, recursive: true }),
+      removeTree(linkedRoot),
+      removeTree(root),
     ]);
   }
 });
@@ -729,7 +730,7 @@ it('excludes configured output trees from project identity and reports unsafe ou
     expect(invalid.model).toBeUndefined();
     expect(invalid.projectContext).toBeUndefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -786,9 +787,9 @@ it('resolves, excludes, and falls back from configured artifact output paths', a
     ]);
   } finally {
     await Promise.all([
-      rm(configuredRoot, { force: true, recursive: true }),
-      rm(defaultRoot, { force: true, recursive: true }),
-      rm(malformedRoot, { force: true, recursive: true }),
+      removeTree(configuredRoot),
+      removeTree(defaultRoot),
+      removeTree(malformedRoot),
     ]);
   }
 });
@@ -823,7 +824,7 @@ it('treats a configured eval run directory as generated output, not project sour
     expect(changed.projectContext).toEqual(initial.projectContext);
     expect(changed.projectContext?.sourceInputs.map((input) => input.path)).not.toContain('recorded-evals/run.json');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -859,7 +860,7 @@ it('reports external configuration symlinks without exposing the underlying path
     expect(prepared.model).toBeUndefined();
     expect(prepared.projectContext).toBeUndefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
     await rm(externalConfig, { force: true });
   }
 });
@@ -900,8 +901,8 @@ it('reports snapshot failures as frozen preparation diagnostics', async () => {
     expect(Object.isFrozen(prepared)).toBe(true);
     expect(Object.isFrozen(prepared.diagnostics[0])).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
-    await rm(externalOutput, { force: true, recursive: true });
+    await removeTree(root);
+    await removeTree(externalOutput);
   }
 });
 
@@ -943,7 +944,7 @@ it('rejects a dangling payload-root symlink that escapes the project', async () 
       sourceInputs: prepared.projectContext?.sourceInputs ?? [],
     })).toThrow(/outside project root/i);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -975,7 +976,7 @@ it('rejects a missing path under chained relative dangling symlinks that escape 
       ],
     })).toThrow(/outside project root/i);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1004,7 +1005,7 @@ it('rejects a missing path under a dangling symlink that escapes the project', a
       ],
     })).toThrow(/outside project root/i);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1029,7 +1030,7 @@ it('accepts a missing payload directory that stays inside the project', async ()
     });
     expect(context.modelDigest).toEqual(expect.any(String));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1072,7 +1073,7 @@ it('rejects a cyclic payload-root symlink instead of hashing it as contained', a
       ],
     })).toThrow(/ELOOP/i);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1121,8 +1122,8 @@ it('rejects an outside-crossing symlink cycle from both entry points', async () 
     })).toThrow(/ELOOP/i);
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(outside, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(outside),
     ]);
   }
 });
@@ -1162,8 +1163,8 @@ it('rejects a dangling relative symlink under a parent that itself is a symlink'
     })).toThrow(/outside project root/i);
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(elsewhere, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(elsewhere),
     ]);
   }
 });
@@ -1202,8 +1203,8 @@ it('rejects symlink/../payload that escapes after the symlink hop', async () => 
     })).toThrow(/outside project root/i);
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(outside, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(outside),
     ]);
   }
 });
@@ -1265,8 +1266,8 @@ it.each([
     expect(nodeFs.realpathSync.native(payload)).toBe(nodeFs.realpathSync.native(join(outside, 'missing')));
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(outside, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(outside),
     ]);
   }
 });
@@ -1304,8 +1305,8 @@ posixContainmentIt('rejects a POSIX symlink target that uses a backslash in one 
     expect(nodeFs.realpathSync.native(payload)).toBe(nodeFs.realpathSync.native(outsideMissing));
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(outside, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(outside),
     ]);
   }
 });
@@ -1359,10 +1360,10 @@ posixContainmentIt('rejects a contained POSIX filename that includes a backslash
       });
       expect(slashContext.modelDigest).toEqual(expect.any(String));
     } finally {
-      await rm(clean, { force: true, recursive: true });
+      await removeTree(clean);
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1397,8 +1398,8 @@ it.each([
     expect(prepared.diagnostics).not.toContainEqual(expect.objectContaining({ code: 'AB7003' }));
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(outside, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(outside),
     ]);
   }
 });
@@ -1412,7 +1413,7 @@ it('routes API validation through the project service for configuration failures
     expect(result).toEqual({ diagnostics: prepared.diagnostics });
     expect(Object.isFrozen(result)).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1455,9 +1456,9 @@ it('derives source revisions from authored bytes, including resources and invali
     expect(invalidChanged.source.revision).not.toBe(invalidInitial.source.revision);
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(equivalentRoot, { force: true, recursive: true }),
-      rm(invalidRoot, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(equivalentRoot),
+      removeTree(invalidRoot),
     ]);
   }
 });
@@ -1496,7 +1497,7 @@ it('changes a payload source revision when an executable bit is lost', async () 
     expect(changed.projectContext?.revision).toBe(changed.source.revision);
     expect(changed.source.revision).not.toBe(initial.source.revision);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1530,7 +1531,7 @@ it('invalidates cached source hashes after a same-size rewrite with a restored m
 
     expect(changed.source.revision).not.toBe(initial.source.revision);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1574,7 +1575,7 @@ it('derives source revisions from the broad authored project graph while excludi
     expect(importedSourceChanged.source.revision).not.toBe(initial.source.revision);
     expect(excludedOnlyChanged.source.revision).toBe(importedSourceChanged.source.revision);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

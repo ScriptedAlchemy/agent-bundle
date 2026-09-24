@@ -7,6 +7,7 @@ import {
   validatePortablePlugin,
   validatePortablePluginFiles,
 } from '../src/host-contracts/portable-plugin-validation.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const pluginSchema = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const mcpSchema = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
@@ -14,7 +15,7 @@ const mcpSchema = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const writeJson = async (path: string, value: unknown): Promise<void> => {
@@ -229,7 +230,7 @@ it('rejects every forbidden control character in HTTP header values while permit
 
 it('reports fixed component locations of the wrong filesystem kind and skill directories without SKILL.md', async () => {
   const root = await conformantBundle();
-  await rm(join(root, 'skills'), { recursive: true });
+  await removeTree(join(root, 'skills'));
   await writeText(join(root, 'skills'), 'not a directory');
   await rm(join(root, 'mcp.json'));
   await mkdir(join(root, 'mcp.json'));
@@ -241,7 +242,7 @@ it('reports fixed component locations of the wrong filesystem kind and skill dir
   expect(codes(wrongKinds)).toEqual(['AB6036', 'AB6036']);
 
   await rm(join(root, 'skills'));
-  await rm(join(root, 'mcp.json'), { recursive: true });
+  await removeTree(join(root, 'mcp.json'));
   await mkdir(join(root, 'skills', 'empty'), { recursive: true });
   await mkdir(join(root, 'skills', 'nested', 'SKILL.md'), { recursive: true });
   await writeText(join(root, 'skills', 'README.md'), 'stray file, ignored by clients\n');

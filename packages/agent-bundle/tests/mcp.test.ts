@@ -33,6 +33,7 @@ import {
 import { agentBundleNodeModules, agentBundlePackageRoot, workbenchNodeModules } from './helpers/workspace-paths.ts';
 import { loadedProject } from './support/loaded-project.ts';
 import { runNodeScript } from './support/run-node-script.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -156,7 +157,7 @@ it('normalizes local, prebuilt, and HTTP MCP server declarations', async () => {
     expect(Object.isFrozen(model.mcpServers)).toBe(true);
     expect(Object.isFrozen(model.mcpServers[0])).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -221,8 +222,8 @@ it('normalizes deeply frozen local MCP App declarations independently of the pro
     expect(portableIdentity(firstApp)).toEqual(portableIdentity(secondApp));
   } finally {
     await Promise.all([
-      rm(firstRoot, { force: true, recursive: true }),
-      rm(secondRoot, { force: true, recursive: true }),
+      removeTree(firstRoot),
+      removeTree(secondRoot),
     ]);
   }
 });
@@ -253,7 +254,7 @@ it('keeps local MCP server identities and output aliases independent of the proj
       source: join(right, 'src', 'server.ts'),
     });
   } finally {
-    await Promise.all([rm(left, { force: true, recursive: true }), rm(right, { force: true, recursive: true })]);
+    await Promise.all([removeTree(left), removeTree(right)]);
   }
 });
 
@@ -314,7 +315,7 @@ it('reports source and model diagnostics before an MCP server can be compiled', 
       { code: 'AB4321' },
     ]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -349,7 +350,7 @@ it('rejects a hostile normalized legacy SSE transport before adapters can plan i
       sourcePath: join(root, 'agent-bundle.config.ts'),
     }]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -449,7 +450,7 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
       { code: 'AB4336', target: 'unknown' },
     ]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -498,7 +499,7 @@ it('rejects non-JSON MCP App metadata before normalization', async () => {
       ]);
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -659,7 +660,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
     })).rejects.toThrow();
     expect(await readFile(join(outputRoot, 'mcp', outputName), 'utf8')).toBe(previousBundle);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -718,7 +719,7 @@ it('inlines agent-bundle/launch-env into a self-connecting entry so it can apply
     expect(await probe({ PROBE_HOST: 'from-host' })).toEqual({ applied: ['PROBE_FILE'], file: 'from-file', host: 'from-host' });
     expect(await probe({ AGENT_BUNDLE_ENV_FILE: 'none', PROBE_HOST: 'from-host' })).toEqual({ applied: [], file: null, host: 'from-host' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -824,7 +825,7 @@ it('lets the operator .env beat a manifest env default the host passed through, 
     // `AGENT_BUNDLE_ENV_FILE=none` disables the layer: the manifest default stands.
     expect(await launch({ AGENT_BUNDLE_ENV_FILE: 'none' })).toEqual(delivered);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 60_000);
 
@@ -898,7 +899,7 @@ it('redirects stdout written at module scope by the server module to stderr befo
     // The frames themselves never went through the wrapper.
     expect(stderr).not.toContain('wrapped:{');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 60_000);
 
@@ -1017,7 +1018,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
       ],
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1096,7 +1097,7 @@ it('injects one release identity into both the Node bundle and the browser MCP A
     expect(html).not.toContain('agent-bundle/meta');
     expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1163,7 +1164,7 @@ it('compiles one shared MCP App once and serves it from every identically declar
     }
     expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1211,7 +1212,7 @@ it('rejects conflicting same-name MCP App declarations at compilation planning',
       'Duplicate compiled MCP App destination "mcp-apps/widget.html"; servers may share an app name only with an identical declaration.',
     );
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1355,7 +1356,7 @@ it('uses the selected streamable HTTP manifest with propagated cancellation and 
     await expect(service.list({ artifact, server: 'http', target: 'claude' })).rejects.toThrow();
     expect(closes).toBe(1);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1405,7 +1406,7 @@ it('rejects a selected projection without its manifest-declared MCP document', a
       target: 'codex',
     })).rejects.toThrow('The codex projection has no MCP document.');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1503,8 +1504,8 @@ it('creates session state only after setup succeeds and always inherits the stdi
     } else {
       process.env[inheritedKey] = previousInherited;
     }
-    await rm(sessionTmp, { force: true, recursive: true });
-    await rm(root, { force: true, recursive: true });
+    await removeTree(sessionTmp);
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1582,8 +1583,8 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     const expectedHtml = await readFile(join(outputRoot, 'mcp-apps', 'dashboard.html'), 'utf8');
     await cp(outputRoot, artifact, { recursive: true });
-    await rm(join(root, 'src'), { force: true, recursive: true });
-    await rm(join(root, 'views'), { force: true, recursive: true });
+    await removeTree(join(root, 'src'));
+    await removeTree(join(root, 'views'));
     expect(await validateArtifact({ artifactRoot: artifact })).toEqual([]);
 
     const client = new Client({ name: 'app-resource-consumer', version: '1.0.0' });
@@ -1628,8 +1629,8 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
     }
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(consumer, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(consumer),
     ]);
   }
 }, 30_000);
@@ -1712,7 +1713,7 @@ it('lists tools from a validated copied artifact without reading project source'
     const artifact = join(consumer, 'installed-plugin');
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     await cp(outputRoot, artifact, { recursive: true });
-    await rm(join(root, 'src'), { force: true, recursive: true });
+    await removeTree(join(root, 'src'));
 
     const api = await import('../src/api.ts') as {
       readonly McpService?: new () => {
@@ -1831,8 +1832,8 @@ it('lists tools from a validated copied artifact without reading project source'
     await expect(pending).rejects.toBeDefined();
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(consumer, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(consumer),
     ]);
   }
 }, 30_000);

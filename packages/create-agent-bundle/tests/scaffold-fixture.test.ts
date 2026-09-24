@@ -1,10 +1,11 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from '@rstest/core';
 
 import { expectPassedPool } from './support/scaffold-fixture.ts';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 /**
  * `expectPassedPool` is the release matrix's verdict on a scaffolded pool, so
@@ -62,7 +63,7 @@ describe('expectPassedPool', () => {
   });
 
   afterAll(async () => {
-    await rm(projectRoot, { force: true, recursive: true });
+    await removeTree(projectRoot);
   });
 
   it('accepts a passing report whose script exited 0 and names the expected tests', async () => {

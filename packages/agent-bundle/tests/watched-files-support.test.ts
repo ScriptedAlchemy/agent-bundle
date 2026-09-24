@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from '@rstest/core';
 
 import type { CompletedBuildAttempt, ProjectStatus, RunningBuildAttempt } from '../src/dev/types.ts';
 import { replaceWatchedSourceAndAwaitRebuild } from './support/watched-files.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const running = (id: string): RunningBuildAttempt => Object.freeze({
   diagnostics: Object.freeze([]),
@@ -56,7 +57,7 @@ describe('replaceWatchedSourceAndAwaitRebuild', () => {
   });
 
   afterEach(async () => {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   });
 
   it('returns the first completed attempt that was unknown before the write, after the write landed', async () => {

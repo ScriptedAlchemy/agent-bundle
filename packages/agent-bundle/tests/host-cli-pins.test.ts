@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -19,6 +19,7 @@ import {
 } from '../../../scripts/host-cli-pins.mjs';
 import claudeCapabilities from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import codexCapabilities from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
+import { removeTree } from './support/remove-tree.ts';
 
 const pins: HostCliPins = Object.freeze({
   claude: Object.freeze({
@@ -216,6 +217,6 @@ it('prints the pins and a cache key to stdout and GITHUB_OUTPUT', async () => {
     expect(await readFile(outputPath, 'utf8')).toBe(`${expected.join('\n')}\n`);
   } finally {
     process.stdout.write = originalWrite;
-    await rm(fixtureRoot, { force: true, recursive: true });
+    await removeTree(fixtureRoot);
   }
 });

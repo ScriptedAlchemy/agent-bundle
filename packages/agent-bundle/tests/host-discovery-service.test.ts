@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,7 @@ import type {
   DoctorOptions,
   DoctorReport,
 } from '../src/install/doctor.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const diagnostic = Object.freeze({
   code: 'AB7300',
@@ -211,7 +212,7 @@ it('enumerates sorted modern MCP servers from a valid bundle manifest', async ()
     expect(Object.isFrozen(report.hosts[0]?.bundle?.mcpServers)).toBe(true);
     expect(Object.isFrozen(report.hosts[0]?.bundle?.mcpServers?.[0])).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -239,7 +240,7 @@ it('distinguishes empty MCP manifests from manifests that could not be enumerate
     await unlink(join(root, '.mcp.json'));
     expect((await service.discover()).hosts[0]?.bundle).not.toHaveProperty('mcpServers');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

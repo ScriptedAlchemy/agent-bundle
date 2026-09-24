@@ -1,5 +1,5 @@
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ import type { TargetAdapter } from '../src/adapters/types.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import { validateModel } from '../src/config/validate.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const metadata = Object.freeze({
   adapterRevision: 'test',
@@ -87,7 +88,7 @@ it('delegates selected native hook sources through registered adapters', async (
       target: 'example',
     }]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -180,7 +181,7 @@ it('normalizes malformed native hook source values into diagnostics without skip
       target: 'invalid',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -216,6 +217,6 @@ it('normalizes thrown native hook sources into diagnostics', async () => {
       target: 'throws',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

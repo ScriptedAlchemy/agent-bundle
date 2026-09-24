@@ -1,14 +1,13 @@
 ---
-description: 'The pkg.pr.new preview channel that stands in for npm: how previews are published, how to pin them, and what changes at the first npm release.'
+description: 'The pkg.pr.new package channel: how previews are published, verified, and pinned by commit SHA.'
 ---
 
 # Preview packages
 
-Nothing is published to npm yet, deliberately. The current package names are placeholders, and
-npm publishing is deferred until the final name is chosen. Until then, **pkg.pr.new is the
-release channel**: every CI package-preview run publishes real, installable tarballs of all four
-publishable workspace packages to a free continuous-release registry keyed by commit SHA and pull
-request.
+**pkg.pr.new is the package distribution channel.** Every CI package-preview run publishes real,
+installable tarballs of all four publishable workspace packages to a free continuous-release
+registry keyed by commit SHA and pull request. Consumers pin the commit-addressed URLs; no npm
+registry credential is needed or expected.
 
 The install commands and the runtime pairing rule are in
 [Installation](../start/installation.mdx). This page is the channel itself: where previews come
@@ -16,15 +15,16 @@ from, how far you can trust them, and what pinning actually guarantees.
 
 ## Where previews come from
 
-`.github/workflows/package-preview.yml` runs `pnpm preview:publish` after a full build, on every
-pull request and on every push to `main`. It publishes `packages/agent-bundle`,
+`.github/workflows/package-preview.yml` runs `pnpm preview:publish` after a full build. Pull
+requests invoke it directly; `.github/workflows/release.yml` reuses it for every push to `main`.
+It publishes `packages/agent-bundle`,
 `packages/rsc-runtime`, `packages/rsc-markdown-stream` (the Markdown renderer
 `@agent-bundle/runtime` depends on), and `packages/create-agent-bundle` with
 `--previewVersion --peerDeps --no-compact --no-template`.
 
-Runs are grouped per PR and per branch with `cancel-in-progress`, so a newer push cancels the
-superseded build: only the latest preview of a PR or of `main` matters. A `main` commit that was
-overtaken before its preview published has no installable snapshot; pin the tip instead.
+Pull request runs are grouped by PR with `cancel-in-progress`, so a newer push cancels the
+superseded PR build. On `main`, the serialized `Release packages` workflow waits for the reusable
+preview job and does not cancel an earlier release run.
 
 The "Publish pkg.pr.new preview" check on a PR or commit links to the exact URLs for that build.
 Previews are built from the same `pnpm build` output the release gates verify — but they are not
@@ -59,28 +59,18 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 A scaffolded project pins `agent-bundle` to the preview of the same commit the scaffolder came
 from, so both sides of the pairing rule hold automatically.
 
-## What changes at the first npm release
-
-The first npm release will use
-[npm package provenance](https://docs.npmjs.com/generating-provenance-statements): the publish
-step exports `NPM_CONFIG_PROVENANCE=true` and runs the packed release gates before
-`changeset publish`. `publishConfig.provenance` is already set.
-
-Before that path is enabled, the release owner has to resolve two things: the final package name
-and license, and the repository-wide `"access": "restricted"` policy for `agent-bundle`, which is
-not currently overridden with `publishConfig.access`.
+## Version Packages merges
 
 The `Release packages` workflow records one of `version-maintenance-only`,
-`published`, or `failed`, with executed and skipped stages. Qualification runs against the exact versioned candidate SHA, not the
-pre-version main commit. A successful Version Packages refresh — or a main push that neither
-refreshes that PR nor qualifies a versioned candidate — is
-`version-maintenance-only`. A Version Packages merge, and every `main` push while
-publishing is enabled, must end with each publishable `package.json` version resolving on
-npm (`scripts/verify-registry-versions.sh`); otherwise the run is `failed` and
-**NOT PUBLISHED**.
+`preview-release`, or `failed`, with executed and skipped stages. A successful Version Packages
+refresh is `version-maintenance-only`. When that PR merges, `Release packages` first calls the
+reusable `Package preview` workflow, which publishes and resolves all four
+`https://pkg.pr.new/ScriptedAlchemy/agent-bundle/<package>@<sha>` URLs. The release job depends on
+that proof and qualifies the exact same merge SHA, so green means the packed gates passed and every
+commit-addressed package is installable.
 
-`pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release`, and
-`pnpm test:packed:release` — before publishing. `lint:release` runs `attw` with the `esm-only`
+`pnpm check:release` runs `pnpm pack:dry-run`, `pnpm lint:release`, and
+`pnpm test:packed:release`. `lint:release` runs `attw` with the `esm-only`
 profile on the packed `agent-bundle`, `@agent-bundle/runtime`, `rsc-markdown-stream`, and
 `create-agent-bundle` tarballs, then `scripts/check-declaration-imports.mjs` over the same
 inventories: every `.d.ts` a consumer can

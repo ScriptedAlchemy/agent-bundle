@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -16,6 +16,7 @@ import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { buildWorkbench, e2e, workbenchAssets, workspaceRoot, workbenchUrl } from './support/workbench-e2e.ts';
 import { expectHeading } from './support/workbench-acceptance.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
 const browserTimeout = 12_000 * timeScale;
@@ -112,7 +113,7 @@ const mountedEvalClientScopeFixture = async (): Promise<{ readonly close: () => 
   return {
     close: async () => {
       await closeServer(server);
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     },
     url: `${origin}/page.html`,
   };

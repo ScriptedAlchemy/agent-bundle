@@ -1,4 +1,4 @@
-import { access, cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -9,6 +9,7 @@ import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('runs an authenticated initialize and tools/list probe against a real built stdio server', { timeout: 30_000 }, async () => {
   const project = await createProjectFixture({
@@ -101,7 +102,7 @@ it('runs an authenticated initialize and tools/list probe against a real built s
       ['FORCE_COLOR', 'LANG', 'LC_ALL', 'NO_COLOR', 'TZ'].includes(key))).toBe(true);
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });
 
@@ -196,6 +197,6 @@ it('joins detached probe plugin-data cleanup into Workbench shutdown', { timeout
     await expect(access(join(pluginData, 'proof.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });

@@ -15,6 +15,7 @@ import {
   type PlaygroundServiceOptions,
   type PlaygroundTraceEvent,
 } from '../src/dev/playground/playground-store.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface SessionIndex {
   readonly kind: 'agent-bundle-playground-session-index';
@@ -194,7 +195,7 @@ const createFixture = async (input: Readonly<{
   return Object.freeze({
     close: async () => {
       await service.close().catch(() => undefined);
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     },
     projectRoot,
     service,
@@ -651,7 +652,7 @@ it('rejects arbitrary, symlinked, wrong-project, and unknown-session storage pat
     await expect(owner.openSession({ ...sessionInput(), sessionId: '../escape' })).rejects.toThrow('path-safe');
     await Promise.allSettled([outside.close(), symlinked.close(), owner.close(), otherProject.close()]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -909,7 +910,7 @@ it('rolls back a failed finalization metadata commit so promotion cannot observe
     expect(fixture.service.session('transactional')).toMatchObject({ state: 'open' });
     expect(fixture.service.session('transactional')).not.toHaveProperty('outcome');
     await expect(fixture.service.promoteToDraftEval('transactional', [])).rejects.toThrow('durable');
-    await rm(metadataPath, { recursive: true });
+    await removeTree(metadataPath);
     await writeFile(metadataPath, original, 'utf8');
     await expect(fixture.service.finalize('transactional', { status: 'passed' })).resolves.toMatchObject({ state: 'finalized' });
     await expect(fixture.service.promoteToDraftEval('transactional', [])).resolves.toMatchObject({ outcome: { status: 'passed' } });

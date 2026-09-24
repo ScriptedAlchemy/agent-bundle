@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -8,11 +8,12 @@ import {
   validateCursorPlugin,
   type CursorPluginCommandRunner,
 } from '../src/host-contracts/cursor-plugin-validation.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const fixtureRoots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(fixtureRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(fixtureRoots.splice(0).map((root) => removeTree(root)));
 });
 
 const createFixtureRoot = async (): Promise<string> => {

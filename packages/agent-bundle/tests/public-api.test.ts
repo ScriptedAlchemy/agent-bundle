@@ -1,6 +1,6 @@
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, readdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -40,6 +40,7 @@ import type {
 } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
 import { agentBundleNodeModules, workspaceNodeModules } from './helpers/workspace-paths.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface PackageManifest {
   bin: {
@@ -302,7 +303,7 @@ it('writes the package version as the producer of a built CLI manifest', async (
       version: manifest.version,
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -426,7 +427,7 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       'config.mts',
     ], { cwd: consumerRoot })).resolves.toMatchObject({ stderr: '', stdout: '' });
   } finally {
-    await rm(consumerRoot, { force: true, recursive: true });
+    await removeTree(consumerRoot);
   }
 }, 30_000);
 

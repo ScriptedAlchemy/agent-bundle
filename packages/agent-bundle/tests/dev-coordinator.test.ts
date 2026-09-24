@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -20,6 +20,7 @@ import {
   type PreparedProject,
 } from '../src/dev/index.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const createProject = async (): Promise<string> => (await createProjectFixture({
   config: [
@@ -193,7 +194,7 @@ it('serializes a running build and coalesces all concurrent invalidations into o
     expect(events.filter((type) => type === 'invalidation')).toHaveLength(3);
     await coordinator.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -255,7 +256,7 @@ it('runs the package build inside the rebuild pass and surfaces its warnings on 
 
     await coordinator.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -322,7 +323,7 @@ it('queues watcher add, change, and delete paths as one rebuild during a running
     expect(lintPaths).toEqual([[], ['src/running.ts'], ['src/added.ts', 'src/changed.ts']]);
     await coordinator.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -359,7 +360,7 @@ it('publishes artifact.available when the built epoch revision disagrees with th
     expect(events).toEqual(expect.arrayContaining(['artifact.available']));
     await coordinator.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -406,7 +407,7 @@ it('retains the last good epoch as stale when a later rebuild fails', async () =
     expect(events).toEqual(expect.arrayContaining(['artifact.available', 'build.failed', 'artifact.status']));
     await coordinator.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -448,7 +449,7 @@ it('surfaces the compiler\'s own MCP App diagnostics on build.failed instead of 
     });
     await session.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -502,7 +503,7 @@ it('waits for an in-flight build and closes watcher, diagnostics, and lock exact
 
     expect([watcherCloses, diagnosticCloses, lockCloses]).toEqual([1, 1, 1]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -559,7 +560,7 @@ it('reports every failed release structurally after closing the remaining resour
       { error: watcherFailure, resource: 'watcher' },
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -622,7 +623,7 @@ it('does not build until its watcher is ready and forwards project watcher exclu
     expect(buildCalls).toBe(1);
     await coordinator.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -660,7 +661,7 @@ it('forwards prepared artifact and eval output roots to its watcher', async () =
     expect(watcherOptions?.outputPaths).toContain(evalRuns);
     await coordinator.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -714,7 +715,7 @@ it('adds recovered artifact and eval roots to the live watcher before generated 
     expect(builds).toBe(2);
     await coordinator.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -739,7 +740,7 @@ it('rejects public rebuild requests before startup without preparing or publishi
     expect(result).toMatchObject({ diagnostics: [expect.objectContaining({ code: 'AB7200' })], outcome: 'failed' });
     expect(builds).toBe(0);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -797,7 +798,7 @@ it('rejects public rebuilds until startup has completed watcher readiness', asyn
   } finally {
     releaseWatcherReady?.();
     await starting?.catch(() => undefined);
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -827,7 +828,7 @@ it('does not enable public rebuilds when startup fails before readiness', async 
     expect(result).toMatchObject({ diagnostics: [expect.objectContaining({ code: 'AB7200' })], outcome: 'failed' });
     expect(prepares).toBe(0);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -867,7 +868,7 @@ it('cancels blocked startup readiness and releases its watcher and lock before c
     await expect(starting).rejects.toThrow('DevCoordinator is closed.');
   } finally {
     releaseWatcherReady?.();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -922,7 +923,7 @@ it('cancels blocked startup recovery without creating later watcher or build sta
     expect([watcherCreates, builds, events]).toEqual([0, 0, []]);
   } finally {
     releaseRecovery?.();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -977,7 +978,7 @@ it('cancels blocked active epoch recovery without creating later watcher or buil
     expect([watcherCreates, builds, events]).toEqual([0, 0, []]);
   } finally {
     releaseActiveRead?.();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1009,7 +1010,7 @@ it('loads the active epoch before a failed initial build and retains it as stale
     });
     await session.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1055,7 +1056,7 @@ it('uses one initial development preparation before preparing later development 
     expect(built).toEqual([initial, later]);
     await coordinator.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1088,7 +1089,7 @@ it('re-raises a startup failure after releasing the watcher and lock it acquired
     await coordinator.close();
     expect([watcherCloses, lockCloses]).toEqual([1, 1]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1111,7 +1112,7 @@ it('fails a synchronous watcher construction error closed and releases the lock'
     await coordinator.close();
     expect(lockCloses).toBe(1);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1153,7 +1154,7 @@ it('turns a rejected prepared-project hook into a failed prepare attempt', async
     expect(events).toEqual(expect.arrayContaining(['build.started', 'build.failed', 'artifact.status']));
     await session.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1189,7 +1190,7 @@ it('turns prepare, lint, and artifact rejections into failed attempts and events
       expect(events).toEqual(expect.arrayContaining(['build.failed', 'artifact.status']));
       await session.close();
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   }
 });

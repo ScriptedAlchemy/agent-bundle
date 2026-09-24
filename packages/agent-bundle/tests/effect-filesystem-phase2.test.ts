@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { access, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,7 @@ import { materializeEvalFixture, planEvalFixture } from '../src/eval/fixtures.ts
 import { copyOpaqueCodexAuthStateProgram } from '../src/host-contracts/native-codex-contract.ts';
 import { validatePortablePluginFiles } from '../src/host-contracts/portable-plugin-validation.ts';
 import { forwardingSignals } from '../src/services/mcp-run-signals.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * Phase-2 FileSystem adoption: the ordinary reads, copies, and temp
@@ -32,7 +33,7 @@ const scratch = async (prefix: string): Promise<string> => {
 };
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const errno = (code: string, message: string): NodeJS.ErrnoException => {

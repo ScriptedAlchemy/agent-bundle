@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +32,7 @@ import { testManifestFromRouteGraph } from '../src/test/manifest.ts';
 import { expectDocument } from '../src/test/matchers.ts';
 import { isProcessGone } from './support/bin-process.ts';
 import { deferred } from './support/eventually.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const invocation = (id: string, completedAt: string): RouteInvocation => ({
   completedAt,
@@ -1044,7 +1045,7 @@ it('does not spawn a child for an invocation aborted while queued', async () => 
   } finally {
     hold.resolve();
     await service.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1334,7 +1335,7 @@ it('resolves a `.js` import of a `.tsx` sibling without rewriting the same strin
       .toContainText('panel rendered')
       .toContainText('./panel.js');
   } finally {
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -1396,7 +1397,7 @@ it('bounds a real child\'s long, heavy render stream end to end', { timeout: 60_
     expect(replay.at(-1)).toEqual({ invocation, type: 'final' });
   } finally {
     await service.close();
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -1429,7 +1430,7 @@ it('reaps the render child and its descendants after a successful reply', { time
     expect(alive(pids.child)).toBe(false);
     expect(alive(pids.descendant)).toBe(false);
   } finally {
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -1449,7 +1450,7 @@ it('reaps the render child and its descendants when the invocation times out', {
     expect(alive(pids.child)).toBe(false);
     expect(alive(pids.descendant)).toBe(false);
   } finally {
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -1468,7 +1469,7 @@ it('reaps the render child and its descendants when the invocation is cancelled'
     expect(alive(pids.descendant)).toBe(false);
     expect(await started.result).toBe(cancelled);
   } finally {
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -1489,7 +1490,7 @@ it('reaps the render child and its descendants when the service closes mid-rende
       status: 'failed',
     });
   } finally {
-    await rm(project.root, { force: true, recursive: true });
+    await removeTree(project.root);
   }
 });
 
@@ -1619,7 +1620,7 @@ it('forwards kernel events from tool and event routes rendered in the real child
     ]);
   } finally {
     await service.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

@@ -1,4 +1,4 @@
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -8,6 +8,7 @@ import { startDevServer } from '../src/dev/workbench-server.ts';
 import type { LifecycleListResponse, LifecycleReplay } from '../src/contracts/lifecycles.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('renders a lifecycle replay through a real default-pool dev server', { timeout: 30_000 }, async () => {
   const project = await createProjectFixture({
@@ -118,6 +119,6 @@ it('renders a lifecycle replay through a real default-pool dev server', { timeou
     });
   } finally {
     await server?.close().catch(() => undefined);
-    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    await removeTree(project.root);
   }
 });

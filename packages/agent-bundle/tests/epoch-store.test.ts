@@ -6,6 +6,7 @@ import { expect, it } from '@rstest/core';
 
 import { EpochStore, type EpochStaging } from '../src/dev/epoch-store.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const epochFor = (
   root: string,
@@ -96,7 +97,7 @@ it('publishes a validated staging directory as the active immutable epoch', asyn
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'codex', 'plugin.json'), 'utf8'),
     ).resolves.toBe('{"name":"codex"}\n');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -130,7 +131,7 @@ it('persists one canonical versionless staging and epoch metadata shape', async 
       readFile(activeMetadataPathFor(root), 'utf8').then((value) => JSON.parse(value)),
     ).resolves.toEqual({ epoch });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -153,7 +154,7 @@ it.each(['active', 'per-epoch'] as const)(
         : store.acquireEpochReference(epoch.id);
       await expect(readMetadata).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   },
 );
@@ -178,7 +179,7 @@ it.each(['active', 'per-epoch'] as const)(
         : store.acquireEpochReference(epoch.id);
       await expect(readMetadata).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   },
 );
@@ -205,7 +206,7 @@ it.each([
 
       await expect(store.readActiveEpoch()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   },
 );
@@ -265,7 +266,7 @@ it.each(['marker removal', 'marker file sync', 'marker directory sync'] as const
       await expect(store.readActiveEpoch()).resolves.toEqual(replacement);
       await expect(readFile(join(root, '.agent-bundle', 'epochs', replacement.id, marker), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   },
 );
@@ -304,7 +305,7 @@ it('opens Windows regular files with write-capable non-truncating flags and pres
       expect(entry.flags).toBe(entry.directory ? 'r' : 'r+');
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -342,7 +343,7 @@ it('refuses publication when a Windows regular-file fsync fails and keeps the pr
     expect(epochEntries).not.toContain(replacement.id);
     expect(epochEntries.filter((entry) => entry.startsWith('.stage-'))).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -371,7 +372,7 @@ it('fails epoch publication when file fsync EPERM is not a Windows directory Flu
     await expect(publishEpoch(store, epochFor(root, 'epoch-posix-file-fsync'))).rejects.toBe(eperm);
     await expect(store.readActiveEpoch()).resolves.toBeUndefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -435,7 +436,7 @@ it('fsyncs staged artifacts and each durable publication rename in commit order'
     expect(activeMetadataFileSync).toBeGreaterThan(epochMetadataRenameSync);
     expect(activeMetadataRenameSync).toBeGreaterThan(activeMetadataFileSync);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -449,7 +450,7 @@ it('exposes the validated immutable epoch directory on an acquired reference', a
     expect(reference.root).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
     await reference.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -467,7 +468,7 @@ it('acquires the active epoch and its immutable metadata in one transition', asy
     expect(Object.isFrozen(reference.epoch)).toBe(true);
     await reference.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -487,7 +488,7 @@ it('lists detached immutable epoch identities newest first', async () => {
     expect(Object.isFrozen(listed[0]!)).toBe(true);
     expect(listed[0]).not.toBe(newest);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -506,7 +507,7 @@ it('rejects an unsafe epoch id before it can create a staging directory', async 
       code: 'ENOENT',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -544,7 +545,7 @@ it('retains active, referenced, and five newest unreferenced epochs until the fi
     ).toEqual(['epoch-3', 'epoch-4', 'epoch-5', 'epoch-6', 'epoch-7', 'epoch-8']);
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -572,7 +573,7 @@ it('retains an epoch leased through another store for the same project', async (
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -618,7 +619,7 @@ it('does not admit a cross-store reference while final-release cleanup removes i
     });
   } finally {
     permitDeletion?.();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -648,7 +649,7 @@ it('keeps a retired epoch until the final of multiple references closes', async 
     ).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -677,7 +678,7 @@ it('does not duplicate concurrent close calls before the final reference closes'
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -707,7 +708,7 @@ it('retains an epoch when reference acquisition is serialized before its final c
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -743,7 +744,7 @@ it('shares final-release cleanup failure with concurrent close callers without r
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -784,7 +785,7 @@ it('preserves epoch metadata when final-reference cleanup cannot remove its dire
       readFile(join(epochsRoot, 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -867,7 +868,7 @@ it('waits for every eligible cleanup deletion before admitting a later reference
   } finally {
     earlyGate.resolve();
     lateGate.resolve();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -931,7 +932,7 @@ it('aggregates sorted cleanup failures and retries retained metadata after a met
     await expect(readFile(epochTwoMetadata, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(epochThreeCatalog, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -960,7 +961,7 @@ it('keeps the previous active epoch when validation rejects a staged replacement
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-2', 'claude', 'plugin.json'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -986,7 +987,7 @@ it('removes abandoned staging directories without touching the active epoch', as
     await staging.close();
     await staging.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1019,7 +1020,7 @@ it('recovers every abandoned staging directory at once and tolerates a store tha
     await expect(readdir(join(root, '.agent-bundle', 'epochs'))).resolves.toEqual(['not-staging']);
     await Promise.all(stagings.map((staging) => staging.close()));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1033,7 +1034,7 @@ it('requires selected targets to exactly match the epoch target digests', async 
       targets: ['claude'],
     })).rejects.toMatchObject({ code: 'EPOCH_TARGET_SET_INVALID' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1050,7 +1051,7 @@ it('rejects epoch metadata whose manifest path escapes the final epoch directory
       code: 'EPOCH_MANIFEST_INVALID',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1061,7 +1062,7 @@ it('rejects a replaced staging root even when it has the expected files', async 
   try {
     const store = new EpochStore({ projectRoot: root });
     const staging = await store.createStagingEpoch({ epoch, targets: ['claude'] });
-    await rm(staging.root, { force: true, recursive: true });
+    await removeTree(staging.root);
     await mkdir(join(staging.root, 'claude'), { recursive: true });
     await Promise.all([
       writeFile(join(staging.root, 'claude', 'plugin.json'), 'replacement\n'),
@@ -1073,7 +1074,7 @@ it('rejects a replaced staging root even when it has the expected files', async 
     });
     await expect(store.readActiveEpoch()).resolves.toBeUndefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1101,7 +1102,7 @@ it('rejects a selected target symlink and a missing staged manifest', async () =
       code: 'EPOCH_MANIFEST_INVALID',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1119,7 +1120,7 @@ it('surfaces corrupt per-epoch metadata instead of silently excluding it from cl
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
     ).resolves.toBe('epoch-1\n');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1150,7 +1151,7 @@ it('does not remove an epoch when concurrent references are admitted before its 
     ).resolves.toBe('epoch-1\n');
     await Promise.all(references.map((reference) => reference.close()));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1170,7 +1171,7 @@ it('fails closed when active metadata points at a ghost epoch and leaves cleanup
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
     ).resolves.toBe('epoch-1\n');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1193,7 +1194,7 @@ it('fails closed when active metadata differs from its epoch metadata or the man
     await expect(store.cleanup()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1214,7 +1215,7 @@ it('fails closed when matching active metadata gives its manifest an outside pat
     await expect(store.readActiveEpoch()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     await expect(store.cleanup()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1233,7 +1234,7 @@ it('continues processing later state transitions after a failed cleanup', async 
     await expect(store.cleanup()).resolves.toBeUndefined();
     await expect(store.readActiveEpoch()).resolves.toEqual(epoch);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1269,7 +1270,7 @@ it('reports a cleanup failure as post-commit when the new epoch is already activ
     });
     await expect(store.readActiveEpoch()).resolves.toEqual(committed);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1310,7 +1311,7 @@ it('keeps epoch metadata and contents retryable when native catalog sidecar dele
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1357,7 +1358,7 @@ it('keeps an epoch committed when active-metadata rename succeeds but its parent
     await expect(readFile(join(root, '.agent-bundle', 'epochs', candidate.id, 'claude', 'plugin.json'), 'utf8'))
       .resolves.toBe(`${candidate.id}\n`);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1410,7 +1411,7 @@ it('rolls back a publisher-owned catalog sidecar when activation fails after pub
     expect(syncedPaths.filter((path) => path === join(root, '.agent-bundle', 'epochs'))).toHaveLength(3);
     expect(syncedPaths.filter((path) => path === join(root, '.agent-bundle', 'epochs', '.metadata'))).toHaveLength(2);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1471,6 +1472,6 @@ it('does not let a losing concurrent publisher remove the winning epoch catalog'
     await expect(leftStore.readActiveEpoch()).resolves.toEqual(epoch);
   } finally {
     releaseMoves.resolve();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

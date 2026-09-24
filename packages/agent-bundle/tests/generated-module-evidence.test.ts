@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -27,11 +27,12 @@ import type { NormalizedHook, SourceProvenance } from '../src/core/types.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import type { CompiledAgentRoute, CompiledCliCommand } from '../src/routes/types.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const testMeta: AgentBundleMeta = Object.freeze({

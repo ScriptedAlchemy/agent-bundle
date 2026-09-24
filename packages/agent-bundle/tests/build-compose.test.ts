@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 
@@ -23,6 +23,7 @@ import {
   type TargetMcpRuntimeContract,
 } from '../src/services/mcp-runtime.ts';
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * Acceptance tests for the composite plugin root (#555, Wave 1): every
@@ -32,7 +33,7 @@ import { supportedCapabilities } from './support/adapter-capabilities.ts';
 
 const roots: string[] = [];
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const writeProjectFile = async (root: string, path: string, content: string): Promise<void> => {

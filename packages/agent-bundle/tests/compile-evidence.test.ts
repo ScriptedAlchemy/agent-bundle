@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,11 +14,12 @@ import {
 } from '../src/build/compile-evidence.ts';
 import type { CompileResult } from '../src/build/compile-result.ts';
 import { sha256Hex } from '../src/core/digest.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const createFixture = async (): Promise<{ readonly record: CompileEvidenceRecord; readonly root: string }> => {

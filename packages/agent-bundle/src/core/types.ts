@@ -174,6 +174,8 @@ export interface AgentBundleWebConfig {
 
 /** Optional artifact output location config, inspired by Rsbuild's `output.distPath`. */
 export interface AgentBundleOutputConfig {
+  /** Emit selected hosts' marketplace documents at the project root, pointing to distPath. These files are generated and replaced by build. */
+  repositoryMarketplace?: boolean;
   /**
    * The artifact output directory of `agent-bundle build`, relative to the
    * project root. Defaults to `dist`. The per-invocation CLI `--output` flag
@@ -824,6 +826,7 @@ export interface NormalizedPlugin {
    * profile in. Absent means source maps stay off.
    */
   readonly sourceMap?: true;
+  readonly repositoryMarketplace?: true;
   readonly scripts: readonly NormalizedScript[];
   readonly skills: readonly NormalizedSkill[];
   readonly state?: NormalizedStateDefinition;

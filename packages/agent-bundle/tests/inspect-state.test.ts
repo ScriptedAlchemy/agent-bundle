@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,7 @@ import { expect, it } from '@rstest/core';
 import { runCli } from '../src/cli.ts';
 import { agentStateDefaultBudgets } from '../src/core/state-inspection.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 it('keeps static inspection defaults aligned with the runtime package', () => {
   expect(agentStateDefaultBudgets).toEqual({
@@ -156,7 +157,7 @@ it('inspects volatile and workspace-durable state without inventing runtime path
     });
     expect(JSON.parse(dynamic.stdout).selected.state.budgets).not.toHaveProperty('resolved');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -199,7 +200,7 @@ it('reports the declared notice retention policy and rejects a malformed one as 
     expect(malformed.code).not.toBe(0);
     expect(`${malformed.stdout}${malformed.stderr}`).toContain('AB4833');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -215,7 +216,7 @@ it('reports an invalid built manifest on inspect without treating it as missing'
     const human = await inspectCli(root, []);
     expect(human.stdout).toContain('Built manifest: invalid');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -254,6 +255,6 @@ it('reports stateless inspection and rejects competing state focuses', async () 
     expect(ambiguous.code).toBe(1);
     expect(JSON.parse(ambiguous.stderr)).toMatchObject([{ code: 'AB5000', severity: 'error' }]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

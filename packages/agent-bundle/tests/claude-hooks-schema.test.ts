@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +12,7 @@ import schemaProvenance from '../src/adapters/schemas/claude/PROVENANCE.json' wi
 import { createAdapterValidator } from '../src/adapters/types.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const fixtureRoot = new URL('./fixtures/claude-hooks-schema/', import.meta.url);
 /**
@@ -257,6 +258,6 @@ it('plans a Claude native hooks document that uses every documented handler type
     const rejected = registry.get('claude').plan(await normalizeProject(loaded, { skills: [] }, registry));
     expect(rejected.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['claude.native-hooks.schema']);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { cp, mkdtemp, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -10,6 +10,7 @@ import type { HostDiscoveryServiceOptions } from '../../../agent-bundle/src/dev/
 import type { DevRuntimeClientSurfaceProxyBinding } from '../../../agent-bundle/src/dev/runtime-provider.ts';
 import { startDevServer } from '../../../agent-bundle/src/dev/workbench-server.ts';
 import { ensureRuntimeExamplePayload, runtimeExamplePayloads } from './runtime-example-payload.ts';
+import { removeTree } from '../support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -103,12 +104,12 @@ export const startRuntimePlaygroundFixture = async (
       },
     });
   } catch (error) {
-    await rm(fixtureWorkspace, { force: true, recursive: true });
+    await removeTree(fixtureWorkspace);
     throw error;
   }
   if (eventHub === undefined) {
     await server.close();
-    await rm(fixtureWorkspace, { force: true, recursive: true });
+    await removeTree(fixtureWorkspace);
     throw new Error('Runtime playground fixture did not receive the foreground event hub.');
   }
   const foregroundEventHub = eventHub;
@@ -142,7 +143,7 @@ export const startRuntimePlaygroundFixture = async (
       clientSurfaceFailure = failed?.reason;
       await server.close();
     } finally {
-      await rm(fixtureWorkspace, { force: true, recursive: true });
+      await removeTree(fixtureWorkspace);
       resolveClosed();
     }
     if (clientSurfaceFailure !== undefined) throw clientSurfaceFailure;

@@ -34,6 +34,7 @@ import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 import { eventually } from './support/eventually.ts';
 import { mcpCatalogStub, stdioTransportStub } from './support/mcp-client-stub.ts';
 import { loadedProject } from './support/loaded-project.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -310,7 +311,7 @@ it('keeps one generated server and plugin-data directory bound to the selected e
     } else {
       process.env[inheritedKey] = previousInherited;
     }
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -422,7 +423,7 @@ it('lowers every session trace entry onto the unified trace with request/respons
     await isolated.close();
     await throwing.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -451,7 +452,7 @@ it('rejects an MCP server not declared for the selected projection', async () =>
     })).rejects.toThrow('Expected exactly one portable MCP server matching "fixture".');
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -552,7 +553,7 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
     await session.close();
   } finally {
     await service?.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -583,8 +584,8 @@ it('uses the configured project root as the default workspace from a decoy cwd',
     process.chdir(originalCwd);
     await service?.close();
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(decoy, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(decoy),
     ]);
   }
 }, 30_000);
@@ -615,7 +616,7 @@ it('pins the selected epoch until the persistent session closes', async () => {
     });
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -647,7 +648,7 @@ it('fails tool calls closed with a typed stale-epoch error when the pinned epoch
     // Another process's build retention cannot observe this process's epoch
     // leases: it removes the pinned epoch directory and metadata underneath
     // the live session while `active-epoch.json` already names epoch-2.
-    await rm(join(root, '.agent-bundle', 'epochs', 'epoch-1'), { force: true, recursive: true });
+    await removeTree(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
     await rm(join(root, '.agent-bundle', 'epochs', '.metadata', 'epoch-1.json'), { force: true });
 
     await expect(session.callTool({ arguments: {}, name: 'inspect' })).rejects.toMatchObject({
@@ -663,7 +664,7 @@ it('fails tool calls closed with a typed stale-epoch error when the pinned epoch
     await session.close();
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -685,8 +686,8 @@ it('executes only the acquired epoch reference root when service and store roots
     await service.close();
   } finally {
     await Promise.all([
-      rm(serviceRoot, { force: true, recursive: true }),
-      rm(storeRoot, { force: true, recursive: true }),
+      removeTree(serviceRoot),
+      removeTree(storeRoot),
     ]);
   }
 }, 30_000);
@@ -754,7 +755,7 @@ it('closes an in-flight open instead of returning an untracked epoch-pinning ses
       code: 'ENOENT',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -824,7 +825,7 @@ it('retains a rejected cleanup from an opening drained during service close', as
       code: 'ENOENT',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -886,7 +887,7 @@ it('orders opening cleanup failures before active session cleanup failures durin
     }));
     await expect(service.close()).rejects.toBe(failure);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -958,7 +959,7 @@ it('waits for every session cleanup and retains every close failure', async () =
       'MCP session service is closed.',
     );
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1011,7 +1012,7 @@ it('closes a replacement client when restart races with session shutdown', async
     expect(clients).toHaveLength(2);
     expect(clients[1]!.closes()).toBe(1);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1044,7 +1045,7 @@ it('rejects an already-aborted tool call without invoking the MCP SDK', async ()
 
     await session.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1103,8 +1104,8 @@ it('rejects a tool call aborted while its epoch availability probe is pending', 
     expect(calls).toBe(0);
     await session.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
-    await rm(pluginData, { force: true, recursive: true });
+    await removeTree(root);
+    await removeTree(pluginData);
   }
 }, 30_000);
 
@@ -1171,7 +1172,7 @@ it('bounds frame and event retention with an explicit replay overflow cursor', a
 
     await session.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1213,7 +1214,7 @@ it('delivers replay and reentrant live trace entries in one monotonic order', as
     expect(second).toEqual(Array.from({ length: 512 }, (_, index) => index + 91));
     await session.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1247,7 +1248,7 @@ it('fails and closes the session as soon as stderr exceeds its output bound', as
     expect(clientCloses).toBe(1);
     expect(Buffer.byteLength(session.stderr())).toBeLessThanOrEqual(1_000_000);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1341,7 +1342,7 @@ it('fails admission, lifecycle, and service misuse closed with coded McpSessionE
       'MCP session service is closed.',
     );
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1372,7 +1373,7 @@ it('opens a generated streamable HTTP server through its modern transport', asyn
 
     await Promise.all([httpSession.close(), service.close()]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1559,7 +1560,7 @@ it('retains frozen transport snapshots without caller or subscriber mutation', a
     await session.close();
     expect(closed).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1735,7 +1736,7 @@ it('exposes one opaque, epoch-bound session handle with a bounded ordered wire t
     } else {
       process.env[secretKey] = previousSecret;
     }
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1849,7 +1850,7 @@ it('leases immutable canonical MCP App data without closing the control-owned se
     await expect(session.listTools()).resolves.toEqual([visibleTool, hiddenTool, defaultTool]);
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1890,7 +1891,7 @@ it('closes an unleased session immediately on closeSessionWhenUnleased and a lea
     expect(service.closeSessionWhenUnleased(leased.id)).toBe(false);
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -1968,7 +1969,7 @@ it('synchronously invalidates App leases when the control session closes during 
     await serviceLease.release();
     expect(clientCloses).toBe(2);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -2060,7 +2061,7 @@ it('revokes App authority before a direct session close drains its client and in
     await lease.release();
     await service.close();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 30_000);
 
@@ -2123,8 +2124,8 @@ it('shares one close promise when a synchronous close observer re-enters shutdow
     expect(epochCloses).toBe(1);
     await expect(access(pluginData)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(root, { force: true, recursive: true });
-    await rm(pluginData, { force: true, recursive: true });
+    await removeTree(root);
+    await removeTree(pluginData);
   }
 }, 30_000);
 

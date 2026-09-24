@@ -136,8 +136,8 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
 /**
  * Run-level release tarball for a public package. `test:packed` builds and
  * `pnpm pack`s each package exactly once per run (scripts/run-packed-tests.mjs;
- * pnpm's packer rather than npm's because `pnpm publish` is what ships, and
- * it rewrites `workspace:` ranges — scripts/pnpm-pack.mjs) and shares the
+ * pnpm's packer rather than npm's because pkg.pr.new needs its `workspace:`
+ * range rewrites — scripts/pnpm-pack.mjs) and shares the
  * result through AGENT_BUNDLE_SHARED_PACK_DIR, so every pack-and-install
  * suite consumes the same tarball a release would publish instead of
  * re-packing (and previously rebuilding) per test file.

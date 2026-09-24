@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +26,7 @@ import {
   runtimeEntryFiles,
   unreachedFiles,
 } from './support/dist-graph.ts';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -136,7 +137,7 @@ describe.sequential('packed @agent-bundle/runtime entry identity', () => {
       );
       expect(fileURLToPath(resolved.stdout)).toBe(join(installed, 'package.json'));
     } finally {
-      await rm(consumer, { force: true, recursive: true });
+      await removeTree(consumer);
     }
   }, 180_000);
 });

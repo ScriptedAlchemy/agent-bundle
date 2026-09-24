@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,6 +7,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import { registerLifecycleCommands, type LifecycleApi } from '../src/install/commands.ts';
 import { runInstallCli } from '../src/install/index.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const capture = () => {
   const stdout: string[] = [];
@@ -142,7 +143,7 @@ describe('runInstallCli', () => {
       expect(diagnostic).toMatchObject({ severity: 'error' });
       expect(diagnostic.code).toMatch(/^AB\d{4}$/u);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 });

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ import { diagnostic, isRequestDiagnostic, responseDiagnostic } from '../src/dev/
 import type { TraceEntry } from '../src/dev/trace/trace-entry.ts';
 import { TraceHub } from '../src/dev/trace/trace-hub.ts';
 import { DEV_INSTALL_MARKER_FILE } from '../src/events/trace-receipt.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * #600 PR 2, lane T7: a host-invoked hook against the dev plugin reports a
@@ -86,7 +87,7 @@ const nativePreToolUse = (root: string, toolUseId: string): Readonly<Record<stri
 
 it('posts a host-invoked hook execution to the dev server as hook.received / hook.completed', { timeout: 90_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-receipt-pipe-'));
-  cleanups.push(() => rm(root, { force: true, recursive: true }));
+  cleanups.push(() => removeTree(root));
   await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
   await Promise.all([
     writeProjectFile(root, 'package.json', JSON.stringify({

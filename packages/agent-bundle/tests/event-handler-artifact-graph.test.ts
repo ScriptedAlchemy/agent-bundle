@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -12,6 +12,7 @@ import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
 import { runNodeScript } from './support/run-node-script.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * #595's emitted-graph proof, pre-staged at the built-artifact level: the
@@ -218,7 +219,7 @@ describe('handler artifact graph (#595)', () => {
   }, 240_000);
 
   afterAll(async () => {
-    if (root !== undefined) await rm(root, { force: true, recursive: true });
+    if (root !== undefined) await removeTree(root);
   });
 
   it('attaches the handler leaf to the event route node, and the leaf\'s source graph is cheap by construction', async () => {

@@ -1,5 +1,5 @@
 import { expect, it } from '@rstest/core';
-import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,7 @@ import type { Diagnostic } from '../src/core/diagnostics.ts';
 import type { DiscoveredProject } from '../src/config/discover.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import { emptyRouteConfig, type CompiledAgentRoute, type CompiledRouteGraph } from '../src/routes/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -292,7 +293,7 @@ it('enumerates claude.bin relative to the config file into immutable executable 
     expect(Object.isFrozen(model.hostBins?.[0]?.files)).toBe(true);
     expect(Object.isFrozen(model.hostBins?.[0]?.files[0])).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -356,7 +357,7 @@ it('enumerates Claude workflows and output styles relative to the config file in
     expect(Object.isFrozen(model.hostOutputStyles)).toBe(true);
     expect(Object.isFrozen(model.hostOutputStyles?.[0]?.files[0])).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -380,7 +381,7 @@ it.each([
     expect(model.hostBins?.[0]).toMatchObject({ files: [], issue, source: binRoot, target: 'claude' });
     expect(plan.diagnostics).toContainEqual(expect.objectContaining({ code, severity: 'error' }));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -413,7 +414,7 @@ it.each([
     expect(payload).toMatchObject({ files: [], issue, source: sourceRoot, target: 'claude' });
     expect(plan.diagnostics).toContainEqual(expect.objectContaining({ code, severity: 'error' }));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -445,8 +446,8 @@ it('rejects a Claude payload directory symlink that resolves outside the project
     }));
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(outside, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(outside),
     ]);
   }
 });

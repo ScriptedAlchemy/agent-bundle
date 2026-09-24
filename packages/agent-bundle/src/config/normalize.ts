@@ -1353,6 +1353,7 @@ export const normalizeProject = async (
     ...(assets.length === 0 ? {} : { assets }),
     ...(commands.length === 0 ? {} : { commands }),
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
+    ...(loaded.config.output?.repositoryMarketplace === true ? { repositoryMarketplace: true as const } : {}),
     extensions,
     ...(hostBins.length === 0 ? {} : { hostBins }),
     ...(hostOutputStyles.length === 0 ? {} : { hostOutputStyles }),
