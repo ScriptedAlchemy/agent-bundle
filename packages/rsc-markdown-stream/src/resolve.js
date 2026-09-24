@@ -115,15 +115,6 @@ const Dispatcher = {
 
 function installDispatcher() {
   if (ReactSharedInternals === null) return noop;
-  if (ReactSharedInternals.ReactCurrentDispatcher) {
-    // React <= 18
-    const slot = ReactSharedInternals.ReactCurrentDispatcher;
-    const prev = slot.current;
-    slot.current = Dispatcher;
-    return () => {
-      slot.current = prev;
-    };
-  }
   const prev = ReactSharedInternals.H;
   ReactSharedInternals.H = Dispatcher;
   return () => {
