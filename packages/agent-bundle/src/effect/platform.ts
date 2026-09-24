@@ -16,10 +16,10 @@ import { runPromise, type RunPromiseOptions } from './boundary.ts';
  * `NodeServices.layer`, but built from `@effect/platform-node-shared`, the
  * package that actually implements them (`@effect/platform-node`'s
  * `NodeFileSystem` etc. are re-exports). `agent-bundle` is a runtime
- * dependency of every consumer, and `@effect/platform-node@rc.112` would add
- * `undici`, `mime`, and — through a non-optional `redis` peer that npm
- * auto-installs — a Redis client (+23 MB, +17 packages) to each install for
- * a filesystem layer. `create-agent-bundle`, which bundles its
+ * dependency of every consumer, and `@effect/platform-node@rc.117` would add
+ * `undici` and — through a non-optional `redis` peer that npm auto-installs —
+ * a Redis client (+23 MB, +17 packages measured on rc.112) to each install
+ * for a filesystem layer. `create-agent-bundle`, which bundles its
  * dependencies, keeps `NodeServices.layer`.
  *
  * Provided at Promise edges only — the public API functions in `api.ts` and
@@ -122,7 +122,7 @@ export const ensuringRemoved = <A, E, R>(
  * an interrupt cannot land between its creation and its cleanup. The
  * operation is restored to the caller's interruptibility before it enters
  * the bracket (the bracket's own mask is a no-op inside this one). Not
- * `fs.makeTempDirectoryScoped`: in rc.112 its finalizer removes without
+ * `fs.makeTempDirectoryScoped`: through rc.117 its finalizer removes without
  * `force` and `orDie`s, so a missing directory would reject an already
  * successful call and a real cleanup error would lose its Node cause.
  */
