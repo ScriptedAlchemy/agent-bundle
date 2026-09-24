@@ -1,11 +1,11 @@
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { TargetRegistry, build, createDefaultRegistry, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
+import { TargetRegistry, build, createDefaultRegistry, inspect, invokeMcp, listHooks, listMcp, serveApp, simulateHook, validate } from '../src/api.ts';
 import { unavailableCapability } from '../src/adapters/capability-state.ts';
 import {
   nativeHookWrapperSource,
@@ -26,6 +26,7 @@ import {
   resolveTargetRelativeStdioArgument,
 } from '../src/services/mcp-runtime.ts';
 import { createMcpPathTokenResolver, standardMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const createProject = async (): Promise<string> => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-api-parent-'));
@@ -179,7 +180,7 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
     expect(result.plans[0]?.selected).toEqual([]);
     expect(registry.names()).toEqual(['synthetic']);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -222,7 +223,7 @@ it('projects only the capability contract fields of adapter-owned rows into insp
     ]);
     expect(() => JSON.stringify(result.plans)).not.toThrow();
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -261,7 +262,7 @@ it('accepts claude.userConfig through the public inspection and build APIs', asy
     ) as Record<string, unknown>;
     expect(manifest).toHaveProperty('userConfig.api_token.sensitive', true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -288,7 +289,7 @@ it('returns a frozen invalid inspection for opaque source failures', async () =>
     expect(Object.isFrozen(result.diagnostics)).toBe(true);
     expect(Object.isFrozen(result.plans)).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -311,7 +312,7 @@ it('attaches a specific recovery to every invalid inspection diagnostic', async 
       }),
     ]));
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -341,7 +342,7 @@ it('accepts the public claude.dependencies config surface and plans its manifest
       { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0' },
     ]);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -369,7 +370,83 @@ it('reports one modern-MCP source diagnostic for a legacy SSE declaration', asyn
     expect(Object.isFrozen(result.diagnostics)).toBe(true);
     expect(Object.isFrozen(diagnostics[0])).toBe(true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
+  }
+});
+
+it('emits repository marketplaces from the selected host plans without making outputs source inputs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-repository-'));
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), `export default {
+      plugin: { name: 'repository-fixture', version: '1.0.0' },
+      marketplace: true,
+      output: { distPath: 'artifact', repositoryMarketplace: true },
+      targets: ['claude', 'codex', 'cursor'],
+    };`);
+    const first = await build({ root });
+    const second = await build({ root });
+    expect(second.projectContext.sourceInputs).toEqual(first.projectContext.sourceInputs);
+    const marketplaceBeforeOperations = await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8');
+    await listHooks({ root, target: 'cursor' });
+    expect(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(marketplaceBeforeOperations);
+    const serveEvents: string[] = [];
+    await expect(serveApp({
+      app: 'missing/missing',
+      logger: { log: (event) => { serveEvents.push(event); } },
+      root,
+      target: 'cursor',
+    })).rejects.toThrow();
+    expect(serveEvents).toContain('artifact.build');
+    expect(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(marketplaceBeforeOperations);
+    for (const path of ['.claude-plugin/marketplace.json', '.cursor-plugin/marketplace.json', '.agents/plugins/marketplace.json']) {
+      const repository = JSON.parse(await readFile(join(root, path), 'utf8'));
+      const artifact = JSON.parse(await readFile(join(root, 'artifact', path), 'utf8'));
+      expect(repository.plugins[0].source).toEqual(path.startsWith('.agents')
+        ? { source: 'local', path: './artifact' }
+        : './artifact');
+      expect(artifact.plugins[0].source).toEqual(path.startsWith('.agents')
+        ? { source: 'local', path: './' }
+        : './');
+      repository.plugins[0].source = artifact.plugins[0].source;
+      expect(repository).toEqual(artifact);
+      expect(second.projectContext.sourceInputs.some((input) => input.path === path)).toBe(false);
+    }
+    await expect(validate({ artifact: join(root, 'artifact'), root })).resolves.toEqual({ diagnostics: [] });
+    await build({ output: 'release/plugin', root });
+    expect(JSON.parse(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).plugins[0].source)
+      .toBe('./release/plugin');
+    await build({ output: '.agent-bundle/eval/artifact', repositoryMarketplaces: false, root });
+    expect(JSON.parse(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).plugins[0].source)
+      .toBe('./release/plugin');
+    await expect(build({ output: '.cursor-plugin', root })).rejects.toThrow('overlaps the artifact output');
+    await symlink(join(root, 'artifact'), join(root, 'linked-artifact'), 'dir');
+    await expect(build({ output: 'linked-artifact', root })).rejects.toThrow('real artifact output directory');
+    await symlink(root, join(root, 'alias'), 'dir');
+    await expect(build({ output: 'alias/.cursor-plugin', root })).rejects.toThrow('overlaps the artifact output');
+    await build({ output: 'alias/release/plugin', root });
+    expect(JSON.parse(await readFile(join(root, '.cursor-plugin/marketplace.json'), 'utf8')).plugins[0].source)
+      .toBe('./release/plugin');
+  } finally {
+    await removeTree(root);
+  }
+});
+
+it('leaves repository marketplaces alone by default and refuses symlinked output parents when enabled', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-repository-symlink-'));
+  try {
+    const config = { plugin: { name: 'repository-fixture', version: '1.0.0' }, marketplace: true, targets: ['cursor'] };
+    await writeFile(join(root, 'agent-bundle.config.ts'), `export default ${JSON.stringify(config)};`);
+    await build({ root });
+    await expect(stat(join(root, '.cursor-plugin'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const other = join(root, 'authored');
+    await mkdir(other);
+    await writeFile(join(other, 'marketplace.json'), 'preserve me');
+    await symlink(other, join(root, '.cursor-plugin'), 'dir');
+    await writeFile(join(root, 'agent-bundle.config.ts'), `export default ${JSON.stringify({ ...config, output: { repositoryMarketplace: true } })};`);
+    await expect(build({ root })).rejects.toThrow('cannot replace or traverse');
+    expect(await readFile(join(other, 'marketplace.json'), 'utf8')).toBe('preserve me');
+  } finally {
+    await removeTree(root);
   }
 });
 
@@ -408,7 +485,7 @@ it('resolves artifact output with CLI, config, and default precedence', async ()
     expect(defaults.build.outputRoot).toBe(join(root, 'dist'));
     expect((await stat(join(root, 'dist'))).isDirectory()).toBe(true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -470,7 +547,7 @@ it('build runs the Claude developer validator and load check over built claude t
     expect(strict.hostValidation?.[0]?.status).toBe('failed');
     expect(strict.diagnostics.filter((entry) => entry.code === 'AB6020').every((entry) => entry.severity === 'error')).toBe(true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -503,7 +580,7 @@ it('build surfaces a Claude load refusal as AB7325 even when plugin validate --s
       target: 'claude',
     })]);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -535,7 +612,7 @@ it('build reports one informational AB6019 skip for all Claude-validated targets
     ]);
     expect(result.diagnostics.some((entry) => entry.severity === 'error')).toBe(false);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -617,7 +694,7 @@ it('deduplicates identical adapter diagnostics without collapsing distinct stabl
     expect(Object.isFrozen(prepared.diagnostics)).toBe(true);
     expect(prepared.diagnostics.every((entry) => Object.isFrozen(entry))).toBe(true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -664,7 +741,7 @@ it('contains hostile source getters as reusable preparation diagnostics', async 
     expect(recovered.source.state).toBe('ready');
     expect(recovered.model?.targets).toEqual([expect.objectContaining({ name: 'codex' })]);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -701,7 +778,7 @@ it('fails closed when routes getter throws during inspection', async () => {
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.diagnostics)).toBe(true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -760,7 +837,7 @@ it('contains a throwing adapter plan as a reusable preparation diagnostic', asyn
     expect(recovered.source.state).toBe('ready');
     expect(recovered.model?.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -803,7 +880,7 @@ it('contains an adapter planner that fails after preparation during inspect', as
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.diagnostics)).toBe(true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -832,7 +909,7 @@ it('returns an invalid inspection for selected targets outside the normalized pr
       expect(Object.isFrozen(invalid.plans)).toBe(true);
     }
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -939,7 +1016,7 @@ it('reports skipped target/component pairs against each target emission surface'
     expect(planFor('cursor')?.skipped.some((component) => component.kind === 'rule')).toBe(false);
     expect(Object.isFrozen(planFor('portable')?.skipped)).toBe(true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -1069,7 +1146,7 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
     });
     expect(planFor('portable').kinds.find((report) => report.kind === 'event-route')).toEqual({ kind: 'event-route', selected: 0, skipped: 1 });
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -1125,7 +1202,7 @@ it('accounts an admitted degraded event route as selected, matching the validati
     expect(plan.skipped.some((component) => component.kind === 'event-route')).toBe(false);
     expect(plan.kinds.find((report) => report.kind === 'event-route')).toEqual({ kind: 'event-route', selected: 1, skipped: 0 });
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -1179,7 +1256,7 @@ it('judges event-route admission and lsp emission by the component-emission over
     ]));
     expect(result.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', targets: [syntheticTarget] })]);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -1210,7 +1287,7 @@ it('never reports an lsp component as selected when the declaring planner reject
       expect.objectContaining({ code: 'claude.lsp.extension.conflict', severity: 'error' }),
     ]));
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -1285,7 +1362,7 @@ it('reports omitted component features per target from the host feature rows (#1
     ]);
     expect(validated.diagnostics.some((diagnostic) => diagnostic.code === 'AB4927' || diagnostic.code === 'AB4907' || diagnostic.code === 'AB4908')).toBe(false);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -1355,7 +1432,7 @@ it('never counts an opaque third-party lspServers declaration as emitted by a ho
     expect(claudePlan.selected.some((component) => component.kind === 'lsp')).toBe(false);
     expect(claudePlan.entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -1378,7 +1455,7 @@ it('reports target exclusion before unsupported capability when both omit a comp
 
     expect(skippedHook).toMatchObject({ reason: 'excluded-by-targets' });
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -1407,7 +1484,7 @@ it('surfaces the computed native matcher on inspected hook entries', async () =>
     expect(sessionStart).toBeDefined();
     expect(sessionStart?.nativeMatcher).toBeUndefined();
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 });
 
@@ -1498,7 +1575,7 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
     });
     expect(registry.names()).toEqual([syntheticTarget]);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 60_000);
 
@@ -1535,7 +1612,7 @@ it('prepares a factory-configured project into a frozen inspection and build res
     }
     await expect(validate({ artifact: hookArtifact, root })).resolves.toEqual({ diagnostics: [] });
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -1562,8 +1639,8 @@ it('returns an output-independent project context without absolute project paths
     expect(Object.isFrozen(left.projectContext)).toBe(true);
   } finally {
     await Promise.all([
-      rm(join(leftRoot, '..'), { force: true, recursive: true }),
-      rm(join(rightRoot, '..'), { force: true, recursive: true }),
+      removeTree(join(leftRoot, '..')),
+      removeTree(join(rightRoot, '..')),
     ]);
   }
 }, 30_000);
@@ -1643,8 +1720,8 @@ it('keeps rule and command model digests root-independent and sensitive to conte
     expect(changedCommand.projectContext.modelDigest).not.toBe(left.projectContext.modelDigest);
   } finally {
     await Promise.all([
-      rm(join(leftRoot, '..'), { force: true, recursive: true }),
-      rm(join(rightRoot, '..'), { force: true, recursive: true }),
+      removeTree(join(leftRoot, '..')),
+      removeTree(join(rightRoot, '..')),
     ]);
   }
 });
@@ -1672,7 +1749,7 @@ it('rejects an output beneath an escaping symlink before loading source or writi
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(stat(join(external, 'artifact'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -1696,7 +1773,7 @@ it('rejects a dangling output symlink before loading source', async () => {
     });
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -1720,7 +1797,7 @@ it('rejects an output symlink to the project root before loading source', async 
     });
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -1734,7 +1811,7 @@ it('allows an output below a symlink to the project root', async () => {
     expect(result.build.outputRoot).toBe(join(root, 'alias', 'artifact'));
     expect((await stat(join(root, 'artifact'))).isDirectory()).toBe(true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -1767,8 +1844,8 @@ it('excludes a contained symlinked output tree from project context identity', a
     expect(JSON.stringify(right.projectContext)).not.toContain('actual-output');
   } finally {
     await Promise.all([
-      rm(join(leftRoot, '..'), { force: true, recursive: true }),
-      rm(join(rightRoot, '..'), { force: true, recursive: true }),
+      removeTree(join(leftRoot, '..')),
+      removeTree(join(rightRoot, '..')),
     ]);
   }
 }, 30_000);
@@ -1830,7 +1907,7 @@ it('normalizes named top-level scripts with stable IDs, modes, and sorted target
       },
     ]);
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });
 
@@ -1885,7 +1962,7 @@ it('builds conventional src/scripts modules beside explicit entries', async () =
     await expect(readFile(join(output, 'scripts', 'greet.mjs'), 'utf8')).resolves.toContain('hello from convention');
     await expect(stat(join(output, 'scripts', 'claimed.mjs'))).resolves.toBeDefined();
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });
 
@@ -1925,7 +2002,7 @@ it('refuses unshippable conventional script routes with actionable diagnostics',
       expect(diagnostic.sourcePath).toContain(join('src', 'scripts'));
     }
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });
 
@@ -2027,7 +2104,7 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
       diagnostics: [{ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }],
     });
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 }, 30_000);
 
@@ -2072,7 +2149,7 @@ it('canonicalizes copied script extensions in emitted artifact paths', async () 
     ]));
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });
 
@@ -2111,7 +2188,7 @@ it('documents a versioned MCP App resource URI accepted by source validation', a
 
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB4329');
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });
 
@@ -2154,7 +2231,7 @@ it('rejects unsafe, unsupported, missing, non-file, and unknown-target named scr
       'AB4406',
     ]));
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });
 
@@ -2170,7 +2247,7 @@ it('lists hooks across artifact targets and rejects an explicit unknown target',
     ]);
     await expect(listHooks({ artifact, root, target: 'unsupported' })).rejects.toThrow('Unknown target');
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);
 
@@ -2186,6 +2263,6 @@ it('validates an explicit artifact without loading its project source', async ()
     expect(result).toEqual({ diagnostics: [] });
     expect(Object.isFrozen(result.diagnostics)).toBe(true);
   } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
+    await removeTree(join(root, '..'));
   }
 }, 30_000);

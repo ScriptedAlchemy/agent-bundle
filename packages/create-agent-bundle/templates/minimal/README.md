@@ -60,9 +60,9 @@ pool at the `mcp-in-memory` level, as a working example.
 
 ## The agent-bundle dependency
 
-agent-bundle has no npm release yet; this project pins a
-[pkg.pr.new](https://pkg.pr.new) preview tarball of it. To move to a newer
-preview (or a real release once one exists), change the `agent-bundle` entry
+agent-bundle is distributed through [pkg.pr.new](https://pkg.pr.new); this
+project pins one commit-addressed preview tarball. To move to a newer preview,
+change the `agent-bundle` entry
 in `devDependencies` — see
 [Preview packages](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md)
 for the URL forms.

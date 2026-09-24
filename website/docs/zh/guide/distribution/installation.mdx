@@ -126,14 +126,18 @@ Amp 不属于开发期安装宿主；请使用其有归属回执的 `agent-bundl
 每个输出的安装器——`agent-bundle install <host>` 与独立的 `install.mjs`——共用同一套替换策略。
 内容完全相同的副本是 `already-installed` 空操作。**版本相同但内容哈希不同**的副本会被自动替换，因此不升版本
 地重建不再需要卸载加 `rm -rf`。版本不同则以 `AB7005` 拒绝，除非传入 `--replace`（别名 `--force`）；外来目录
-——不是本插件安装器放置的——无论如何都会被拒绝。Cursor 与 Amp 副本携带安装回执（`.agent-bundle-install.json`：
+——不是本插件安装器放置的——无论如何都会被拒绝。独立的 `install.mjs` 对没有回执的目标目录按其中实际存在的文件计算哈希，
+包括回执出现之前的副本和已暂存的 marketplace 插件。存在 `agent-bundle.manifest.json` 时，产物哈希使用该清单的 `files[]`，
+清单列出而产物缺失的路径会使安装失败。外来或已暂存的目标目录中缺少的清单路径不进入目标哈希，因此两边哈希不同，安装拒绝该副本，而不是抛出 `ENOENT`。属于本安装器的同版本副本可以修复。Cursor 与 Amp 副本携带安装回执（`.agent-bundle-install.json`：
 插件、版本、宿主、内容哈希、归属文件）；替换就地进行，只触碰归属文件，绝不动旧版或就地的 `state/` 之类的非归属条目，
 `--replace` 会接管回执出现之前的副本。本发行版构建的产物把框架状态放在
 `~/.agent-bundle/state/<plugin>-<digest>`（`AGENT_BUNDLE_STATE_ROOT` 覆盖该位置）。`uninstall`
 配合 `--purge-data --confirm-purge` 只会删除回执证明归该安装独占的根；预先存在、共享、无标记或其他
 无法证明归属的覆盖根都会保留。Claude 的替换先运行 `claude plugin uninstall --keep-data` 再重新安装，
-因为 `plugin update` 受版本门控；Codex 先 `codex plugin remove` 再 `add`。输出的 `INSTALL.md` 按宿主记录了
-同样的步骤。
+因为 `plugin update` 受版本门控；Codex 的替换只执行 `codex plugin add`，以便保留 `config.toml` 中的插件设置与嵌套
+MCP 覆盖。原生 add 会把插件级 `enabled = false` 重置为 `true`；原生 plugin CLI 没有可保留设置的合格更新 API，因此安装器会拒绝
+已禁用或启用状态未知的替换（`AB7004`），并保持该安装不变。输出的
+`INSTALL.md` 按宿主记录了同样的步骤。
 
 框架 CLI 从 `agent-bundle.manifest.json` 的 `files[]` 派生产物侧哈希与复制集合，校验每个列出的摘要，
 而不遍历产物目录。清单自身与约定的操作员 `.env` / `.env.local` 覆盖层也会被复制并哈希；未列出的

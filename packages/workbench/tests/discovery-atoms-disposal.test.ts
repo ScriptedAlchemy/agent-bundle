@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join, normalize, relative } from 'node:path';
 
 import { createRsbuild } from '@rsbuild/core';
@@ -8,6 +8,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { browserLaunchOptions } from './support/workbench-e2e.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 declare global {
   interface Window {
@@ -252,7 +253,7 @@ describe('Discovery atoms', () => {
     } finally {
       await browser.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
-      await rm(temp, { force: true, recursive: true });
+      await removeTree(temp);
     }
   }, 60_000);
 });

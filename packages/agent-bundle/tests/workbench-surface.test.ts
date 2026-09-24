@@ -1,4 +1,4 @@
-import { rm } from 'node:fs/promises';
+
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from '@rstest/core';
@@ -13,6 +13,7 @@ import {
   type WorkbenchSurface,
 } from '../src/test/index.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const exampleRoot = (name: string): string => resolve(import.meta.dirname, '../../../examples', name);
 
@@ -283,7 +284,7 @@ describe('capability counts', () => {
       expect(applicationGroup(surface, 'scripts')).toMatchObject({ leaves: expect.any(Array) });
       expect(surface.application.groups.map((group) => group.kind)).not.toContain('events');
     } finally {
-      await rm(project.root, { force: true, recursive: true });
+      await removeTree(project.root);
     }
   });
 
@@ -340,10 +341,10 @@ describe('capability counts', () => {
         expect(hidden.counts).toMatchObject({ hooks: 0, targets: 1 });
         expect(applicationGroup(hidden, 'events')).toMatchObject({ leaves: expect.any(Array) });
       } finally {
-        await rm(prebuiltOnly.root, { force: true, recursive: true });
+        await removeTree(prebuiltOnly.root);
       }
     } finally {
-      await rm(project.root, { force: true, recursive: true });
+      await removeTree(project.root);
     }
   });
 
@@ -371,7 +372,7 @@ describe('capability counts', () => {
       expect(surface.counts).toMatchObject({ hooks: 0, scripts: 0, targets: 1 });
       expect(surface.application.groups).toEqual([]);
     } finally {
-      await rm(project.root, { force: true, recursive: true });
+      await removeTree(project.root);
     }
   });
 });
@@ -435,7 +436,7 @@ describe('preparation parity with the Workbench server', () => {
       expect(byDefault.counts).toMatchObject({ evalSuites: 0, targets: 2 });
       expect(byDefault.advanced).not.toContain('evals');
     } finally {
-      await rm(project.root, { force: true, recursive: true });
+      await removeTree(project.root);
     }
   });
 });
@@ -473,7 +474,7 @@ describe('an unusable project', () => {
       expect((error as AgentTestError).message).toContain('source state invalid');
       expect((error as AgentTestError).message).toContain('AB4100');
     } finally {
-      await rm(project.root, { force: true, recursive: true });
+      await removeTree(project.root);
     }
   });
 });

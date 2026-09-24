@@ -666,9 +666,30 @@ const installPublicCli = async (
       previousContentHash = installed?.hash ?? previousReceipt?.contentHash;
     }
   }
+  // Codex `plugin remove` deletes the `[plugins."<id>"]` subtree in config.toml, including nested
+  // MCP overrides. Native `plugin add` refreshes the cache in place and keeps those tables, so
+  // replacement is add-only. Native add also resets plugin-level `enabled = false` to `true`.
+  // The native plugin CLI has no qualified settings-preserving update API (no expected-version
+  // write on plugin add/list/remove). A replace whose inventory row is disabled or omits
+  // `enabled` is refused before any host verb mutates config. Enable the plugin in Codex, then
+  // replace; otherwise leave it unchanged. The list `--json` `enabled` snapshot is not atomic
+  // against a concurrent edit of this same plugin's enabled flag between list and add.
+  if (replaced && host === 'codex' && entry?.enabled !== true) {
+    const reason = entry?.enabled === false
+      ? 'plugin list reports enabled: false'
+      : 'plugin list omits enabled';
+    throw failure(
+      'AB7004',
+      `Cannot replace the Codex install of ${id}: ${reason}. ` +
+        'The native plugin CLI has no qualified settings-preserving update API, and native `plugin add` resets ' +
+        'plugin-level enabled to true. Enable the plugin in Codex before replacing, or leave this install unchanged.',
+      host,
+    );
+  }
   // Decided before any host verb runs, so the marketplace ownership check sees the pre-install state.
   const recorded = await receiptIdentity();
-  if (replaced) {
+  const replaceRemovesPlugin = replaced && host !== 'codex';
+  if (replaceRemovesPlugin) {
     await runHostCommand(runner, identity, host, publicHostUninstallArguments(host, id, scope), 'removal');
   }
   await runHostCommand(runner, identity, host, [
@@ -713,7 +734,11 @@ const installPublicCli = async (
   } catch (error) {
     if (stateRollback !== undefined) await stateRollback();
     const rollbacks: (readonly string[])[] = [
-      ...(pluginInstalled ? [publicHostUninstallArguments(host, id, scope)] : []),
+      // Codex replace is add-only: the plugin was already installed, so a failed receipt must not
+      // `plugin remove` (that would delete the settings subtree this path exists to keep).
+      ...(pluginInstalled && !(host === 'codex' && replaced)
+        ? [publicHostUninstallArguments(host, id, scope)]
+        : []),
       ...(createdMarketplace ? [publicHostMarketplaceRemoveArguments(marketplace)] : []),
     ];
     for (const args of rollbacks) {

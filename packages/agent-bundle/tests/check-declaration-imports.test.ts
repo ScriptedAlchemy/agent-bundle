@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -13,6 +13,7 @@ import {
   runCheckDeclarationImports,
   type DeclarationManifest,
 } from '../../../scripts/check-declaration-imports.mjs';
+import { removeTree } from './support/remove-tree.ts';
 
 const manifest: DeclarationManifest = {
   name: 'fixture-package',
@@ -439,7 +440,7 @@ describe('the packed-declaration gate', () => {
           + '(reachable from exports["."])',
       ]);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 
@@ -468,7 +469,7 @@ describe('the packed-declaration gate', () => {
       expect(lines[0]).toBe('good-fixture: 2 packed declarations, 1 reachable from 1 export entries; 1 errors, 0 warnings');
       expect(lines[1]).toContain('  error   dist/internal.d.ts:1 imports "typescript-5"');
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   });
 

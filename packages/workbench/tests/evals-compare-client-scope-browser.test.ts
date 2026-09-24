@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -11,6 +11,7 @@ import { closeServer } from './support/http.ts';
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { browserLaunchOptions, browserTrace } from './support/workbench-e2e.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const workspaceRoot = process.cwd();
 const evalsCompare = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-compare.tsx');
@@ -88,7 +89,7 @@ const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Prom
   return {
     close: async () => {
       await closeServer(server);
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     },
     url: `${origin}/page.html`,
   };

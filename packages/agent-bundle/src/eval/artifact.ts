@@ -110,6 +110,7 @@ export const prepareEvalArtifact = async (
   await build({
     ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
     output: artifactRoot,
+    repositoryMarketplaces: false,
     registry,
     root: options.projectRoot,
     ...(options.targets === undefined ? {} : { targets: [...options.targets] }),

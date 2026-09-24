@@ -13,6 +13,7 @@ import {
 } from '../config/dev-contracts.ts';
 import { configuredPayloadRoots, discoverProject } from '../config/discover.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
+import { repositoryMarketplacePaths } from '../build/repository-marketplace.ts';
 import { loadConfig } from '../config/load.ts';
 import { normalizeEvalConfig } from '../eval/config.ts';
 import {
@@ -226,7 +227,7 @@ const physicalOutputRoot = async (
   return physical;
 };
 
-const resolveOutputRoots = async (
+export const resolveOutputRoots = async (
   requestedRoot: string,
   root: string,
   outputRoots: readonly string[] | undefined,
@@ -849,6 +850,10 @@ export class ProjectService {
     const targetNames = loaded.context.selectedTargets.length > 0
       ? loaded.context.selectedTargets
       : (loaded.config.targets ?? registry.defaultTargetNames());
+    if (loaded.config.output?.repositoryMarketplace === true) {
+      outputRoots = Object.freeze([...outputRoots, ...repositoryMarketplacePaths(registry, targetNames)
+        .map((path) => resolve(root, path))]);
+    }
     const hostBinRoots = (registry.binSources?.(loaded.config, targetNames) ?? [])
       .flatMap((source) => 'source' in source ? [resolve(dirname(loaded.configPath), source.source)] : []);
     const hostOutputStyleRoots = (registry.outputStyleSources?.(loaded.config, targetNames) ?? [])

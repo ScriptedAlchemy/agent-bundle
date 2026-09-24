@@ -40,6 +40,7 @@ import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.
 import { createMcpPathTokenResolver } from '../src/services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../src/services/mcp-runtime.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const hash = (value: string): string => sha256Hex(value);
 
@@ -187,7 +188,7 @@ it('accepts compile evidence that covers a matching bundle', async () => {
   try {
     expect((await validateArtifact({ artifactRoot: root })).filter((diagnostic) => diagnostic.code === 'AB6039')).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -203,7 +204,7 @@ it('reports compile evidence for different bundle bytes', async () => {
       expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('describes different bytes') }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -216,7 +217,7 @@ it('reports compile evidence that does not cover a bundle', async () => {
       expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('does not cover') }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -232,7 +233,7 @@ it('reports compile evidence that names a copy file', async () => {
       expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('does not list as a compiled file') }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -255,7 +256,7 @@ it('reports a non-builtin external in compile evidence', async () => {
       expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('is not one') }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -279,7 +280,7 @@ it('reports a missing artifact-relative external target in compile evidence', as
       expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('does not contain') }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -295,7 +296,7 @@ it('reports compile evidence from a different policy revision', async () => {
       expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('was judged under policy') }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -311,7 +312,7 @@ it('reports malformed compile evidence as a non-strict record', async () => {
       }),
     ]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -484,8 +485,8 @@ it('validates and owns every concrete document matched by an optional schema fam
     );
   } finally {
     await Promise.all([
-      rm(validRoot, { force: true, recursive: true }),
-      rm(invalidRoot, { force: true, recursive: true }),
+      removeTree(validRoot),
+      removeTree(invalidRoot),
     ]);
   }
 });
@@ -531,8 +532,8 @@ it('admits only direct .mdc files in a declared rules layout', async () => {
     );
   } finally {
     await Promise.all([
-      rm(validRoot, { force: true, recursive: true }),
-      rm(invalidRoot, { force: true, recursive: true }),
+      removeTree(validRoot),
+      removeTree(invalidRoot),
     ]);
   }
 });
@@ -559,8 +560,8 @@ it('admits only direct .md files in a declared commands layout', async () => {
     );
   } finally {
     await Promise.all([
-      rm(validRoot, { force: true, recursive: true }),
-      rm(invalidRoot, { force: true, recursive: true }),
+      removeTree(validRoot),
+      removeTree(invalidRoot),
     ]);
   }
 });
@@ -760,7 +761,7 @@ it('validates an emitted Skill and copied resources from the artifact only', asy
   try {
     expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -796,7 +797,7 @@ it('returns frozen validated evidence without changing the diagnostics-only vali
     expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation.projections[0]!)).toBe(true);
     expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -816,7 +817,7 @@ it('rejects a rehashed top-level artifact file outside declared target namespace
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -836,7 +837,7 @@ it('rejects a rehashed file outside a declared target emitted layout', async () 
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -853,7 +854,7 @@ it('accepts a manifested target asset emitted by the core build', async () => {
   try {
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -882,8 +883,8 @@ it('rejects malformed and unmanifested target asset paths', async () => {
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(malformedRoot, { force: true, recursive: true });
-    await rm(unmanifestedRoot, { force: true, recursive: true });
+    await removeTree(malformedRoot);
+    await removeTree(unmanifestedRoot);
   }
 });
 
@@ -902,7 +903,7 @@ it('rejects an artifact symlink even when the manifest remains self-consistent',
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -925,8 +926,8 @@ it('rejects a special manifest without following its symlink target', async () =
       expect.objectContaining({ code: 'AB6001' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
-    await rm(outside, { force: true, recursive: true });
+    await removeTree(root);
+    await removeTree(outside);
   }
 });
 
@@ -945,7 +946,7 @@ it('rejects a canonical manifest whose runtime is below the generated floor', as
       expect.objectContaining({ code: 'AB6001', generatedPath: 'agent-bundle.manifest.json' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -967,7 +968,7 @@ it('settles promptly when the artifact manifest is a FIFO', async () => {
       expect.objectContaining({ code: 'AB6013', generatedPath: 'agent-bundle.manifest.json' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -996,8 +997,8 @@ it('rejects empty declared and undeclared target directories independently of ma
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(emptyRoot, { force: true, recursive: true });
-    await rm(declaredRoot, { force: true, recursive: true });
+    await removeTree(emptyRoot);
+    await removeTree(declaredRoot);
   }
 });
 
@@ -1014,7 +1015,7 @@ it('rejects a nested empty directory under an otherwise valid target namespace',
       ]),
     );
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1038,7 +1039,7 @@ it('rejects forged hook output for a target without a hook contract', async () =
       expect.objectContaining({ code: 'AB6014', generatedPath: 'hooks/junk.txt' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1064,7 +1065,7 @@ it('rejects a canonically rehashed script with an unsupported extension', async 
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1117,7 +1118,7 @@ it('fails ordinary artifact validation when an emitted portable tree breaks the 
       .toEqual(normative.map((entry) => entry.message));
     expect(hostValidated.diagnostics.some((entry) => entry.code === 'AB6038')).toBe(false);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1149,8 +1150,8 @@ it('does not follow a symlinked portable document into the byte lane once the in
     // The forged content was never read: no schema or normative finding from behind the link.
     expect(diagnostics.filter((entry) => ['AB6035', 'AB6036', 'AB6037'].includes(entry.code))).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
-    await rm(outside, { force: true, recursive: true });
+    await removeTree(root);
+    await removeTree(outside);
   }
 });
 
@@ -1177,7 +1178,7 @@ it('leaves an advanced registry adapter that reuses the portable name to its own
     // identity, so a custom adapter under the portable name owes neither (#592).
     expect(diagnostics).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1199,7 +1200,7 @@ it('admits nested project assets in the target-owned recursive asset namespace',
   try {
     await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1214,7 +1215,7 @@ it('admits executable commands and nested support files in a recursive bin names
   try {
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1237,7 +1238,7 @@ it.each([
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1255,7 +1256,7 @@ it('rejects emitted Skill Markdown without instruction body content', async () =
       ]),
     );
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1283,7 +1284,7 @@ it('validates emitted Skill frontmatter against the pinned contract and director
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1305,7 +1306,7 @@ it('rejects noncanonical and duplicate-key manifests as strict parse failures', 
       ]);
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1319,7 +1320,7 @@ it('matches a canonical nested manifest file table by path instead of directory 
   try {
     expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1333,7 +1334,7 @@ it('rejects a canonical manifest that omits an executable file mode', async () =
       expect.objectContaining({ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1369,7 +1370,7 @@ it('preserves structural artifact diagnostics after a strict manifest passes', a
       expect.objectContaining({ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1396,7 +1397,7 @@ it('reports an orphan compiler MCP output after the artifact is rehashed', async
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1444,7 +1445,7 @@ it('does not attribute compiler MCP outputs to an equal-length sibling target', 
       expect.objectContaining({ code: 'AB6017' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1469,7 +1470,7 @@ it.each([
     const matching = diagnostics.some((entry) => entry.code === 'AB6017' && entry.generatedPath === 'native/servers.json');
     expect(matching).toBe(expectsDiagnostic);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1497,7 +1498,7 @@ it('rejects a target-local file URL argument that is absent from the artifact', 
       expect.objectContaining({ code: 'AB6017', generatedPath: nativePath, target: coherenceTarget }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1524,7 +1525,7 @@ it.each([
       expect.objectContaining({ code: 'AB6017', generatedPath: 'mcp/mcp-server-deadbeef.mjs', target: coherenceTarget }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1608,7 +1609,7 @@ it('rejects host document launches that disagree with the manifest', async () =>
       expect(agreementDiagnostics(await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() }))).toEqual(cases[index]!.expected);
     }
   } finally {
-    await Promise.all(roots.map((root) => rm(root, { force: true, recursive: true })));
+    await Promise.all(roots.map((root) => removeTree(root)));
   }
 });
 
@@ -1629,7 +1630,7 @@ it('rejects duplicate keys in a canonically manifested native MCP document', asy
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1650,7 +1651,7 @@ it('requires a manifest hook row when native hook metadata is present', async ()
       expect.objectContaining({ code: 'AB6018', generatedPath: 'hooks/hooks.json', target: hookCoherenceTarget }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1676,7 +1677,7 @@ it('reports a compiler-pattern native hook command that is not indexed', async (
       expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1701,7 +1702,7 @@ it.each([
       ]),
     );
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1716,7 +1717,7 @@ it('accepts inert top-level throws, rejections, and never-settling awaits', asyn
   try {
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1741,7 +1742,7 @@ it.each([
       ]),
     );
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1765,7 +1766,7 @@ it('allows Node builtins and manifest-listed JSON terminal imports', async () =>
   try {
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1786,7 +1787,7 @@ it('rejects non-literal dynamic imports', async () => {
       ]),
     );
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1799,7 +1800,7 @@ it('imports a self-contained generated module at a path with spaces', async () =
   try {
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1828,8 +1829,8 @@ it('rejects generated JavaScript that resolves a dependency outside the artifact
     );
   } finally {
     await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(outside, { force: true, recursive: true }),
+      removeTree(root),
+      removeTree(outside),
     ]);
   }
 });
@@ -1847,7 +1848,7 @@ it('rejects an existing JavaScript dependency omitted from the manifest', async 
       expect.objectContaining({ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1861,7 +1862,7 @@ it('accepts deterministic cycles between manifested JavaScript modules', async (
   try {
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1953,7 +1954,7 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
     expect(requests).toBe(0);
   } finally {
     await new Promise<void>((resolvePromise, reject) => server.close((error) => error === undefined ? resolvePromise() : reject(error)));
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1977,7 +1978,7 @@ it('reports one structural change for a file mutation during validation', async 
     expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'scripts/mutable.mjs')).toHaveLength(1);
     expect(mutated).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -1997,7 +1998,7 @@ it('rejects a special entry added during validation without returning a snapshot
     expect(result.diagnostics.filter((entry) => entry.code === 'AB6013' && entry.generatedPath === 'late-link.json')).toHaveLength(1);
     expect(result.snapshot).toBeUndefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2017,7 +2018,7 @@ it('rejects an empty directory added during validation without returning a snaps
     expect(result.diagnostics.filter((entry) => entry.code === 'AB6014' && entry.generatedPath === 'late-empty')).toHaveLength(1);
     expect(result.snapshot).toBeUndefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2044,7 +2045,7 @@ it('does not re-enter artifact validation after taking final evidence snapshots'
     expect(result.diagnostics).toEqual([]);
     expect(result.snapshot).toBeDefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2070,7 +2071,7 @@ it('does not allow a late registry re-entry to create an unvalidated empty direc
     expect(result.diagnostics).toEqual([]);
     expect(result.snapshot).toBeDefined();
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2096,7 +2097,7 @@ it.each([
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
     expect(diagnostics.filter((entry) => entry.code === 'AB6001' && entry.generatedPath === 'agent-bundle.manifest.json')).toHaveLength(1);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2117,7 +2118,7 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
     expect(diagnostics.filter((entry) => entry.code === 'AB6005' && entry.generatedPath === 'scripts/mutable.mjs')).toHaveLength(1);
     expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'scripts/mutable.mjs')).toHaveLength(1);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2183,7 +2184,7 @@ it('lexes compiled modules the evidence record proves and walks every other modu
         .filter((entry) => entry.code === 'AB6005' || entry.code === 'AB6039')
         .map((entry) => [entry.code, entry.generatedPath, entry.message]);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   };
   const walkedInFull = [
@@ -2238,7 +2239,7 @@ it('does not import copied non-JavaScript resources', async () => {
   try {
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2262,7 +2263,7 @@ it('fails closed when Agent Skills provenance does not equal the pinned contract
       ]));
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2294,7 +2295,7 @@ it('requires manifest target metadata to match the supplied registry exactly', a
       ]));
     }
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2312,7 +2313,7 @@ it('reports AB6010 when a projection records another built-in adapter identity',
       }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2334,7 +2335,7 @@ it('requires registered target-native documents and validates their pinned schem
       expect.objectContaining({ code: 'AB6012', generatedPath: 'document.json', target: customTarget }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2379,7 +2380,7 @@ it.each([
       expect.objectContaining({ code: 'AB6012', generatedPath: mcpPath, target }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2452,7 +2453,7 @@ it('validates Claude plugin artifacts carrying the pinned userConfig contract', 
       expect.objectContaining({ code: 'AB6012', generatedPath: pluginPath, target: 'claude' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2521,7 +2522,7 @@ it('validates an enriched Claude marketplace against the full closed pinned cont
       expect.objectContaining({ code: 'AB6012', generatedPath: marketplacePath, target: 'claude' }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2587,7 +2588,7 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
       }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2653,7 +2654,7 @@ it.each(malformedValidatorCases)('reports $0 through the stable schema diagnosti
       }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2679,7 +2680,7 @@ it('documents recovery for every stable artifact diagnostic code', async () => {
       diagnostic.recovery !== undefined && diagnostic.recovery.trim().length > 0,
     )).toBe(true);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2731,7 +2732,7 @@ it.each(['amp', 'claude', 'codex', 'cursor', 'portable'] as const)(
         }),
       ]));
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   },
 );
@@ -2748,7 +2749,7 @@ it.each(['cursor', 'portable'] as const)(
         }),
       ]));
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   },
 );
@@ -2760,7 +2761,7 @@ it.each(['claude', 'codex'] as const)(
     try {
       await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([]);
     } finally {
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     }
   },
 );
@@ -2795,7 +2796,7 @@ it('accepts an emitted Claude settings document against its pinned schema', asyn
   try {
     await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2809,7 +2810,7 @@ it('rejects a rehashed Claude settings document that carries an unsupported key'
       target: 'claude',
     })]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2844,7 +2845,7 @@ it('accepts a Claude plugin manifest carrying valid dependencies', async () => {
   try {
     await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2858,7 +2859,7 @@ it('rejects a rehashed Claude plugin manifest carrying invalid dependencies', as
       target: 'claude',
     })]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2893,7 +2894,7 @@ it('fails artifact validation when a Cursor manifest logo is missing from the de
       }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -2918,6 +2919,6 @@ it('accepts a Cursor manifest logo that resolves inside the artifact', async () 
     const diagnostics = await validateArtifact({ artifactRoot: root });
     expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6025')).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

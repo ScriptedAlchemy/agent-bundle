@@ -50,6 +50,7 @@ import {
 } from './packed-native-smoke.ts';
 import { diffTreeSnapshots, snapshotTree, treesIdentical } from './tree-snapshot.ts';
 import { replaceWatchedSource } from './watched-files.ts';
+import { removeTree } from './remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -655,7 +656,7 @@ const buildFixtureProject = async (options: {
     await Promise.all(options.expectedPaths.map((path) => access(join(artifactRoot, path))));
     return Object.freeze({ artifactRoot, cli, root });
   } catch (error) {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
     throw error;
   }
 };
@@ -719,7 +720,7 @@ export const buildPortableHostInstallFixture = async (options: {
 };
 
 export const disposeHostInstallFixture = async (fixture: BuiltFixtureProject): Promise<void> => {
-  await rm(fixture.root, { force: true, recursive: true });
+  await removeTree(fixture.root);
 };
 
 /** Proves initial host-owned installation followed by the host-specific development re-sync. */
@@ -897,7 +898,7 @@ export const runDevHostInstallProof = async (
   } finally {
     await restarted?.close();
     await manager.close();
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -1001,7 +1002,7 @@ export const runInstalledHostContractMatrixProof = async (
       session,
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -1102,7 +1103,7 @@ export const runClaudeHostInstallProof = async (
       status: 'passed',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -1261,7 +1262,7 @@ export const runCodexHostInstallProof = async (
       status: 'passed',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -1473,7 +1474,7 @@ const assertUnifiedBundleCursorInstall = async (
       staticFindings: Object.freeze({ AB6027: 0, AB7320: 0 }),
     });
   } finally {
-    await rm(home, { force: true, recursive: true });
+    await removeTree(home);
   }
 };
 
@@ -1578,7 +1579,7 @@ export const runCursorHostInstallProof = async (
       unifiedBundle,
     });
   } finally {
-    await rm(home, { force: true, recursive: true });
+    await removeTree(home);
   }
 };
 
@@ -1883,7 +1884,7 @@ export const runPortableHostInstallProof = async (
       status: 'passed',
     });
   } finally {
-    await rm(home, { force: true, recursive: true });
+    await removeTree(home);
   }
 };
 
@@ -2411,7 +2412,7 @@ const runLiveHostScenario = async (
     await client?.close().catch(() => undefined);
     await server?.close().catch(() => undefined);
     await appServer?.close().catch(() => undefined);
-    await rm(scenarioRoot, { force: true, recursive: true });
+    await removeTree(scenarioRoot);
   }
 };
 
@@ -2981,7 +2982,7 @@ export const runHostUninstallProof = async (
       status: 'passed',
     });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -3047,7 +3048,7 @@ export const runPortableUninstallProof = async (
     const missing = await runInstaller(['--uninstall']);
     assertProof(missing.exitCode === 1 && missing.stderr.includes('predates install receipts'), 'Portable uninstall without a receipt was not refused.');
     await expectOk(['--uninstall', '--force'], `Uninstalled ${portablePlugin}@${version}`);
-    await rm(join(home, '.cursor', 'plugins'), { force: true, recursive: true });
+    await removeTree(join(home, '.cursor', 'plugins'));
     await mkdir(destination, { recursive: true });
     await writeFile(join(destination, 'payload.txt'), 'someone else\n');
     const foreign = await runInstaller(['--uninstall', '--force']);
@@ -3067,6 +3068,6 @@ export const runPortableUninstallProof = async (
       status: 'passed',
     });
   } finally {
-    await rm(home, { force: true, recursive: true });
+    await removeTree(home);
   }
 };

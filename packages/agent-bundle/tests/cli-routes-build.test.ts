@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,12 +10,13 @@ import { build, parseArtifactManifest, type ReadyInspectResult, validate } from 
 import { runCli } from '../src/cli.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const writeProjectFile = async (root: string, path: string, contents: string): Promise<void> => {
@@ -636,7 +637,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
   }, 120_000);
 
   afterAll(async () => {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   });
 
   it('bundles the projection module into the executable and keeps the tool as the only route behind it', async () => {

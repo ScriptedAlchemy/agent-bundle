@@ -1,7 +1,7 @@
 import { openSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 
 import { describe, expect, it } from '@rstest/core';
 
@@ -12,6 +12,7 @@ import {
   terminalColor,
   type TerminalStreamProbe,
 } from '../src/terminal-capability.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /** A descriptor number no process holds open: `fstat` on it fails with EBADF. */
 const CLOSED_FD = 1_000_003;
@@ -91,7 +92,7 @@ describe('process terminal detection (#511)', () => {
       expect(forced.stdout).toEqual({ color: 'truecolor', columns: 100, kind: 'pipe' });
     } finally {
       closeSync(fd);
-      await rm(directory, { force: true, recursive: true });
+      await removeTree(directory);
     }
   });
 

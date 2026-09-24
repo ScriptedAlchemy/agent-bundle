@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ import { portableAdapter } from '../src/adapters/portable.ts';
 import { normalizeProject, validateSource, type NormalizationTargetRegistry } from '../src/config/index.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { AgentBundleConfig, AgentBundleSharedMetadata, NormalizedPlugin } from '../src/core/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const hosts = ['portable', 'claude', 'codex', 'cursor'] as const;
 
@@ -33,7 +34,7 @@ const withProject = async (
     }
     await run(root);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 

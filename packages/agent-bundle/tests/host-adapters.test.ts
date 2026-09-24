@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import type { TargetArtifactEntry } from '../src/adapters/types.ts';
 import { emitPlanEntries } from '../src/build/emit.ts';
 import { build } from './support/build.ts';
 import { pathTokens, pluginRootEnvAnchor, type NormalizedPlugin } from '../src/core/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
 
@@ -1946,7 +1947,7 @@ it('preserves the executable mode when emitting a Claude bin copy entry', async 
 
     expect((await stat(join(output, 'bin', 'review-tool'))).mode & 0o777).toBe(0o751);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -3119,6 +3120,6 @@ it('filters host components and builds portable, Codex, and Claude target roots'
       'skills/review/SKILL.md',
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

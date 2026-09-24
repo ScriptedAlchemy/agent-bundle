@@ -12,6 +12,7 @@ import {
   installedEnvironment,
   sharedPackedTarball,
 } from './support/shared-pack.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const examples = resolve(process.cwd(), 'examples');
@@ -233,6 +234,6 @@ it('keeps packed static and plain-hook plugins free of undeclared runtimes', asy
     expect(registrations).toEqual(['skills/review']);
     expect(await readFile(processTrace, 'utf8')).toBe('');
   } finally {
-    await rm(consumer, { force: true, recursive: true });
+    await removeTree(consumer);
   }
 }, 180_000);

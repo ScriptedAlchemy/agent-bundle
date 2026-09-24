@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,12 +9,13 @@ import { expect, it } from '@rstest/core';
 import { ScriptPlaygroundService } from '../src/dev/playground/script-playground-service.ts';
 import { taskkill, terminateProcessTree, waitForProcessTreeExit } from '../src/services/process-tree.ts';
 import { timeScale } from './support/time-scale.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const temporaryScript = async (source: string): Promise<Readonly<{ readonly close: () => Promise<void>; readonly path: string }>> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-playground-test-'));
   const path = join(root, 'review.mjs');
   await writeFile(path, source);
-  return Object.freeze({ close: () => rm(root, { force: true, recursive: true }), path });
+  return Object.freeze({ close: () => removeTree(root), path });
 };
 
 const eventually = async (assertion: () => Promise<void> | void): Promise<void> => {
@@ -78,7 +79,7 @@ it('uses a fresh server-owned workspace and deletes it only after the child exit
   try {
     const service = new ScriptPlaygroundService({
       createWorkspace: async () => Object.freeze({
-        close: async () => { closed = true; await rm(workspace, { force: true, recursive: true }); },
+        close: async () => { closed = true; await removeTree(workspace); },
         path: workspace,
       }),
       resolveScript: async () => Object.freeze({
@@ -97,7 +98,7 @@ it('uses a fresh server-owned workspace and deletes it only after the child exit
     expect(closed).toBe(true);
     await expect(readFile(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await Promise.allSettled([emitted.close(), rm(workspace, { force: true, recursive: true })]);
+    await Promise.allSettled([emitted.close(), removeTree(workspace)]);
   }
 });
 
@@ -127,7 +128,7 @@ it('preserves a successful script result when workspace release fails', async ()
       stdout: 'completed',
     });
   } finally {
-    await Promise.allSettled([emitted.close(), rm(workspace, { force: true, recursive: true })]);
+    await Promise.allSettled([emitted.close(), removeTree(workspace)]);
   }
 });
 
@@ -181,7 +182,7 @@ it('preserves timeout and cancellation identity when workspace release fails', a
       name: 'AbortError',
     });
   } finally {
-    await Promise.allSettled([emitted.close(), rm(workspace, { force: true, recursive: true })]);
+    await Promise.allSettled([emitted.close(), removeTree(workspace)]);
   }
 }, 10_000 * timeScale);
 
@@ -415,7 +416,7 @@ it('cancels and drains the emitted script process group before its workspace is 
   try {
     const service = new ScriptPlaygroundService({
       createWorkspace: async () => Object.freeze({
-        close: async () => { workspaceClosed = true; await rm(workspace, { force: true, recursive: true }); }, path: workspace,
+        close: async () => { workspaceClosed = true; await removeTree(workspace); }, path: workspace,
       }),
       resolveScript: async () => Object.freeze({
         interpreter: Object.freeze({ args: Object.freeze([]), command: process.execPath }), name: 'review', path: emitted.path,
@@ -437,7 +438,7 @@ it('cancels and drains the emitted script process group before its workspace is 
     expect(workspaceClosed).toBe(true);
     expect(() => process.kill(descendant, 0)).toThrow();
   } finally {
-    await Promise.allSettled([emitted.close(), rm(root, { force: true, recursive: true }), rm(workspace, { force: true, recursive: true })]);
+    await Promise.allSettled([emitted.close(), removeTree(root), removeTree(workspace)]);
   }
 }, 10_000 * timeScale);
 
@@ -479,7 +480,7 @@ it('keeps SIGKILL process-group cleanup alive after the direct child closes', as
       try { process.kill(descendant, 'SIGKILL'); }
       catch { /* The cleanup contract already terminated it. */ }
     }
-    await Promise.allSettled([emitted.close(), rm(root, { force: true, recursive: true })]);
+    await Promise.allSettled([emitted.close(), removeTree(root)]);
   }
 }, 10_000 * timeScale);
 
@@ -551,7 +552,7 @@ const assertStubbornDescendantIsGoneAtSettlement = async (
       try { process.kill(descendant, 'SIGKILL'); }
       catch { /* The cleanup contract already terminated it. */ }
     }
-    await Promise.allSettled([emitted.close(), rm(root, { force: true, recursive: true })]);
+    await Promise.allSettled([emitted.close(), removeTree(root)]);
   }
 };
 

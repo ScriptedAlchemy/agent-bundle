@@ -13,6 +13,7 @@ import {
   rstestWorkerRootPrefix,
 } from '../../../scripts/rstest-worker-roots.mjs';
 import { rstestWorkerRoot, rstestWorkerRootOwner } from '../../../rstest.worker-isolation.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * The pool teardown (rstest.global-setup.ts) removes the worker roots of one
@@ -140,6 +141,6 @@ it('removes only the finished roots that carry one run id', async () => {
     await expect(removeRunRstestWorkerRoots({ parent: join(parent, 'missing'), runId }))
       .resolves.toEqual({ removed: [], retained: [] });
   } finally {
-    await rm(parent, { force: true, recursive: true });
+    await removeTree(parent);
   }
 });

@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { expect, it } from '@rstest/core';
 
 import { isolatedCommandEnvironment } from '../../../rstest.worker-isolation.ts';
 import { cachedNpmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -85,6 +86,6 @@ it('never shadows the consumer\'s tsc bin from a packed npm install', async () =
     expect(JSON.stringify(JSON.parse(inspected))).toContain('"tool:demo/status"');
     expect(inspected).toContain('Read status.');
   } finally {
-    await rm(consumerRoot, { force: true, recursive: true });
+    await removeTree(consumerRoot);
   }
 }, 120_000);

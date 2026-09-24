@@ -1,4 +1,4 @@
-import { access, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,6 +9,7 @@ import { runWithPlatform } from '../src/effect/platform.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { generateRouteTypes, routeTypesRelativePath, writeRouteTypes, writeRouteTypesProgram } from '../src/routes/typegen.ts';
 import type { CompiledRouteGraph } from '../src/routes/types.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * `writeRouteTypes` publishes `.agent-bundle/routes.d.ts` with a
@@ -20,7 +21,7 @@ import type { CompiledRouteGraph } from '../src/routes/types.ts';
  */
 const roots: string[] = [];
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const scratchRoot = async (): Promise<string> => {

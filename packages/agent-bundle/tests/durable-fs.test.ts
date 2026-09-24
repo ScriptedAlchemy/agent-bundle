@@ -12,6 +12,7 @@ import {
 } from '../src/core/durable-fs.ts';
 import { acquireOwnerLockFile, isProcessAlive } from '../src/core/owner-lock.ts';
 import { errnoFailure } from './support/errors.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const publicationMessages = Object.freeze({
   publicationCleanupFailed: 'publication and cleanup both failed',
@@ -57,7 +58,7 @@ it('publishes files by hard link, adopts raced winners, and never leaves staging
     await expect(readFile(path, 'utf8')).resolves.toBe('{"first":true}\n');
     await expect(readdir(root)).resolves.toEqual(['published.json']);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -80,7 +81,7 @@ it('propagates staging failures raw while removing the staging file', async () =
     })).rejects.toBe(writeFailure);
     await expect(readdir(root)).resolves.toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -134,7 +135,7 @@ it('rolls back a linked publication when the directory fsync fails and aggregate
       stagingPath,
     })).rejects.toMatchObject({ errors: [removeFailure], message: 'staging cleanup failed' });
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -154,7 +155,7 @@ it('tolerates documented Windows directory fsync gaps during link publication', 
     })).resolves.toBe(true);
     await expect(readFile(path, 'utf8')).resolves.toBe('contents\n');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

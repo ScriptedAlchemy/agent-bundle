@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -20,6 +20,7 @@ import {
 } from '../src/test/packed.ts';
 import { routeHarnessPackedContractFixtures } from './support/contract-matrix-fixtures.ts';
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/route-harness');
@@ -462,6 +463,6 @@ it.each([
       await secondSession.close();
     }
   } finally {
-    await rm(consumer, { force: true, recursive: true });
+    await removeTree(consumer);
   }
 }, 300_000);

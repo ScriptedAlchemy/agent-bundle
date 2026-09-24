@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -20,6 +20,7 @@ import {
   withWorkbenchServer,
   workspaceRoot,
 } from './support/workbench-e2e.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const browserTimeout = 15_000 * timeScale;
 const hostTimeout = 60_000 * timeScale;
@@ -92,7 +93,7 @@ e2e('accepts Claude and Codex host sessions at 1440×900', { timeout: 300_000 * 
           else process.env[key] = value;
         }
       },
-      () => rm(homes, { force: true, recursive: true }),
+      () => removeTree(homes),
     ],
   }, async (server, project) => {
     await openWorkbench(page, server.url, '/sessions');

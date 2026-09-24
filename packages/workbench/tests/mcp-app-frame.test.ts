@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -27,6 +27,7 @@ import {
 } from '../../agent-bundle/src/web-host/browser/frame-relay.ts';
 import type { McpAppJsonValue, McpAppRelayFrame, McpAppRouteClose, McpAppRouteMessages } from '../src/mcp/mcp-app-client.ts';
 import { deferred, eventually } from './support/async.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const frame: McpAppRelayFrame = Object.freeze({
   allow: '',
@@ -167,7 +168,7 @@ const mountedSecureRendererFixture = async () => {
       await new Promise<void>((resolve, reject) => {
         bootstrap.close((error) => error === undefined ? resolve() : reject(error));
       });
-      await rm(root, { force: true, recursive: true });
+      await removeTree(root);
     },
     url: `http://127.0.0.1:${address.port}/renderer.html`,
   };

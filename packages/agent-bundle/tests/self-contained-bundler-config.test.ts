@@ -2,7 +2,7 @@ import { createRsbuild } from '@rsbuild/core';
 import { createRslib } from '@rslib/core';
 import { expect, it } from '@rstest/core';
 import { init, parse } from 'es-module-lexer/minimal';
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,6 +20,7 @@ import {
 } from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 type RslibInspection = Awaited<ReturnType<Awaited<ReturnType<typeof createRslib>>['inspectConfig']>>;
 
@@ -191,7 +192,7 @@ it('lowers a generated executable with only Node builtins external and inlines i
     await expect(readdir(join(root, 'dist'))).resolves.toEqual(['scripts']);
     await expect(readdir(join(root, 'dist', 'scripts'))).resolves.toEqual(['probe.mjs']);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 }, 20_000);
 
@@ -217,6 +218,6 @@ it('composes MCP App views as fully inlined web bundles with nothing externalize
     expect(externalDeclarations(bundler.externals)).toEqual([]);
     expect(bundler.output?.asyncChunks).toBe(false);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });

@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, utimes, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
+import { removeTree } from './support/remove-tree.ts';
 
 const loadPackedNativeSmoke = async () => import('./support/packed-native-smoke.ts').catch(() => undefined);
 
@@ -115,7 +116,7 @@ it('detects normal Claude config, settings, or plugin changes without retaining 
       await utimes(pluginPath, fixedTime, fixedTime);
     })).resolves.toBe(false);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -162,8 +163,8 @@ it('opaquely detects default ~/.claude.json mutation without extending custom co
     expect(JSON.stringify(customChanged)).not.toContain(customHome);
   } finally {
     await Promise.all([
-      rm(userHome, { force: true, recursive: true }),
-      rm(customHome, { force: true, recursive: true }),
+      removeTree(userHome),
+      removeTree(customHome),
     ]);
   }
 });
@@ -198,7 +199,7 @@ it('guards Claude settings and plugins across a real turn while tolerating the .
       await writeFile(join(userHome, '.claude', 'plugins', 'installed.json'), '{"plugins":["changed"]}\n');
     }, { homeDirectory: userHome })).resolves.toBe(false);
   } finally {
-    await rm(userHome, { force: true, recursive: true });
+    await removeTree(userHome);
   }
 });
 

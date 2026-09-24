@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +12,7 @@ import {
 import { runCli as runSourceCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const runSourceCliWithOutput = async (
   args: string[],
@@ -83,7 +84,7 @@ it('inspect --artifact --json projects the fixture manifest and Workbench applic
     expect(human.stdout).toContain('Projections: cursor');
     expect(human.stdout).toContain('Payloads: native (cursor: ffmpeg); tools (cursor: sharp)');
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 
@@ -95,7 +96,7 @@ it('inspect --artifact on a directory with no manifest fails AB7001 and exits 1'
     expect(result.stdout).toBe('');
     expect(JSON.parse(result.stderr)).toMatchObject([{ code: 'AB7001', severity: 'error' }]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 });
 

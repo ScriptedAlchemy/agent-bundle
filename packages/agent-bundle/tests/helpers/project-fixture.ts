@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { rstestWorkerRoot } from '../../../../rstest.worker-isolation.ts';
+import { removeTree } from '../support/remove-tree.ts';
 
 export interface ProjectFixture {
   configPath: string;
@@ -119,5 +120,5 @@ export const createProjectFixture = async (
 };
 
 export const removeProjectFixture = async (root: string): Promise<void> => {
-  await rm(root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+  await removeTree(root);
 };

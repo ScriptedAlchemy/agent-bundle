@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -28,6 +28,7 @@ import {
   type PreparedEvalArtifact,
 } from '../src/eval/index.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const hosts = deepFreeze({ portable: { model: 'deterministic' } });
 
@@ -84,7 +85,7 @@ const withWorkspace = async (task: (root: string) => Promise<void>): Promise<voi
   try {
     await task(root);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeTree(root);
   }
 };
 
@@ -120,7 +121,13 @@ it('validates and reads an explicit artifact exactly and builds one run-owned co
   await withWorkspace(async () => {
     try {
       const output = join(project.root, 'explicit-artifact');
+      await writeFile(join(project.root, 'agent-bundle.config.ts'), `export default {
+        plugin: { name: 'eval-repository-fixture', version: '1.0.0' },
+        targets: ['cursor'], marketplace: true,
+        output: { repositoryMarketplace: true },
+      };`);
       await build({ output, root: project.root });
+      const repositoryMarketplace = await readFile(join(project.root, '.cursor-plugin/marketplace.json'), 'utf8');
 
       const explicitWriter = await createEvalRun({
         artifact: { manifestPath: 'pending', source: 'explicit', targetDigests: { portable: 'pending' } },
@@ -153,13 +160,14 @@ it('validates and reads an explicit artifact exactly and builds one run-owned co
       expect(current.binding.source).toBe('run-owned');
       expect(current.root).toBe(join(sourceWriter.directory, 'artifacts', 'target'));
       expect(current.binding.targetDigests).toEqual(explicit.binding.targetDigests);
+      expect(await readFile(join(project.root, '.cursor-plugin/marketplace.json'), 'utf8')).toBe(repositoryMarketplace);
       await expect(prepareEvalArtifact({
         artifact: join(project.root, 'absent'),
         projectRoot: project.root,
         runDirectory: sourceWriter.directory,
       })).rejects.toMatchObject({ code: 'EVAL_ARTIFACT_MISSING' });
     } finally {
-      await rm(project.root, { force: true, recursive: true });
+      await removeTree(project.root);
     }
   });
 }, 240_000);
@@ -243,7 +251,7 @@ it('records deterministic evidence whose raw artifacts reproduce every conclusio
       });
       expect(reproduced).toEqual(first.assertions);
     } finally {
-      await rm(project.root, { force: true, recursive: true });
+      await removeTree(project.root);
     }
   });
 }, 240_000);
@@ -288,7 +296,7 @@ it('does not persist inherited credentials and marks a malformed MCP log unavail
         if (stdout === undefined) throw new Error('The deterministic trial must record stdout.');
         expect(await readFile(join(writer.directory, stdout), 'utf8')).not.toContain(credential);
       } finally {
-        await rm(project.root, { force: true, recursive: true });
+        await removeTree(project.root);
       }
     });
   } finally {
@@ -347,7 +355,7 @@ it('separates a harness failure from a plugin failure', async () => {
       expect(harnessFailure.pluginFailure).toBeUndefined();
       expect(harnessFailure.assertions.every((assertion) => assertion.outcome === 'inconclusive')).toBe(true);
     } finally {
-      await rm(project.root, { force: true, recursive: true });
+      await removeTree(project.root);
     }
   });
 }, 240_000);
@@ -453,7 +461,7 @@ it('keeps a negative case inconclusive when activation evidence is unavailable',
       expect(JSON.parse(await readFile(join(writer.directory, unavailable.rawArtifacts[0] ?? ''), 'utf8')))
         .toMatchObject({ skillActivation: { level: 'unavailable' } });
     } finally {
-      await rm(project.root, { force: true, recursive: true });
+      await removeTree(project.root);
     }
   });
 }, 240_000);

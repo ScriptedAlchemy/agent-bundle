@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import type { Dirent } from 'node:fs';
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
@@ -21,6 +21,7 @@ import { isErrno } from '../src/core/errors.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { cachedNpmInstallArguments, linkWorkspaceTypes, sharedPackedTarball } from './support/shared-pack.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 interface PackageManifest {
   bin: {
@@ -225,7 +226,7 @@ beforeAll(async () => {
       { cwd: warmRoot, env: isolatedCommandEnvironment() },
     );
   } finally {
-    await rm(warmRoot, { force: true, recursive: true });
+    await removeTree(warmRoot);
   }
 }, 180_000);
 
@@ -257,7 +258,7 @@ it('writes the package version as the producer of a packed CLI manifest', async 
       version: manifest.version,
     });
   } finally {
-    await rm(consumerRoot, { force: true, recursive: true });
+    await removeTree(consumerRoot);
   }
 }, 30_000);
 
@@ -294,7 +295,7 @@ it('installs one Rspack engine into a packed consumer', async () => {
     expect(bindings, report).toHaveLength(1);
     expect(bindings[0]!.version, report).toBe(installed('@rspack/core')[0]!.version);
   } finally {
-    await rm(consumerRoot, { force: true, recursive: true });
+    await removeTree(consumerRoot);
   }
 }, 30_000);
 
@@ -376,7 +377,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
     const aliasedRuntime = await readFile(join(installedDist, 'mcp-server-runtime.d.ts'), 'utf8');
     expect(aliasedRuntime).toContain('GeneratedNoticeDeliveryBinding');
   } finally {
-    await rm(consumerRoot, { force: true, recursive: true });
+    await removeTree(consumerRoot);
   }
 }, 30_000);
 
@@ -414,7 +415,7 @@ it('runs the packed App client through a dynamic-origin parent', async () => {
 
     expect(JSON.parse(stdout)).toEqual({ active: 0, status: 'healthy' });
   } finally {
-    await rm(consumerRoot, { force: true, recursive: true });
+    await removeTree(consumerRoot);
   }
 }, 30_000);
 
@@ -496,6 +497,6 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
       server: { name: 'packed-fixture', version: '1.0.0' },
     });
   } finally {
-    await rm(consumerRoot, { force: true, recursive: true });
+    await removeTree(consumerRoot);
   }
 }, 30_000);

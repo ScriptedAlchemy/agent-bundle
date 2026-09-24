@@ -19,6 +19,7 @@ import {
   type PackOutput,
 } from '../src/build/pack-inventory.ts';
 import type { PackageBuildResult } from '../src/build/package-build.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceNodeModules = join(process.cwd(), 'node_modules');
@@ -77,7 +78,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(cleanupRoot, { force: true, recursive: true });
+  await removeTree(cleanupRoot);
 });
 
 const diagnostics = (
@@ -492,7 +493,7 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     for (const name of ['alias', 'tilde', 'versioned', 'embedded', 'vendored', 'tarred']) {
       expect(reported[0]?.message).not.toContain(JSON.stringify(name));
     }
-    await rm(join(projectRoot, 'dist', 'vendor'), { force: true, recursive: true });
+    await removeTree(join(projectRoot, 'dist', 'vendor'));
     expect(reported[0]?.recovery).toContain('registry');
 
     const underPnpm = withCode(await diagnostics(pack, true), 'AB7015');
@@ -571,7 +572,7 @@ it('accepts a dependency a consumer install script names or runs, through delega
         },
       );
     } finally {
-      await rm(wrapper, { force: true, recursive: true });
+      await removeTree(wrapper);
     }
   },
 ));
@@ -594,7 +595,7 @@ it('reads a dependency whose installed manifest is not JSON as an unknown execut
       expect(unused?.message).not.toContain('"broken-dep"');
       expect(withCode(reported, 'AB7015')).toHaveLength(0);
     } finally {
-      await rm(broken, { force: true, recursive: true });
+      await removeTree(broken);
     }
   },
 ));
@@ -618,7 +619,7 @@ it('reads an installed manifest as npm does, so the last of duplicate name keys 
       expect(skipped?.severity).toBe('error');
       expect(withCode(reported, 'AB7014')).toHaveLength(0);
     } finally {
-      await rm(dup, { force: true, recursive: true });
+      await removeTree(dup);
     }
   },
 ));
@@ -636,7 +637,7 @@ it('surfaces a warning when the only finding is an unresolvable optional depende
       expect((await diagnostics(pack)).map((diagnostic) => [diagnostic.code, diagnostic.severity]))
         .toEqual([['AB7015', 'warning']]);
     } finally {
-      await rm(extras, { force: true, recursive: true });
+      await removeTree(extras);
     }
   },
 ));
@@ -794,7 +795,7 @@ it('installs a real generated tarball and runs its manifest-driven Cursor instal
   await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(tarballs, packed.filename)], {
     cwd: consumer,
   });
-  await rm(projectRoot, { force: true, recursive: true });
+  await removeTree(projectRoot);
 
   const installer = join(consumer, 'node_modules', 'installer-fixture', 'install.mjs');
   const installed = await execFile(process.execPath, [installer], {

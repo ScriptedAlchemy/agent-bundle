@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -18,6 +18,7 @@ import {
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { stableJson } from '../src/core/digest.ts';
 import { readBundleIdentity, type BundleIdentityHost } from '../src/install/identity.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 /**
  * Relocatable-path proof for `agent-bundle.manifest.json` (#592 step 3 / #604
@@ -186,7 +187,7 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 it('emits a relocatable manifest that survives moving the composite root', async () => {

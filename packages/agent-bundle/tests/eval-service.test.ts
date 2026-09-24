@@ -14,6 +14,7 @@ import { evalCaseFromDraft } from '../src/eval/index.ts';
 import { EvalRunWriter } from '../src/eval/run-store.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const service = (root: string): EvalService => new EvalService({ projectRoot: root, targets: ['portable'] });
 
@@ -369,7 +370,7 @@ it('fails closed when an ancestor of a persisted raw artifact becomes a symlink'
     const outside = join(project.root, 'outside-artifacts');
     await mkdir(outside);
     await writeFile(join(outside, 'evidence.json'), '{"substituted":true}\n');
-    await rm(artifactDirectory, { force: true, recursive: true });
+    await removeTree(artifactDirectory);
     await symlink(outside, artifactDirectory);
 
     let opened: Awaited<ReturnType<typeof evals.openArtifact>> | undefined;
@@ -482,7 +483,7 @@ it('fails closed without a filesystem path when a run root is swapped after pers
     const directory = join(project.root, '.agent-bundle', 'runs', created.run.id);
     const outside = join(project.root, 'swapped-run');
     await mkdir(outside);
-    await rm(directory, { force: true, recursive: true });
+    await removeTree(directory);
     await symlink(outside, directory);
 
     await expect(evals.openArtifact(created.run.id, ref)).rejects.toMatchObject({

@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,11 +13,12 @@ import type { McpAppJsonValue } from '../src/contracts/mcp-apps.ts';
 import type { AppSelection, AppSelectionSource, OpenAppRequest } from '../src/web-host/select-app.ts';
 import type { StdioAppSession, StdioLaunch } from '../src/web-host/session.ts';
 import { deferred, eventually } from './support/eventually.ts';
+import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map((root) => removeTree(root)));
 });
 
 const statusApp: WebManifestApp = Object.freeze<WebManifestApp>({

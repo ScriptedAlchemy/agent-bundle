@@ -64,15 +64,14 @@ pnpm changeset
 ```
 
 选择受影响的包与版本级别，并从读者的角度描述这次改动——changeset 是发布说明的文案，不是提交信息。
-`pnpm version-packages` 应用待处理的 changeset，而发布会在 `changeset publish` 之前先运行
-`pnpm check:release`。私有工作区包，包括示例与本站点，不参与版本管理，也不打标签。
+`pnpm version-packages` 应用待处理的 changeset；合并 Version Packages 后，会先解析 pkg.pr.new
+预览，再运行 `pnpm check:release`。私有工作区包，包括示例与本站点，不参与版本管理。
 
-目前还没有任何东西发布到 npm。当前的发布通道是 pkg.pr.new 预览 tarball，见
+包分发通道是 pkg.pr.new 预览 tarball，见
 [预览包](../guide/distribution/preview-packages.mdx)。
 每次 `Release packages` 运行都会在工作流摘要中写出明确结果：`version-maintenance-only`
-（刷新了 Version Packages PR）、`published`（每个可发布包的 `package.json` 版本都能在 npm 上解析；
-阶段列表会说明是本次运行发布的，还是版本此前已在注册表上）或 `failed`。若合并 Version Packages 后版本不在 npm 上——未启用发布、缺少 token，或 `changeset publish`
-静默失败——结果为 `failed` 且写明 **NOT PUBLISHED**，绝不会是绿色的资格认定。
+（刷新了 Version Packages PR）、`preview-release`（merge commit 通过发布门禁，且全部四个按 commit
+固定的 pkg.pr.new URL 都可解析）或 `failed`。
 
 ## 原生宿主 smoke 需要显式开启
 
@@ -90,8 +89,9 @@ pnpm test:host-install:session:claude
 而不是报告一个它没有挣到的通过。这条边界正是[测试](../guide/development/testing.mdx)中证明级别的全部
 意义所在：一个级别绝不会被当作更强级别的收据来报告。
 
-依赖审查、包预览与发布工作流出于结构性原因只在托管侧运行——第一项要针对 pull request 的 diff 查询
-GitHub 的安全公告数据库，另外两项是发布的副作用，而不是检查。
+依赖审查、包预览与 Release packages 工作流出于结构性原因只在托管侧运行——第一项要针对 pull
+request 的 diff 查询 GitHub 的安全公告数据库，另外两项会发布到 pkg.pr.new；Release packages 还会
+验证远程 commit URL。
 
 ## 开发 Workbench 界面
 

@@ -184,7 +184,8 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 
 输出的独立 `install.mjs` 接受同样的 `--replace`。Cursor 副本携带安装回执
 （`.agent-bundle-install.json`），替换只触碰归属文件，`--replace` 会接管回执出现之前的副本；Claude 的替换
-先运行 `claude plugin uninstall --keep-data` 再重新安装，Codex 则先 `codex plugin remove` 再 `add`。
+先运行 `claude plugin uninstall --keep-data` 再重新安装。Codex 的替换只执行 `codex plugin add`，以便保留插件设置与嵌套
+MCP 覆盖。已禁用或启用状态未知的 Codex 替换会被拒绝（`AB7004`），因为原生 plugin CLI 没有可保留设置的合格更新 API。
 每次安装都会写入生命周期回执（格式 `agent-bundle-install-receipt/2`：版本、内容哈希、模式、作用域、归属路径、
 宿主注册、时间戳）——Cursor 与 Amp 本地副本写在树内，Claude、Codex 与 Cursor 市场模式写在
 `<宿主根目录>/agent-bundle/receipts/` 下——`uninstall` 与 `doctor` 都消费它。
