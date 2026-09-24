@@ -1282,7 +1282,7 @@ const validateBin = (loaded: LoadedConfig): Diagnostic[] => {
 };
 
 const outputShapeRecovery =
-  'Declare output.distPath as a non-empty project-root-relative path string, output.sourceMap as a boolean, or remove the output block.';
+  'Declare output.distPath as a non-empty project-root-relative path string, output.sourceMap and output.repositoryMarketplace as booleans, or remove the output block.';
 const outputPathRecovery =
   'Use a project-root-contained relative POSIX path; pass the CLI --output flag for per-invocation absolute locations.';
 const outputReservedRecovery =
@@ -1294,12 +1294,20 @@ const validateOutput = (loaded: LoadedConfig): Diagnostic[] => {
   if (!isArtifactOutputConfig(output)) {
     return [sourceDiagnostic(
       'AB4707',
-      'Output configuration must be an object with optional distPath and sourceMap fields.',
+      'Output configuration must be an object with optional distPath, sourceMap, and repositoryMarketplace fields.',
       loaded.configPath,
       outputShapeRecovery,
     )];
   }
   const diagnostics: Diagnostic[] = [];
+  if (Object.hasOwn(output, 'repositoryMarketplace') && typeof output.repositoryMarketplace !== 'boolean') {
+    diagnostics.push(sourceDiagnostic(
+      'AB4707',
+      'Output repositoryMarketplace must be a boolean when declared.',
+      loaded.configPath,
+      'Set output.repositoryMarketplace to true to emit repository-root marketplaces, or remove it.',
+    ));
+  }
   if (Object.hasOwn(output, 'sourceMap') && typeof output.sourceMap !== 'boolean') {
     diagnostics.push(sourceDiagnostic(
       'AB4707',
