@@ -123,6 +123,25 @@ Default state projection budgets are 5,000 ms per commit, 262,144 bytes per even
 of state, and 100,000 revisions. `agent-bundle inspect --state` reports the resolved driver,
 lifetime, durable location, and budget source for each definition.
 
+### Stores written before the current SQLite layout
+
+The driver reads only the layout it writes today. It neither adopts nor migrates a store written
+before that layout, in either of two ways.
+
+A database under the pre-#201 file name, whose suffix was the state id's own leading bytes in hex
+rather than a SHA-256 digest, is never opened. The driver leaves the old file untouched and
+creates a new, empty store beside it under the current name, so the old data is still on disk and
+simply unread.
+
+A database under the current file name whose `agent_state_journal` table differs from the one the
+driver creates fails at open with a `corrupt` `AgentStateError` naming the table. Column names,
+their order, and their `NOT NULL` flags all count, so a journal whose `result_state` column is
+nullable, as an older runtime's `ALTER TABLE` left it, is rejected before any row is read.
+
+Recover from either by deleting the stale database files, each `*.sqlite` plus its `-wal` and
+`-shm` sidecars, or the whole state root. The next launch creates a fresh store at the definition's
+initial state. Nothing reconstructs the old history.
+
 ## Next
 
 - [Security](./security.mdx): the credential and network boundaries around these processes.
