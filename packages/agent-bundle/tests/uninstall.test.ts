@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -17,7 +17,7 @@ import {
   readInstallReceipt,
   readInstallReceiptFile,
 } from '../src/install/receipt.ts';
-import { recordInstalledState } from '../src/install/state-root.ts';
+import { installedWebDataRoot, recordInstalledState } from '../src/install/state-root.ts';
 import { uninstallBundle, type UninstallResult } from '../src/install/uninstall.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
@@ -1278,9 +1278,26 @@ it.each([
     const missing = await failureOf(uninstallBundle(options));
     expect(missing.diagnostics[0]).toMatchObject({ code: 'AB7009', target: host });
     expect(calls.map((call) => call.args.join(' '))).toEqual(['plugin list --json']);
+    // --force never extends to durable data: without a receipt nothing proves the web-data or Claude's plugins/data
+    // are this bundle's, so a forced purge is refused before any host verb runs and the data survives.
+    const unprovenData = [
+      installedWebDataRoot(installPath, fixture.home),
+      ...(host === 'claude' ? [join(hostRoot, 'plugins', 'data', 'uninstall-fixture@uninstall-fixture-marketplace')] : []),
+    ];
+    for (const path of unprovenData) await writeJson(join(path, 'data.json'), { owner: 'unknown' });
+    calls.length = 0;
+    const forcedPurge = await failureOf(uninstallBundle({ ...options, confirmPurge: true, force: true, purgeData: true }));
+    expect(forcedPurge.diagnostics[0]).toMatchObject({ code: 'AB7009', target: host });
+    expect(forcedPurge.diagnostics[0]?.message).toContain('Refusing --purge-data');
+    expect((await failureOf(uninstallBundle({ ...options, confirmPurge: true, force: true, plan: true, purgeData: true }))).diagnostics[0])
+      .toMatchObject({ code: 'AB7009' });
+    expect(calls.map((call) => call.args.join(' '))).toEqual(['plugin list --json', 'plugin list --json']);
+    for (const path of unprovenData) await access(join(path, 'data.json'));
     calls.length = 0;
     const forced = await uninstallBundle({ ...options, force: true });
     expect(forced).toMatchObject({ forced: true, receipt: { status: 'forced-missing' }, state: 'uninstalled' });
+    for (const path of unprovenData) await access(join(path, 'data.json'));
+    for (const path of unprovenData) await removeTree(path);
     // Without a receipt nothing proves Agent Bundle registered the marketplace, so --force removes the plugin only
     // and retains the marketplace, naming the verb to run by hand.
     expect(forced.registrations).toEqual([

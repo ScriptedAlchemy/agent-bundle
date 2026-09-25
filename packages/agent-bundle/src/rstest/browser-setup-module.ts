@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 
 import type { CompiledMcpApp } from '../build/mcp-apps.ts';
 import { MAX_APP_HTML_BYTES } from '../core/mcp-app-limits.ts';
@@ -11,6 +10,7 @@ import {
   type CompiledBrowserTestApp,
 } from '../test/browser-registry.ts';
 import { BROWSER_APP_PROOF_LEVEL, proofLevelLabel } from '../test/manifest.ts';
+import { writeGeneratedTestModule } from './generated-module.ts';
 
 const compiledEntry = async (app: CompiledMcpApp, host: string): Promise<CompiledBrowserTestApp> => {
   const html = await readFile(app.output, 'utf8');
@@ -65,8 +65,5 @@ export const writeBrowserTestSetup = async (
     apps,
     version: AGENT_BROWSER_TEST_REGISTRY_VERSION,
   });
-  const target = resolve(projectRoot, '.agent-bundle', 'test', 'browser-app-setup.mjs');
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, browserTestSetupSource(registry), 'utf8');
-  return target;
+  return writeGeneratedTestModule(projectRoot, 'browser-app-setup.mjs', browserTestSetupSource(registry));
 };

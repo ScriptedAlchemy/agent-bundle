@@ -2956,6 +2956,12 @@ export const runHostUninstallProof = async (
       await access(join(installedRoot, 'INSTALL.md')).catch(() => fail('Cursor refused a foreign uninstall but removed files anyway.'));
       await removeTree(installedRoot);
     } else {
+      // --force does not extend to durable data: without a store receipt a purge is refused before any host verb runs.
+      await expectRefusal(
+        lifecycle('uninstall', ['--force', '--purge-data', '--confirm-purge']),
+        'AB7009',
+        `${host} uninstall --force --purge-data without a receipt`,
+      );
       // A host-CLI install with no store receipt is `forced-missing`: --force removes what the host lists as this plugin's.
       const forced = await uninstall(['--force']);
       assertProof(

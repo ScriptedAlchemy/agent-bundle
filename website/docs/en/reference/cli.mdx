@@ -228,7 +228,7 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
 | `--keep-data` | on | Keep every recorded framework state root, derived web-data, and a recorded Cursor `PLUGIN_DATA` directory. This is the default; the flag makes it explicit and preserves the ownership receipt for a later purge. |
 | `--purge-data` | off | Remove only receipt-recorded, installation-owned durable-data roots. Refused (`AB7008`) without `--confirm-purge`; shared, externally managed, marker-less, foreign-marker, and otherwise unproven roots are retained and listed. |
-| `--force` | off | Proceed without a store receipt for a host-registered install (Claude/Codex, staged Cursor marketplace) or when owned content, version, or staged `HEAD` no longer matches the receipt. A Cursor local directory without a receipt, or a receipt or manifest naming another plugin, is foreign and refused regardless (`AB7007`). |
+| `--force` | off | Proceed without a store receipt for a host-registered install (Claude/Codex, staged Cursor marketplace) or when owned content, version, or staged `HEAD` no longer matches the receipt. A Claude/Codex copy without a store receipt keeps its data: `--force --purge-data --confirm-purge` is refused (`AB7009`). A Cursor local directory without a receipt, or a receipt or manifest naming another plugin, is foreign and refused regardless (`AB7007`). |
 | `--plan` | off | Print the exact paths and host registrations that would be removed and change nothing. |
 
 Uninstall removes exactly what the receipt owns: the recorded files and installer-created
