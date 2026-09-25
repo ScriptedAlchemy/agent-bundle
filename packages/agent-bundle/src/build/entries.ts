@@ -458,27 +458,23 @@ export const planMcpEntriesSurface = async (
         ...(options.state === undefined ? {} : { state: options.state }),
       });
   });
-  // Factory-exporting entries (default export) are wrapped in the framework
-  // stdio lifecycle shell; self-connecting entries keep today's behavior byte
-  // for byte. The shell is aliased onto the local runtime module so emitted
-  // bundles stay self-contained (no residual `agent-bundle` import).
-  const entryShells = await Promise.all(compiled.map(async (entry, index) => {
+  // Every local entry default-exports a server factory (AB4730) and is wrapped
+  // in the framework stdio lifecycle shell. The shell is aliased onto the local
+  // runtime module so emitted bundles stay self-contained (no residual
+  // `agent-bundle` import).
+  const entryShells = compiled.map((entry, index) => {
     const serverName = entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name;
-    if (generatedRouteSources[index] !== undefined) {
-      return generatedStdioMcpEntrySource({ entrySource: routeModuleSpecifier, serverName });
-    }
-    return (await scanEntryExports(entry.source)).hasDefaultExport
-      ? generatedStdioMcpEntrySource({ entrySource: entry.source, serverName })
-      : undefined;
-  }));
-  const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
+    return generatedStdioMcpEntrySource({
+      entrySource: generatedRouteSources[index] === undefined ? entry.source : routeModuleSpecifier,
+      serverName,
+    });
+  });
+  const runtimeShell = mcpEntryRuntimePath();
   // The operator `.env` layer (#469) is public API for every stdio entry: the
-  // shell's prelude applies it ahead of the server module, and a
-  // self-connecting entry — which has no shell — imports
-  // `agent-bundle/launch-env` and calls `applyOperatorEnv` itself. The alias
-  // is unconditional so that import resolves to this package's plain-Node
-  // module and can never be externalized; the bundler inlines it only where
-  // an import reaches it, so an entry that never imports it is unchanged.
+  // shell's prelude applies it ahead of the server module. The alias is
+  // unconditional so that import resolves to this package's plain-Node module
+  // and can never be externalized; the bundler inlines it only where an import
+  // reaches it, so an entry that never imports it is unchanged.
   const launchEnvRuntime = launchEnvRuntimePath();
   const eventIpcRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('ipc');
   const eventProjectRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('project');
@@ -488,22 +484,18 @@ export const planMcpEntriesSurface = async (
   const mainEntries = compiled.map(({ id, name, source, sourceInputs }, index) => ({
     aliases: {
       [launchEnvRuntimeSpecifier]: launchEnvRuntime,
-      ...(entryShells[index] === undefined || runtimeShell === undefined
+      [mcpEntryRuntimeSpecifier]: runtimeShell,
+      ...(!hostsRuntime(id) || eventIpcRuntime === undefined || eventProjectRuntime === undefined
         ? {}
         : {
-          [mcpEntryRuntimeSpecifier]: runtimeShell,
-          ...(!hostsRuntime(id) || eventIpcRuntime === undefined || eventProjectRuntime === undefined
-            ? {}
-            : {
-              [eventIpcRuntimeSpecifier]: eventIpcRuntime,
-              [eventProjectRuntimeSpecifier]: eventProjectRuntime,
-            }),
-          ...(generatedRouteSources[index] === undefined || serverRuntime === undefined
-            ? {}
-            : { [mcpServerRuntimeSpecifier]: serverRuntime }),
+          [eventIpcRuntimeSpecifier]: eventIpcRuntime,
+          [eventProjectRuntimeSpecifier]: eventProjectRuntime,
         }),
+      ...(generatedRouteSources[index] === undefined || serverRuntime === undefined
+        ? {}
+        : { [mcpServerRuntimeSpecifier]: serverRuntime }),
     },
-    ...(entryShells[index] === undefined ? {} : { virtualSource: entryShells[index] }),
+    virtualSource: entryShells[index],
     name,
     outputRelativePath: `mcp/${name}.mjs`,
     ...(generatedRouteSources[index] === undefined ? {} : { rscManifest: true as const }),
@@ -522,11 +514,8 @@ export const planMcpEntriesSurface = async (
       }]),
       // The shell's prelude — stdout guard, then the operator `.env` layer
       // (#469) — carries the server's manifest `env` block, so the layer can
-      // tell a passed-through default from a host export; a self-connecting
-      // entry has no shell and applies the layer itself if it wants it.
-      ...(entryShells[index] === undefined
-        ? []
-        : [stdioPreludeVirtualModule(servers.find((candidate) => candidate.id === id)?.env)]),
+      // tell a passed-through default from a host export.
+      stdioPreludeVirtualModule(servers.find((candidate) => candidate.id === id)?.env),
     ],
   }));
   const workerEntries = compiled.flatMap((entry, index) => {

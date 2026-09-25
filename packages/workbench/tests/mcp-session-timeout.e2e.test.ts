@@ -22,11 +22,12 @@ const writeTimeoutProject = async (root: string): Promise<void> => {
     writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
-      "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
       '',
-      "const server = new McpServer({ name: 'timeout-fixture', version: '1.0.0' });",
-      "server.registerTool('inspect', {}, async () => ({ content: [{ text: 'ready', type: 'text' }] }));",
-      'await server.connect(new StdioServerTransport());',
+      'export default () => {',
+      "  const server = new McpServer({ name: 'timeout-fixture', version: '1.0.0' });",
+      "  server.registerTool('inspect', {}, async () => ({ content: [{ text: 'ready', type: 'text' }] }));",
+      '  return server;',
+      '};',
       '',
     ].join('\n')),
     writeFile(join(root, 'agent-bundle.config.ts'), [
