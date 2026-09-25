@@ -647,11 +647,12 @@ A local MCP server entry module (explicit `entry:` or the conventional
 in the framework stdio lifecycle shell (console-to-stderr guard,
 SIGINT/SIGTERM, stdin-EOF exit, bounded shutdown, heartbeat), and the shell
 calls the module's default export to build the server, so a module without
-one cannot be built. The detection is the same static default-export scan the
-build uses, so the diagnostic and the build always agree. A CommonJS entry's
-top-level `module.exports = <factory>` counts as that default export, because
-the bundler exposes the assigned value as the module's `default`; a narrower
-`exports.foo = …` or `module.exports.foo = …` does not.
+one cannot be built. Validation finds the default export with a static scan of
+the entry's top-level statements. A CommonJS entry's top-level
+`module.exports = <factory>` counts as that default export, because the
+bundler exposes the assigned value as the module's `default`, unless the file
+declares its own `module` binding. A narrower `exports.foo = …` or
+`module.exports.foo = …` does not count.
 
 Recover: default-export the server factory from the entry module, or declare
 a prebuilt server with `command` or `url`, which the framework launches

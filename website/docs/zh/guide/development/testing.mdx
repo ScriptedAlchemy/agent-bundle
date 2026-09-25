@@ -312,8 +312,8 @@ export const matrix = async (): Promise<void> => {
 };
 ```
 
-资源路由的 fixture，以及 `apps: 'explicit'` 下 MCP App 路由的 fixture，必须恰好是
-`{ kind: 'resource' }`。写成空的 `{}` 会让该路由的 `coverage` 检查以
+资源路由的 fixture，以及 `apps: 'explicit'` 下 MCP App 路由的 fixture，必须设置
+`kind: 'resource'`。写成空的 `{}` 会让该路由的 `coverage` 检查以
 `resource/app route fixture must be { kind: "resource" }` 失败；仅有键名并不算覆盖该路由。反过来，
 工具、prompt 与命令行路由拒绝这个 `kind`，它们的 fixture 携带的是 `input`。
 

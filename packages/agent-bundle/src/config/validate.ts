@@ -3,7 +3,7 @@ import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } fr
 
 import { capabilityIsSupported, cliBinCapability, webSurfaceCapability } from '../adapters/capability-state.ts';
 import { builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts';
-import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
+import { assignsModuleExportsSource, type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
 import { externalizedSpecifiers } from '../build/external-policy.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
@@ -616,10 +616,8 @@ const relativePosix = toPosixRelative;
 
 /**
  * AB4730: every local stdio entry is wrapped in the framework stdio lifecycle
- * shell, which imports the entry's default export as its server factory (a
- * CommonJS entry's `module.exports` is that default under bundling). The
- * detection is the same static export scan the build uses to build the wrap,
- * so the diagnostic and the build always agree.
+ * shell, which imports the entry's default export as its server factory. A
+ * CommonJS entry's top-level `module.exports` is that default under bundling.
  */
 const missingServerFactoryErrors = (
   name: string,
@@ -634,7 +632,8 @@ const missingServerFactoryErrors = (
     : conventionalEntry;
   if (source === undefined || !bundleScriptExtensions.has(extname(source).toLowerCase())) return [];
   try {
-    if (scanEntryExportsSource(readFileSync(source, 'utf8'), source).hasDefaultExport) return [];
+    const text = readFileSync(source, 'utf8');
+    if (scanEntryExportsSource(text, source).hasDefaultExport || assignsModuleExportsSource(text, source)) return [];
   } catch {
     // An unreadable entry is already reported by the existence diagnostics.
     return [];

@@ -361,8 +361,8 @@ export const matrix = async (): Promise<void> => {
 };
 ```
 
-A resource route's fixture, and an MCP App route's fixture under `apps: 'explicit'`, must be
-exactly `{ kind: 'resource' }`. A bare `{}` entry fails that route's `coverage` check with
+A resource route's fixture, and an MCP App route's fixture under `apps: 'explicit'`, must set
+`kind: 'resource'`. A bare `{}` entry fails that route's `coverage` check with
 `resource/app route fixture must be { kind: "resource" }`; the key alone does not cover the route.
 The same `kind` is refused on a tool, prompt, or CLI route, whose fixtures carry `input` instead.
 
