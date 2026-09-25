@@ -4,8 +4,8 @@ pkg.pr.new is the only package distribution channel. Every CI package-preview
 run publishes real, installable tarballs of all four publishable workspace
 packages (`agent-bundle`,
 `@agent-bundle/runtime`, `rsc-markdown-stream`, `create-agent-bundle`) to
-[pkg.pr.new](https://pkg.pr.new)
-— a free continuous-release registry keyed by commit SHA and pull request.
+[pkg.pr.new](https://pkg.pr.new),
+a free continuous-release registry keyed by commit SHA and pull request.
 Consumers pin these previews by commit SHA; no npm registry credential is
 needed or expected.
 
@@ -38,7 +38,7 @@ A scaffolded project pins `agent-bundle` to the preview of the same commit
 the scaffolder came from, so both sides of the pairing rule below hold
 automatically.
 
-`@1` resolves to the last preview published for PR #1 — commit `5685521` at the
+`@1` resolves to the last preview published for PR #1, commit `5685521` at the
 time of its merge, which is the state that landed on `main`.
 
 ## Pin an exact commit
@@ -64,7 +64,7 @@ the optional compiler/runtime release-pair record declared by
 peer). A regular `dependencies` entry that names a sibling workspace package
 is rewritten to that sibling's same-sha tarball URL: `@agent-bundle/runtime`'s
 `rsc-markdown-stream` dependency resolves to the renderer preview of the same
-commit. Installing both packages from the same sha therefore works with stock npm — no
+commit. Installing both packages from the same sha therefore works with stock npm, no
 `--legacy-peer-deps` needed. Mixing two different shas fails with `ERESOLVE`
 by design; use one sha (or one PR number) for both URLs. Previews published
 before the peer rewrite landed (PR #46, fixing #45) still carry the original

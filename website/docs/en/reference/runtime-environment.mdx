@@ -13,15 +13,15 @@ The compiler and the Workbench need **Node.js 22.19 or later**; generated execut
 
 ## Host path tokens
 
-Generated documents reference the plugin root — the composite root every selected host loads —
+Generated documents reference the plugin root, the composite root every selected host loads,
 through the token each host substitutes, and the compiler writes the right spelling into each
 host's own documents rather than assuming one:
 
 | Host | Plugin root | Plugin data |
 | --- | --- | --- |
 | Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
-| Cursor | `${CURSOR_PLUGIN_ROOT}` | — (rejected: no documented host equivalent) |
-| Codex | `${PLUGIN_ROOT}` (hook commands only) | — (rejected: no documented host equivalent) |
+| Cursor | `${CURSOR_PLUGIN_ROOT}` | none (rejected: no documented host equivalent) |
+| Codex | `${PLUGIN_ROOT}` (hook commands only) | none (rejected: no documented host equivalent) |
 | portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
 
 Substitution is **positional, not global**. Codex's `${PLUGIN_ROOT}` is the command root of its
@@ -31,7 +31,7 @@ value and the server's `cwd` is the plugin root, in which case the compiler rewr
 `./`-relative path under `cwd: "./"`; an embedded token, a token without that `cwd`, or any
 plugin-data or workspace-root token is a build error. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` and
 its siblings in Skill and agent content, hook and monitor commands, MCP servers, and LSP servers
-only — never in `settings.json`, which is why `claude.settings` rejects path tokens outright.
+only, never in `settings.json`, which is why `claude.settings` rejects path tokens outright.
 Cursor's pinned loader has its own substituted-field table, and a token outside it reports
 `AB6028` at build time and `AB7320` from Doctor.
 
@@ -39,7 +39,7 @@ Cursor's pinned loader has its own substituted-field table, and a token outside 
 
 | Variable | Read by | Meaning |
 | --- | --- | --- |
-| `AGENT_BUNDLE_PLUGIN_ROOT` | Generated executables | The plugin code root — the composite plugin root, the directory holding the host manifests, `mcp/`, `hooks/`, and `bin/`. Overrides the built-in fallback; surfaced to routes and providers as `(await agent()).plugin.value.root` (`source: 'native'`). An unexpanded `${…}` token is treated as unset. |
+| `AGENT_BUNDLE_PLUGIN_ROOT` | Generated executables | The plugin code root, the composite plugin root, the directory holding the host manifests, `mcp/`, `hooks/`, and `bin/`. Overrides the built-in fallback; surfaced to routes and providers as `(await agent()).plugin.value.root` (`source: 'native'`). An unexpanded `${…}` token is treated as unset. |
 | `AGENT_BUNDLE_STATE_ROOT` | Generated executables | The framework state root: the exact directory where the SQLite state kernel, notice ledger, and lineage journal live. Overrides the derived location. An unexpanded `${…}` token is treated as unset. |
 | `XDG_STATE_HOME` | Generated executables | When set to an absolute path (a relative value is ignored, per the base-directory spec), the derived state root is `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>` instead of `~/.agent-bundle/state/<plugin>-<digest>`. |
 | `AGENT_BUNDLE_ENV_FILE` | Generated executables | The operator env file(s) an installed pack reads at launch instead of `<plugin root>/.env` and `.env.local`: one path, or several joined by the platform path delimiter, later files winning; `none` disables the layer. `mcp run` sets it for its child from `--env-file` / `--no-env`. |
@@ -64,8 +64,8 @@ part of an ordinary test run.
 2. The **`.env` file layer**.
 3. The operator's real `process.env`, so an exported variable always wins.
 
-The `.env` layer is the conventional Rsbuild set at the project root (the runtime calls this the
-workspace root) — `.env`, `.env.local`, `.env.<mode>`, `.env.<mode>.local` — unless
+The `.env` layer is the conventional Rsbuild set (`.env`, `.env.local`, `.env.<mode>`,
+`.env.<mode>.local`) at the project root, which the runtime calls the workspace root, unless
 `--env-file <path>` replaces it with exactly the files you name, or `--no-env` removes it. The two flags are mutually exclusive. Files are read into a
 scratch object, so the real `process.env` is never mutated.
 
@@ -74,7 +74,7 @@ scratch object, so the real `process.env` is never mutated.
 A host launches an installed pack directly, so the pack's own shells apply the same layer
 themselves: the stdio MCP entries, the hook wrappers that run plugin code, and the artifact CLI
 `bin/<name>.mjs` read `<plugin root>/.env` then `.env.local` at launch (or the files
-`AGENT_BUNDLE_ENV_FILE` names), filling only variables the host did not set — an exported variable
+`AGENT_BUNDLE_ENV_FILE` names), filling only variables the host did not set, an exported variable
 wins, a manifest `env` default the host passed through yields to the file (the stdio entry carries
 its server's declared block to tell the two apart), `.env.local` beats `.env`, values are never
 logged, a missing file costs nothing, an unreadable one is skipped. The layer is applied before the
@@ -89,8 +89,8 @@ variable count of each file (`AB7331`). Details and the precedence table:
 
 ## Durable state
 
-Installed artifacts — the MCP entry, Flight worker, artifact CLI bin, render worker, and standalone
-hook wrappers — derive `~/.agent-bundle/state/<plugin>-<digest>` as their framework state root.
+Installed artifacts, the MCP entry, Flight worker, artifact CLI bin, render worker, and standalone
+hook wrappers, derive `~/.agent-bundle/state/<plugin>-<digest>` as their framework state root.
 `<plugin>` is the code root's basename, or `plugin` when that basename is not a safe path segment;
 `<digest>` is the first 16 hexadecimal characters of the SHA-256 digest of the code root's real
 path. Two installs therefore never share state, and a read-only install launches. `XDG_STATE_HOME`
@@ -100,17 +100,17 @@ package bin keeps `./.agent-bundle/state`.
 Only a `workspace-durable` state definition uses the SQLite driver; other lifetimes use the
 in-memory driver and keep nothing on disk. Every generated process resolves the code root and state
 root exactly once (`resolvePluginRoot` from `@agent-bundle/runtime`) and publishes them as
-`(await agent()).plugin` — `{ root, stateRoot }` — so a route or provider that keeps its own files
+`(await agent()).plugin`, `{ root, stateRoot }`, so a route or provider that keeps its own files
 beside the framework's reads `plugin.value.stateRoot` instead of re-deriving the path.
 
 Under `mcp run`, plugin-root anchors in **env values** expand to the project root by default,
 not the artifact: the artifact is an ephemeral build product there, and anchoring durable state on
 it would fragment that state on every rebuild. Pass `--plugin-root <path>` pointing at the
-artifact root itself — the composite plugin root, not a host subdirectory — for a byte-faithful
+artifact root itself, the composite plugin root, not a host subdirectory, for a byte-faithful
 rehearsal of a copied-artifact launch. The state root then derives from that expanded code root
 (`~/.agent-bundle/state/<project>-<digest>`) unless `AGENT_BUNDLE_STATE_ROOT` names one.
 Workbench MCP sessions and Workbench route invocations launched by `agent-bundle dev` pin
-`AGENT_BUNDLE_STATE_ROOT` to `<project>/.agent-bundle/state` instead — one state root per project,
+`AGENT_BUNDLE_STATE_ROOT` to `<project>/.agent-bundle/state` instead, one state root per project,
 beside the build epochs rather than inside them, so it survives republishes and epoch retirement
 without accumulating one user-data directory per rebuild. The warm dev runtime itself does not set
 that variable.
@@ -125,5 +125,5 @@ lifetime, durable location, and budget source for each definition.
 
 ## Next
 
-- [Security](./security.mdx) — the credential and network boundaries around these processes.
-- [CLI](./cli.mdx) — the flags referenced above.
+- [Security](./security.mdx): the credential and network boundaries around these processes.
+- [CLI](./cli.mdx): the flags referenced above.

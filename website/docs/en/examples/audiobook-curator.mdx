@@ -30,11 +30,11 @@ those features, not the build. This example has no hooks.
   handwritten `src/mcp/curator.ts`, no per-operation server selector, and no `routes` setting.
   Every tool uses `defineTool` to keep its metadata, schemas, and handler in one definition.
 - **One operation, one command.** Every tool has a colocated
-  [`<tool>.cli.ts` projection](../guide/authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command)
-  — `search_audible.cli.ts` spells the tool as `audible-search`, `--duration`, and a
+  [`<tool>.cli.ts` projection](../guide/authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command),
+  `search_audible.cli.ts` spells the tool as `audible-search`, `--duration`, and a
   comma-separated or repeatable `--regions`; `prepare_audiobook.cli.ts` spells `outputRoot` as
   `--output`; and `convert_audiobook.cli.ts` keeps its nested conversion contract whole behind
-  `--input` — so the compiled graph carries exactly 16 CLI commands, each with the tool's own
+  `--input`, so the compiled graph carries exactly 16 CLI commands, each with the tool's own
   identity (`tool:curator/<tool>`). There is no `src/cli/` directory and no
   `audiobook-curator curator <tool> --input` twin: the projection is the command. Every
   projection declares `confirm: false` because the plan-first commands gate their mutation on
@@ -44,8 +44,8 @@ those features, not the build. This example has no hooks.
   the same document, so a tool and its command cannot drift into two presenters.
 - **Markdown blocks are JSX.** The library's `DataList` and `FileList` primitives and the
   duplicate analysis's measured-files table author their Markdown through the runtime's
-  [`MarkdownContent`](../guide/authoring/mcp.mdx#rich-markdown-blocks-as-jsx) component —
-  `<ul>`/`<li>`, `<strong>`, and a GFM `<table>` — instead of hand-concatenated strings, so
+  [`MarkdownContent`](../guide/authoring/mcp.mdx#rich-markdown-blocks-as-jsx) component,
+  `<ul>`/`<li>`, `<strong>`, and a GFM `<table>`, instead of hand-concatenated strings, so
   escaping belongs to the renderer and piped CLI Markdown and MCP text content come from one
   output.
 - **Request context is observed, not assumed.** The conventional `src/providers/library.ts`
@@ -54,7 +54,7 @@ those features, not the build. This example has no hooks.
   the live context or an explicit unavailable state.
 - **Durable state has a mounted identity.** `src/state.ts` mounts the workspace-durable
   `audiobook-curator/shelf` state with three events. If state is not mounted, the read-only
-  `review_curation_shelf` tool — `shelf` on the command line — returns an empty structured shelf
+  `review_curation_shelf` tool, `shelf` on the command line, returns an empty structured shelf
   and an explicit unavailable notice instead of failing.
 - **Suspense becomes MCP progress.** `audit_library` places its asynchronous analysis behind
   React `Suspense` with an `Agent.Progress` fallback, and that fallback alone is the progress
@@ -72,7 +72,7 @@ those features, not the build. This example has no hooks.
 ## Every command renders its tool's document
 
 Each command runs its tool's component. An interactive terminal draws the streamed
-`Agent.Progress` fallback in place; piped output is one final Markdown document — the same
+`Agent.Progress` fallback in place; piped output is one final Markdown document, the same
 headline and report the MCP client receives as text content. `--json` selects machine output and
 emits one result-schema-validated JSON value followed by a newline: the canonical final
 `Agent.Result` value, never the Markdown presentation and never an intermediate Suspense fallback,
@@ -80,8 +80,8 @@ and byte for byte the `structuredContent` of the tool call. Named `--report` and
 options remain optional where a command projects fields as flags; `convert` carries its optional
 `receipt` inside the JSON `conversion` object. A command that gets one still writes the receipt
 file when it succeeds. This is a behavior change from the retired `src/cli/` tree, where
-every command that took a report or receipt path — thirteen of the sixteen, `inventory --report`
-and `convert --receipt` among them — required it: those commands now run without the path and
+every command that took a report or receipt path, thirteen of the sixteen, `inventory --report`
+and `convert --receipt` among them, required it: those commands now run without the path and
 write no report or receipt file, and their exit codes, `--apply` gating, and error output are
 unchanged either way. `inspect`, `prepare`, and `shelf` never took one.
 
@@ -96,8 +96,8 @@ pnpm --filter @agent-bundle-example/audiobook-curator typecheck
 
 `pnpm check` inside the package runs validate, build, typecheck, and both test pools. One
 `agent-bundle build --output artifact` produces everything: one composite plugin root at
-`artifact/` carrying the Claude and Codex projections — each host's manifest in its own dotfolder
-over one shared Skill, bundled CLI script, and lifecycle-wrapped MCP server — plus the npm
+`artifact/` carrying the Claude and Codex projections, each host's manifest in its own dotfolder
+over one shared Skill, bundled CLI script, and lifecycle-wrapped MCP server, plus the npm
 package beneath `dist/`.
 
 Start `pnpm example:audiobook` from the repository root for the visual development loop:

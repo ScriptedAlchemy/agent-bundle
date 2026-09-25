@@ -21,8 +21,8 @@ Each Codex trial sets a temporary `CODEX_HOME` and copies only the installed CLI
 used as trial state and are left unchanged. The contributor smoke commands remove provider
 API-key and credential-shaped environment values and fail if the selected host's normal
 configuration, settings, or installed-plugin state changes. For Claude that surface is
-`~/.claude/config.json`, `settings.json`, `settings.local.json`, and `plugins/`, plus — in the
-native contract smoke — the user-scope `mcpServers` registrations inside `~/.claude.json`. The
+`~/.claude/config.json`, `settings.json`, `settings.local.json`, and `plugins/`, plus, in the
+native contract smoke, the user-scope `mcpServers` registrations inside `~/.claude.json`. The
 rest of `~/.claude.json` is host bookkeeping Claude Code rewrites on every start (cached feature
 flags, first-start and machine identity, usage counters, per-project session statistics) and is
 deliberately not guarded.
@@ -38,8 +38,8 @@ hosted service. The browser is not a trusted input source: it never supplies a c
 directory, a native model, or a credential, and browser-supplied native models and credentials are
 refused. Operations are trusted-local only.
 
-The foreground server's browser routes — session bootstrap, mutations, and the project-event
-stream — carry an `Origin` guard: a request whose `Origin` is not the foreground URL is refused
+The foreground server's browser routes, session bootstrap, mutations, and the project-event
+stream, carry an `Origin` guard: a request whose `Origin` is not the foreground URL is refused
 with `AB8003` (one without `Origin` passes only as `Sec-Fetch-Site: same-origin`), because any
 other origin, including another loopback origin such as an MCP App sandbox iframe running
 third-party plugin code on its own loopback port, could otherwise forge requests against it. The
@@ -81,8 +81,8 @@ frame is bound to and applies its own authentication, capability, and consent po
 reaches the foreground routes or an MCP backend around the relay, and the relay never merges in
 the permissions of another App, server, or browser origin. The same holds for cancellation: the
 framework's host bridge honors an App's `notifications/cancelled` only for a request that App
-itself started and that is still in flight — aborting that one operation and denying its pending
-consent challenge — so cancelling can neither reach around consent nor touch a request the App
+itself started and that is still in flight, aborting that one operation and denying its pending
+consent challenge, so cancelling can neither reach around consent nor touch a request the App
 did not make.
 
 ## The Agent API
@@ -108,7 +108,7 @@ overwriting collisions, is idempotent for identical content, refuses version or 
 collisions, never invokes `sudo`, and never changes `PATH`.
 
 `agent-bundle doctor` is read-only by construction. It inventories durable state by directory
-entry and filesystem metadata only — it never opens a database — and it never repairs anything.
+entry and filesystem metadata only, it never opens a database, and it never repairs anything.
 
 ## Artifact integrity
 
