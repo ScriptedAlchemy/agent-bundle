@@ -418,3 +418,24 @@ it('flags promises-namespace and asserted options without maxRetries', () => {
     `await rm(root, <const>{ ${recursiveTrue}, maxRetries: 5 });`,
   ]))).toEqual([]);
 });
+
+it('unwraps non-null asserted options, alone and nested in other wrappers', () => {
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    "import * as fs from 'node:fs/promises';",
+    "import { promises as fsp } from 'node:fs';",
+    `await rm(root, { ${recursiveTrue} }!);`,
+    `await fs.rm(root, { ${recursiveTrue} }!);`,
+    `await fsp.rm(root, { ${recursiveTrue} }!);`,
+    `await rm(root, ({ ${recursiveTrue} } as const)!);`,
+    `await rm(root, { ${recursiveTrue} }! satisfies Options);`,
+    `await rm(root, <Options>{ ${recursiveTrue} }!);`,
+    `await rm(root, ({ ${recursiveTrue} })<Options>);`,
+  ]))).toEqual([4, 5, 6, 7, 8, 9, 10].map((line) => expect.objectContaining({ hasRetries: false, line })));
+
+  expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', sample([
+    "import { rm } from 'node:fs/promises';",
+    `await rm(root, { ${recursiveTrue}, maxRetries: 5 }!);`,
+    `await rm(root, ({ ${recursiveTrue}, maxRetries: 5 } as const)!);`,
+  ]))).toEqual([]);
+});
