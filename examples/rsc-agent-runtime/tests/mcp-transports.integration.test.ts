@@ -8,9 +8,8 @@ import type { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 
 import { createRsbuild } from '@rsbuild/core';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { expect, test } from '@rstest/core';
 
 import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
@@ -40,21 +39,24 @@ const createClient = (): Client =>
   new Client({ name: 'rsc-agent-runtime-test', version: '1.0.0' });
 
 const requestStatus = ({
+  body,
   headers,
   path,
   port,
 }: {
+  body?: string;
   headers: Record<string, string>;
   path: string;
   port: number;
 }): Promise<number> =>
   new Promise((resolve, reject) => {
-    const request = httpRequest({ headers, hostname: '127.0.0.1', method: 'GET', path, port }, (response) => {
+    const method = body === undefined ? 'GET' : 'POST';
+    const request = httpRequest({ headers, hostname: '127.0.0.1', method, path, port }, (response) => {
       response.resume();
       response.once('end', () => resolve(response.statusCode ?? 0));
     });
     request.once('error', reject);
-    request.end();
+    request.end(body);
   });
 
 const expectStaticSurface = async (client: Client) => {
@@ -315,6 +317,14 @@ test('built Streamable HTTP MCP reports its one JSON startup line and closes cle
         requestStatus({ headers: { Host: localHost, Origin: 'https://attacker.example' }, path, port: startup.port }),
       ).resolves.toBe(403);
     }
+    await expect(
+      requestStatus({
+        body: JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'ping', params: { padding: 'x'.repeat(200 * 1024) } }),
+        headers: { 'Content-Type': 'application/json', Host: localHost },
+        path: '/mcp',
+        port: startup.port,
+      }),
+    ).resolves.toBe(413);
   } finally {
     await client.close();
     child.kill('SIGTERM');

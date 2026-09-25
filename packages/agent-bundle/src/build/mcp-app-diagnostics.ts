@@ -41,9 +41,10 @@ export interface McpAppOutputSize {
 
 /**
  * Emitted bytes at which a production view draws the `AB4772` advisory. The
- * framework floor for any view using `@modelcontextprotocol/ext-apps` (its
- * SDK, both `zod` generations, `zod-to-json-schema`) measured 437 kB; this is
- * roughly 2.4× that floor and half the {@link MAX_APP_HTML_BYTES} host bound.
+ * framework floor for a view using `@modelcontextprotocol/ext-apps` measured
+ * 249 kB on 2.x and 437 kB on 1.x (its SDK, both `zod` generations,
+ * `zod-to-json-schema`); this is roughly 2.4× the 1.x floor and half the
+ * {@link MAX_APP_HTML_BYTES} host bound.
  */
 export const MCP_APP_HTML_ADVISORY_BYTES = 1_048_576;
 

@@ -902,9 +902,10 @@ MCP App <name> (<target>): mcp-apps/<name>.html <size> (<gzip size> gzip)
 数字来自当次实际
 输出；不要把某次示例构建的体积当作固定契约。
 
-任何导入 `@modelcontextprotocol/ext-apps` 的视图都会带上 `zod`（v3 与 v4）、
-`@modelcontextprotocol/sdk`、`zod-to-json-schema` 以及 `ext-apps` 本身——在你写下第一行自己的代码
-之前就约有 437 kB（gzip 后 104 kB）——因此一个健康的视图远在 1 MiB 以下。生产构建的输出达到或超过
+任何导入 `@modelcontextprotocol/ext-apps` 2.x 的视图都会带上 `zod` 4、`@modelcontextprotocol/client`、
+`@modelcontextprotocol/core` 以及 `ext-apps` 本身——在你写下第一行自己的代码之前就约有 249 kB
+（gzip 后 65 kB）。`ext-apps` 1.x 视图还会带上 `zod` 3、`@modelcontextprotocol/sdk` 与
+`zod-to-json-schema`，约 437 kB（gzip 后 104 kB），即便如此也远在 1 MiB 以下。生产构建的输出达到或超过
 1 MiB 时会报告 `AB4772` 建议性诊断并点名最大的五个模块；任何超过 2 MiB 的构建也会报告它，因为
 2 MiB 是 Workbench 与 `serve-app` 宿主拒绝该资源的上限，超过后视图在那里将不再渲染。阈值是固定的；
 没有配置键可以改变它们。

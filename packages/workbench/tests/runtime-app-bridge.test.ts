@@ -231,6 +231,46 @@ it('forwards an initialized App tools/call through the controller-owned client t
   });
 });
 
+it('passes the official AppBridge request signal to consent and forwarded tools/list', async () => {
+  await withBrowser(async (browser) => {
+    const consentSignals: Array<AbortSignal | undefined> = [];
+    const forwarded: Array<Readonly<{ readonly method: string; readonly signal: unknown }>> = [];
+    const factory = runtimeFactory(async () => Object.freeze({
+      ...appAccess(async () => undefined),
+      client: Object.freeze({
+        getServerCapabilities: () => Object.freeze({ tools: Object.freeze({}) }),
+        request: async (request: Readonly<{ readonly method: string }>, options?: Readonly<{ readonly signal?: AbortSignal }>) => {
+          forwarded.push(Object.freeze({ method: request.method, signal: options?.signal }));
+          return Object.freeze({ tools: Object.freeze([]) });
+        },
+        setNotificationHandler: () => undefined,
+      }),
+    }), {
+      installedHandlers: Object.freeze({ openExternalLink: async () => undefined }),
+      requestConsent: async (_challenge, signal?: AbortSignal) => {
+        consentSignals.push(signal);
+        return 'deny';
+      },
+    });
+    const bridge = await invokeBridgeFactory(factory, browser);
+    const emit = (data: unknown) => browser.emit({ data, origin: 'https://apps.example.test', source: browser.target });
+    const response = (id: string) => browser.posts.find((entry) => (entry.message as { readonly id?: unknown } | null)?.id === id)?.message;
+
+    emit({ id: 'initialize', jsonrpc: '2.0', method: 'ui/initialize', params: { appCapabilities: {}, appInfo: { name: 'app', version: '1' }, protocolVersion: '2026-01-26' } });
+    await eventually(() => response('initialize') !== undefined);
+    emit({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} });
+    emit({ id: 'open-link', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://weather.example/forecast' } });
+    emit({ id: 'list-tools', jsonrpc: '2.0', method: 'tools/list', params: {} });
+
+    await eventually(() => response('open-link') !== undefined && response('list-tools') !== undefined);
+    expect(consentSignals).toEqual([expect.any(AbortSignal)]);
+    expect(forwarded).toEqual([{ method: 'tools/list', signal: expect.any(AbortSignal) }]);
+    expect(response('open-link')).toEqual({ id: 'open-link', jsonrpc: '2.0', result: { isError: true } });
+    expect(response('list-tools')).toEqual({ id: 'list-tools', jsonrpc: '2.0', result: { tools: [] } });
+    await bridge.close();
+  });
+});
+
 it('rejects noncanonical links and noncanonical bounded downloads before consent or host actions', async () => {
   await withBrowser(async (browser) => {
     const opened: string[] = [];
@@ -335,9 +375,9 @@ it('aborts valid runtime App side effects before a late consent decision or host
       },
     );
     const bridge = await invokeBridgeFactory(factory, browser) as unknown as Readonly<{
-      readonly ondownloadfile?: (params: Readonly<{ readonly contents: unknown }>, extra: Readonly<{ readonly signal: AbortSignal }>) => Promise<Readonly<{ readonly isError?: true }>>;
-      readonly onopenlink?: (params: Readonly<{ readonly url: unknown }>, extra: Readonly<{ readonly signal: AbortSignal }>) => Promise<Readonly<{ readonly isError?: true }>>;
-      readonly onrequestdisplaymode?: (params: Readonly<{ readonly mode: 'inline' | 'fullscreen' | 'pip' }>, extra: Readonly<{ readonly signal: AbortSignal }>) => Promise<Readonly<{ readonly mode: 'inline' | 'fullscreen' | 'pip' }>>;
+      readonly ondownloadfile?: (params: Readonly<{ readonly contents: unknown }>, extra: Readonly<{ readonly mcpReq: Readonly<{ readonly signal: AbortSignal }> }>) => Promise<Readonly<{ readonly isError?: true }>>;
+      readonly onopenlink?: (params: Readonly<{ readonly url: unknown }>, extra: Readonly<{ readonly mcpReq: Readonly<{ readonly signal: AbortSignal }> }>) => Promise<Readonly<{ readonly isError?: true }>>;
+      readonly onrequestdisplaymode?: (params: Readonly<{ readonly mode: 'inline' | 'fullscreen' | 'pip' }>, extra: Readonly<{ readonly mcpReq: Readonly<{ readonly signal: AbortSignal }> }>) => Promise<Readonly<{ readonly mode: 'inline' | 'fullscreen' | 'pip' }>>;
     }>;
     if (bridge.onopenlink === undefined || bridge.ondownloadfile === undefined || bridge.onrequestdisplaymode === undefined) {
       throw new Error('Expected side-effect handlers.');
@@ -347,10 +387,10 @@ it('aborts valid runtime App side effects before a late consent decision or host
       const abort = new AbortController();
       prompt = deferred<'allow-once' | 'deny'>();
       const pending = index === 0
-        ? bridge.onopenlink({ url: 'https://weather.example/forecast' }, Object.freeze({ signal: abort.signal }))
+        ? bridge.onopenlink({ url: 'https://weather.example/forecast' }, Object.freeze({ mcpReq: Object.freeze({ signal: abort.signal }) }))
         : index === 1
-          ? bridge.ondownloadfile({ contents: [{ text: 'forecast', type: 'text' }] }, Object.freeze({ signal: abort.signal }))
-          : bridge.onrequestdisplaymode({ mode: 'fullscreen' }, Object.freeze({ signal: abort.signal }));
+          ? bridge.ondownloadfile({ contents: [{ text: 'forecast', type: 'text' }] }, Object.freeze({ mcpReq: Object.freeze({ signal: abort.signal }) }))
+          : bridge.onrequestdisplaymode({ mode: 'fullscreen' }, Object.freeze({ mcpReq: Object.freeze({ signal: abort.signal }) }));
       await eventually(() => promptSignals.at(-1) === abort.signal);
       const reason = new DOMException(`Cancelled side effect ${index}.`, 'AbortError');
       abort.abort(reason);
@@ -368,7 +408,7 @@ it('aborts valid runtime App side effects before a late consent decision or host
 
     holdCreate = true;
     const createAbort = new AbortController();
-    const heldCreate = bridge.onopenlink({ url: 'https://weather.example/forecast' }, Object.freeze({ signal: createAbort.signal }));
+    const heldCreate = bridge.onopenlink({ url: 'https://weather.example/forecast' }, Object.freeze({ mcpReq: Object.freeze({ signal: createAbort.signal }) }));
     await eventually(() => createSignals.at(-1) === createAbort.signal);
     const createReason = new DOMException('Cancelled creation.', 'AbortError');
     createAbort.abort(createReason);
@@ -381,7 +421,7 @@ it('aborts valid runtime App side effects before a late consent decision or host
     prompt = deferred<'allow-once' | 'deny'>();
     prompt.resolve('allow-once');
     const decisionAbort = new AbortController();
-    const heldDecision = bridge.onopenlink({ url: 'https://weather.example/forecast' }, Object.freeze({ signal: decisionAbort.signal }));
+    const heldDecision = bridge.onopenlink({ url: 'https://weather.example/forecast' }, Object.freeze({ mcpReq: Object.freeze({ signal: decisionAbort.signal }) }));
     await eventually(() => decisionSignals.at(-1) === decisionAbort.signal);
     const decisionReason = new DOMException('Cancelled decision.', 'AbortError');
     decisionAbort.abort(decisionReason);

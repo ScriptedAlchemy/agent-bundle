@@ -1039,9 +1039,11 @@ MCP App <name> (<target>): mcp-apps/<name>.html <size> (<gzip size> gzip)
 
 The figures are that build's own measurement, not a contract. A view that reaches its host
 through `agent-bundle/app` carries the framework's client and nothing else from the protocol
-stack; one that imports `@modelcontextprotocol/ext-apps` instead carries `zod` (v3 and v4),
-`@modelcontextprotocol/sdk`, `zod-to-json-schema`, and `ext-apps` itself — about 437 kB (104 kB
-gzip) before the first line of your own code — and even that view sits well under 1 MiB. A
+stack; one that imports `@modelcontextprotocol/ext-apps` 2.x instead carries `zod` 4,
+`@modelcontextprotocol/client`, `@modelcontextprotocol/core`, and `ext-apps` itself — about
+249 kB (65 kB gzip) before the first line of your own code. An `ext-apps` 1.x view also carries
+`zod` 3, `@modelcontextprotocol/sdk`, and `zod-to-json-schema`, about 437 kB (104 kB gzip), and
+even that view sits well under 1 MiB. A
 production build that emits 1 MiB or more reports the `AB4772`
 advisory naming the five largest modules; any build over 2 MiB reports it too, because 2 MiB is
 the bound above which the Workbench and `serve-app` hosts refuse the resource and the view stops
