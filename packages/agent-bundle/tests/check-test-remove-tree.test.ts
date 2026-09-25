@@ -311,6 +311,36 @@ it('does not let a parameter shadow a computed method key or decorator', () => {
     `  @hook(rm(root, { ${recursiveTrue} })) run(rm) {}`,
     '}',
   ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 3 })]);
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    'class Suite {',
+    `  run(@hook(rm(root, { ${recursiveTrue} })) rm) {}`,
+    `  constructor(@hook(rm(root, { ${recursiveTrue} })) rm) {}`,
+    '}',
+  ]))).toEqual([
+    expect.objectContaining({ hasRetries: false, line: 3 }),
+    expect.objectContaining({ hasRetries: false, line: 4 }),
+  ]);
+
+  expect(recursiveRmCalls(sample([
+    "import * as fs from 'node:fs/promises';",
+    `class Suite { run(@hook(fs.rm(root, { ${recursiveTrue} })) fs) {} }`,
+  ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+});
+
+it('does not let a nested-block var hide a call outside its function', () => {
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    'function setup() { if (ready) { var rm = mockRm; } }',
+    `function cleanup() { rm(root, { ${recursiveTrue} }); }`,
+    `function reset(done = () => rm(root, { ${recursiveTrue} })) { { var rm = mockRm; } }`,
+    `class Suite { static { { var rm = mockRm; } } run() { rm(root, { ${recursiveTrue} }); } }`,
+  ]))).toEqual([
+    expect.objectContaining({ hasRetries: false, line: 3 }),
+    expect.objectContaining({ hasRetries: false, line: 4 }),
+    expect.objectContaining({ hasRetries: false, line: 5 }),
+  ]);
 });
 
 it('parses TSX and JS test files with their own script kind', () => {
