@@ -27,8 +27,7 @@ const workbenchBrowserAliases = {
  *
  * This is deliberately not `createWorkbenchConfig()` from `rsbuild.config.ts`.
  * The production config exists to ship the Workbench: it renders the checked-in
- * `index.html` template, copies THIRD_PARTY_NOTICES and APP-RENDERER-LICENSE
- * into `dist`, sets `root` to the package, and — whenever
+ * `index.html` template, copies THIRD_PARTY_NOTICES into `dist`, sets `root` to the package, and — whenever
  * `AGENT_BUNDLE_WORKBENCH_API_PROXY` happens to be set in the contributor's
  * shell — adds the `/api` dev proxy. None of that is fixture behaviour, and
  * fixtures that mutated the production config inherited all of it, so their

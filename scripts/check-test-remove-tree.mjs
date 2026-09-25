@@ -154,7 +154,10 @@ const statementDeclares = (statement, name) => {
   return false;
 };
 
-/** `from` is the child the walk came up through; names, computed keys, and decorators sit outside the function scope. */
+/**
+ * `from` is the child the walk came up through; names, computed keys, and decorators
+ * (including parameter decorators) sit outside the function scope.
+ */
 const functionLikeDeclares = (node, from, name) => {
   if (
     !(
@@ -189,6 +192,11 @@ const identifierIsLocallyShadowed = (identifier) => {
   let from = identifier;
   let current = identifier.parent;
   while (current !== undefined) {
+    if (ts.isDecorator(current) && ts.isParameter(current.parent)) {
+      from = current.parent.parent;
+      current = from.parent;
+      continue;
+    }
     if (
       ts.isSourceFile(current)
       || ts.isBlock(current)
