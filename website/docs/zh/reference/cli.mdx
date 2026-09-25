@@ -212,7 +212,7 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | `--mode <mode>` | `local` | 仅限 Cursor：卸载 `local` 副本或已暂存的 `marketplace` 仓库。 |
 | `--keep-data` | 开启 | 保留回执记录的所有框架状态根、推导出的 web-data，以及回执记录的 Cursor `PLUGIN_DATA` 目录。这是默认行为；该标志只是显式声明，并保留归属回执供以后 purge。 |
 | `--purge-data` | 关闭 | 只删除回执记录且由该安装独占的持久数据根。没有 `--confirm-purge` 时被拒绝（`AB7008`）；共享、外部管理、无标记、外来标记及其他无法证明归属的根都会被保留并列出。 |
-| `--force` | 关闭 | 在宿主已注册的安装（Claude/Codex、暂存的 Cursor 市场）缺少仓库回执，或归属内容、版本、暂存 `HEAD` 与回执不再匹配时继续。缺少仓库回执的 Claude/Codex 副本会保留其数据：`--force --purge-data` 被拒绝（`AB7009`）。没有回执的 Cursor 本地目录，以及回执或清单指向另一个插件的目录，是外来目录，无论如何都会被拒绝（`AB7007`）。 |
+| `--force` | 关闭 | 在宿主已注册的安装（Claude/Codex、暂存的 Cursor 市场）缺少仓库回执，或归属内容、版本、暂存 `HEAD` 与回执不再匹配时继续。缺少仓库回执的 Claude/Codex 副本会保留其数据：`--force --purge-data --confirm-purge` 被拒绝（`AB7009`）。没有回执的 Cursor 本地目录，以及回执或清单指向另一个插件的目录，是外来目录，无论如何都会被拒绝（`AB7007`）。 |
 | `--plan` | 关闭 | 打印将被删除的确切路径与宿主注册，不做任何改动。 |
 
 uninstall 只删除回执归属的内容：记录的文件与安装器创建的目录（Cursor 本地，包括安装本身创建的

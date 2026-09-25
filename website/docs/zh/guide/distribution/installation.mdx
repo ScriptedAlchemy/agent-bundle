@@ -212,7 +212,7 @@ node artifact/install.mjs --uninstall [--mode marketplace]
 包的 Cursor 副本在回执中记录的 `PLUGIN_DATA` 目录，除非传入 `--purge-data --confirm-purge` 否则保留，且结果如实说明宿主自行决定而 Agent Bundle 无法左右的部分（Claude 把缓存
 副本标为 orphaned 并保留约 14 天；Codex 删除缓存树且没有 keep-data 选项）。宿主已注册的安装缺少仓库回执（`AB7009`）或内容不匹配
 （`AB7007`）会被拒绝，除非 `--force`。即使带 `--force`，缺少仓库回执的副本也绝不会被 purge：
-`--purge-data` 被拒绝（`AB7009`），因为没有任何证据表明该 bundle 拥有这些数据，请不带它卸载，再手动删除数据。没有回执的 Cursor 目录，或属于另一个插件的目录，是外来目录，无论如何都被拒绝（`AB7007`）；
+`--purge-data --confirm-purge` 被拒绝（`AB7009`），因为没有任何证据表明该 bundle 拥有这些数据，请不带它卸载，再手动删除数据。没有回执的 Cursor 目录，或属于另一个插件的目录，是外来目录，无论如何都被拒绝（`AB7007`）；
 再次运行是 `not-installed` 空操作。只读取格式 2 的回执；携带更早回执的副本是外来目录。如果回执未记录状态归属，
 从当前环境或 home 解析出的根只会列为无法证明并保留；`--keep-data` 也不能把这次观察变成以后 purge 的权限。
 

@@ -268,7 +268,7 @@ you pass `--purge-data --confirm-purge`, and the result states honestly what the
 Agent Bundle cannot (Claude orphans its cached copy for a ~14-day grace period; Codex deletes the
 cached tree and offers no keep-data option). A missing store receipt for a host-registered install
 (`AB7009`) or a content mismatch (`AB7007`) is refused unless `--force`. Even with `--force`, a
-copy without a store receipt is never purged: `--purge-data` is refused (`AB7009`) because nothing
+copy without a store receipt is never purged: `--purge-data --confirm-purge` is refused (`AB7009`) because nothing
 proves the bundle owns its data, so uninstall without it and remove the data by hand. A Cursor directory without
 a receipt, or one that belongs to another plugin, is foreign and refused regardless (`AB7007`);
 a second run is a `not-installed` no-op. Only format 2 receipts are read; a copy carrying an older
