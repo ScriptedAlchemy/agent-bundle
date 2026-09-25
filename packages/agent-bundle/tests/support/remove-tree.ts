@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import { rm as removeDirectory } from 'node:fs/promises';
 
 const nodeRetryCodes = new Set(['EBUSY', 'EMFILE', 'ENFILE', 'ENOTEMPTY', 'EPERM']);
@@ -27,4 +28,9 @@ export const removeTree = async (path: string, fs: TreeRemoval = defaultRemoval)
       await delay(retryDelay * (attempt + 1));
     }
   }
+};
+
+/** For callers that cannot await, such as `exit` handlers. Node retries the same codes with the same linear backoff. */
+export const removeTreeSync = (path: string): void => {
+  rmSync(path, { force: true, maxRetries, recursive: true, retryDelay });
 };

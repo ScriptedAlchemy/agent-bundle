@@ -1,11 +1,18 @@
 /**
- * Test teardown that deletes a tree calls `removeTree`. A bare `rm` with
- * `recursive: true` and no `maxRetries` races a late writer and flakes with ENOTEMPTY.
+ * Test teardown that deletes a tree calls `removeTree` (`removeTreeSync` where it
+ * cannot await). A bare `rm` with `recursive: true` and no nonzero `maxRetries`
+ * races a late writer and flakes with ENOTEMPTY. `rmSync`, `rmdir`, and
+ * `rmdirSync` follow the same rules as `rm`.
  *
  * Catches bare `rm(`, aliased `import { rm as remove }` calls, and `ns.rm(` or
  * `ns.promises.rm(` when `ns` is a namespace/default import from node:fs, fs, or
  * their /promises forms. The same wrappers as the options argument are unwrapped
  * around the callee and its object, and `?.` member access counts.
+ * ponytail: only literal options and direct import bindings are read; options held
+ * in a variable or spread, a non-literal `recursive`, a non-literal `maxRetries`
+ * (counted as retried), and indirect bindings (local
+ * aliases, destructuring, dynamic import/require, `ns['rm']`, `.call`) are not
+ * followed. Closing that needs data-flow analysis, not a wider AST match.
  *
  * Call, option, and import-binding detection is parser-backed (typescript-5):
  * only real node:fs(/promises) ImportDeclaration bindings count, only Node-bound
@@ -36,6 +43,8 @@ const roots = [
 
 const nodeFsSpecifier = /^(?:node:)?fs(?:\/promises)?$/u;
 
+const removalNames = new Set(['rm', 'rmSync', 'rmdir', 'rmdirSync']);
+
 const isRemoveTreeHelper = (file) => /(?:^|\/)remove-tree\.ts$/u.test(file.replaceAll('\\', '/'));
 
 const walk = async (directory, files) => {
@@ -54,7 +63,7 @@ const walk = async (directory, files) => {
 };
 
 /**
- * Named/aliased rm bindings and namespace/default/`promises` bindings that expose .rm.
+ * Named/aliased removal bindings and namespace/default/`promises` bindings that expose them.
  * Import bindings are collected from the TypeScript AST so comments and local
  * identifiers cannot forge Node fs.rm bindings.
  */
@@ -99,7 +108,7 @@ export const removalBindings = (text, fileName = 'bindings.ts') => {
         ? element.name.text
         : element.propertyName.text;
       const localName = element.name.text;
-      if (importedName === 'rm') {
+      if (removalNames.has(importedName)) {
         bareNames.add(localName);
         continue;
       }
@@ -254,7 +263,10 @@ const optionsFlags = (optionsArg) => {
     if (key === 'recursive' && property.initializer.kind === ts.SyntaxKind.TrueKeyword) {
       recursive = true;
     }
-    if (key === 'maxRetries') hasRetries = true;
+    if (key === 'maxRetries') {
+      const retries = unwrapExpression(property.initializer);
+      hasRetries = !ts.isNumericLiteral(retries) || Number(retries.text) !== 0;
+    }
   }
   return { recursive, hasRetries };
 };
@@ -265,7 +277,7 @@ const isNodeBoundRmCall = (callee, bareNames, namespaceNames) => {
   if (ts.isIdentifier(expression)) {
     return bareNames.has(expression.text) && !identifierIsLocallyShadowed(expression);
   }
-  if (!ts.isPropertyAccessExpression(expression) || expression.name.text !== 'rm') return false;
+  if (!ts.isPropertyAccessExpression(expression) || !removalNames.has(expression.name.text)) return false;
   let object = unwrapExpression(expression.expression);
   if (ts.isPropertyAccessExpression(object) && object.name.text === 'promises') {
     object = unwrapExpression(object.expression);

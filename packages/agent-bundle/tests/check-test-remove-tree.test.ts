@@ -484,3 +484,40 @@ it('flags fs.promises.rm and wrapped callees or callee objects', () => {
     `await fs.other.rm(root, { ${recursiveTrue} });`,
   ]))).toEqual([]);
 });
+
+it('flags recursive rmSync, rmdir, and rmdirSync with the same rules', () => {
+  expect(recursiveRmCalls(sample([
+    "import { rmSync, rmdirSync as removeDirSync } from 'node:fs';",
+    "import { rmdir } from 'node:fs/promises';",
+    "import * as fs from 'node:fs';",
+    `rmSync(root, { force: true, ${recursiveTrue} });`,
+    `removeDirSync(root, { ${recursiveTrue} });`,
+    `await rmdir(root, { ${recursiveTrue} });`,
+    `fs.rmSync(root, { ${recursiveTrue} });`,
+    `await fs.promises.rmdir(root, { ${recursiveTrue} });`,
+    `(fs.rmdirSync)!(root, { ${recursiveTrue} });`,
+  ]))).toEqual([4, 5, 6, 7, 8, 9].map((line) => expect.objectContaining({ hasRetries: false, line })));
+
+  expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', sample([
+    "import { rmSync, rmdirSync } from 'node:fs';",
+    'rmSync(file);',
+    `rmSync(root, { ${recursiveTrue}, maxRetries: 5 });`,
+    `rmdirSync(root, { ${recursiveTrue}, maxRetries: 5 });`,
+    'rmdirSync(root);',
+    `const cleanup = (rmSync) => rmSync(root, { ${recursiveTrue} });`,
+    `other.rmSync(root, { ${recursiveTrue} });`,
+  ]))).toEqual([]);
+});
+
+it('treats maxRetries: 0 as not retried', () => {
+  expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', sample([
+    "import { rm } from 'node:fs/promises';",
+    "import { rmSync } from 'node:fs';",
+    `await rm(root, { ${recursiveTrue}, maxRetries: 0 });`,
+    `rmSync(root, { ${recursiveTrue}, "maxRetries": 0x0 });`,
+    `await rm(root, { ${recursiveTrue}, maxRetries: 1 });`,
+  ]))).toEqual([
+    'packages/agent-bundle/tests/example.test.ts:3 bare recursive rm. Use removeTree.',
+    'packages/agent-bundle/tests/example.test.ts:4 bare recursive rm. Use removeTree.',
+  ]);
+});

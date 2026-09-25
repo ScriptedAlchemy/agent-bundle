@@ -1,5 +1,4 @@
 import { execFile as executeFile } from 'node:child_process';
-import { rmSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +7,7 @@ import { promisify } from 'node:util';
 import { isolatedCommandEnvironment } from '../../../../rstest.worker-isolation.ts';
 import { pnpmPack, type PnpmPackOutput as SharedPackOutput } from '../../../../scripts/pnpm-pack.mjs';
 import { packOutputFromJson } from '../../src/build/pack-inventory.ts';
+import { removeTreeSync } from './remove-tree.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -124,7 +124,7 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
   }
   const destination = await mkdtemp(join(tmpdir(), 'agent-bundle-shared-pack-'));
   process.once('exit', () => {
-    rmSync(destination, { force: true, recursive: true });
+    removeTreeSync(destination);
   });
   return pnpmPack({
     cwd: join(workspaceRoot, 'packages', sharedPackDirectories[packageName]),
