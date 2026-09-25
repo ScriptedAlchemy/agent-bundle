@@ -1,5 +1,38 @@
 # create-agent-bundle
 
+## 0.1.2
+
+### Patch Changes
+
+- 7b99b1f: Update the bundled Effect runtime to `effect@4.0.0-rc.117` (with `@effect/platform-node-shared` and `@effect/platform-node` on the same RC). Consumer installs of `agent-bundle` and `@agent-bundle/runtime` no longer pull in `msgpackr`, `msgpackr-extract`, or `fast-check` through `effect`. (#832)
+- e57c0ac: Update the `minimal`, `mcp-server`, and `cli-tool` templates to `@types/node` 26.5.1, update the routed templates to React 19.3.0, and move the `mcp-server` template to `@types/react` 19.3.0. (#808)
+- 3b667c8: Require every local stdio MCP entry to default-export a server factory: self-connecting entries no longer build and AB4730 is now an error instead of an informational nudge; retire AB4736, so documents left in the top-level `skills/`, `commands/`, and `rules/` locations are ignored rather than reported (#839)
+- 6e836aa: Raise the `@agent-bundle/runtime` `zod` peer floor from `^4.5.4` to `^4.6.4`: projects on `zod@4.5.x` or earlier must upgrade their direct `zod` dependency before installing the runtime, or npm rejects the required peer with `ERESOLVE`. `agent-bundle` now compiles its bundled schemas with `zod` 4.6.4, and the `cli-tool` and `mcp-server` scaffold templates pin `zod@4.6.4` to satisfy the new peer. (#842)
+- Updated dependencies [cf82ffe]
+- Updated dependencies [c74702b]
+- Updated dependencies [ab5ae66]
+- Updated dependencies [7b99b1f]
+- Updated dependencies [a0652c1]
+- Updated dependencies [13c9570]
+- Updated dependencies [7c96689]
+- Updated dependencies [184ff02]
+- Updated dependencies [1a77058]
+- Updated dependencies [18a913e]
+- Updated dependencies [3b667c8]
+- Updated dependencies [2a129e9]
+- Updated dependencies [b9fbc2e]
+- Updated dependencies [349aa1a]
+- Updated dependencies [c42b93d]
+- Updated dependencies [12a1ddc]
+- Updated dependencies [78d75f2]
+- Updated dependencies [116ea16]
+- Updated dependencies [ff7421b]
+- Updated dependencies [cb9792d]
+- Updated dependencies [10485c4]
+- Updated dependencies [6e836aa]
+  - agent-bundle@0.3.0
+  - @agent-bundle/runtime@0.2.0
+
 ## 0.1.1
 
 ### Patch Changes

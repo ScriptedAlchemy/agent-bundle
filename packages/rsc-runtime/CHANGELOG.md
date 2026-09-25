@@ -1,5 +1,25 @@
 # @agent-bundle/runtime
 
+## 0.2.0
+
+### Minor Changes
+
+- 184ff02: Fail `createSqliteStateDriver({ root }).open()` from `@agent-bundle/runtime/state/sqlite` with a typed `corrupt` `AgentStateError` when the root holds a pre-#201 `<sanitized id>-<12 hex of utf8(id)>.sqlite` store and no store under the current name. Previously an empty store opened beside it silently. The error names the old file: move it and its `-wal`/`-shm` sidecars out of the state root, or delete them, and the next open creates a fresh store. The old store is never adopted or migrated. (#854)
+- 18a913e: Remove `plugin.version` and mismatch diagnostic AB4008 (retired); the key now fails with AB4001, and `AgentBundlePluginConfig` drops its index signature, so unknown `plugin.*` keys are type errors. Remove the `agent-bundle install --force` alias (use `--replace`); the emitted `install.mjs` exits 2 on `--force` without `--uninstall`. Tool routes must default-export `defineTool(...)`; split named tool exports fail with AB4810. Route App `config.template` resolves only from the route module, else AB4827. Remove `ServedApp` and generated CLI `isTty`. `@agent-bundle/runtime` removes the `Hook`/`Mcp` lowerers, `createRscRequestContext`, `RscRequestContext`, `AgentDocumentSnapshot`, and the `McpResultProps`, `McpDataProps`, `McpResourceLinkProps`, and `McpEmbeddedResourceProps` types. `rsc-markdown-stream` drops its React 18 element, provider, and dispatcher paths (#810)
+- 349aa1a: Stop adopting pre-#201 durable SQLite state stores in `createSqliteStateDriver`: a root-mode store still named `<sanitized id>-<12 hex of utf8(id)>.sqlite` is no longer renamed to `<sanitized id>-<sha256(id)[0:16]>.sqlite` and adopted, and a journal table without a `result_state` column is no longer upgraded in place but rejected on open with a typed `corrupt` error. Move old stores and their `-wal`/`-shm` sidecars out of the state root, or delete them, before upgrading. (#837)
+- 6e836aa: Raise the `@agent-bundle/runtime` `zod` peer floor from `^4.5.4` to `^4.6.4`: projects on `zod@4.5.x` or earlier must upgrade their direct `zod` dependency before installing the runtime, or npm rejects the required peer with `ERESOLVE`. `agent-bundle` now compiles its bundled schemas with `zod` 4.6.4, and the `cli-tool` and `mcp-server` scaffold templates pin `zod@4.6.4` to satisfy the new peer. (#842)
+
+### Patch Changes
+
+- 7b99b1f: Update the bundled Effect runtime to `effect@4.0.0-rc.117` (with `@effect/platform-node-shared` and `@effect/platform-node` on the same RC). Consumer installs of `agent-bundle` and `@agent-bundle/runtime` no longer pull in `msgpackr`, `msgpackr-extract`, or `fast-check` through `effect`. (#832)
+- 13c9570: Accept a CommonJS `module.exports` server factory as the default export of a
+  stdio MCP entry, so `AB4730` no longer rejects a `.cjs` entry the generated
+  lifecycle shell can run, and reject a SQLite state store at open with the
+  typed `corrupt` error when its journal schema differs in column nullability
+  from the one the current kernel writes. (#850)
+- Updated dependencies [18a913e]
+  - rsc-markdown-stream@0.1.3
+
 ## 0.1.1
 
 ### Patch Changes
