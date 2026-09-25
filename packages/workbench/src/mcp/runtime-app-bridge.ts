@@ -1,5 +1,4 @@
-import { AppBridge, PostMessageTransport } from '@modelcontextprotocol/ext-apps/app-bridge';
-import { ListToolsRequestSchema, ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { AppBridge, PostMessageTransport, type McpUiResourceCsp } from '@modelcontextprotocol/ext-apps/app-bridge';
 
 import type {
   McpAppBridgeMessage,
@@ -77,7 +76,7 @@ interface PostMessageTarget {
 }
 
 interface AppBridgeHandlerExtra {
-  readonly signal: AbortSignal;
+  readonly mcpReq: Readonly<{ readonly signal: AbortSignal }>;
 }
 
 type DisplayHandler = (
@@ -85,7 +84,7 @@ type DisplayHandler = (
   extra?: AppBridgeHandlerExtra,
 ) => Promise<Readonly<{ readonly mode: 'inline' | 'fullscreen' | 'pip' }>>;
 
-/** The ext-apps 1.7.5 declaration omits inherited runtime members. */
+/** The official AppBridge surface this factory drives and hands to AppRenderer. */
 interface RuntimeAppBridge extends AppRendererBridge {
   addEventListener(type: 'initialized', listener: () => void): void;
   addEventListener(
@@ -102,8 +101,8 @@ interface RuntimeAppBridge extends AppRendererBridge {
   onrequestdisplaymode: DisplayHandler | undefined;
   onupdatemodelcontext: ((params: Readonly<{ readonly structuredContent?: McpAppJsonValue }>, extra: AppBridgeHandlerExtra) => Promise<Readonly<Record<string, never>>>) | undefined;
   setRequestHandler(
-    schema: typeof ListToolsRequestSchema,
-    handler: (request: Readonly<{ readonly params: Readonly<Record<string, McpAppJsonValue>> }>, extra: AppBridgeHandlerExtra) => Promise<unknown>,
+    method: 'tools/list',
+    handler: (request: Readonly<{ readonly params?: Readonly<{ readonly cursor?: string }> }>, extra: AppBridgeHandlerExtra) => Promise<unknown>,
   ): void;
   teardownResource(
     params: Readonly<Record<string, never>>,
@@ -320,7 +319,8 @@ const bridgeCapabilities = (
   ...(options.installedHandlers.downloadFile === undefined ? {} : { downloadFile: Object.freeze({}) }),
   logging: Object.freeze({}),
   sandbox: Object.freeze({
-    ...(preview.resource.csp === undefined ? {} : { csp: preview.resource.csp }),
+    // AppBridge only serializes host capabilities into the ui/initialize result.
+    ...(preview.resource.csp === undefined ? {} : { csp: preview.resource.csp as McpUiResourceCsp }),
     permissions: preview.documentPolicy.approvedPermissions,
   }),
   ...(server?.tools === undefined ? {} : { serverTools: Object.freeze({ ...(options.listChanged.tools ? { listChanged: true } : {}) }) }),
@@ -543,8 +543,8 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
         },
         source: target,
       });
-      // This is the one intentionally isolated compatibility cast: ext-apps
-      // 1.x consumes the SDK-v1 Client shape, while the controller owns v2.
+      // This is the one intentionally isolated cast: AppBridge reads only these
+      // members of the controller-owned client, and the facade exposes nothing else.
       const officialClient = Object.freeze({
         getServerCapabilities: () => {
           const capabilities = attached.client.getServerCapabilities();
@@ -576,10 +576,9 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
         writable: false,
       });
       if (serverCapabilities?.tools !== undefined) {
-        bridge.setRequestHandler(ListToolsRequestSchema, async (request, extra) => officialClient.request(
+        bridge.setRequestHandler('tools/list', async (request, extra) => officialClient.request(
           { method: 'tools/list', params: request.params },
-          ListToolsResultSchema,
-          { signal: extra.signal },
+          { signal: extra.mcpReq.signal },
         ));
       }
       bridge.addEventListener('loggingmessage', (entry) => {
@@ -597,18 +596,18 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
       bridge.onopenlink = async ({ url }, extra) => {
         const candidate = validateMcpAppExternalUrl(url);
         if (candidate === undefined || options.installedHandlers.openExternalLink === undefined) return { isError: true };
-        const approved = await sideEffectConsent(options, preview, 'open-external-link', Object.freeze({ url: candidate }), 'Open MCP App link', extra.signal);
+        const approved = await sideEffectConsent(options, preview, 'open-external-link', Object.freeze({ url: candidate }), 'Open MCP App link', extra.mcpReq.signal);
         if (!approved) return { isError: true };
-        throwIfAborted(extra.signal);
+        throwIfAborted(extra.mcpReq.signal);
         await options.installedHandlers.openExternalLink(candidate);
         return {};
       };
       bridge.ondownloadfile = async ({ contents }, extra) => {
         const candidate = validateMcpAppDownloadContents(contents);
         if (candidate === undefined || options.installedHandlers.downloadFile === undefined) return { isError: true };
-        const approved = await sideEffectConsent(options, preview, 'download-file', candidate.contents, 'Download MCP App file', extra.signal);
+        const approved = await sideEffectConsent(options, preview, 'download-file', candidate.contents, 'Download MCP App file', extra.mcpReq.signal);
         if (!approved) return { isError: true };
-        throwIfAborted(extra.signal);
+        throwIfAborted(extra.mcpReq.signal);
         await options.installedHandlers.downloadFile(candidate);
         return {};
       };
@@ -618,9 +617,9 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
         : 'inline';
       const protectedDisplayHandler: DisplayHandler = async ({ mode }, extra) => {
         if (!validDisplayMode(mode) || options.installedHandlers.requestDisplayMode === undefined) return { mode: safeDisplayMode };
-        const approved = await sideEffectConsent(options, preview, 'request-display-mode', Object.freeze({ mode }), 'Change MCP App display mode', extra?.signal);
+        const approved = await sideEffectConsent(options, preview, 'request-display-mode', Object.freeze({ mode }), 'Change MCP App display mode', extra?.mcpReq.signal);
         if (!approved) return { mode: safeDisplayMode };
-        throwIfAborted(extra?.signal);
+        throwIfAborted(extra?.mcpReq.signal);
         const applied = await options.installedHandlers.requestDisplayMode(mode);
         if (!validDisplayMode(applied)) return { mode: safeDisplayMode };
         const rendered = displayFallback === undefined

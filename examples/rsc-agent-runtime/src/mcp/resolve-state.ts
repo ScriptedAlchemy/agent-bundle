@@ -1,24 +1,21 @@
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
-import { ListRootsResultSchema, type ServerNotification, type ServerRequest } from '@modelcontextprotocol/sdk/types.js';
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type { ServerContext } from '@modelcontextprotocol/server';
 
 import { resolveImplicitRuntimeStateFile } from '../runtime/state-file.js';
 
-export type McpRequestExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
-
 export interface ResolveStateOptions {
   stateFile?: string;
-  resolveStateFile?: (extra: McpRequestExtra) => string | undefined | Promise<string | undefined>;
+  resolveStateFile?: (ctx: ServerContext) => string | undefined | Promise<string | undefined>;
 }
 
 const usablePath = (value: string | undefined): string | undefined =>
   value === undefined || value.trim() === '' ? undefined : resolve(value);
 
-const stateFileFromRoots = async (extra: McpRequestExtra): Promise<string | undefined> => {
+const stateFileFromRoots = async (ctx: ServerContext): Promise<string | undefined> => {
   try {
-    const result = await extra.sendRequest({ method: 'roots/list' }, ListRootsResultSchema);
+    const result = await ctx.mcpReq.send({ method: 'roots/list' });
     const root = result.roots[0];
     if (root === undefined) {
       return undefined;
@@ -30,8 +27,8 @@ const stateFileFromRoots = async (extra: McpRequestExtra): Promise<string | unde
   }
 };
 
-export const resolveStateFile = async (options: ResolveStateOptions, extra: McpRequestExtra): Promise<string> => {
-  const resolvedByOption = options.resolveStateFile === undefined ? undefined : await options.resolveStateFile(extra);
+export const resolveStateFile = async (options: ResolveStateOptions, ctx: ServerContext): Promise<string> => {
+  const resolvedByOption = options.resolveStateFile === undefined ? undefined : await options.resolveStateFile(ctx);
   const explicit = usablePath(resolvedByOption) ?? usablePath(options.stateFile);
   if (explicit !== undefined) {
     return explicit;
@@ -42,7 +39,7 @@ export const resolveStateFile = async (options: ResolveStateOptions, extra: McpR
     return fromEnvironment;
   }
 
-  const fromRoots = await stateFileFromRoots(extra);
+  const fromRoots = await stateFileFromRoots(ctx);
   if (fromRoots !== undefined) {
     return fromRoots;
   }

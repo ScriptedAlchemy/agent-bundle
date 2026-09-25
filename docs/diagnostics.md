@@ -553,10 +553,12 @@ self-contained HTML and their gzip size, what a compressing transport would
 carry. `AB4772` is the size advisory, one **warning** per App. A view that
 reaches its host through `agent-bundle/app` carries the framework's client
 and nothing else from the protocol stack; one that imports
-`@modelcontextprotocol/ext-apps` instead starts at about 437 kB (104 kB gzip),
-`zod` v3 and v4, `@modelcontextprotocol/sdk`, `zod-to-json-schema`, and
-`ext-apps` itself, so the advisory bound of 1 MiB (1,048,576 bytes) sits at
-roughly 2.4× that floor and at half the 2 MiB (2,097,152 bytes) bound above
+`@modelcontextprotocol/ext-apps` 2.x instead starts at about 249 kB (65 kB
+gzip): `zod` 4, `@modelcontextprotocol/client`, `@modelcontextprotocol/core`,
+and `ext-apps` itself. A 1.x view, which also carries `zod` 3,
+`@modelcontextprotocol/sdk`, and `zod-to-json-schema`, starts at about 445 kB
+(106 kB gzip). The advisory bound of 1 MiB (1,048,576 bytes) sits at roughly
+2.4× the 1.x floor and at half the 2 MiB (2,097,152 bytes) bound above
 which the Workbench and `serve-app` hosts refuse the resource and the Rstest
 browser harness refuses to mount it. The advisory fires when a production
 build emits 1 MiB or more, and in either compile mode when the document
