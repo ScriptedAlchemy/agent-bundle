@@ -19,8 +19,7 @@ it('runs input, resize, output, and termination through a real PTY', { timeout: 
   const exited = Promise.withResolvers<void>();
   process.onExit(() => exited.resolve());
 
-  await expect.poll(() => output).toContain('ready');
-  expect(output).toMatch(/24\s+80/u);
+  await expect.poll(() => output).toMatch(/ready\r?\n24\s+80/u);
   process.resize(100, 30);
   process.write('hello\n');
   await expect.poll(() => output).toContain('got:hello');
