@@ -430,7 +430,8 @@ it('unwraps non-null asserted options, alone and nested in other wrappers', () =
     `await rm(root, ({ ${recursiveTrue} } as const)!);`,
     `await rm(root, { ${recursiveTrue} }! satisfies Options);`,
     `await rm(root, <Options>{ ${recursiveTrue} }!);`,
-  ]))).toEqual([4, 5, 6, 7, 8, 9].map((line) => expect.objectContaining({ hasRetries: false, line })));
+    `await rm(root, ({ ${recursiveTrue} })<Options>);`,
+  ]))).toEqual([4, 5, 6, 7, 8, 9, 10].map((line) => expect.objectContaining({ hasRetries: false, line })));
 
   expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', sample([
     "import { rm } from 'node:fs/promises';",
