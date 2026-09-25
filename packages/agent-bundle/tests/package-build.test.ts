@@ -259,7 +259,7 @@ describe('framework-owned package build', () => {
     await expect(execFile(process.execPath, [script, 'beta'])).resolves.toMatchObject({ stdout: 'hauled:beta\n' });
   }, 120_000);
 
-  it('wraps factory-exporting MCP entries in the lifecycle shell and leaves self-connecting entries alone', async () => {
+  it('wraps every local MCP entry, conventional or explicit, in the lifecycle shell', async () => {
     const root = await fixtureRoot({
       ...conventionFixture(),
       'agent-bundle.config.ts': [
@@ -275,24 +275,33 @@ describe('framework-owned package build', () => {
         '};',
         '',
       ].join('\n'),
-      'src/plain.ts': "process.stderr.write('self-connecting entry ran\\n');\n",
+      'src/plain.ts': [
+        'export default () => {',
+        "  process.stderr.write('plain factory ran\\n');",
+        '  return {',
+        '    close() {},',
+        '    async connect(transport: { onmessage?: unknown }) { void transport; },',
+        '  };',
+        '};',
+        '',
+      ].join('\n'),
     });
     const result = await build({ output: 'artifact', packageOutputs: true, root });
     expect(result.packageBuild).toBeUndefined();
 
     const entries = Object.fromEntries(result.build.compiledMcpEntries.map((entry) => [entry.id, entry.output]));
-    const wrapped = await readFile(entries['mcp:echoer']!, 'utf8');
-    const plain = await readFile(entries['mcp:plain']!, 'utf8');
-    expect(wrapped).toContain('stdio heartbeat');
-    expect(wrapped).not.toMatch(/from\s*['"]agent-bundle/u);
-    expect(plain).not.toContain('stdio heartbeat');
+    for (const id of ['mcp:echoer', 'mcp:plain']) {
+      const bundle = await readFile(entries[id]!, 'utf8');
+      expect(bundle).toContain('stdio heartbeat');
+      expect(bundle).not.toMatch(/from\s*['"]agent-bundle/u);
+    }
 
     // The lifecycle shell exits 0 on stdin EOF so clients can respawn.
-    const eofRun = execFile(process.execPath, [entries['mcp:echoer']!], { timeout: 15_000 });
-    eofRun.child.stdin?.end();
-    await expect(eofRun).resolves.toMatchObject({ stdout: '' });
-    const plainRun = await execFile(process.execPath, [entries['mcp:plain']!], { timeout: 15_000 });
-    expect(plainRun.stderr).toContain('self-connecting entry ran');
+    for (const id of ['mcp:echoer', 'mcp:plain']) {
+      const eofRun = execFile(process.execPath, [entries[id]!], { timeout: 15_000 });
+      eofRun.child.stdin?.end();
+      await expect(eofRun).resolves.toMatchObject({ stdout: '' });
+    }
   }, 120_000);
 
   it('applies the tools escape hatch after the profile and before the invariant enforcer', async () => {
@@ -864,12 +873,15 @@ describe('mcp run', () => {
       'src/pin.ts': [
         "import { mkdirSync, writeFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
-        "const anchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? '';",
-        "mkdirSync(join(anchor, '.runtime'), { recursive: true });",
-        "writeFileSync(join(anchor, '.runtime', 'state.json'), JSON.stringify({",
-        '  anchor,',
-        "  cookie: process.env.MCP_RUN_TRACKER_COOKIE ?? null,",
-        '}));',
+        'export default () => {',
+        "  const anchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? '';",
+        "  mkdirSync(join(anchor, '.runtime'), { recursive: true });",
+        "  writeFileSync(join(anchor, '.runtime', 'state.json'), JSON.stringify({",
+        '    anchor,',
+        "    cookie: process.env.MCP_RUN_TRACKER_COOKIE ?? null,",
+        '  }));',
+        '  process.exit(0);',
+        '};',
         '',
       ].join('\n'),
     });
@@ -913,7 +925,7 @@ describe('mcp run', () => {
         '',
       ].join('\n'),
       'package.json': '{"name":"package-build-fixture","type":"module","private":true,"version":"1.0.0"}\n',
-      'src/exit.ts': 'process.exitCode = 7;\nexport const marker = true;\n',
+      'src/exit.ts': 'export default () => { process.exit(7); };\n',
     });
     await build({ output: 'artifact', root });
     const exitCode = await runCli([

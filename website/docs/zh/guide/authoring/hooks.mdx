@@ -119,13 +119,6 @@ export default async function BeforeWrite(
 
 渲染事件默认使用 `standalone`；设置 `runtime: 'shared'` 可复用生成的 MCP 服务器。轻量 `.ts` 处理器始终在钩子包装器中执行。
 
-### 迁移已有事件
-
-将原预检函数改为 `.ts` 事件文件的默认导出，将 JSX 移至同级 `.view.tsx`，并用
-`ctx.render('./name.view.js', data)` 替换 `execute` 结果。删除 `preflight` 重导出。
-内联 `before()` 和旧 `preflight` 导出现在都会触发 `AB4840`。`continue` 和 `deny` 含义不变。
-删除 `config.providers`，改用 `context.provider(key)`。原生配置钩子保留为高级兼容接口。
-
 ### 请求级 provider
 
 普通事件中使用 `await context.provider('writePolicy')`，JSX 中使用

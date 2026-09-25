@@ -1407,6 +1407,7 @@ it('generates deterministic route-specific types from the compiled graph', () =>
       id: 'event:workspace/open',
       kind: 'event-route',
       provenance: { kind: 'conventional', relativePath: 'src/events/workspace/open.tsx' },
+      resultSchemaState: 'absent' as const,
       source: '/workspace/project/src/events/workspace/open.tsx',
     }],
     providers: [],
@@ -1415,6 +1416,7 @@ it('generates deterministic route-specific types from the compiled graph', () =>
       id: 'script:rebuild-index',
       kind: 'script',
       provenance: { kind: 'conventional', relativePath: 'src/scripts/rebuild-index.ts' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/workspace/project/src/scripts/rebuild-index.ts',
     }],
     servers: [{
@@ -1426,6 +1428,7 @@ it('generates deterministic route-specific types from the compiled graph', () =>
         id: 'tool:curator/inspect',
         kind: 'tool',
         provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+        resultSchemaState: 'unprojectable' as const,
         serverId: 'mcp:curator',
         source: '/workspace/project/src/mcp/curator/tools/inspect.tsx',
       }],
@@ -1483,6 +1486,7 @@ it('omits the App registration for graphs without an MCP tool route', () => {
     id: `${kind}:curator/${name}`,
     kind,
     provenance: { kind: 'conventional', relativePath: `src/mcp/curator/${collection}/${name}.ts` },
+    resultSchemaState: kind === 'app' ? 'absent' : 'unprojectable',
     serverId: 'mcp:curator',
     source: `/workspace/project/src/mcp/curator/${collection}/${name}.ts`,
   });
@@ -1496,6 +1500,7 @@ it('omits the App registration for graphs without an MCP tool route', () => {
         id: 'cli:report',
         kind: 'cli',
         provenance: { kind: 'conventional', relativePath: 'src/cli/report.ts' },
+        resultSchemaState: 'unprojectable' as const,
         source: '/workspace/project/src/cli/report.ts',
       }],
     },
@@ -1507,6 +1512,7 @@ it('omits the App registration for graphs without an MCP tool route', () => {
       id: 'event:workspace/open',
       kind: 'event-route',
       provenance: { kind: 'conventional', relativePath: 'src/events/workspace/open.tsx' },
+      resultSchemaState: 'absent' as const,
       source: '/workspace/project/src/events/workspace/open.tsx',
     }],
     providers: [{
@@ -1584,6 +1590,7 @@ it('generates provider declarations and the runtime augmentation in execution or
         id: 'tool:curator/inspect',
         kind: 'tool',
         provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+        resultSchemaState: 'unprojectable' as const,
         serverId: 'mcp:curator',
         source: '/workspace/project/src/mcp/curator/tools/inspect.tsx',
       }],
@@ -1976,18 +1983,6 @@ it('pairs a lightweight handler with its explicit JSX view', async () => {
     source: join(root, 'src/events/tool/before.ts'),
     view: join(root, 'src/events/tool/before.view.tsx'),
   });
-});
-
-it('rejects removed before and preflight exports with migration guidance', async () => {
-  const root = await createRoot();
-  await writeTree(root, {
-    'src/events/tool/before.tsx': "export { default as preflight } from '../../gate.js'; export default async function View() {}",
-    'src/events/session/start.tsx': 'export function before() {} export default async function View() {}',
-    'src/gate.ts': "export default () => 'execute';",
-  });
-  const graph = await compileRouteGraph(root, fixtureConfig());
-  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4840', 'AB4840']);
-  expect(graph.diagnostics.every(({ recovery }) => recovery?.includes('.view.tsx'))).toBe(true);
 });
 
 it('fails unavailable event routes before packaging while admitting supported targets', async () => {

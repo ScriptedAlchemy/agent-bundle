@@ -198,6 +198,7 @@ describe('generated entry templates', () => {
       id: 'cli:report',
       kind: 'cli' as const,
       provenance: { kind: 'conventional' as const, relativePath: 'src/cli/report.ts' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/cli/report.ts',
     };
     const command = { aliases: [], exitCode: 'zero' as const, options: [], path: ['report'], rendered: false, routeId: 'cli:report' };
@@ -266,6 +267,7 @@ describe('generated entry templates', () => {
       id: 'cli:status',
       kind: 'cli' as const,
       provenance: { kind: 'conventional' as const, relativePath: 'src/cli/status.ts' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/cli/status.ts',
     };
     const command = {
@@ -586,6 +588,7 @@ it('fails the build on an MCP route the generated server cannot register', () =>
       id: 'tool:curator/notice-inbox',
       kind: 'tool',
       provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/notice-inbox.tsx' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/mcp/curator/tools/notice-inbox.tsx',
     }],
     serverName: 'curator',
@@ -605,6 +608,7 @@ it('fails the build on an MCP route the generated server cannot register', () =>
       id: 'resource:curator/other',
       kind: 'resource',
       provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/resources/other.tsx' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/mcp/curator/resources/other.tsx',
     }],
     serverName: 'curator',
@@ -628,6 +632,7 @@ it('journals the lineage registry through sqlite only for workspace-durable proj
       id: 'tool:curator/inspect',
       kind: 'tool',
       provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/mcp/curator/tools/inspect.tsx',
     }],
     serverName: 'curator',
@@ -739,6 +744,7 @@ it('generates bulk-projected MCP commands with the CLI invocation and preserves 
     id: 'tool:curator/read_item',
     kind: 'tool' as const,
     provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/curator/tools/read_item.tsx' },
+    resultSchemaState: 'unprojectable' as const,
     serverId: 'mcp:curator',
     source: '/project/src/mcp/curator/tools/read_item.tsx',
   };
@@ -782,6 +788,7 @@ it('imports explicit CLI projections and maps their input before canonical valid
     id: 'tool:curator/submit',
     kind: 'tool' as const,
     provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/curator/tools/submit.tsx' },
+    resultSchemaState: 'unprojectable' as const,
     serverId: 'mcp:curator',
     source: '/project/src/mcp/curator/tools/submit.tsx',
   };
@@ -857,6 +864,7 @@ it('mounts the shell-probed terminal on every routed-CLI surface and forwards it
     id: 'cli:doctor',
     kind: 'cli' as const,
     provenance: { kind: 'conventional' as const, relativePath: 'src/cli/doctor.ts' },
+    resultSchemaState: 'unprojectable' as const,
     source: '/project/src/cli/doctor.ts',
   };
   const bin = entryShellModule.generatedCliBinEntrySource({
@@ -958,6 +966,7 @@ it('generates deterministic per-request provider execution in the shared Flight 
       id: 'tool:curator/inspect',
       kind: 'tool',
       provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/mcp/curator/tools/inspect.tsx',
     }],
     serverName: 'curator',
@@ -985,6 +994,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
     id: 'cli:doctor',
     kind: 'cli' as const,
     provenance: { kind: 'conventional' as const, relativePath: 'src/cli/doctor.ts' },
+    resultSchemaState: 'unprojectable' as const,
     source: '/project/src/cli/doctor.ts',
   };
   const command = {
@@ -1079,6 +1089,7 @@ it('mounts deterministic per-request providers in rendered route workers', () =>
       id: 'tool:curator/inspect',
       kind: 'tool',
       provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/mcp/curator/tools/inspect.tsx',
     }],
   });
@@ -1125,6 +1136,7 @@ it('keeps the generated provider loop and the in-process execution helper identi
       id: 'cli:report',
       kind: 'cli',
       provenance: { kind: 'conventional', relativePath: 'src/cli/report.tsx' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/cli/report.tsx',
     }],
   });
@@ -1229,6 +1241,7 @@ it('composes the root and server layout chain around generated MCP routes and ne
         id: 'tool:curator/inspect',
         kind: 'tool',
         provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+        resultSchemaState: 'unprojectable' as const,
         serverId: 'mcp:curator',
         source: '/project/src/mcp/curator/tools/inspect.tsx',
       },
@@ -1237,6 +1250,7 @@ it('composes the root and server layout chain around generated MCP routes and ne
         id: 'resource:other/catalog',
         kind: 'resource',
         provenance: { kind: 'conventional', relativePath: 'src/mcp/other/resources/catalog.tsx' },
+        resultSchemaState: 'unprojectable' as const,
         serverId: 'mcp:other',
         source: '/project/src/mcp/other/resources/catalog.tsx',
       },
@@ -1276,6 +1290,7 @@ it('imports only the layouts some route of the worker composes through, never an
         id: 'cli:library/audit',
         kind: 'cli',
         provenance: { kind: 'conventional', relativePath: 'src/cli/library/audit.tsx' },
+        resultSchemaState: 'unprojectable' as const,
         source: '/project/src/cli/library/audit.tsx',
       },
       {
@@ -1283,6 +1298,7 @@ it('imports only the layouts some route of the worker composes through, never an
         id: 'script:rebuild-index',
         kind: 'script',
         provenance: { kind: 'conventional', relativePath: 'src/scripts/rebuild-index.tsx' },
+        resultSchemaState: 'unprojectable' as const,
         source: '/project/src/scripts/rebuild-index.tsx',
       },
     ],
@@ -1302,6 +1318,7 @@ it('imports only the layouts some route of the worker composes through, never an
       id: 'resource:other/catalog',
       kind: 'resource',
       provenance: { kind: 'conventional', relativePath: 'src/mcp/other/resources/catalog.tsx' },
+      resultSchemaState: 'unprojectable' as const,
       serverId: 'mcp:other',
       source: '/project/src/mcp/other/resources/catalog.tsx',
     }],
@@ -1319,6 +1336,7 @@ it('imports only the layouts some route of the worker composes through, never an
     id: 'cli:library/audit',
     kind: 'cli' as const,
     provenance: { kind: 'conventional' as const, relativePath: 'src/cli/library/audit.tsx' },
+    resultSchemaState: 'unprojectable' as const,
     source: '/project/src/cli/library/audit.tsx',
   }];
   expect(entryShellModule.generatedRenderedRouteWorkerSource({ projectRoot: '/project', layouts: serverOnly, routes: cliRoutes }))
@@ -1334,6 +1352,7 @@ it('emits an identity composition when no layout exists so layout-free workers r
       id: 'tool:curator/inspect',
       kind: 'tool',
       provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      resultSchemaState: 'unprojectable' as const,
       serverId: 'mcp:curator',
       source: '/project/src/mcp/curator/tools/inspect.tsx',
     }],
@@ -1355,6 +1374,7 @@ it('hands rendered CLI, projected MCP, and script routes their layout chain and 
         id: 'cli:library/audit',
         kind: 'cli',
         provenance: { kind: 'conventional', relativePath: 'src/cli/library/audit.tsx' },
+        resultSchemaState: 'unprojectable' as const,
         source: '/project/src/cli/library/audit.tsx',
       },
       {
@@ -1362,6 +1382,7 @@ it('hands rendered CLI, projected MCP, and script routes their layout chain and 
         id: 'tool:curator/inspect',
         kind: 'tool',
         provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+        resultSchemaState: 'unprojectable' as const,
         serverId: 'mcp:curator',
         source: '/project/src/mcp/curator/tools/inspect.tsx',
       },
@@ -1370,6 +1391,7 @@ it('hands rendered CLI, projected MCP, and script routes their layout chain and 
         id: 'script:rebuild-index',
         kind: 'script',
         provenance: { kind: 'conventional', relativePath: 'src/scripts/rebuild-index.tsx' },
+        resultSchemaState: 'unprojectable' as const,
         source: '/project/src/scripts/rebuild-index.tsx',
       },
     ],
@@ -1386,6 +1408,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     id: 'tool:curator/inspect',
     kind: 'tool',
     provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+    resultSchemaState: 'unprojectable' as const,
     source: '/project/src/mcp/curator/tools/inspect.tsx',
   } as const;
   const state = (lifetime: 'process' | 'request' | 'workspace-durable') => ({

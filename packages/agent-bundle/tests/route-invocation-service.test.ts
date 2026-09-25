@@ -184,6 +184,7 @@ it('publishes correlated invocation and kernel entries with slim details', async
     id: 'tool:fixture/echo',
     kind: 'tool',
     provenance: { kind: 'conventional' },
+    resultSchemaState: 'unprojectable' as const,
     serverId: 'mcp:fixture',
     source: 'src/mcp/fixture/tools/echo.tsx',
   } as const;
@@ -335,6 +336,7 @@ it('publishes failed event invocations with native provenance', async () => {
     id: 'event:tool/after',
     kind: 'event-route',
     provenance: { kind: 'conventional' },
+    resultSchemaState: 'absent' as const,
     source: 'src/events/tool/after.tsx',
   } as const;
   const trace = collectingTrace();
@@ -484,6 +486,7 @@ it.each([
     id: 'event:tool/after',
     kind: 'event-route',
     provenance: { kind: 'conventional' },
+    resultSchemaState: 'absent' as const,
     source: 'src/events/tool/after.tsx',
   } as const;
   let production: RouteInvocationChildRequest['production'];
@@ -556,6 +559,7 @@ const echoRoute = {
   id: 'tool:fixture/echo',
   kind: 'tool',
   provenance: { kind: 'conventional' },
+  resultSchemaState: 'unprojectable' as const,
   serverId: 'mcp:fixture',
   source: 'src/mcp/fixture/tools/echo.tsx',
 } as const;
@@ -1097,6 +1101,7 @@ it('rejects a canonical event surface when the compiled route has handler', asyn
     execution: { fallback: 'standalone', handler: 'src/events/tool/before.handler.ts', runtime: 'standalone' },
     kind: 'event-route',
     provenance: { kind: 'conventional' },
+    resultSchemaState: 'absent' as const,
     source: 'src/events/tool/before.tsx',
   } as const;
   let leases = 0;
@@ -1137,6 +1142,7 @@ it('rejects a globally supported host absent from the route executable bindings'
     execution: { fallback: 'standalone', handler: 'src/events/tool/before.handler.ts', runtime: 'standalone' },
     kind: 'event-route',
     provenance: { kind: 'conventional' },
+    resultSchemaState: 'absent' as const,
     source: 'src/events/tool/before.tsx',
   } as const;
   let childStarts = 0;
@@ -1218,6 +1224,7 @@ const routeProject = async (
     id: `tool:fixture/${name}`,
     kind: 'tool',
     provenance: { kind: 'conventional', relativePath },
+    resultSchemaState: 'unprojectable' as const,
     serverId: 'mcp:fixture',
     source,
   } as const;
@@ -1244,6 +1251,7 @@ const routeProject = async (
         id: compiled.id,
         kind: compiled.kind,
         provenance: { kind: 'conventional' },
+        resultSchemaState: compiled.resultSchemaState,
         serverId: compiled.serverId,
         source: relativePath,
       }],
@@ -1525,6 +1533,7 @@ it('forwards kernel events from tool and event routes rendered in the real child
     id: 'tool:fixture/traced',
     kind: 'tool',
     provenance: { kind: 'conventional', relativePath: 'src/mcp/fixture/tools/traced.tsx' },
+    resultSchemaState: 'unprojectable' as const,
     serverId: 'mcp:fixture',
     source: toolSource,
   } as const;
@@ -1534,6 +1543,7 @@ it('forwards kernel events from tool and event routes rendered in the real child
     id: 'event:tool/before',
     kind: 'event-route',
     provenance: { kind: 'conventional', relativePath: 'src/events/tool/before.tsx' },
+    resultSchemaState: 'absent' as const,
     source: eventSource,
   } as const;
   const graph = {
@@ -1553,6 +1563,7 @@ it('forwards kernel events from tool and event routes rendered in the real child
       id: eventRoute.id,
       kind: eventRoute.kind,
       provenance: { kind: 'conventional' },
+      resultSchemaState: eventRoute.resultSchemaState,
       source: eventRoute.provenance.relativePath,
     }],
     providers: [],
@@ -1566,6 +1577,7 @@ it('forwards kernel events from tool and event routes rendered in the real child
         id: toolRoute.id,
         kind: toolRoute.kind,
         provenance: { kind: 'conventional' },
+        resultSchemaState: toolRoute.resultSchemaState,
         serverId: toolRoute.serverId,
         source: toolRoute.provenance.relativePath,
       }],
@@ -1698,6 +1710,7 @@ it('reports an event route kind for unit-render provenance', async () => {
     id: 'event:tool/after',
     kind: 'event-route',
     provenance: { kind: 'conventional' },
+    resultSchemaState: 'absent' as const,
     source: 'src/events/tool/after.tsx',
   } as const;
   const service = new RouteInvocationService({

@@ -259,6 +259,7 @@ it('projects a CLI surface projection and option aliases without leaking project
     inputSchema: input,
     kind: 'tool' as const,
     provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/hauler/tools/hauler_request.tsx' },
+    resultSchemaState: 'unprojectable' as const,
     serverId: 'mcp:hauler',
     source: '/project/src/mcp/hauler/tools/hauler_request.tsx',
   };
@@ -389,6 +390,7 @@ it('passes the bounded input schema through as the optional manifest wire field'
       inputSchema,
       kind: 'script',
       provenance: { kind: 'conventional', relativePath: 'src/scripts/inspect.ts' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/scripts/inspect.ts',
     }],
   };
@@ -418,6 +420,7 @@ it('projects shared route contracts and omits them from contract-free graphs', (
     inputSchema: input,
     kind: 'cli' as const,
     provenance: { kind: 'conventional' as const, relativePath: 'src/cli/status.ts' },
+    resultSchemaState: 'unprojectable' as const,
     source: '/project/src/cli/status.ts',
   };
   const toolRoute = {
@@ -427,6 +430,7 @@ it('projects shared route contracts and omits them from contract-free graphs', (
     inputSchema: input,
     kind: 'tool' as const,
     provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/hauler/tools/hauler_status.ts' },
+    resultSchemaState: 'unprojectable' as const,
     serverId: 'mcp:hauler',
     source: '/project/src/mcp/hauler/tools/hauler_status.ts',
   };

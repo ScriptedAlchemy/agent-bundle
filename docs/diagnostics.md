@@ -24,7 +24,7 @@ even when no error diagnostic was reported.
 | `AB470x` | Package build `bin` configuration (`AB4700`–`AB4705`; `AB4706`: artifact output overlaps `dist`; `AB4707`: `output` shape plus `output.distPath` string and `output.sourceMap` boolean types; `AB4708`–`AB4709`: `output.distPath` root escape and reserved namespace); see below. |
 | `AB471x` | Package build `lib` configuration (`AB4710`–`AB4715`) and declaration generation (`AB4716`); see below. |
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch (`AB4720`–`AB4723`: shape; `AB4724`: a framework-owned Rsbuild plugin re-added through `tools.rsbuild.plugins`; `AB4725`: `tools` externalizes a non-built-in; `AB4726`: a deprecated Rsbuild v2 configuration key; see below). |
-| `AB473x` | Migration nudges (informational; see below). |
+| `AB473x` | Entry conventions: `AB4730` and `AB4737`–`AB4738` are errors, `AB4731`–`AB4735` are informational shadowing nudges, and `AB4736` is retired (see below). |
 | `AB4740`–`AB4751` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
 | `AB4765`–`AB4768` | Artifact-hosted routed CLI and npm lifecycle paths: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it; an npm root cannot select a routed CLI absent from the manifest; or a consumer lifecycle names an unsupported or absent Node path (see below). |
@@ -617,18 +617,19 @@ development-only fallback can never produce a release artifact, so
 | `AB4014` | error | A `plugin.metadata` field is not the shape the shared descriptive layer accepts, or the block declares a field beyond `author`, `homepage`, `keywords`, `license`, and `repository`. The config declared it, so it is an error rather than a withheld value, a blank string or empty array included, where `null` is how a field is opted out. |
 | `AB4015` | warning | A `package.json` descriptive field cannot be shared with any host manifest, a `homepage`, `repository`, or `author.url` the pinned host schemas' `uri` format refuses, an `author.email` their `email` format refuses, or a `repository` in a form this compiler will not convert (`owner/repo` and `github:` shorthands, `git@`/`git://`/`git+ssh`/`git+http` URLs; only `http(s)` and the `git+https://…` URL npm writes, with or without a trailing `.git`, are read). An `author` with any malformed part is withheld whole. The field is withheld rather than guessed at; declare `plugin.metadata.<field>` to share an explicit value. A field the config already overrides is not reported. |
 
-## Migration nudges and convention claims (`AB4730`–`AB4738`)
+## Entry conventions and convention claims (`AB4730`–`AB4738`)
 
 The entry conventions and the framework-owned stdio lifecycle shell (RFC #50)
-replaced patterns consumers previously wrote by hand. When `validate`,
-`inspect`, `build`, or `dev` prepares project source and finds one of those
-pre-convention patterns, it reports a migration diagnostic. `AB4730`–`AB4735`
-are **informational** nudges and never block anything. `AB4736`–`AB4738` are
-errors: the removed top-level authored-document locations are no longer
-discovered, and a conventional script whose `bin` entry would run an export
-the artifact script ignores cannot ship on both surfaces, so the compiler
-refuses to omit or misbuild them silently. The CLI prints these in
-human `validate` output and includes them in every `--json` diagnostics array.
+define how a project's modules reach an artifact. When `validate`, `inspect`,
+`build`, or `dev` prepares project source, it reports what the conventions
+refuse and what they silently shadow. `AB4730`, `AB4737`, and `AB4738` are
+**errors**: an entry the framework cannot wrap, and a conventional script
+whose `bin` entry would run an export the artifact script ignores, cannot
+ship, so the compiler refuses to misbuild them silently. `AB4731`–`AB4735`
+are **informational** nudges for a confusable state where explicit
+configuration shadows a conventional file on disk, and never block anything.
+`AB4736` is retired. The CLI prints these in human `validate` output and
+includes them in every `--json` diagnostics array.
 
 Which explicit config keys *claim* a conventional module out of discovery is
 tabulated in `docs/entry-conventions.md` ("Which config keys claim a
@@ -639,17 +640,19 @@ keeps shipping as an artifact script beside the bin because the two outputs
 are disjoint and both envelopes run the same `main`. That dual-surface shape
 is intentional and raises no diagnostic.
 
-### `AB4730` self-connecting stdio MCP entry
+### `AB4730` stdio MCP entry without a server factory
 
 A local MCP server entry module (explicit `entry:` or the conventional
-`src/mcp/<server-id>.ts`) has no default export, so the build bundles it
-byte-for-byte instead of wrapping it in the framework stdio lifecycle shell
-(console-to-stderr guard, SIGINT/SIGTERM, stdin-EOF exit, bounded shutdown,
-heartbeat). The detection is the same static default-export scan the build
-uses, so the nudge and the build always agree.
+`src/mcp/<server-id>.ts`) has no default export. Every local entry is wrapped
+in the framework stdio lifecycle shell (console-to-stderr guard,
+SIGINT/SIGTERM, stdin-EOF exit, bounded shutdown, heartbeat), and the shell
+calls the module's default export to build the server, so a module without
+one cannot be built. The detection is the same static default-export scan the
+build uses, so the diagnostic and the build always agree.
 
-Adopt: default-export a server factory from the entry module. Silence: keep
-the self-connecting entry, its behavior is preserved exactly.
+Recover: default-export the server factory from the entry module, or declare
+a prebuilt server with `command` or `url`, which the framework launches
+as-is and never wraps.
 
 ### `AB4731` `src/cli.ts` shadowed by explicit `bin` config
 
@@ -696,18 +699,15 @@ document beats a generated one, so the component module never compiles.
 Adopt: remove `SKILL.md` so the rendered skill compiles at build. Silence:
 remove the component module.
 
-### `AB4736` legacy top-level authored document location
+### `AB4736` retired
 
-A document still matches a removed top-level convention:
-`skills/<name>/SKILL.md` (or rendered `SKILL.tsx`/`SKILL.ts`),
-`commands/*.md`, or `rules/*.mdc`. These locations are no longer discovered,
-and every unignored legacy document is reported as an error. A top-level
-skill covered by explicit `skills` configuration is claimed and stays valid;
-commands and rules have no equivalent override.
-
-Recover: move the document under `src/skills/`, `src/commands/`, or
-`src/rules/`. Explicit `skills` paths remain valid anywhere. Published
-artifact paths remain `skills/`, `commands/`, and `rules/`.
+The report of documents left in the removed top-level locations
+(`skills/<name>/SKILL.md`, `commands/*.md`, `rules/*.mdc`). Discovery reads
+`src/skills/<name>/SKILL.md`, `src/commands/*.md`, and `src/rules/*.mdc`
+only, so a document at the top level is now ignored without a diagnostic. An
+explicit `skills` path still names a skill directory anywhere in the project,
+including the top level. Published artifact paths remain `skills/`,
+`commands/`, and `rules/`. The code is never reused.
 
 ### `AB4737` rendered script claimed as a package bin entry lacks `main` or the component
 
@@ -1153,8 +1153,8 @@ compile has no correct partial output, so every finding is an error
 An event route uses a `.ts` lightweight handler or a `.tsx` rendered handler. A `.ts`
 handler can return `ctx.render('./name.view.js', data)` to load its separate `.view.tsx`
 sibling. Data must be strict JSON. The compiler uses explicit module boundaries without
-extracting closures. Removed `before`/`preflight` exports, invalid view modules, and event
-helper/path mismatches report `AB4840`. Definition helpers require a direct default call
+extracting closures. Invalid view modules and event helper/path mismatches report
+`AB4840`. Definition helpers require a direct default call
 with an inline object literal; computed options and wrappers report `AB4810`.
 
 Providers load on first `context.provider('<key>')` access. Concurrent readers share the
@@ -1203,7 +1203,7 @@ projections; no static provider subset declaration is required.
 | `AB4837` | error | A compiled executable imports a compiler-carrying framework entry (`agent-bundle`, `/api`, `/config`, `/eval`, `/rstest`, `/test`, or `/test/browser`). The build checks requests after transformation and resolved package export identities, including aliases, and names the importing module. Type-only imports erased by the configured transform are legal. Source-only `inspect` and `validate` do not prove this dependency boundary. Keep compiler calls in a host process, or use `import type` for framework types. |
 | `AB4838` | none | Retired. Schema imports are resolved by the bundler, not an inspection-time interpreter. |
 | `AB4839` | none | Retired. Inspection does not follow schema alias chains. |
-| `AB4840` | error | An event exports removed `before` or `preflight` bindings, its helper disagrees with the conventional path, or its `.view.tsx` sibling is not a valid rendered event module. Use a `.ts` handler and `ctx.render('./name.view.js', data)` for an explicit rendered view. |
+| `AB4840` | error | An event helper disagrees with the conventional path, its `.view.tsx` sibling exports `config`, or its `.view.tsx` sibling is not a valid rendered event module. Use a `.ts` handler and `ctx.render('./name.view.js', data)` for an explicit rendered view. |
 | `AB4843` | error | A `.cli.{ts,tsx}` module under `src/mcp/<server>/tools/` has no sibling tool route `<stem>.{ts,tsx}` (orphan), a `.cli.{ts,tsx}` module sits under `resources/`, `prompts/`, or `apps/`, or a second projection module (`<stem>.cli.ts` beside `<stem>.cli.tsx`) names the same tool, the first in path order wins and the second is reported. The suffix is reserved under `src/mcp/**` only. The message is `CLI projection <module> for tool:<server>/<tool>: <detail>.` (`has no sibling tool route …`, `<other module> already projects this tool …`); a misplaced module names no tool, so its message is `CLI projection <module>: sits under resources/, prompts/, or apps/ …`. `sourcePath` is the projection module's absolute path. Recovery: rename the file to match the sibling tool, or prefix `_` to park it, then inspect again. It is an error because a projection that cannot compile has no correct partial output. |
 | `AB4844` | error | A CLI projection config does not satisfy its closed metadata contract, combines JSON input mode with flag mapping, or relaxes a required key without declaring `mapInput`. The generated runtime checks that a loaded `mapInput` is callable, awaits it, and validates the result through the original input schema. |
 | `AB4845` | error | A CLI projection's grammar does not bind to the tool's contract: `flags`/`positionals` name a key absent from the tool's `RouteContract.input`; a `name`/alias is not kebab-case, is reserved (`help`, `json`, `ndjson`, `version`, and `yes` when confirm), or collides with another option's spelling or alias; `flags.<key>.name` or `flags.<key>.aliases` is declared on a key `positionals` consumes as a bare argument (`description`, `default`, and `required: false` still apply there); the tool's contract has a key `yes` while the command confirms, the shell keys parsed values by canonical key and strips `yes` as the confirmation, so no `name` override reaches the tool (`set confirm: false or rename the key`); or a `command` segment is not a safe identity segment. The message is `CLI projection <module> for tool:<server>/<tool>: <detail>.` and `sourcePath` is the projection module's absolute path. Recovery names the offending key or spelling and the accepted form, then says to inspect again. It is an error because a projection that cannot compile has no correct partial output. |

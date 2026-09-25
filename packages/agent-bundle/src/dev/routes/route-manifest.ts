@@ -65,8 +65,8 @@ export type RouteManifestContract = ArtifactManifestRouteContract;
  */
 export interface RouteManifestRoute extends ArtifactManifestRoute {
   readonly config: readonly RouteManifestConfigEntry[];
-  /** Static declaration/projection evidence; absent only on manifests from older dev servers. */
-  readonly resultSchemaState?: RouteManifestResultSchemaState;
+  /** Static declaration/projection evidence from the compiler pass. */
+  readonly resultSchemaState: RouteManifestResultSchemaState;
 }
 
 /** Result schemas execute as authored, so a declaration is known without inventing a static schema projection. */
@@ -164,7 +164,7 @@ const configSummary = (config: Readonly<Record<string, unknown>>): readonly Rout
 const manifestRoute = (route: CompiledAgentRoute): RouteManifestRoute => ({
   ...artifactRouteFor(route),
   config: configSummary(route.config),
-  ...(route.resultSchemaState === undefined ? {} : { resultSchemaState: route.resultSchemaState }),
+  resultSchemaState: route.resultSchemaState,
 });
 
 const manifestServer = (server: CompiledServerSurface): RouteManifestServer => ({

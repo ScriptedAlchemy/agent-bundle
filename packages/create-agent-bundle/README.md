@@ -36,9 +36,9 @@ scripted and asks nothing, the remaining values fall back to their defaults.
 | `cli-tool` | An installable routed CLI from one `src/cli/<command>.ts` route module (generated executable, help, argv grammar, validation), a conventional `src/scripts/<name>.ts` artifact script, and a `src/index.ts` library export with declarations, with the framework test harness wired up. |
 
 Every template ships a `check` script (validate + build + typecheck + tests)
-and validates with zero diagnostics, including the `AB473x` migration
-nudges, because the templates are written against the entry conventions from
-the start.
+and validates with zero diagnostics, including the informational `AB473x`
+convention nudges, because the templates are written against the entry
+conventions from the start.
 
 The `mcp-server` and `cli-tool` templates also start with the consumer test
 harness. `mcp-server` ships a route-unit pool (`agentBundleRstest()` from

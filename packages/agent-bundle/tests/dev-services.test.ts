@@ -83,7 +83,7 @@ const createRuntimeProject = async (options: Readonly<{
       'Review the changed files.',
       '',
     ].join('\n')),
-    writeFile(join(root, 'src', 'server.ts'), 'export const server = true;\n'),
+    writeFile(join(root, 'src', 'server.ts'), 'export default () => ({});\n'),
     writeFile(join(root, 'src', 'app.ts'), 'export const app = true;\n'),
     writeFile(join(root, 'src', 'shell.html'), '<main>fixture</main>\n'),
     writeFile(join(root, 'src', 'dev', 'provider.ts'), [
