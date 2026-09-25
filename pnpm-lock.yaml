@@ -336,8 +336,8 @@ importers:
         specifier: 8.18.1
         version: 8.18.1
       effect-rstest:
-        specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
+        specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -376,8 +376,8 @@ importers:
         specifier: 4.0.0-rc.117
         version: 4.0.0-rc.117
       effect-rstest:
-        specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
+        specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
 
   packages/rsc-markdown-stream:
     devDependencies:
@@ -428,8 +428,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       effect-rstest:
-        specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
+        specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
       micromark:
         specifier: 4.0.2
         version: 4.0.2(supports-color@7.2.0)
@@ -1840,12 +1840,12 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f:
-    resolution: {integrity: sha512-vAoaIALD1PEKZDHdX8RdFKzJQtV5FTTzmGt9+xSbjbCJyPX/yKXvL9kJlR9QjSXRxGwFcxy+v+QxEK2ja7JKpA==, tarball: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f}
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e:
+    resolution: {integrity: sha512-5+p2KfQ++ASE/jODKn7/WvTEJoLGA0EQNol/Y4yO1KsB46ZgPcwyjmS7CwmM5B7UxzB6LzbdmXmgpoE1sAfh6w==, tarball: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e}
     version: 0.1.0
     peerDependencies:
       '@rstest/core': ^0.11.11
-      effect: ^4.0.0-rc.108
+      effect: ^4.0.0-rc.113
 
   effect@4.0.0-rc.117:
     resolution: {integrity: sha512-UUyi9QiOW4nySFIBM3KnYbNMd9EZliOdKfBcyLD0mPMPheO2fkuXS5y0opjWc9oqzlJxPQICEGm8gGw3kh9j/w==}
@@ -4529,7 +4529,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.12)(effect@4.0.0-rc.117):
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(@rstest/core@0.11.12)(effect@4.0.0-rc.117):
     dependencies:
       '@rstest/core': 0.11.12
       effect: 4.0.0-rc.117

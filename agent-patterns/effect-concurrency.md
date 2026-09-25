@@ -14,7 +14,8 @@ lifecycle). Build those Effect-native from day one behind Promise edges.
 - `Fiber.await` / `Fiber.join` / `Fiber.interrupt`: observe or cancel.
 - Prefer exported Fiber functions over `interruptUnsafe` / `pollUnsafe`.
 - Forked work that owns a resource must be forked *into a scope*
-  (`forkScoped` / `Layer.scoped`) so interruption closes the resource.
+  (`forkScoped`, or a `Layer.effect` constructor) so interruption closes
+  the resource.
 
 Host `AbortSignal` still exists at the edges (`dispatch()` / `stream()`).
 Do not thread extra internal signals once the program is an Effect; interrupt

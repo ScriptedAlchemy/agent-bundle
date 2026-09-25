@@ -9,8 +9,8 @@ docs, or examples' user code. The four-concept newcomer ledger is untouched.
 
 | Surface | Pin |
 | --- | --- |
-| npm `effect` | **`4.0.0-rc.112`** (exact). Latest published `rc` dist-tag on 2026-09-01. The Wave 3.5 brief named `4.0.0-rc.113`; that version was not on the registry. Re-pin chores take the next published RC. |
-| Vendored tree | `repos/effect` via `git subtree` from [Effect-TS/effect](https://github.com/Effect-TS/effect.git) `main` (v4). Squash commit tracks `packages/effect` version **4.0.0-rc.112**. |
+| npm `effect` | **`4.0.0-rc.117`** (exact). Latest published `rc` dist-tag on 2026-09-25 (re-pinned from `4.0.0-rc.112`, #832). Re-pin chores take the next published RC. |
+| Vendored tree | `repos/effect` via `git subtree` from [Effect-TS/effect](https://github.com/Effect-TS/effect.git) at the release tag **`effect@4.0.0-rc.117`** (v4). Pull the tag matching the npm pin, not `main`: upstream `main` can carry unreleased commits under the same version. |
 | `website` TypeScript | Native **`7.0.2`** runs `tsc`; the `typescript-6` alias stays on **`6.0.3`** for TypeDoc, Twoslash, and `rspress.config.ts` compiler-API calls. `.pnpmfile.cjs` turns those plugins' TypeScript peers into dependencies, and the scoped overrides in `pnpm-workspace.yaml` isolate them from TypeScript 7. Re-pin chores update the alias and overrides together. |
 
 Application code imports the npm package. Never import from `repos/**`.
@@ -86,7 +86,7 @@ is not the goal, and recovery keeps using `Effect.catch` + `instanceof` /
 What does not change: `instanceof Error` / `instanceof X`, `.name`,
 `.message`, `.code`, `.cause`, `.stack`, the boundary's identity-preserving
 rethrow (`isTypedDevError` matches the string `code`), `JSON.stringify`,
-`stableJson`, `{ ...error }`, and `util.inspect`. rc.112 `Data.Error` would
+`stableJson`, `{ ...error }`, and `util.inspect`. rc.117 `Data.Error` would
 otherwise change the last four, its prototype `toJSON` spreads the
 constructor fields (`message`, `cause`) into the JSON and its
 `[nodejs.util.inspect.custom]` prints that instead of the stack, so the
@@ -169,10 +169,11 @@ on the Promise edge. Do not widen public error types to satisfy Effect.
   `Disposable` / `AsyncDisposable`).
 - Close a scope with `Effect.scoped` / `Effect.scopedWith`. Do not leak
   `Scope` into a public Promise signature.
-- Layers compose services. `Layer.scoped` when the layer needs `Scope`.
+- Layers compose services. `Layer.effect` also covers a layer that needs
+  `Scope` (v4 has no `Layer.scoped`).
 - Host `AbortSignal` at a Promise edge goes on `runPromise(..., { signal })`.
   Inside Effect, `interruptWhenAborted` or `yield* scopedAbortSignal`.
-- `scopedAbortSignal` is `Effect.abortSignal`, which in rc.112 is exactly
+- `scopedAbortSignal` is `Effect.abortSignal`, which in rc.117 is exactly
   `acquireRelease(sync(() => new AbortController()), c => sync(() => c.abort()))`
   mapped to `.signal`: it aborts only when the owning scope closes, always
   with no reason, and never hands out the controller. A contract that must
@@ -268,7 +269,7 @@ Hurt / gotchas:
   `release: (a, exit) => Effect<unknown, never, R>` and `Effect.addFinalizer`
   an `Effect<void, never, R>`, so a release that can fail cannot even be
   written there. `Effect.acquireUseRelease`'s `release` and `Effect.onExit`
-  / `Effect.ensuring` handlers are **not** infallible: rc.112 types them
+  / `Effect.ensuring` handlers are **not** infallible: rc.117 types them
   `Effect<void, E3, R3>` and merges a failing handler into the result
   (`combineFinalizerCause` → `Cause.combine(useCause, handlerCause)`). That
   merged cause is first-failure-wins once it reaches the boundary:
@@ -305,7 +306,7 @@ published API surface; its dist ships inside the `agent-bundle` package as
 static assets.
 
 Exact-pin `effect` + `@effect/atom-react` (synchronized with the repo's effect
-pin, currently `4.0.0-rc.112`) are allowed there, but only in dedicated
+pin, currently `4.0.0-rc.117`) are allowed there, but only in dedicated
 browser-state modules (`src/runtime/agent-document-atoms.ts`,
 `src/routes/route-editor-atoms.ts`, and `src/discovery/discovery-atoms.ts`).
 The discovery module owns report loading plus ephemeral live-probe consent
@@ -323,10 +324,10 @@ and result state. Atoms live in `effect/unstable/reactivity`; React bindings com
 - Imperative clients (`ProjectClient`, `RuntimeClient`, `AgentDocumentClient`,
   …) stay the lifecycle authorities; atoms are read-side caches over their
   decoded outputs.
-- Known caveat: `4.0.0-rc.112` has a stream-backed derived-atom disposal bug
-  (fixed upstream post-rc.112, unpublished), no stream-backed derived atoms
-  in the Workbench until a re-pin past the fix; the root `RegistryProvider`
-  (not the default registry) avoids the reported React case.
+- Stream-backed derived atoms are allowed from `4.0.0-rc.117`: the rc.112
+  idle-TTL disposal bug for a stream-backed atom read through a derived atom
+  is fixed upstream (Effect-TS/effect#7535, first published in rc.113). Keep
+  the root `RegistryProvider`; the module-level default registry stays unused.
 - Every effect re-pin must bump `@effect/atom-react` to the same RC in the
   same chore, re-run the Workbench disposal regression test, and re-measure
   the Workbench production bundle (the rsbuild build emits the size table).
@@ -336,6 +337,9 @@ and result state. Atoms live in `effect/unstable/reactivity`; React bindings com
 Re-evaluated 2026-09-03 against `effect@4.0.0-rc.112` +
 `@effect/platform-node@4.0.0-rc.112`; **decision = adopted for ordinary
 filesystem I/O and path operations** (the 2026-09-01 decline is superseded).
+Re-verified 2026-09-25 on rc.117: `@effect/platform-node` still requires a
+non-optional `redis` peer, and `NodeFileSystem` still has no `lstat`,
+`O_NOFOLLOW`, or directory fsync, so the split and the keep-raw list stand.
 `FileSystem.FileSystem` and `Path.Path` from the `effect` package are the
 sanctioned way for framework code to touch the filesystem. The Node
 implementations come from `@effect/platform-node` (`NodeServices.layer`) in
@@ -344,7 +348,7 @@ implementations come from `@effect/platform-node` (`NodeServices.layer`) in
 `NodeFileSystem` / `NodePath` / `NodeChildProcessSpawner` / `NodeStdio` /
 `NodeTerminal` / `NodeCrypto`; `@effect/platform-node`'s modules are
 re-exports of it) in `agent-bundle`, which every consumer installs:
-`@effect/platform-node@rc.112` would add `undici`, `mime`, and, through a
+`@effect/platform-node` would add `undici` (rc.112 also added `mime`) and, through a
 non-optional `redis` peer that npm auto-installs, a Redis client (+23 MB,
 +17 packages) to each consumer install. `agent-bundle`'s `platformLayer`
 composes the same six services the same way `NodeServices.layer` does. The
@@ -374,7 +378,7 @@ the first-party CLI's user-facing text, see
   `try`/`finally` `rm(dir, { recursive: true, force: true })` exactly,
   `force`, cleanup failure as a typed `PlatformError` that wins over the
   operation's failure, cleanup on interruption. Not
-  `fs.makeTempDirectoryScoped` in library code: the rc.112 finalizer removes
+  `fs.makeTempDirectoryScoped` in library code: the rc.117 finalizer removes
   without `force` and `orDie`s, so an operation that deleted its own staging
   directory would fail an already successful call, and a real cleanup error
   would surface as the `PlatformError` wrapper (scope finalizers cannot fail
@@ -508,7 +512,9 @@ import into its own chunk (`dist/scaffold-cli.js`, 447.5 kB; the argv layer
 is 10.8 kB), so `--help` no longer evaluates it: cold start ≈40 ms before
 `NodeServices.layer`, ≈65 ms with it evaluated eagerly (the 2026-09-03
 regression, ≈69 ms on the 2026-09-03 re-measurement below), ≈40 ms with the
-split. `undici` is not pulled into the bundle.
+split. `undici` is not pulled into the bundle. Re-measured 2026-09-25: the
+chunk is 449.5 kB on rc.112 and 487.4 kB on rc.117 (+37.9 kB; the package
+total 462.2 kB → 500.1 kB).
 
 `packages/agent-bundle/src/effect/platform.ts` owns the framework's platform
 layer: `platformLayer` (the `NodeServices` union composed from
@@ -566,7 +572,7 @@ place of the script's outcome.
 ### Terminal and Stdio: user-facing CLI text
 
 Adopted 2026-09-03 for the first-party `agent-bundle` CLI (`src/cli.ts`); the
-Node implementations come from `@effect/platform-node-shared@4.0.0-rc.112`,
+Node implementations come from `@effect/platform-node-shared@4.0.0-rc.117`,
 the same dependency `platform.ts` builds `platformLayer` from (never
 `@effect/platform-node`, for the consumer-footprint reason above).
 `effect/Terminal` is the sanctioned way to touch stdin/stdout for
@@ -735,7 +741,7 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
-| `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
+| `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement (rc.117: 2929.0 kB / 649.8 kB gzip total); stream-backed derived atoms allowed since rc.117 (Effect-TS/effect#7535) |
 | `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O, `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); host-contracts validators, `services/*`, `eval/*`, and the post-build readers (phase 2, ordinary-I/O modules, 2026-09-03); the dev server's services on one session-scoped runtime created in `startDevServer` (phase 2, dev server, 2026-09-03); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
 | `@effect/platform-node-shared` (`NodeTerminal` / `NodeStdio`) + `effect/Terminal`, `effect/Stdio` | first-party CLI command output, diagnostics, and machine output (`src/cli.ts`, `src/effect/terminal.ts`, `src/effect/cli-runtime.ts`), loaded lazily on the first command write (2026-09-03); Commander's help/version/argv-error text and the scaffolder's `--help` / flag-error text stay on synchronous process writes for the cold-start budget | re-pin re-checks `Terminal.display` stays stdout-only, `readLine` EOF → `QuitError`, the `Stdio` sink contract, and re-measures `agent-bundle --version` startup against the recorded ≈60 ms (`cli.test.ts` fails the build if the trivial invocations resolve an `effect` module) |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
@@ -774,7 +780,10 @@ must not regress it: `pnpm bench:hook-cold-start -- --check`.
    the same RC; re-run the Workbench disposal regression test and production
    bundle measurement (rsbuild size table), and re-measure the scaffolder
    bundle (`pnpm --filter create-agent-bundle build` prints the size table).
-3. `git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git main --squash`.
+3. `git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git effect@<version> --squash`
+   (the release tag of the new pin). Fetch upstream tags in a separate clone,
+   never into this repository. Keep the `git-subtree-dir` / `git-subtree-split`
+   trailers in the PR's squash-merge body so the next pull finds its base.
 4. Re-read `repos/effect/LLMS.md` and refresh `agent-patterns/effect-*.md`.
 5. Re-verify every unstable-module row and the language-service diagnostics.
 6. Re-run the hook cold-start check.
@@ -804,7 +813,7 @@ resolved the current repo practice stands, and new code follows it.
   (`adapters/hook-contract.ts`, `install/surface.ts`,
   `dev/runtime-client-surface-proxy.ts`, `dev/mcp-apps/mcp-app-sandbox.ts`).
   Roughly 400 call sites in total, against about a dozen
-  `Predicate.isObject` uses (the install lane). rc.112 `Predicate` has no
+  `Predicate.isObject` uses (the install lane). rc.117 `Predicate` has no
   `isRecord`; `Predicate.isObject` is the closest match (`{}`-typed, excludes
   arrays), and `Predicate.isObjectOrArray` includes arrays. Options: declare
   the `core/strict-json.ts` guards the sanctioned spelling, fold the private
@@ -819,7 +828,7 @@ resolved the current repo practice stands, and new code follows it.
   [Yieldable framework errors](#yieldable-framework-errors-dataerror-decided-2026-09-03).
   Summary: framework-process error classes in Effect-native modules extend
   `YieldableFrameworkError` / `YieldableCodedError`
-  (`packages/agent-bundle/src/effect/errors.ts`, thin subclasses of rc.112
+  (`packages/agent-bundle/src/effect/errors.ts`, thin subclasses of rc.117
   `Data.Error` that keep the `Error` / `CodedError` constructor shapes and
   restore plain-`Error` `toJSON` / `util.inspect`), so programs write
   `return yield* new X(...)`. `Schema.TaggedError` stays deferred. Plain
@@ -852,6 +861,6 @@ soon as the trigger fires and retire the row.
 
 | Recorded | Pin (where) | Observed registry state | Trigger / action |
 | --- | --- | --- | --- |
-| 2026-09-03 | `effect-rstest` **pkg.pr.new preview `e5f8d5f`** (`https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f`), `packages/agent-bundle`, `packages/rsc-runtime`, `packages/create-agent-bundle` devDependencies (three pins). Needs a real release pin once published. | `npm view effect-rstest versions`: **E404, not published to npm** (no versions, no dist-tags). | First npm publish of `effect-rstest`. Replace all three preview URLs with the exact published version, refresh `pnpm-lock.yaml`, re-run `pnpm test:unit` (`it.effect` / `it.live` suites). |
-| 2026-09-03 | `effect` **`4.0.0-rc.112`** (`packages/agent-bundle`, `packages/rsc-runtime`, `packages/workbench`, `packages/create-agent-bundle`), `@effect/atom-react` `4.0.0-rc.112` (`packages/workbench`), `@effect/platform-node` `4.0.0-rc.112` (`packages/create-agent-bundle`), `@effect/platform-node-shared` `4.0.0-rc.112` (`packages/agent-bundle`), `@effect/language-service` `0.87.2` (root). `@effect/tsgo` is not part of this row: it detects the Effect major version rather than pinning an RC, and moves on its own (`0.45.0`, 2026-09-24, #817; `effect-tsgo diagnostics` output identical to `0.41.0` on the root, Workbench, and scaffolder projects). Auto re-pin in lockstep + `repos/effect` subtree + Workbench atom phase 4 unblock (stream-backed derived atoms) once the post-rc.112 disposal fix ships. | `npm view effect dist-tags`: `rc` **`4.0.0-rc.112`** (unchanged), `beta` `4.0.0-beta.107`, `latest` `3.22.1`. `@effect/atom-react`: `rc` `4.0.0-rc.112`. `@effect/language-service`: `latest` `0.87.2`. 2026-09-24: `rc` **`4.0.0-rc.117`**; the trigger has fired but the re-pin is **blocked** (#832): every `effect-rstest` build imports `effect/testing/FastCheck`, removed in rc.113 (Effect-TS/effect#7254, native Arbitraries), so six unit-test files fail to load on any RC after rc.112. | `effect-rstest` ships a build ported to `effect/unstable/arbitrary/Arbitrary` (as upstream `@effect/vitest` did); then run the re-pin chore steps 1–6 above (#832 has steps 1 and 3), bumping `effect`, `@effect/atom-react`, and `@effect/language-service` together, then lift the stream-backed derived-atom ban in the Workbench if the disposal fix is in the new RC. |
+| 2026-09-25 | `effect-rstest` **pkg.pr.new preview `cbbf87e`** (`https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e`, the ScriptedAlchemy/effect-rstest#5 port to `effect/unstable/arbitrary`), `packages/agent-bundle`, `packages/rsc-runtime`, `packages/create-agent-bundle` devDependencies (three pins). Needs a real release pin once published. | ScriptedAlchemy/effect-rstest is **not published to npm**. The npm name `effect-rstest` (`latest` `0.1.5`, 2026-09-19) belongs to an unrelated port, [Nsttt/effect-rstest](https://github.com/Nsttt/effect-rstest); do not pin it by name. | First npm publish of ScriptedAlchemy/effect-rstest. Replace all three preview URLs with the exact published version, refresh `pnpm-lock.yaml`, re-run `pnpm test:unit` (`it.effect` / `it.live` / `it.prop` suites). |
+| 2026-09-25 | `effect` **`4.0.0-rc.117`** (`packages/agent-bundle`, `packages/rsc-runtime`, `packages/workbench`, `packages/create-agent-bundle`), `@effect/atom-react` `4.0.0-rc.117` (`packages/workbench`), `@effect/platform-node` `4.0.0-rc.117` (`packages/create-agent-bundle`), `@effect/platform-node-shared` `4.0.0-rc.117` (`packages/agent-bundle`), `@effect/language-service` `0.87.2` (root). `@effect/tsgo` is not part of this row: it detects the Effect major version rather than pinning an RC, and moves on its own. Auto re-pin in lockstep + `repos/effect` subtree at the matching release tag. | `npm view effect dist-tags`: `rc` **`4.0.0-rc.117`**, `beta` `4.0.0-beta.107`, `latest` `3.22.2`. `@effect/atom-react`: `rc` `4.0.0-rc.117`. `@effect/language-service`: `latest` `0.87.2`. Re-pinned from rc.112 in #832 after `effect-rstest` moved off `effect/testing/FastCheck` (removed in rc.113, Effect-TS/effect#7254). | `effect@rc` advances past `4.0.0-rc.117`. Run the re-pin chore steps 1–6 above, bumping `effect`, `@effect/atom-react`, the platform packages, and `@effect/language-service` together; `effect-rstest` must build against the new RC first. |
 | 2026-09-03 | Agent Plugins specification **`1.0.0`**, `packages/agent-bundle/src/adapters/schemas/portable/{plugin,mcp}.schema.json` + `PROVENANCE.json` (spec repo `agentplugins/agent-plugins-spec` @ `ff8ab5e392cc87bd88d87c060815a87490e51003`, 2026-08-19), portable `adapterRevision` `1.8.0`, pins in `tests/adapter-metadata.test.ts`. Spec watch for #426; not an npm pin, so re-verify with `curl`/`gh api`, not `npm view`. | Live `https://agent-plugins.org/schemas/1.0.0/{plugin,mcp}.schema.json` rehash to the pinned sha256 (1805 / 3408 bytes). Repo `main` HEAD unchanged at the pinned commit; **no tags, no GitHub releases**. `spec/1.1.0.md` is "Status: Working Draft" (started 2026-08-15, `a2afd7ec`); in-repo `schemas/1.1.0/*.schema.json` differ from 1.0.0 only in the `$id`/`const`/`description` version strings; `https://agent-plugins.org/schemas/1.1.0/*.schema.json` → 404. Observed latest published version: **1.0.0**. | `spec/1.1.0.md` (or later) flips to "Published" **and** `agent-plugins.org/schemas/<version>/` serves both schemas. Re-pin under `schemas/portable/` with a dated `PROVENANCE.json` (sha/bytes/date/commit), bump the portable `adapterRevision`, refresh the metadata pins, run `pnpm test:unit` (portable adapter + plugin-validation suites) and `pnpm test:host-install:build`, and add a capability row per additive field. |
