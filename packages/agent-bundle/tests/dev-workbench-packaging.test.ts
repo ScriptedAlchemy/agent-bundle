@@ -132,7 +132,7 @@ it('packages both react-server render children and renders a route invocation fr
       markdownStream.tarball,
       'react@19.2.8',
       'react-dom@19.2.8',
-      'zod@4.5.4',
+      'zod@4.6.4',
     ], { cwd: consumer, env: installedEnvironment() });
     await mkdir(join(project, 'src', 'mcp', 'status', 'tools'), { recursive: true });
     await Promise.all([

@@ -105,7 +105,7 @@ beforeAll(async () => {
     markdownStream.tarball,
     'react@19.2.8',
     'react-dom@19.2.8',
-    'zod@4.5.4',
+    'zod@4.6.4',
   ], { cwd: project, env: installedEnvironment() });
   const cli = join(project, 'node_modules', '.bin', 'agent-bundle');
   await execFile(cli, ['build', '--root', project, '--output', artifact], {
