@@ -46,7 +46,6 @@ import {
   DevRuntimeUnavailableError,
   createRuntimeGenerationStore,
   type DevRuntimeAsset,
-  type DevRuntimeAssetRequest,
   type DevRuntimeDescriptor,
   type DevRuntimeDiagnostic,
   type DevRuntimeEventInput,
@@ -76,7 +75,6 @@ const descriptor: DevRuntimeDescriptor = Object.freeze({
   label: 'RSC agent runtime',
   schemaVersion: 1,
 });
-const maximumAssetBytes = 8 * 1024 * 1024;
 const stateStoreId = 'playground';
 const maximumInvocationWorkers = 4;
 const maximumInvocationStdoutBytes = 4 * 1024 * 1024;
@@ -463,7 +461,6 @@ const clonePrepared = (prepared: DevRuntimePreparedProject): DevRuntimePreparedP
   deepFreeze(structuredClone(prepared));
 
 const preparedRuntimeAuthorityDigest = (prepared: DevRuntimePreparedProject): string => digestValue({
-  apps: prepared.apps,
   provider: prepared.provider,
   servers: prepared.servers,
 });
@@ -508,10 +505,6 @@ export interface RsbuildRuntimeSessionStartTesting {
    * while an activation is in flight) can be injected deterministically.
    */
   readonly beforeActivationCommit?: () => Promise<void> | void;
-  readonly beforeAssetRead?: (input: Readonly<{
-    readonly request: DevRuntimeAssetRequest;
-    readonly runtimeGenerationId: string;
-  }>) => Promise<void> | void;
   readonly afterInvocationWorkerResponse?: (input: Readonly<{
     readonly runId: string;
     readonly surfaceId: string;
@@ -560,7 +553,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #stateKernel: ReturnType<typeof createFileRuntimeKernel>;
   readonly #activeRuns = new Map<string, DevRuntimeRun>();
   readonly #terminalRuns = new Map<string, DevRuntimeRun>();
-  readonly #surfaceAssetApps = new Map<string, DevRuntimePreparedProject['apps'][number]>();
   readonly #surfaces = new Map<string, DevRuntimeSurface>();
   readonly #testing: RsbuildRuntimeSessionStartTesting;
   readonly #maximumRunHistory: number;
@@ -584,7 +576,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #evictionTail: Promise<void> = Promise.resolve();
   #generationSequence = 0;
   #failureTail: Promise<void> = Promise.resolve();
-  #hmrReady = false;
   #reconcileDegraded = false;
   #latestPreparedRuntime: DevRuntimePreparedProject;
   #latestRscCohortRevision = 0;
@@ -617,7 +608,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#status = Object.freeze({
       descriptor,
       diagnostics: Object.freeze([]),
-      hmrReady: false,
       state: 'starting',
     });
   }
@@ -753,48 +743,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#invocations.add(task);
     void task.finally(() => { this.#invocations.delete(task); }).catch(() => undefined);
     return task;
-  }
-
-  async readAsset(request: DevRuntimeAssetRequest): Promise<DevRuntimeAsset | undefined> {
-    if (this.#closed || !this.#surfaces.has(request.surfaceId) || request.runtimeGenerationId.length === 0) return undefined;
-    const segments = request.path.map((segment) => {
-      if (!safeSegment(segment)) return undefined;
-      try {
-        return decodeURIComponent(segment) === segment ? segment : undefined;
-      } catch {
-        return undefined;
-      }
-    });
-    if (segments.some((segment) => segment === undefined)) return undefined;
-    const requestPath = `/${segments.join('/')}`;
-    let lease;
-    try {
-      lease = await this.#generationStore.lease(request.runtimeGenerationId);
-      await this.#testing.beforeAssetRead?.(Object.freeze({
-        request,
-        runtimeGenerationId: lease.generation.id,
-      }));
-      const app = this.#surfaceAssetApps.get(request.surfaceId);
-      if (app === undefined) return undefined;
-      const boundSurfaceId = this.#surfaceAssetBinding(lease.generation, app);
-      if (boundSurfaceId === undefined) return undefined;
-      const descriptor = lease.generation.manifest.metadata.surfaceAssets[boundSurfaceId]
-        ?.find((asset) => asset.requestPath === requestPath);
-      if (descriptor === undefined || descriptor.bytes > maximumAssetBytes) return undefined;
-      const assetSegments = descriptor.generationPath.split('/');
-      if (assetSegments.some((segment) => !safeSegment(segment))) return undefined;
-      const path = join(lease.generation.root, ...assetSegments);
-      if (!isInside(lease.generation.root, path)) return undefined;
-      const details = await lstat(path);
-      if (!details.isFile() || details.isSymbolicLink() || details.size !== descriptor.bytes) return undefined;
-      const body = await readFile(path);
-      if (body.byteLength !== descriptor.bytes || createHash('sha256').update(body).digest('hex') !== descriptor.sha256) return undefined;
-      return Object.freeze({ body, contentType: descriptor.contentType });
-    } catch {
-      return undefined;
-    } finally {
-      await lease?.release();
-    }
   }
 
   async readRunFlight(runId: string): Promise<DevRuntimeAsset | undefined> {
@@ -1838,7 +1786,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #attachServer(server: StartDevServerResult['server']): void {
     if (this.#closed) return;
     this.#server = server;
-    this.#hmrReady = true;
     this.#setStatus(this.#active === undefined ? 'compiling' : 'active');
   }
 
@@ -2161,7 +2108,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       preparedGeneration = undefined;
       this.#active = generation;
       this.#updateSurfaces(snapshot, snapshot.preparedRuntime);
-      this.#updateSurfaceAssetApps(snapshot.preparedRuntime);
       this.#reconcileDegraded = false;
       this.#setStatus('active');
       this.#emit(Object.freeze({ runtimeGenerationId: generation.id, type: 'runtime.generation.activated' }));
@@ -2181,7 +2127,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     try {
       const definition = JSON.parse(await readFile(join(active.root, 'rsc', 'runtime-definition.json'), 'utf8')) as SerializedRuntimeDefinition;
       this.#updateSurfaces({ definition }, prepared);
-      this.#updateSurfaceAssetApps(prepared);
       if (this.#reconcileDegraded) {
         this.#reconcileDegraded = false;
         this.#setStatus('active');
@@ -2196,7 +2141,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   async #close(): Promise<void> {
     this.#closed = true;
     this.#invocationAbort.abort(new Error('RSC runtime session is closing.'));
-    this.#hmrReady = false;
     this.#pendingCohortIds.clear();
     this.#settleCompileObservation();
     for (const worker of this.#workers.values()) {
@@ -2207,7 +2151,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const checkpointStoreClose = this.#checkpointStore.close();
     void checkpointStoreClose.catch(() => undefined);
     this.#setStatus('closed');
-    this.#surfaceAssetApps.clear();
     while (this.#captureTasks.size > 0) await Promise.all([...this.#captureTasks]);
     while (this.#invocations.size > 0) await Promise.allSettled([...this.#invocations]);
     while (this.#runReadTasks.size > 0) {
@@ -2308,14 +2251,13 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       ...(vector === undefined ? {} : { activeVector: vector, lastGoodVector: vector }),
       descriptor,
       diagnostics: Object.freeze([...diagnostics]),
-      hmrReady: this.#hmrReady,
       state,
     });
   }
 
   #updateSurfaces(
     snapshot: Pick<RscRuntimeCapturedGenerationSnapshot, 'definition'>,
-    prepared: Pick<DevRuntimePreparedProject, 'apps' | 'servers'>,
+    prepared: Pick<DevRuntimePreparedProject, 'servers'>,
   ): void {
     this.#surfaces.clear();
     for (const hook of snapshot.definition.nativeHooks) {
@@ -2349,41 +2291,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         fixtures: Object.freeze([]),
       }));
     }
-    for (const app of prepared.apps) {
-      this.#surfaces.set(`mcp.${app.name}`, Object.freeze({
-        id: `mcp.${app.name}`,
-        kind: 'mcp-app',
-        label: app.name,
-        readOnly: true,
-        targets: Object.freeze([...app.targets]),
-        fixtures: Object.freeze([]),
-      }));
-    }
-  }
-
-  #updateSurfaceAssetApps(prepared: Pick<DevRuntimePreparedProject, 'apps'>): void {
-    this.#surfaceAssetApps.clear();
-    for (const app of prepared.apps) {
-      this.#surfaceAssetApps.set(`mcp.${app.name}`, app);
-    }
-  }
-
-  #surfaceAssetBinding(
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    app: DevRuntimePreparedProject['apps'][number],
-  ): string | undefined {
-    const metadata = generation.manifest.metadata;
-    const exact = metadata.appDefinitions.find((candidate) =>
-      candidate.id === app.id && candidate.resourceUri === app.resourceUri,
-    );
-    if (exact !== undefined) {
-      const surfaceId = `mcp.${exact.name}`;
-      return metadata.surfaceAssets[surfaceId] === undefined ? undefined : surfaceId;
-    }
-    const matches = metadata.appDefinitions.filter((candidate) =>
-      candidate.resourceUri === app.resourceUri && metadata.surfaceAssets[`mcp.${candidate.name}`] !== undefined,
-    );
-    return matches.length === 1 ? `mcp.${matches[0]!.name}` : undefined;
   }
 
   #vector(generation: RuntimeGeneration<RscRuntimeGenerationMetadata>, stateVersion = 0): RuntimeVector {
@@ -2461,14 +2368,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     if (prepared.provider !== './src/dev/provider.ts') throw new Error('RSC runtime provider declaration does not match this provider.');
     if (!isInside(context.projectRoot, resolve(context.projectRoot, prepared.provider))) {
       throw new Error('RSC runtime provider declaration escapes the project root.');
-    }
-    for (const source of [
-      ...prepared.servers.flatMap((server) => [server.cwd, server.source]),
-      ...prepared.apps.flatMap((app) => [app.source, app.template]),
-    ]) {
-      if (source !== undefined && !isInside(context.projectRoot, resolve(context.projectRoot, source))) {
-        throw new Error('RSC runtime prepared declaration contains a path outside the project root.');
-      }
     }
   }
 }

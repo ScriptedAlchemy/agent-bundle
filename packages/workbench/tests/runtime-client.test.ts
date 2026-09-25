@@ -34,7 +34,6 @@ const status = Object.freeze({
   activeVector: vector,
   descriptor: Object.freeze({ environmentVariables: [], id: 'rsc', label: 'RSC', schemaVersion: 1 as const }),
   diagnostics: Object.freeze([]),
-  hmrReady: true,
   lastGoodVector: vector,
   state: 'active' as const,
 }) satisfies DevRuntimeStatus;
@@ -42,7 +41,7 @@ const status = Object.freeze({
 const surface = Object.freeze({
   fixtures: Object.freeze([{ id: 'fixture-a', label: 'Fixture A' }]),
   id: 'app-weather',
-  kind: 'mcp-app' as const,
+  kind: 'mcp-tool' as const,
   label: 'Weather App',
   readOnly: false,
   targets: Object.freeze(['portable']),
@@ -91,7 +90,6 @@ const deferred = <Value>(): Deferred<Value> => {
 };
 
 const runtimeFetch = (options: {
-  readonly asset?: Response;
   readonly document?: Response;
   readonly flight?: Response;
   readonly runs?: readonly DevRuntimeRun[];
@@ -125,9 +123,6 @@ const runtimeFetch = (options: {
             type: 'complete',
           }],
         });
-      }
-      if (url === '/api/runtime/assets/app-weather/assets/weather%20app.js?generation=generation%20a') {
-        return options.asset ?? new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'application/javascript' } });
       }
       throw new Error(`Unexpected route request ${url}.`);
     },
@@ -320,7 +315,6 @@ it('rejects every runtime mutation and protected read before an available bootst
   await expect(client.readRun('run a')).rejects.toMatchObject({ code: 'AB8201' });
   await expect(client.replayRun({ mode: 'exact', runId: 'run a' })).rejects.toMatchObject({ code: 'AB8201' });
   await expect(client.resetState({ stateStoreId: 'state-a' })).rejects.toMatchObject({ code: 'AB8201' });
-  await expect(client.readAsset({ path: ['assets', 'weather app.js'], runtimeGenerationId: 'generation a', surfaceId: 'app-weather' })).rejects.toMatchObject({ code: 'AB8201' });
   expect(fixture.requests).toEqual([]);
 });
 
@@ -366,13 +360,11 @@ it('uses the exact imported request bodies and encoded opaque runtime paths', as
   await client.readRun('run a');
   await client.replayRun({ expectedGenerationId: 'generation-a', mode: 'exact', runId: 'run a' });
   await client.resetState({ expectedGenerationId: 'generation-a', seed: { city: 'London' }, stateStoreId: 'state-a' });
-  await expect(client.readAsset({ path: ['assets', 'weather app.js'], runtimeGenerationId: 'generation a', surfaceId: 'app-weather' })).resolves.toBeInstanceOf(Blob);
   await expect(client.readRunFlight('run a')).resolves.toBeInstanceOf(Blob);
 
   expect(fixture.requests.map((request) => request.url)).toContain('/api/runtime/runs/run%20a');
   expect(fixture.requests.map((request) => request.url)).toContain('/api/runtime/runs/run%20a/flight');
   expect(fixture.requests.map((request) => request.url)).toContain('/api/runtime/runs/run%20a/replay');
-  expect(fixture.requests.map((request) => request.url)).toContain('/api/runtime/assets/app-weather/assets/weather%20app.js?generation=generation%20a');
   expect(fixture.requests.find((request) => request.url === '/api/runtime/runs')?.body).toBe(
     '{"expectedGenerationId":"generation-a","fixtureId":"fixture-a","input":{"city":"London"},"surfaceId":"app-weather","target":"portable"}',
   );
@@ -417,23 +409,6 @@ it('surfaces a complete sanitized generation conflict without retrying the prote
     new RuntimeClientError({ code: 'AB8204', details: { actualGenerationId: 'generation-b' }, message: 'Generation changed.', phase: 'provider-lifecycle' }),
   );
   expect(runs).toBe(1);
-});
-
-it('rejects oversized, untyped, or unsupported protected assets', async () => {
-  const oversized = new Response(new Uint8Array(4 * 1024 * 1024 + 1), { headers: { 'content-type': 'application/javascript' } });
-  const missingType = new Response(new Uint8Array([1]));
-  const unsupportedType = new Response(new Uint8Array([1]), { headers: { 'content-type': 'text/plain' } });
-
-  for (const asset of [oversized, missingType, unsupportedType]) {
-    const fixture = runtimeFetch({ asset });
-    const client = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));
-    await client.bootstrap();
-    await expect(client.readAsset({
-      path: ['assets', 'weather app.js'],
-      runtimeGenerationId: 'generation a',
-      surfaceId: 'app-weather',
-    })).rejects.toMatchObject({ code: 'AB8206' });
-  }
 });
 
 it('rejects oversized or mistyped protected Flight payloads', async () => {

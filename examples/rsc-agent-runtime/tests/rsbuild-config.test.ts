@@ -33,7 +33,7 @@ test('sets an explicit Chromium browserslist on the web hosts only', () => {
   expect(webOutput(production, 'app')?.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
   expect(webOutput(production, 'widget')?.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
   expect(webOutput(production, 'rsc')?.overrideBrowserslist).toBeUndefined();
-  expect(webOutput(development, 'app')?.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
+  expect(webOutput(development, 'app')).toBeUndefined();
   expect(webOutput(development, 'widget')?.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
 });
 
@@ -46,15 +46,12 @@ test('resolved development topology keeps every React environment in production 
     });
     const inspection = await rsbuild.inspectConfig({ mode: 'development' });
     const widgetBundler = inspection.origin.bundlerConfigs.find((config) => config.name === 'widget');
-    const appBundler = inspection.origin.bundlerConfigs.find((config) => config.name === 'app');
 
     expect(inspection.origin.rsbuildConfig.mode).toBe('production');
-    expect(inspection.origin.environmentConfigs.app?.mode).toBe('production');
+    expect(inspection.origin.environmentConfigs.app).toBeUndefined();
     expect(inspection.origin.environmentConfigs.rsc?.mode).toBe('production');
     expect(inspection.origin.environmentConfigs.widget?.mode).toBe('production');
-    expect(inspection.origin.environmentConfigs.app?.output.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
     expect(inspection.origin.environmentConfigs.widget?.output.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
-    expect(appBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
     expect(widgetBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
   } finally {
     await rm(compilerRoot, { force: true, recursive: true });

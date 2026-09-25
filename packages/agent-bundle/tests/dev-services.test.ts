@@ -118,32 +118,12 @@ it('prepares a frozen server-only runtime declaration only for development calle
     await expect(readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(runtime.source.state).toBe('ready');
     expect(runtime.devRuntime).toEqual({
-      apps: [{
-        _meta: { labels: ['one', 'two'], ui: { preferred: 'compact' } },
-        id: 'mcp-app:timeline:dashboard',
-        name: 'dashboard',
-        resourceUri: 'ui://timeline/v1/dashboard',
-        serverId: 'mcp:timeline',
-        serverName: 'timeline',
-        source: join(root, 'src', 'app.ts'),
-        targets: ['portable'],
-        template: join(root, 'src', 'shell.html'),
-      }],
       provider: './src/dev/provider.ts',
-      servers: [expect.objectContaining({
-        id: 'mcp:timeline',
-        name: 'timeline',
-        source: join(root, 'src', 'server.ts'),
-        targets: ['portable'],
-        transport: 'stdio',
-      })],
+      servers: [{ id: 'mcp:timeline', name: 'timeline', targets: ['portable'] }],
       sourceRevision: runtime.source.revision,
     });
     expect(Object.isFrozen(runtime.devRuntime)).toBe(true);
-    expect(Object.isFrozen(runtime.devRuntime?.apps)).toBe(true);
-    expect(Object.isFrozen(runtime.devRuntime?.apps[0]!._meta)).toBe(true);
-    expect(Object.isFrozen(runtime.devRuntime?.apps[0]!._meta?.labels)).toBe(true);
-    expect('provenance' in runtime.devRuntime!.apps[0]!).toBe(false);
+    expect(Object.isFrozen(runtime.devRuntime?.servers[0]?.targets)).toBe(true);
   } finally {
     await removeTree(root);
   }

@@ -11,9 +11,7 @@ import type {
   RscStagedEnvironmentCheckpoint,
 } from './environment-checkpoint-store.js';
 import type {
-  RscRuntimeAppDefinition,
   RscRuntimeGenerationMetadata,
-  RscRuntimeSurfaceAsset,
   SerializedRuntimeDefinition,
 } from '../runtime/contracts.js';
 import type { JsonObject, JsonValue } from 'agent-bundle';
@@ -29,7 +27,7 @@ import type {
   RuntimeGenerationValidationInput,
 } from 'agent-bundle/api';
 
-export type { RscRuntimeGenerationMetadata, RscRuntimeSurfaceAsset } from '../runtime/contracts.js';
+export type { RscRuntimeGenerationMetadata } from '../runtime/contracts.js';
 
 const definitionFile = 'rsc/runtime-definition.json';
 const runtimeAssetsFile = 'rsc/runtime-assets.json';
@@ -453,109 +451,6 @@ const validateClientReferenceRelationship = async (
   }
 };
 
-const contentTypeFor = (path: string): RscRuntimeSurfaceAsset['contentType'] | undefined => {
-  if (path.endsWith('.js')) return 'application/javascript';
-  if (path.endsWith('.json')) return 'application/json';
-  if (path.endsWith('.css')) return 'text/css';
-  if (path.endsWith('.html')) return 'text/html';
-  return undefined;
-};
-
-const surfaceAssets = (
-  preparedRuntime: DevRuntimePreparedProject,
-  assets: readonly RuntimeGenerationAsset[],
-): Readonly<Record<string, readonly RscRuntimeSurfaceAsset[]>> => {
-  const widgetAssets = assets.flatMap((asset): RscRuntimeSurfaceAsset[] => {
-    if (!asset.path.startsWith('widget/')) return [];
-    const contentType = contentTypeFor(asset.path);
-    if (contentType === undefined) return [];
-    const requestPath = asset.path.slice('widget'.length);
-    return [Object.freeze({
-      bytes: asset.bytes,
-      contentType,
-      generationPath: asset.path,
-      requestPath,
-      sha256: asset.sha256,
-    })];
-  });
-  const appHtmlAssets = assets.flatMap((asset): RscRuntimeSurfaceAsset[] => {
-    if (!asset.path.startsWith('app/') || !asset.path.endsWith('.html')) return [];
-    return [Object.freeze({
-      bytes: asset.bytes,
-      contentType: 'text/html',
-      generationPath: asset.path,
-      requestPath: asset.path.slice('app'.length),
-      sha256: asset.sha256,
-    })];
-  });
-  const surfaces: Record<string, readonly RscRuntimeSurfaceAsset[]> = {};
-  for (const app of preparedRuntime.apps) {
-    const surfaceId = `mcp.${app.name}`;
-    if (surfaces[surfaceId] !== undefined) throw new Error('Runtime generation has duplicate App surface definitions.');
-    const resourcePath = appResourcePath(app.resourceUri);
-    const html = appHtmlAssets.filter((asset) => asset.requestPath === resourcePath);
-    if (html.length !== 1) throw new Error(`Runtime generation App ${JSON.stringify(app.resourceUri)} has no unique captured HTML asset.`);
-    surfaces[surfaceId] = Object.freeze([
-      ...widgetAssets.map((asset) => Object.freeze({ ...asset })),
-      Object.freeze({ ...html[0]! }),
-    ]);
-  }
-  return Object.freeze(surfaces);
-};
-
-const appResourcePath = (uri: string): string => {
-  let parsed: URL;
-  try {
-    parsed = new URL(uri);
-  } catch {
-    throw new TypeError('Runtime generation App resource URI is invalid.');
-  }
-  if (parsed.protocol !== 'ui:' || parsed.host.length === 0 || parsed.search.length > 0 || parsed.hash.length > 0) {
-    throw new TypeError('Runtime generation App resource URI is invalid.');
-  }
-  const origin = `ui://${parsed.host}`;
-  if (!uri.startsWith(origin)) throw new TypeError('Runtime generation App resource URI is invalid.');
-  const path = uri.slice(origin.length);
-  const segments = path.startsWith('/') ? path.slice(1).split('/') : [];
-  if (segments.length === 0 || segments.some((segment) => !isSafeSegment(segment) || decodeURIComponent(segment) !== segment)) {
-    throw new TypeError('Runtime generation App resource URI is invalid.');
-  }
-  return `/${segments.join('/')}`;
-};
-
-const validateAppSurfaceAssets = (
-  apps: readonly RscRuntimeAppDefinition[],
-  surfaces: Readonly<Record<string, readonly RscRuntimeSurfaceAsset[]>>,
-): void => {
-  const expected = new Set<string>();
-  for (const app of apps) {
-    const surfaceId = `mcp.${app.name}`;
-    if (expected.has(surfaceId)) throw new TypeError('Runtime generation has duplicate App surface definitions.');
-    expected.add(surfaceId);
-    const resourcePath = appResourcePath(app.resourceUri);
-    const appHtml = surfaces[surfaceId]?.filter((asset) =>
-      asset.contentType === 'text/html' && asset.generationPath.startsWith('app/'),
-    ) ?? [];
-    if (appHtml.length !== 1 || appHtml[0]!.generationPath !== `app${resourcePath}` || appHtml[0]!.requestPath !== resourcePath) {
-      throw new TypeError(`Runtime generation App ${JSON.stringify(app.resourceUri)} has no canonical captured HTML asset.`);
-    }
-  }
-  if (Object.keys(surfaces).length !== expected.size || Object.keys(surfaces).some((surfaceId) => !expected.has(surfaceId))) {
-    throw new TypeError('Runtime generation App surface assets are not owned by App definitions.');
-  }
-};
-
-const appDefinitions = (preparedRuntime: DevRuntimePreparedProject): readonly RscRuntimeAppDefinition[] =>
-  freezeJson(preparedRuntime.apps.map((app) => ({
-    id: app.id,
-    name: app.name,
-    resourceUri: app.resourceUri,
-  })).sort((left, right) => {
-    const leftJson = canonicalJson(left);
-    const rightJson = canonicalJson(right);
-    return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
-  })) as unknown as readonly RscRuntimeAppDefinition[];
-
 const metadataFromSnapshot = async (
   snapshot: RscRuntimeCapturedGenerationSnapshot,
   assets: readonly RuntimeGenerationAsset[],
@@ -577,10 +472,8 @@ const metadataFromSnapshot = async (
     return [entry, `rsc/${path}`];
   })));
   return Object.freeze({
-    appDefinitions: appDefinitions(snapshot.preparedRuntime),
     entries,
     stateStoreId,
-    surfaceAssets: surfaceAssets(snapshot.preparedRuntime, assets),
   });
 };
 
@@ -594,7 +487,7 @@ export const captureRuntimeGenerationSnapshot = async (
   // live compiler roots, which the next parallel compile may already be
   // rewriting. The definition executable and the generated definition
   // artifacts likewise run against and land in the candidate's own copy.
-  const { app, rsc, widget } = input.cohort;
+  const { rsc, widget } = input.cohort;
   const candidateRsc = join(input.candidate.root, 'rsc');
   const runtimeAssets = await parseRuntimeAssets(rsc.root);
   await copyDeclaredRscAssets(rsc, runtimeAssets, candidateRsc);
@@ -602,7 +495,6 @@ export const captureRuntimeGenerationSnapshot = async (
   await writeFileDurably(join(candidateRsc, 'runtime-definition.json'), Buffer.from(canonicalJson(definition)));
   await emitRuntimeArtifacts(candidateRsc, definition);
   await fsyncPath(candidateRsc);
-  await copyCheckpointTree(app, join(input.candidate.root, 'app'));
   await copyCheckpointTree(widget, join(input.candidate.root, 'widget'));
   await fsyncPath(input.candidate.root);
   const assets = await walkRegularFiles(input.candidate.root);
@@ -619,12 +511,12 @@ export const captureRuntimeGenerationSnapshot = async (
 
 const decodeMetadata = (value: JsonValue): RscRuntimeGenerationMetadata => {
   if (!isJsonObject(value)) throw new TypeError('Runtime generation metadata is malformed.');
-  const required = ['appDefinitions', 'entries', 'stateStoreId', 'surfaceAssets'];
+  const required = ['entries', 'stateStoreId'];
   if (Object.keys(value).some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     throw new TypeError('Runtime generation metadata has an invalid schema.');
   }
-  const { appDefinitions, entries, stateStoreId, surfaceAssets } = value;
-  if (typeof stateStoreId !== 'string' || !Array.isArray(appDefinitions) || !isJsonObject(entries) || !isJsonObject(surfaceAssets)) {
+  const { entries, stateStoreId } = value;
+  if (typeof stateStoreId !== 'string' || !isJsonObject(entries)) {
     throw new TypeError('Runtime generation metadata is malformed.');
   }
   if (stateStoreId.length === 0 ||
@@ -632,42 +524,9 @@ const decodeMetadata = (value: JsonValue): RscRuntimeGenerationMetadata => {
     throw new TypeError('Runtime generation entries are malformed.');
   }
 
-  const decodedAppDefinitions = appDefinitions.map((value): RscRuntimeAppDefinition => {
-    if (!isJsonObject(value)) throw new TypeError('Runtime generation App definition is malformed.');
-    const fields = ['id', 'name', 'resourceUri'];
-    if (Object.keys(value).some((key) => !fields.includes(key)) || fields.some((field) => !(field in value)) ||
-      typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.resourceUri !== 'string') {
-      throw new TypeError('Runtime generation App definition is malformed.');
-    }
-    return Object.freeze({ id: value.id, name: value.name, resourceUri: value.resourceUri });
-  });
-
-  const decodedSurfaceAssets: Record<string, readonly RscRuntimeSurfaceAsset[]> = {};
-  for (const [surfaceId, value] of Object.entries(surfaceAssets)) {
-    if (surfaceId.length === 0 || !Array.isArray(value)) throw new TypeError('Runtime generation surface assets are malformed.');
-    decodedSurfaceAssets[surfaceId] = Object.freeze(value.map((value): RscRuntimeSurfaceAsset => {
-      if (!isJsonObject(value)) throw new TypeError('Runtime generation surface asset is malformed.');
-      const fields = ['bytes', 'contentType', 'generationPath', 'requestPath', 'sha256'];
-      if (Object.keys(value).some((key) => !fields.includes(key)) || fields.some((field) => !(field in value)) ||
-        typeof value.bytes !== 'number' || !Number.isSafeInteger(value.bytes) || value.bytes < 0 || typeof value.generationPath !== 'string' ||
-        typeof value.requestPath !== 'string' || typeof value.sha256 !== 'string' || !sha256Expression.test(value.sha256) ||
-        (value.contentType !== 'application/javascript' && value.contentType !== 'application/json' && value.contentType !== 'text/css' && value.contentType !== 'text/html')) {
-        throw new TypeError('Runtime generation surface asset is malformed.');
-      }
-      return Object.freeze({
-        bytes: value.bytes,
-        contentType: value.contentType,
-        generationPath: assertRelativeAssetPath(value.generationPath),
-        requestPath: value.requestPath,
-        sha256: value.sha256,
-      });
-    }));
-  }
   return Object.freeze({
-    appDefinitions: Object.freeze(decodedAppDefinitions),
     entries: Object.freeze(Object.fromEntries(requiredEntries.map((entry) => [entry, entries[entry] as string]))),
     stateStoreId,
-    surfaceAssets: Object.freeze(decodedSurfaceAssets),
   });
 };
 
@@ -701,17 +560,6 @@ export const validateRscRuntimeGenerationMetadata = async (
     throw new TypeError('Runtime generation definition is not canonical.');
   }
   await validateClientReferenceRelationship(input.root, input.assets);
-  const declaredSurfaceAssets = metadata.surfaceAssets as Readonly<Record<string, readonly RscRuntimeSurfaceAsset[]>>;
-  for (const [surface, descriptors] of Object.entries(declaredSurfaceAssets)) {
-    const requestPaths = new Set<string>();
-    for (const asset of descriptors) {
-      if (requestPaths.has(asset.requestPath) || assets.get(asset.generationPath)?.sha256 !== asset.sha256 || assets.get(asset.generationPath)?.bytes !== asset.bytes || contentTypeFor(asset.generationPath) !== asset.contentType) {
-        throw new TypeError(`Runtime generation surface ${JSON.stringify(surface)} is invalid.`);
-      }
-      requestPaths.add(asset.requestPath);
-    }
-  }
-  validateAppSurfaceAssets(metadata.appDefinitions, declaredSurfaceAssets);
   return metadata;
 };
 

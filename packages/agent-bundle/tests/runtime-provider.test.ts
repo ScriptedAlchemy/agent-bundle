@@ -142,7 +142,6 @@ it('starts one provider from the trusted prepared snapshot with only declared en
     status: () => ({
       descriptor: { environmentVariables: ['RUNTIME_TOKEN'], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
       diagnostics: [],
-      hmrReady: true,
       state: 'active',
     }),
   } as unknown as DevRuntimeSession;
@@ -152,7 +151,6 @@ it('starts one provider from the trusted prepared snapshot with only declared en
     emit: (event) => events.push(event),
     environment: { RUNTIME_TOKEN: 'allowed', UNDECLARED_SECRET: 'must-not-pass' },
     preparedRuntime: {
-      apps: [],
       provider: './src/dev/provider.ts',
       servers: [],
       sourceRevision: 'source-1',
@@ -178,7 +176,7 @@ it('starts one provider from the trusted prepared snapshot with only declared en
   });
   expect(received?.environment).not.toHaveProperty('UNDECLARED_SECRET');
   expect(controller.providerSessionId).toMatch(/^[0-9a-f-]{36}$/u);
-  expect(controller.status()).toMatchObject({ hmrReady: true, state: 'active' });
+  expect(controller.status()).toMatchObject({ state: 'active' });
   expect(events).toEqual([]);
   await controller.close();
 });
@@ -192,8 +190,8 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
     close: async () => undefined,
     reconcilePreparedRuntime: async () => undefined,
     status: () => activated
-      ? { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, lastGoodVector: vector, state: 'active' as const }
-      : { descriptor, diagnostics: [], hmrReady: false, state: 'compiling' as const },
+      ? { activeVector: vector, descriptor, diagnostics: [], lastGoodVector: vector, state: 'active' as const }
+      : { descriptor, diagnostics: [], state: 'compiling' as const },
     surfaces: () => activated ? [surface] : [],
   } as unknown as DevRuntimeSession;
   const controller = new DevRuntimeController({
@@ -202,7 +200,7 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
       observedEvents.push({ state: controller.status().state, surfaceCount: controller.surfaces().length, type: event.type });
     },
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
@@ -215,7 +213,7 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
   });
 
   await controller.start();
-  expect(controller.status()).toMatchObject({ hmrReady: false, state: 'compiling' });
+  expect(controller.status()).toMatchObject({ state: 'compiling' });
   expect(controller.status()).not.toHaveProperty('activeVector');
   expect(controller.surfaces()).toEqual([]);
 
@@ -224,7 +222,6 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
 
   expect(controller.status()).toMatchObject({
     activeVector: vector,
-    hmrReady: true,
     lastGoodVector: vector,
     state: 'active',
   });
@@ -258,12 +255,11 @@ it('refreshes authoritative failed and status snapshots before forwarding their 
     close: async () => undefined,
     reconcilePreparedRuntime: async () => undefined,
     status: () => malformed
-      ? { activeVector: { runtimeGenerationId: 7 }, descriptor, diagnostics: [], hmrReady: true, state: 'active' as const }
+      ? { activeVector: { runtimeGenerationId: 7 }, descriptor, diagnostics: [], state: 'active' as const }
       : {
           activeVector: vector,
           descriptor,
           diagnostics: failed ? [sourceBuildDiagnostic] : [],
-          hmrReady: true,
           lastGoodVector: vector,
           state: 'active' as const,
         },
@@ -279,7 +275,7 @@ it('refreshes authoritative failed and status snapshots before forwarding their 
       });
     },
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
@@ -335,7 +331,6 @@ it('refreshes terminal run snapshots before completed or failed events without r
         activeVector: current,
         descriptor,
         diagnostics: Object.freeze([]),
-        hmrReady: true,
         lastGoodVector: current,
         state: 'active' as const,
       });
@@ -351,7 +346,7 @@ it('refreshes terminal run snapshots before completed or failed events without r
       }));
     },
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
@@ -389,14 +384,14 @@ it('does not overwrite a controller-owned lifecycle failure while publishing its
     artifactStatus: () => ({ state: 'missing' }),
     emit: () => undefined,
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
       start: async () => ({
         close: async () => undefined,
         reconcilePreparedRuntime: async () => { throw new Error('Reconcile failed.'); },
-        status: () => ({ activeVector: vector, descriptor, diagnostics: [], hmrReady: true, lastGoodVector: vector, state: 'active' as const }),
+        status: () => ({ activeVector: vector, descriptor, diagnostics: [], lastGoodVector: vector, state: 'active' as const }),
         surfaces: () => [surface],
       } as unknown as DevRuntimeSession),
     },
@@ -404,7 +399,7 @@ it('does not overwrite a controller-owned lifecycle failure while publishing its
   });
 
   await controller.start();
-  await controller.reconcileDeclaration({ apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-2' });
+  await controller.reconcileDeclaration({ provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-2' });
 
   expect(controller.status()).toMatchObject({
     activeVector: vector,
@@ -447,7 +442,7 @@ it('detaches and freezes complete activation status and surface snapshots', asyn
     artifactStatus: () => ({ state: 'missing' }),
     emit: () => undefined,
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor: mutableDescriptor,
@@ -461,11 +456,10 @@ it('detaches and freezes complete activation status and surface snapshots', asyn
                 activeVector: mutableVector,
                 descriptor: mutableDescriptor,
                 diagnostics: [mutableDiagnostic],
-                hmrReady: true,
                 lastGoodVector: mutableVector,
                 state: 'active' as const,
               }
-            : { descriptor: mutableDescriptor, diagnostics: [], hmrReady: false, state: 'compiling' as const },
+            : { descriptor: mutableDescriptor, diagnostics: [], state: 'compiling' as const },
           surfaces: () => activated ? [mutableSurface] : [],
         } as unknown as DevRuntimeSession;
       },
@@ -514,22 +508,22 @@ it('degrades instead of publishing malformed activation snapshots', async () => 
   const malformed = [
     {
       name: 'partial vector',
-      status: { activeVector: { runtimeGenerationId: 7 }, descriptor, diagnostics: [], hmrReady: true, state: 'active' },
+      status: { activeVector: { runtimeGenerationId: 7 }, descriptor, diagnostics: [], state: 'active' },
       surfaces: [],
     },
     {
       name: 'malformed surface',
-      status: { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' },
+      status: { activeVector: vector, descriptor, diagnostics: [], state: 'active' },
       surfaces: [{}],
     },
     {
       name: 'cyclic schema',
-      status: { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' },
+      status: { activeVector: vector, descriptor, diagnostics: [], state: 'active' },
       surfaces: [{ ...surface, inputSchema: cyclicSchema }],
     },
     {
       name: 'BigInt fixture seed',
-      status: { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' },
+      status: { activeVector: vector, descriptor, diagnostics: [], state: 'active' },
       surfaces: [{ ...surface, fixtures: [{ id: 'after-edit', label: 'After file edit', seed: 1n }] }],
     },
   ] as const;
@@ -542,7 +536,7 @@ it('degrades instead of publishing malformed activation snapshots', async () => 
       artifactStatus: () => ({ state: 'missing' }),
       emit: (event) => { published.push(event.type); },
       environment: {},
-      preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+      preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
       projectRoot: '/workspace/project',
       provider: {
         descriptor,
@@ -553,7 +547,7 @@ it('degrades instead of publishing malformed activation snapshots', async () => 
             reconcilePreparedRuntime: async () => undefined,
             status: () => activated
               ? invalid.status
-              : { descriptor, diagnostics: [], hmrReady: false, state: 'compiling' as const },
+              : { descriptor, diagnostics: [], state: 'compiling' as const },
             surfaces: () => activated ? invalid.surfaces : [],
           } as unknown as DevRuntimeSession;
         },
@@ -585,7 +579,7 @@ it('accepts acyclic shared JSON fragments in activation snapshots', async () => 
     artifactStatus: () => ({ state: 'missing' }),
     emit: () => undefined,
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
@@ -595,8 +589,8 @@ it('accepts acyclic shared JSON fragments in activation snapshots', async () => 
           close: async () => undefined,
           reconcilePreparedRuntime: async () => undefined,
           status: () => activated
-            ? { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' as const }
-            : { descriptor, diagnostics: [], hmrReady: false, state: 'compiling' as const },
+            ? { activeVector: vector, descriptor, diagnostics: [], state: 'active' as const }
+            : { descriptor, diagnostics: [], state: 'compiling' as const },
           surfaces: () => activated
             ? [{
                 ...surface,
@@ -649,7 +643,7 @@ it('buffers synchronous startup failure and status until controller snapshots in
       });
     },
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
@@ -660,7 +654,7 @@ it('buffers synchronous startup failure and status until controller snapshots in
         return {
           close: async () => undefined,
           reconcilePreparedRuntime: async () => undefined,
-          status: () => ({ descriptor, diagnostics: [sourceBuildDiagnostic], hmrReady: true, state: 'degraded' as const }),
+          status: () => ({ descriptor, diagnostics: [sourceBuildDiagnostic], state: 'degraded' as const }),
           surfaces: () => [surface],
         } as unknown as DevRuntimeSession;
       },
@@ -691,7 +685,7 @@ it('buffers synchronous startup activation until controller snapshots install', 
       });
     },
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
@@ -702,7 +696,7 @@ it('buffers synchronous startup activation until controller snapshots install', 
         return {
           close: async () => undefined,
           reconcilePreparedRuntime: async () => undefined,
-          status: () => ({ activeVector: vector, descriptor, diagnostics: [], hmrReady: true, lastGoodVector: vector, state: 'active' as const }),
+          status: () => ({ activeVector: vector, descriptor, diagnostics: [], lastGoodVector: vector, state: 'active' as const }),
           surfaces: () => [surface],
         } as unknown as DevRuntimeSession;
       },
@@ -721,7 +715,7 @@ it('buffers synchronous startup activation until controller snapshots install', 
 
 it('drops buffered startup lifecycle events after close or topology failure', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
-  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
+  const prepared = { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
   for (const transition of ['close', 'topology'] as const) {
     let closeCalls = 0;
     let resolveSession: ((session: DevRuntimeSession) => void) | undefined;
@@ -752,7 +746,7 @@ it('drops buffered startup lifecycle events after close or topology failure', as
     resolveSession?.({
       close: async () => { closeCalls += 1; },
       reconcilePreparedRuntime: async () => undefined,
-      status: () => ({ activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+      status: () => ({ activeVector: vector, descriptor, diagnostics: [], state: 'active' }),
       surfaces: () => [surface],
     } as unknown as DevRuntimeSession);
     await starting;
@@ -775,7 +769,7 @@ it('sanitizes a failed activation refresh without recursively publishing runtime
     artifactStatus: () => ({ state: 'missing' }),
     emit: (event) => { published.push(event.type); },
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
@@ -784,7 +778,7 @@ it('sanitizes a failed activation refresh without recursively publishing runtime
         return {
           close: async () => undefined,
           reconcilePreparedRuntime: async () => undefined,
-          status: () => ({ descriptor, diagnostics: [], hmrReady: activated, state: activated ? 'active' as const : 'compiling' as const }),
+          status: () => ({ descriptor, diagnostics: [], state: activated ? 'active' as const : 'compiling' as const }),
           surfaces: () => {
             if (activated) throw new Error('Activation surface snapshot failed.');
             return [];
@@ -816,7 +810,7 @@ it('aborts a timed-out provider start and closes a late session exactly once', a
     artifactStatus: () => ({ state: 'missing' }),
     emit: () => undefined,
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
@@ -846,7 +840,7 @@ it('contains synchronous provider and malformed status failures as failed runtim
     artifactStatus: () => ({ state: 'missing' }),
     emit: () => undefined,
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     storageRoot: '/workspace/project/.agent-bundle/runtime',
   } as const;
@@ -887,7 +881,7 @@ it('reconciles the newest revision exactly once after a deferred provider start 
     artifactStatus: () => ({ state: 'missing' }),
     emit: () => undefined,
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
@@ -899,7 +893,6 @@ it('reconciles the newest revision exactly once after a deferred provider start 
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
 
   await controller.reconcilePreparedRuntime({
-    apps: [],
     provider: './src/dev/provider.ts',
     servers: [],
     sourceRevision: 'source-2',
@@ -907,7 +900,7 @@ it('reconciles the newest revision exactly once after a deferred provider start 
   resolveSession?.({
     close: async () => undefined,
     reconcilePreparedRuntime: async (prepared: DevRuntimePreparedProject) => { reconciled.push(prepared.sourceRevision); },
-    status: () => ({ descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),
+    status: () => ({ descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 }, diagnostics: [], state: 'active' }),
     surfaces: () => [],
   } as unknown as DevRuntimeSession);
 
@@ -922,14 +915,14 @@ it('latches a provider path change on an active session and revokes its run capa
     artifactStatus: () => ({ state: 'missing' }),
     emit: () => undefined,
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
       start: async () => ({
         close: async () => undefined,
         runs: () => [],
-        status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+        status: () => ({ descriptor, diagnostics: [], state: 'active' }),
         surfaces: () => [],
       }) as unknown as DevRuntimeSession,
     },
@@ -939,7 +932,6 @@ it('latches a provider path change on an active session and revokes its run capa
   expect(controller.runs(1)).toEqual([]);
 
   await controller.reconcileDeclaration({
-    apps: [],
     provider: './src/dev/replaced-provider.ts',
     servers: [],
     sourceRevision: 'source-2',
@@ -952,7 +944,7 @@ it('latches a provider path change on an active session and revokes its run capa
 
 it('latches every topology failure across a pending runtime start', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
-  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
+  const prepared = { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
   const topologyChanges: readonly Readonly<{
     readonly apply: (controller: DevRuntimeController) => Promise<void>;
     readonly name: string;
@@ -982,7 +974,7 @@ it('latches every topology failure across a pending runtime start', async () => 
     resolveSession?.({
       close: async () => { closeCalls += 1; },
       reconcilePreparedRuntime: async () => undefined,
-      status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+      status: () => ({ descriptor, diagnostics: [], state: 'active' }),
       surfaces: () => [],
     } as unknown as DevRuntimeSession);
     await starting;
@@ -996,7 +988,7 @@ it('latches every topology failure across a pending runtime start', async () => 
 
 it('retains a topology failure when it races an accepted runtime reconcile', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
-  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
+  const prepared = { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
   let closeCalls = 0;
   let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
   let resolveReconcile: (() => void) | undefined;
@@ -1014,7 +1006,7 @@ it('retains a topology failure when it races an accepted runtime reconcile', asy
         return {
         close: async () => { closeCalls += 1; },
         reconcilePreparedRuntime: async () => reconcileGate,
-        status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+        status: () => ({ descriptor, diagnostics: [], state: 'active' }),
         surfaces: () => [],
         } as unknown as DevRuntimeSession;
       },
@@ -1037,7 +1029,7 @@ it('retains a topology failure when it races an accepted runtime reconcile', asy
 
 it('latches runtime removal and diagnostics as restart-required failures', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
-  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
+  const prepared = { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
   const controller = () => new DevRuntimeController({
     artifactStatus: () => ({ state: 'missing' }),
     emit: () => undefined,
@@ -1048,7 +1040,7 @@ it('latches runtime removal and diagnostics as restart-required failures', async
       descriptor,
       start: async () => ({
         close: async () => undefined,
-        status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+        status: () => ({ descriptor, diagnostics: [], state: 'active' }),
         surfaces: () => [],
       }) as unknown as DevRuntimeSession,
     },
@@ -1083,7 +1075,7 @@ it('observes a late provider close rejection and preserves it across a concurren
     artifactStatus: () => ({ state: 'missing' }),
     emit: () => undefined,
     environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    preparedRuntime: { provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
     projectRoot: '/workspace/project',
     provider: {
       descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },

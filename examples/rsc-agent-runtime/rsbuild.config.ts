@@ -62,10 +62,10 @@ export interface RscRuntimeCompileSnapshot {
 
 export type RscRuntimeActivationOutcome = 'activated' | 'failed';
 export type RscRuntimeCompileFailureKind = 'provider-lifecycle' | 'source-build';
-export type RscRuntimeCompileEnvironmentName = 'app' | 'rsc' | 'widget';
+export type RscRuntimeCompileEnvironmentName = 'rsc' | 'widget';
 export type RscRuntimeCompileEnvironmentHashes = Readonly<Record<RscRuntimeCompileEnvironmentName, string>>;
 
-const compileEnvironmentNames: readonly RscRuntimeCompileEnvironmentName[] = Object.freeze(['app', 'rsc', 'widget'] as const);
+const compileEnvironmentNames: readonly RscRuntimeCompileEnvironmentName[] = Object.freeze(['rsc', 'widget'] as const);
 
 const isCompileEnvironmentName = (value: string): value is RscRuntimeCompileEnvironmentName =>
   (compileEnvironmentNames as readonly string[]).includes(value);
@@ -296,7 +296,7 @@ export const createRscRuntimeRsbuildConfig = (
   if (development && options.compilerRoot === undefined) {
     throw new TypeError('Development RSC runtime config requires compilerRoot.');
   }
-  const root = (name: 'rsc' | 'widget' | 'app', productionRoot: string): string =>
+  const root = (name: 'rsc' | 'widget', productionRoot: string): string =>
     development ? join(options.compilerRoot as string, name) : productionRoot;
 
   return {
@@ -322,7 +322,7 @@ export const createRscRuntimeRsbuildConfig = (
       pluginReact(rscRuntimeReactPluginOptions),
       pluginRSC({ environments: { server: 'rsc', client: 'widget' } }),
       emitRuntimeManifest(),
-      selfContainedAppPlugin(),
+      ...(development ? [] : [selfContainedAppPlugin()]),
       ...(options.onCompile === undefined ? [] : [runtimeCompileObserverPlugin(options.onCompile)]),
     ],
     environments: {
@@ -383,15 +383,7 @@ export const createRscRuntimeRsbuildConfig = (
           rspack: { name: 'widget' },
         },
       },
-      app: {
-        ...(development ? {
-          dev: {
-            // The development session serves no browser client; the compiled
-            // App must never receive a browser HMR credential or connection.
-            hmr: false,
-            liveReload: false,
-          },
-        } : {}),
+      ...(development ? {} : { app: {
         html: { inject: 'body' },
         // Self-contained documents, asserted by `selfContainedAppPlugin`: every
         // script, style, licence comment, and asset of any size is inlined,
@@ -399,17 +391,12 @@ export const createRscRuntimeRsbuildConfig = (
         output: {
           cleanDistPath: false,
           dataUriLimit: Number.MAX_SAFE_INTEGER,
-          distPath: {
-            ...(development ? {} : { js: './' }),
-            root: root('app', 'dist/app'),
+          distPath: { js: './', root: 'dist/app' },
+          filename: {
+            assets: '[name][ext]',
+            css: '[name].css',
+            js: '[name].js',
           },
-          ...(development ? {} : {
-            filename: {
-              assets: '[name][ext]',
-              css: '[name].css',
-              js: '[name].js',
-            },
-          }),
           filenameHash: false,
           inlineScripts: true,
           inlineStyles: true,
@@ -431,7 +418,7 @@ export const createRscRuntimeRsbuildConfig = (
             output: { asyncChunks: false },
           },
         },
-      },
+      } }),
     },
   };
 };

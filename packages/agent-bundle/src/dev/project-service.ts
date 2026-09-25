@@ -37,14 +37,13 @@ import type {
   AgentBundleDevConfig,
   AgentBundleDevRuntimeConfig,
   AgentBundleToolsConfig,
-  NormalizedMcpApp,
   NormalizedMcpServer,
   NormalizedPlugin,
 } from '../core/types.ts';
 import { emptyCompiledRouteGraph } from '../routes/graph.ts';
 import { writeRouteTypes } from '../routes/typegen.ts';
 import type { CompiledRouteGraph } from '../routes/types.ts';
-import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
+import type { DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
@@ -527,33 +526,10 @@ const appMetadata = (value: unknown): JsonObject => {
   return freezeJsonValue(snapshot) as JsonObject;
 };
 
-const stringRecord = (value: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined =>
-  value === undefined ? undefined : Object.freeze({ ...value });
-
 const preparedMcpServer = (server: NormalizedMcpServer): DevRuntimePreparedMcpServer => Object.freeze({
-  ...(server.args === undefined ? {} : { args: Object.freeze([...server.args]) }),
-  ...(server.command === undefined ? {} : { command: server.command }),
-  ...(server.cwd === undefined ? {} : { cwd: server.cwd }),
-  ...(server.env === undefined ? {} : { env: stringRecord(server.env) }),
-  ...(server.headers === undefined ? {} : { headers: stringRecord(server.headers) }),
   id: server.id,
   name: server.name,
-  ...(server.source === undefined ? {} : { source: server.source }),
   targets: Object.freeze([...server.targets]),
-  transport: server.transport,
-  ...(server.url === undefined ? {} : { url: server.url }),
-});
-
-const preparedMcpApp = (app: NormalizedMcpApp): DevRuntimePreparedMcpApp => Object.freeze({
-  ...(app._meta === undefined ? {} : { _meta: appMetadata(app._meta) }),
-  id: app.id,
-  name: app.name,
-  resourceUri: app.resourceUri,
-  serverId: app.serverId,
-  serverName: app.serverName,
-  source: app.source,
-  targets: Object.freeze([...app.targets]),
-  ...(app.template === undefined ? {} : { template: app.template }),
 });
 
 const preparedRuntime = (
@@ -561,7 +537,6 @@ const preparedRuntime = (
   model: NormalizedPlugin,
   revision: string,
 ): DevRuntimePreparedProject => Object.freeze({
-  apps: Object.freeze((model.mcpApps ?? []).map(preparedMcpApp)),
   provider: declaration.provider,
   servers: Object.freeze(model.mcpServers.map(preparedMcpServer)),
   sourceRevision: revision,

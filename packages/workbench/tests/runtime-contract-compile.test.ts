@@ -1,7 +1,6 @@
 import { expect, it } from '@rstest/core';
 
 import type {
-  DevRuntimeAssetRequest,
   DevRuntimeDiagnostic,
   DevRuntimeInspectionEnvelope,
   DevRuntimeInvocationRequest,
@@ -56,7 +55,7 @@ const surface = {
   fixtures: [{ id: 'fixture-a', label: 'Fixture A', seed: { city: 'London' } }],
   id: 'app/weather',
   inputSchema: { type: 'object' },
-  kind: 'mcp-app',
+  kind: 'mcp-tool',
   label: 'Weather App',
   readOnly: false,
   targets: ['portable'],
@@ -108,7 +107,6 @@ const status = {
   activeVector: vector,
   descriptor: { environmentVariables: ['NODE_ENV'], id: 'rsc', label: 'RSC Runtime', schemaVersion: 1 },
   diagnostics: [diagnostic],
-  hmrReady: true,
   lastGoodVector: vector,
   state: 'active',
 } satisfies DevRuntimeStatus;
@@ -132,12 +130,6 @@ const reset = {
   seed: { city: 'London' },
   stateStoreId: 'state-a',
 } satisfies DevRuntimeStateResetRequest;
-
-const asset = {
-  path: ['assets', 'weather.js'],
-  runtimeGenerationId: 'generation-a',
-  surfaceId: 'app/weather',
-} satisfies DevRuntimeAssetRequest;
 
 const statusResponse = { status } satisfies DevRuntimeStatusResponse;
 const surfacesResponse = { surfaces: [surface] } satisfies DevRuntimeSurfacesResponse;
@@ -214,7 +206,6 @@ it('compiles RuntimeClient against the exact provider wire contract', async () =
   const effect: RuntimePendingEffect | undefined = effectFor(confirmed);
 
   expect({
-    asset,
     appPreviewFixture,
     bootstrap,
     controlledInput,

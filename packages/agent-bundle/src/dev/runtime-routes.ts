@@ -35,8 +35,7 @@ const agentDocumentResponseLimit = 16 * 1024 * 1024;
 
 type Route =
   | Readonly<{ readonly kind: 'status' | 'surfaces' | 'runs' | 'state-reset' }>
-  | Readonly<{ readonly id: string; readonly kind: 'run' | 'document' | 'flight' | 'replay' }>
-  | Readonly<{ readonly generation: string; readonly kind: 'asset'; readonly path: readonly string[]; readonly surfaceId: string }>;
+  | Readonly<{ readonly id: string; readonly kind: 'run' | 'document' | 'flight' | 'replay' }>;
 
 /**
  * Structural view of the optional `@agent-bundle/runtime` peer. The peer's own
@@ -123,12 +122,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
     if (segments.length === 3 && (segments[2] === 'document' || segments[2] === 'flight' || segments[2] === 'replay')) {
       return Object.freeze({ id: segments[1], kind: segments[2] });
     }
-  }
-  if (segments[0] === 'assets' && segments[1] !== undefined && segments.length > 2) {
-    const query = onlyQuery(requestTarget, 'generation');
-    const generation = query.get('generation');
-    if (generation === null) return runtimePathError();
-    return Object.freeze({ generation: decodedSegment(generation), kind: 'asset', path: Object.freeze(segments.slice(2)), surfaceId: segments[1] });
   }
   return runtimePathError();
 };
@@ -397,14 +390,5 @@ export class RuntimeRoutes {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       return writeJsonResponse(response, { state: await session.resetState(reset(await jsonBody(request))) });
     }
-    if (parsed.kind !== 'asset') return;
-    if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-    const asset = await session.readAsset({
-      path: parsed.path,
-      runtimeGenerationId: parsed.generation,
-      surfaceId: parsed.surfaceId,
-    });
-    if (asset === undefined) throw new DevRuntimeUnavailableError('Runtime asset is not available.');
-    return responseAsset(response, asset);
   }
 }

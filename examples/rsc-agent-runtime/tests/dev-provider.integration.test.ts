@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -271,13 +272,13 @@ const introduceWorkerSyntaxError = async (projectRoot: string): Promise<number> 
   return line;
 };
 
-test('keeps compiler-App HMR out of the opaque browser child', () => {
-  const config = createRscRuntimeRsbuildConfig({
-    compilerRoot: join(tmpdir(), 'rsc-provider-outer-hmr'),
+test('compiles the App environment only for production builds', () => {
+  const development = createRscRuntimeRsbuildConfig({
+    compilerRoot: join(tmpdir(), 'rsc-provider-dev-environments'),
     mode: 'development',
   });
-  const app = config.environments?.app as Readonly<{ readonly dev?: unknown }> | undefined;
-  expect(app?.dev).toMatchObject({ hmr: false, liveReload: false });
+  expect(Object.keys(development.environments ?? {}).sort()).toEqual(['rsc', 'widget']);
+  expect(createRscRuntimeRsbuildConfig({ mode: 'production' }).environments?.app).toBeDefined();
 });
 
 test('declares an optional runtime while keeping Claude and Codex artifacts buildable', async () => {
@@ -332,99 +333,13 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
     });
     try {
       await waitFor(() => session.status().state === 'active');
-      expect(session.status()).toMatchObject({ hmrReady: true, state: 'active' });
+      expect(session.status()).toMatchObject({ state: 'active' });
       expect(session.surfaces()).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: 'hook' }),
         expect.objectContaining({ id: 'mcp.render_edit_timeline', kind: 'mcp-tool' }),
         expect.objectContaining({ id: 'mcp.edit-timeline', kind: 'mcp-resource' }),
-        expect.objectContaining({ id: 'mcp.timeline', kind: 'mcp-app' }),
       ]));
       const runtimeGenerationId = session.status().activeVector!.runtimeGenerationId;
-
-      await expect(session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId,
-        surfaceId: 'mcp.timeline',
-      })).resolves.toMatchObject({ contentType: 'text/html' });
-      await expect(session.readAsset({
-        path: ['..'],
-        runtimeGenerationId,
-        surfaceId: 'mcp.timeline',
-      })).resolves.toBeUndefined();
-      await expect(session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId,
-        surfaceId: 'mcp.unknown',
-      })).resolves.toBeUndefined();
-      for (const path of [
-        ['rsc', 'missing.html'],
-        ['..'],
-        ['.'],
-        ['rsc\\index.html'],
-        ['rsc', 'index\0.html'],
-        ['%2e%2e'],
-      ]) {
-        await expect(session.readAsset({
-          path,
-          runtimeGenerationId,
-          surfaceId: 'mcp.timeline',
-        })).resolves.toBeUndefined();
-      }
-      await expect(session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId: '',
-        surfaceId: 'mcp.timeline',
-      })).resolves.toBeUndefined();
-      await expect(session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId: 'generation-pruned',
-        surfaceId: 'mcp.timeline',
-      })).resolves.toBeUndefined();
-      const assetPath = join(
-        runtimeStorageRoot,
-        'generation-store',
-        'generations',
-        runtimeGenerationId,
-        'widget',
-        'rsc',
-        'index.html',
-      );
-      const originalAsset = await readFile(assetPath);
-      const readTimelineAsset = () => session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId,
-        surfaceId: 'mcp.timeline',
-      });
-      const digestTampered = Buffer.from(originalAsset);
-      digestTampered[0] = digestTampered[0] === 0 ? 1 : 0;
-      await writeFile(assetPath, digestTampered);
-      await expect(readTimelineAsset()).resolves.toBeUndefined();
-      await writeFile(assetPath, originalAsset);
-      await writeFile(assetPath, Buffer.alloc((8 * 1024 * 1024) + 1));
-      await expect(readTimelineAsset()).resolves.toBeUndefined();
-      await writeFile(assetPath, originalAsset);
-      await rm(assetPath);
-      await symlink(join(root, 'src', 'definition.ts'), assetPath);
-      await expect(readTimelineAsset()).resolves.toBeUndefined();
-      await rm(assetPath);
-      await mkdir(assetPath);
-      await expect(readTimelineAsset()).resolves.toBeUndefined();
-      await rm(assetPath, { recursive: true });
-      await writeFile(assetPath, originalAsset);
-
-      await session.reconcilePreparedRuntime({
-        ...prepared.devRuntime!,
-        apps: prepared.devRuntime!.apps.map((app) => ({
-          ...app,
-          _meta: { ...app._meta, 'openai/widgetDescription': 'Updated timeline description.' },
-        })),
-        sourceRevision: `${prepared.devRuntime!.sourceRevision}-app-metadata`,
-      });
-      expect(session.surfaces()).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'mcp.render_edit_timeline', targets: prepared.devRuntime!.servers[0]!.targets }),
-        expect.objectContaining({ id: 'mcp.timeline', kind: 'mcp-app' }),
-      ]));
-      await expect(readTimelineAsset()).resolves.toMatchObject({ contentType: 'text/html' });
 
       const definitionPath = join(runtimeStorageRoot, 'generation-store', 'generations', runtimeGenerationId, 'rsc', 'runtime-definition.json');
       await rename(definitionPath, `${definitionPath}.hidden`);
@@ -467,7 +382,7 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
         sourceRevision: `${prepared.devRuntime!.sourceRevision}-close-race`,
       })).rejects.toThrow('RSC runtime session is closed.');
       await closing;
-      expect(session.status()).toMatchObject({ hmrReady: false, state: 'closed' });
+      expect(session.status()).toMatchObject({ state: 'closed' });
     } finally {
       await session.close();
     }
@@ -923,126 +838,6 @@ test('drains a deferred generation pipeline before close without publishing late
   }
 }, 30_000 * timeScale);
 
-test('binds renamed and added App surfaces to the active generation assets without restoring removed surfaces', async () => {
-  const copied = await copyProviderExample();
-  try {
-    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
-    const session = await RsbuildRuntimeSession.start(startContext({
-      projectRoot: copied.projectRoot,
-      preparedRuntime: prepared.devRuntime!,
-      providerSessionId: 'provider-reconciled-app-assets',
-      signal: new AbortController().signal,
-      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-reconciled-app-assets'),
-    }));
-    try {
-      await waitFor(() => session.status().state === 'active');
-      const runtimeGenerationId = session.status().activeVector!.runtimeGenerationId;
-      const original = prepared.devRuntime!.apps[0]!;
-      await session.reconcilePreparedRuntime({
-        ...prepared.devRuntime!,
-        apps: [
-          { ...original, name: 'timeline-renamed' },
-          { ...original, id: `${original.id}-added`, name: 'timeline-added' },
-        ],
-        sourceRevision: `${prepared.devRuntime!.sourceRevision}-reconciled-app-assets`,
-      });
-
-      await expect(session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId,
-        surfaceId: 'mcp.timeline-renamed',
-      })).resolves.toMatchObject({ contentType: 'text/html' });
-      await expect(session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId,
-        surfaceId: 'mcp.timeline-added',
-      })).resolves.toMatchObject({ contentType: 'text/html' });
-      await expect(session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId,
-        surfaceId: 'mcp.timeline',
-      })).resolves.toBeUndefined();
-
-      await changeWorkerImplementation(copied.projectRoot, 'reconciled-app-assets-generation-two');
-      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== runtimeGenerationId);
-      const nextRuntimeGenerationId = session.status().activeVector!.runtimeGenerationId;
-      for (const generationId of [runtimeGenerationId, nextRuntimeGenerationId]) {
-        await expect(session.readAsset({
-          path: ['rsc', 'index.html'],
-          runtimeGenerationId: generationId,
-          surfaceId: 'mcp.timeline-renamed',
-        })).resolves.toMatchObject({ contentType: 'text/html' });
-        await expect(session.readAsset({
-          path: ['rsc', 'index.html'],
-          runtimeGenerationId: generationId,
-          surfaceId: 'mcp.timeline-added',
-        })).resolves.toMatchObject({ contentType: 'text/html' });
-        await expect(session.readAsset({
-          path: ['rsc', 'index.html'],
-          runtimeGenerationId: generationId,
-          surfaceId: 'mcp.timeline',
-        })).resolves.toBeUndefined();
-      }
-    } finally {
-      await session.close();
-    }
-  } finally {
-    await rm(copied.workspaceRoot, { force: true, recursive: true });
-  }
-}, 30_000 * timeScale);
-
-test('rebinds current App surfaces across retained generations after a later configuration reconcile', async () => {
-  const copied = await copyProviderExample();
-  try {
-    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
-    const session = await RsbuildRuntimeSession.start(startContext({
-      projectRoot: copied.projectRoot,
-      preparedRuntime: prepared.devRuntime!,
-      providerSessionId: 'provider-reconciled-retained-app-assets',
-      signal: new AbortController().signal,
-      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-reconciled-retained-app-assets'),
-    }));
-    try {
-      await waitFor(() => session.status().state === 'active');
-      const firstGenerationId = session.status().activeVector!.runtimeGenerationId;
-      await changeWorkerImplementation(copied.projectRoot, 'reconciled-retained-app-assets-generation-two');
-      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGenerationId);
-      const secondGenerationId = session.status().activeVector!.runtimeGenerationId;
-      const original = prepared.devRuntime!.apps[0]!;
-      await session.reconcilePreparedRuntime({
-        ...prepared.devRuntime!,
-        apps: [
-          { ...original, name: 'timeline-renamed' },
-          { ...original, id: `${original.id}-added`, name: 'timeline-added' },
-        ],
-        sourceRevision: `${prepared.devRuntime!.sourceRevision}-reconciled-retained-app-assets`,
-      });
-
-      for (const generationId of [firstGenerationId, secondGenerationId]) {
-        await expect(session.readAsset({
-          path: ['rsc', 'index.html'],
-          runtimeGenerationId: generationId,
-          surfaceId: 'mcp.timeline-renamed',
-        })).resolves.toMatchObject({ contentType: 'text/html' });
-        await expect(session.readAsset({
-          path: ['rsc', 'index.html'],
-          runtimeGenerationId: generationId,
-          surfaceId: 'mcp.timeline-added',
-        })).resolves.toMatchObject({ contentType: 'text/html' });
-        await expect(session.readAsset({
-          path: ['rsc', 'index.html'],
-          runtimeGenerationId: generationId,
-          surfaceId: 'mcp.timeline',
-        })).resolves.toBeUndefined();
-      }
-    } finally {
-      await session.close();
-    }
-  } finally {
-    await rm(copied.workspaceRoot, { force: true, recursive: true });
-  }
-}, 30_000 * timeScale);
-
 test('activates a warm-cache definition change and republishes the changed tool description as its surface label', async () => {
   const copied = await copyProviderExample();
   try {
@@ -1112,20 +907,12 @@ test('aborts a stale activation transaction at its private preparation boundary'
       expect(session.status().activeVector?.runtimeGenerationId).toBe(firstGeneration);
       const reconciled = session.reconcilePreparedRuntime({
         ...prepared.devRuntime!,
-        apps: prepared.devRuntime!.apps.map((app) => ({
-          ...app,
-          source: './src/widget/App.tsx',
-        })),
+        servers: prepared.devRuntime!.servers.map((server) => ({ ...server, targets: ['portable'] })),
         sourceRevision: `${prepared.devRuntime!.sourceRevision}-store-superseding-prepared`,
       });
       allow.resolve();
       await reconciled;
       await new Promise<void>((resolve) => { setTimeout(resolve, 50); });
-      await expect(session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId: 'generation-2',
-        surfaceId: 'mcp.timeline',
-      })).resolves.toBeUndefined();
       expect(session.status().activeVector?.runtimeGenerationId).toBe(firstGeneration);
       expect(events.filter((event) => event.type === 'runtime.generation.activated' && event.runtimeGenerationId === 'generation-2')).toHaveLength(0);
       armBarrier = false;
@@ -1543,52 +1330,50 @@ test('fails a wedged activation store step within the budget and releases its la
   }
 });
 
-test('retains a leased inactive generation through pruning and prunes it after the read releases', async () => {
+test('retains a leased inactive generation through pruning and prunes it after the invocation releases', async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
-    const enteredRead = deferred<void>();
-    const releaseRead = deferred<void>();
-    let deferAssetRead = true;
-    const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-asset-lease');
+    const enteredResponse = deferred<void>();
+    const releaseResponse = deferred<void>();
+    let deferResponse = true;
+    const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-invocation-lease');
     const session = await RsbuildRuntimeSession.start(startContext({
       projectRoot: copied.projectRoot,
       preparedRuntime: prepared.devRuntime!,
-      providerSessionId: 'provider-asset-lease',
+      providerSessionId: 'provider-invocation-lease',
       signal: new AbortController().signal,
       storageRoot,
     }), {
-      beforeAssetRead: async () => {
-        if (!deferAssetRead) return;
-        enteredRead.resolve();
-        await releaseRead.promise;
+      afterInvocationWorkerResponse: async () => {
+        if (!deferResponse) return;
+        enteredResponse.resolve();
+        await releaseResponse.promise;
       },
     });
     try {
       await waitFor(() => session.status().state === 'active');
       const firstGeneration = session.status().activeVector!.runtimeGenerationId;
-      const heldRead = session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId: firstGeneration,
-        surfaceId: 'mcp.timeline',
+      const heldInvocation = session.invoke({
+        expectedGenerationId: firstGeneration,
+        input: {},
+        surfaceId: 'mcp.render_edit_timeline',
+        target: 'portable',
       });
-      await enteredRead.promise;
+      await enteredResponse.promise;
       let activeGeneration = firstGeneration;
       for (let marker = 2; marker <= 7; marker += 1) {
         await changeWorkerImplementation(copied.projectRoot, `lease-prune-${String(marker)}`);
         await waitFor(() => session.status().activeVector?.runtimeGenerationId !== activeGeneration);
         activeGeneration = session.status().activeVector!.runtimeGenerationId;
       }
-      expect((await lstat(join(storageRoot, 'generation-store', 'generations', firstGeneration))).isDirectory()).toBe(true);
-      releaseRead.resolve();
-      await expect(heldRead).resolves.toMatchObject({ contentType: 'text/html' });
-      deferAssetRead = false;
-      await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
-      await expect(session.readAsset({
-        path: ['rsc', 'index.html'],
-        runtimeGenerationId: firstGeneration,
-        surfaceId: 'mcp.timeline',
-      })).resolves.toBeUndefined();
+      const firstGenerationRoot = join(storageRoot, 'generation-store', 'generations', firstGeneration);
+      expect((await lstat(firstGenerationRoot)).isDirectory()).toBe(true);
+      deferResponse = false;
+      releaseResponse.resolve();
+      await expect(heldInvocation).resolves.toMatchObject({ status: 'succeeded', vector: { runtimeGenerationId: firstGeneration } });
+      await changeWorkerImplementation(copied.projectRoot, 'lease-prune-after-release');
+      await waitFor(() => !existsSync(firstGenerationRoot));
     } finally {
       await session.close();
     }
@@ -1660,10 +1445,9 @@ test('returns a compiling session without treating provider activation work as a
     const returnedBeforeActivation = returnedSession;
     expect(returnedBeforeActivation?.status()).toMatchObject({ state: 'compiling' });
     if (returnedBeforeActivation === undefined) throw new Error('RSC runtime session did not return while compiling.');
-    const originalApp = prepared.devRuntime!.apps[0]!;
     const reconciling = returnedBeforeActivation.reconcilePreparedRuntime({
       ...prepared.devRuntime!,
-      apps: [{ ...originalApp, name: 'timeline-startup' }],
+      servers: prepared.devRuntime!.servers.map((server) => ({ ...server, targets: ['portable'] })),
       sourceRevision: `${prepared.devRuntime!.sourceRevision}-startup-reconcile`,
     });
     releaseActivation.resolve();
@@ -1671,11 +1455,9 @@ test('returns a compiling session without treating provider activation work as a
 
     await reconciling;
     await waitFor(() => session?.status().state === 'active');
-    await expect(session.readAsset({
-      path: ['rsc', 'index.html'],
-      runtimeGenerationId: session.status().activeVector!.runtimeGenerationId,
-      surfaceId: 'mcp.timeline-startup',
-    })).resolves.toMatchObject({ contentType: 'text/html' });
+    expect(session.surfaces()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'mcp.render_edit_timeline', targets: ['portable'] }),
+    ]));
   } finally {
     releaseActivation.resolve();
     await session?.close();

@@ -68,7 +68,6 @@ const runtimeStatus = Object.freeze({
     schemaVersion: 1,
   },
   diagnostics: [],
-  hmrReady: false,
   state: 'active' as const,
 } satisfies DevRuntimeStatus);
 
@@ -91,9 +90,6 @@ class MemoryRuntime implements DevRuntimeSession {
     }
     this.#run = Object.freeze({ ...succeededRun, input: request.input, target: request.target });
     return this.#run;
-  }
-  async readAsset(): Promise<DevRuntimeAsset | undefined> {
-    return { body: new Uint8Array([1, 2, 3]), contentType: 'application/javascript; charset=utf-8' };
   }
   async readRunFlight(runId: string): Promise<DevRuntimeAsset | undefined> {
     return runId === this.#run.id
@@ -120,7 +116,6 @@ class StartingRuntime extends MemoryRuntime {
     return {
       descriptor: runtimeStatus.descriptor,
       diagnostics: [],
-      hmrReady: false,
       state: 'starting',
     };
   }
@@ -510,8 +505,8 @@ it('rejects malformed, stale, undeclared, and excessive runtime inputs at the fi
     });
     expect(tooLarge.status).toBe(413);
 
-    const traversal = await fetch(`${server.url}/api/runtime/assets/hook.after-edit/%2e%2e/main.js?generation=g1`, { headers });
-    expect(traversal.status).toBe(400);
+    const removedAssets = await fetch(`${server.url}/api/runtime/assets/hook.after-edit/main.js?generation=g1`, { headers });
+    expect(removedAssets.status).toBe(400);
   } finally {
     await server.close();
   }
@@ -532,7 +527,6 @@ it('accepts only the literal method and query matrix for every runtime route', a
     { acceptedMethod: 'GET', acceptedPath: '/api/runtime/runs/run-a/document', headers: privateHeaders, invalidMethod: 'POST', queryPath: '/api/runtime/runs/run-a/document?extra=1&extra=2' },
     { acceptedMethod: 'POST', acceptedPath: '/api/runtime/runs/run-a/replay', body: JSON.stringify({ mode: 'exact', runId: 'run-a' }), headers: jsonHeaders, invalidMethod: 'GET', queryPath: '/api/runtime/runs/run-a/replay?extra=1&extra=2' },
     { acceptedMethod: 'POST', acceptedPath: '/api/runtime/state/reset', body: JSON.stringify({ stateStoreId: 'state-a' }), headers: jsonHeaders, invalidMethod: 'GET', queryPath: '/api/runtime/state/reset?extra=1&extra=2' },
-    { acceptedMethod: 'GET', acceptedPath: '/api/runtime/assets/hook.after-edit/main.js?generation=g1', headers: privateHeaders, invalidMethod: 'HEAD', queryPath: '/api/runtime/assets/hook.after-edit/main.js?generation=g1&generation=g2' },
   ];
 
   try {

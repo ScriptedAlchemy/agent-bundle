@@ -1,7 +1,6 @@
 import type { ArtifactStatus, JsonObject } from './types.ts';
 import type {
   DevRuntimeAsset,
-  DevRuntimeAssetRequest,
   DevRuntimeDescriptor,
   DevRuntimeInvocationRequest,
   DevRuntimeReplayRequest,
@@ -14,33 +13,12 @@ import type {
 
 /** Trusted normalized input from ProjectService; never serialize to the browser. */
 export interface DevRuntimePreparedMcpServer {
-  readonly args?: readonly string[];
-  readonly command?: string;
-  readonly cwd?: string;
-  readonly env?: Readonly<Record<string, string>>;
-  readonly headers?: Readonly<Record<string, string>>;
   readonly id: string;
   readonly name: string;
-  readonly source?: string;
   readonly targets: readonly string[];
-  readonly transport: 'stdio' | 'streamable-http' | 'sse';
-  readonly url?: string;
-}
-
-export interface DevRuntimePreparedMcpApp {
-  readonly _meta?: JsonObject;
-  readonly id: string;
-  readonly name: string;
-  readonly resourceUri: string;
-  readonly serverId: string;
-  readonly serverName: string;
-  readonly source: string;
-  readonly targets: readonly string[];
-  readonly template?: string;
 }
 
 export interface DevRuntimePreparedProject {
-  readonly apps: readonly DevRuntimePreparedMcpApp[];
   readonly provider: string;
   readonly servers: readonly DevRuntimePreparedMcpServer[];
   readonly sourceRevision: string;
@@ -77,7 +55,6 @@ export interface DevRuntimeSession {
   readonly providerSessionId: string;
   close(): Promise<void>;
   invoke(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun>;
-  readAsset(request: DevRuntimeAssetRequest): Promise<DevRuntimeAsset | undefined>;
   readRunFlight(runId: string): Promise<DevRuntimeAsset | undefined>;
   reconcilePreparedRuntime(prepared: DevRuntimePreparedProject): Promise<void>;
   replay(request: DevRuntimeReplayRequest): Promise<DevRuntimeRun>;
