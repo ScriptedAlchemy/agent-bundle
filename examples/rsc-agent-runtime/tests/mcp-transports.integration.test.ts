@@ -325,6 +325,14 @@ test('built Streamable HTTP MCP reports its one JSON startup line and closes cle
         port: startup.port,
       }),
     ).resolves.toBe(413);
+    await expect(
+      requestStatus({
+        body: JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'ping' }),
+        headers: { 'Content-Encoding': 'gzip', 'Content-Type': 'application/json', Host: localHost },
+        path: '/mcp',
+        port: startup.port,
+      }),
+    ).resolves.toBe(415);
   } finally {
     await client.close();
     child.kill('SIGTERM');

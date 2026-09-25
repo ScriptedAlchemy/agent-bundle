@@ -44,6 +44,13 @@ const serveMcp = async (request: IncomingMessage, response: ServerResponse): Pro
     return;
   }
 
+  const encoding = request.headers['content-encoding'];
+  if (encoding !== undefined && encoding.toLowerCase() !== 'identity') {
+    request.resume();
+    writeJsonRpcError(response, 415, -32000, `Unsupported Content-Encoding: ${encoding}`);
+    return;
+  }
+
   const body = await readRequestBody(request);
   if (body === undefined) {
     writeJsonRpcError(response, 413, -32000, 'Request body too large');
