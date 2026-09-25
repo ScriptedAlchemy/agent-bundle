@@ -203,7 +203,6 @@ const mcpEntryEntries = async (
     const server = model.mcpServers.find((candidate) => candidate.id === entry.id);
     const serverName = entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name;
     const generatedRoutes = server?.generatedRoutes;
-    const wrapped = generatedRoutes !== undefined || (await scanEntryExports(entry.source)).hasDefaultExport;
     const workerFile = `${entry.name}-flight.mjs`;
     const routeSource = generatedRoutes === undefined || server === undefined
       ? undefined
@@ -221,24 +220,16 @@ const mcpEntryEntries = async (
     entries.push({
       entry: {
         aliases: {
-          // Every stdio entry can import the operator `.env` layer (#469); the
-          // lifecycle shell of a wrapped entry applies it itself.
+          // The lifecycle shell of every stdio entry applies the operator
+          // `.env` layer (#469) itself.
           [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
-          ...(wrapped
-            ? {
-              [mcpEntryRuntimeSpecifier]: mcpEntryRuntimePath(),
-              ...(routeSource === undefined ? {} : { [mcpServerRuntimeSpecifier]: mcpServerRuntimePath() }),
-            }
-            : {}),
+          [mcpEntryRuntimeSpecifier]: mcpEntryRuntimePath(),
+          ...(routeSource === undefined ? {} : { [mcpServerRuntimeSpecifier]: mcpServerRuntimePath() }),
         },
-        ...(wrapped
-          ? {
-            virtualSource: generatedStdioMcpEntrySource({
-              entrySource: routeSource === undefined ? entry.source : 'agent-bundle/generated-route-server',
-              serverName,
-            }),
-          }
-          : {}),
+        virtualSource: generatedStdioMcpEntrySource({
+          entrySource: routeSource === undefined ? entry.source : 'agent-bundle/generated-route-server',
+          serverName,
+        }),
         name: entry.name,
         outputRelativePath: `mcp/${entry.name}.mjs`,
         ...(routeSource === undefined ? {} : { rscManifest: true as const }),
@@ -250,7 +241,7 @@ const mcpEntryEntries = async (
             source: '/* The MCP App registry virtual module is generated from built app HTML at build time. */',
           },
           ...(routeSource === undefined ? [] : [{ name: 'agent-bundle/generated-route-server', source: routeSource }]),
-          ...(wrapped ? [stdioPreludeVirtualModule(server?.env)] : []),
+          stdioPreludeVirtualModule(server?.env),
         ],
       },
       kind: 'mcp-entry',

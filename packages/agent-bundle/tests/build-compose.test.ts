@@ -83,7 +83,7 @@ const writeProject = async (root: string, options: FixtureOptions = {}): Promise
     writeProjectFile(root, 'native/claude.json', nativeHookDocument('echo claude-native')),
     writeProjectFile(root, 'native/codex.json', nativeHookDocument('echo codex-native')),
     writeProjectFile(root, 'src/hooks/session-start.ts', "export default () => ({ outcome: 'continue' as const, additionalContext: 'started' });\n"),
-    writeProjectFile(root, 'src/mcp/fixture.ts', "process.stderr.write('fixture server\\n');\n"),
+    writeProjectFile(root, 'src/mcp/fixture.ts', "process.stderr.write('fixture server\\n');\nexport default () => ({});\n"),
     writeProjectFile(root, 'src/tools/hello.ts', "console.log('hello');\n"),
     writeProjectFile(root, 'src/skills/review/SKILL.md', [
       '---', 'name: review', 'description: Review changes', ...(options.skillFrontmatter ?? []), '---', '# Review', '',
