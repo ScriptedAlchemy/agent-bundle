@@ -58,6 +58,7 @@ const leaf = Object.freeze({
   key: '/routes/mcp/curator/tool/search_audible',
   label: 'Search Audible',
   ref: Object.freeze({ kind: 'tool' as const, name: 'search_audible', server: 'curator' }),
+  resultSchemaState: 'unprojectable' as const,
   routeId: invocation.routeId,
 }) satisfies ApplicationLeaf;
 

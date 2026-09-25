@@ -7,7 +7,6 @@ import { validateRouteModuleContract } from '../src/routes/contract.ts';
 import { defineTool, normalizeRouteModule } from '../src/routes/definitions.ts';
 import { parseModule } from '../src/routes/syntax.ts';
 import { readRouteDefinition } from '../src/routes/definition-syntax.ts';
-import { eventHandlerEntry } from '../src/routes/event-handler.ts';
 import { events } from '../src/routes/event-definitions.ts';
 import { executeEventHandler } from '../src/events/handler.ts';
 import { createCanonicalEventProps, projectEventHandlerResult } from '../src/events/projection.ts';
@@ -46,8 +45,7 @@ it('normalizes the same inferred handler for generated and source execution', as
     () => module.default({ input: inputSchema.parse({}), signal: new AbortController().signal }))).toBe('false:ready');
 });
 
-it('rejects closure extraction and dynamic definition composition', () => {
-  expect(() => eventHandlerEntry('export function before() {} export default async function View() {}', 'before.tsx', '/before.tsx')).toThrow('no longer supported');
+it('rejects dynamic definition composition', () => {
   for (const declaration of [
     'const tool = createMyTool(); export default tool;',
     'const opts = getOptions(); export default defineTool(opts, handler);',
