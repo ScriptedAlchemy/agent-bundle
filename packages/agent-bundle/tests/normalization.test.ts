@@ -1120,6 +1120,7 @@ const scriptRouteFixture = (root: string, relativePath: string): CompiledAgentRo
     id: `script:${identity}`,
     kind: 'script',
     provenance: { kind: 'conventional', relativePath },
+    resultSchemaState: 'unprojectable' as const,
     source: `${root}/${relativePath}`,
   };
 };
@@ -1313,6 +1314,7 @@ const routeGraphWithGeneratedServer = (root: string): CompiledRouteGraph => {
     id: 'tool:curator/inspect',
     kind: 'tool',
     provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+    resultSchemaState: 'unprojectable' as const,
     serverId: 'mcp:curator',
     source: `${root}/src/mcp/curator/tools/inspect.tsx`,
   };
@@ -1339,6 +1341,7 @@ it('carries event-route handler provenance and provider selection into normalize
   view: `${root}/src/events/tool/after.view.tsx`,
     },
     provenance: { kind: 'conventional', relativePath: 'src/events/tool/after.tsx' },
+    resultSchemaState: 'absent' as const,
     source: `${root}/src/events/tool/after.tsx`,
   };
   const inherited: CompiledAgentRoute = {
@@ -1347,6 +1350,7 @@ it('carries event-route handler provenance and provider selection into normalize
     id: 'event:session/start',
     kind: 'event-route',
     provenance: { kind: 'conventional', relativePath: 'src/events/session/start.tsx' },
+    resultSchemaState: 'absent' as const,
     source: `${root}/src/events/session/start.tsx`,
   };
   const routeGraph: CompiledRouteGraph = {

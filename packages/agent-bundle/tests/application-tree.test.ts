@@ -21,6 +21,7 @@ const route = (
   id,
   kind,
   provenance: { kind: 'conventional' },
+  resultSchemaState: kind === 'event-route' || kind === 'app' ? 'absent' : 'unprojectable',
   source,
   ...extra,
 });
