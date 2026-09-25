@@ -1,5 +1,44 @@
 # agent-bundle
 
+## 0.3.0
+
+### Minor Changes
+
+- 1a77058: Refuse `agent-bundle uninstall claude|codex --force --purge-data --confirm-purge` with `AB7009` when no store receipt proves the bundle owns the install. Without a receipt, web-data and Claude's `plugins/data/<id>/` are no longer deleted. The refusal happens before any host verb runs, and `--plan` refuses the same way. `--force` without `--purge-data` still uninstalls through the host CLI and keeps the data. Remove unreceipted data by hand. (#853)
+- 18a913e: Remove `plugin.version` and mismatch diagnostic AB4008 (retired); the key now fails with AB4001, and `AgentBundlePluginConfig` drops its index signature, so unknown `plugin.*` keys are type errors. Remove the `agent-bundle install --force` alias (use `--replace`); the emitted `install.mjs` exits 2 on `--force` without `--uninstall`. Tool routes must default-export `defineTool(...)`; split named tool exports fail with AB4810. Route App `config.template` resolves only from the route module, else AB4827. Remove `ServedApp` and generated CLI `isTty`. `@agent-bundle/runtime` removes the `Hook`/`Mcp` lowerers, `createRscRequestContext`, `RscRequestContext`, `AgentDocumentSnapshot`, and the `McpResultProps`, `McpDataProps`, `McpResourceLinkProps`, and `McpEmbeddedResourceProps` types. `rsc-markdown-stream` drops its React 18 element, provider, and dispatcher paths (#810)
+- 3b667c8: Require every local stdio MCP entry to default-export a server factory: self-connecting entries no longer build and AB4730 is now an error instead of an informational nudge; retire AB4736, so documents left in the top-level `skills/`, `commands/`, and `rules/` locations are ignored rather than reported (#839)
+- 2a129e9: Remove the legacy install readers from `install`, `uninstall`, `doctor`, and the emitted `install.mjs`: format-1 receipts (`agent-bundle-install-receipt/1`), receipt-less "legacy" adoption of a pre-receipt Cursor copy, the in-tree `<plugin root>/state` handling and its `--purge-data` removal, the compatibility receipt `stateRoot` field, and the `AB7317` unsupported-runtime report. A Cursor directory without a format-2 receipt naming the plugin is foreign: `install` refuses it with `AB7005` (with or without `--replace`), `uninstall` refuses it with `AB7007` (with or without `--force`), and Doctor reports it as `AB7321`; remove such a directory by hand and reinstall. An in-tree `state/` is an ordinary unowned entry that `uninstall` retains and lists, never purges. A runtime that rejects the status probe is a failed probe (`AB7318`). `AB7317`, `AB7329`, and `AB7332` are retired. (#841)
+- b9fbc2e: Drop the `complete` Flight worker message from the development server's production route invocation path. Generated workers have streamed `chunk` and `end` since #718, so an artifact compiled before that and restored from the epoch store now fails its render with `Compiled route worker failed.` instead of rendering one buffered document. Rebuild the project to restore rendering. (#838)
+- c42b93d: Make `CompiledAgentRoute.resultSchemaState` required on every compiled route; require `{ kind: 'resource' }` for `agent-bundle/test` App and resource contract fixtures (bare `{}` rejected); stop reporting AB4840 for removed `before`/`preflight` event exports. (#840)
+- 12a1ddc: Remove the development runtime App-asset path: `DevRuntimeSession.readAsset`, the `/api/runtime/assets` route (now a 400 invalid path), the `DevRuntimeAssetRequest` and `DevRuntimePreparedMcpApp` exports, the prepared-runtime `apps` input, `DevRuntimeStatus.hmrReady`, the `mcp-app` runtime surface kind, the `mcp-protocol`, `resource-selection`, `sandbox/csp`, and `app-bridge` diagnostic phases, and the launch and credential fields on `DevRuntimePreparedMcpServer`, which is now `{ id, name, targets }`. (#856)
+- 78d75f2: Remove the Workbench runtime App preview path. The dev server no longer serves `/api/runtime/apps/**` or `/api/runtime/mcp/sessions/**`, `DevServerSession` (from `agent-bundle` and `agent-bundle/api`) drops `openRuntimeClientSurface`, and `DevRuntimeEventInput` no longer accepts `runtime.app.updated`, `runtime.hmr.client-connected`, or `runtime.hmr.client-disconnected`. The `AB8022` 410 and `AB8023` 413 runtime App responses are gone; both codes keep their other meanings. Runtime runs, status, surfaces, and MCP App previews for artifact sessions are unchanged. (#852)
+- 116ea16: Remove the runtime provider MCP contract from `agent-bundle/api`. `DevRuntimeSession` no longer has `mcpRegistry` or `clientSurface()`, `createRuntimeMcpRegistry` and the `DevRuntimeMcp*`, `RuntimeMcp*`, `DevRuntimeProviderMcpRegistry`, and `DevRuntimeClientSurfaceEndpoint` types are gone, run inspections (`DevRuntimeInspectionEnvelope`) no longer carry `app`, and `DevRuntimeEventInput` and the root `RuntimeEvent` type drop the `runtime.mcp.*` events with their `mcpRegistryRevision`, `mcpSessionId`, and `mcpSessionRevision` fields. The Workbench rejects a run inspection that still includes `app` (`AB8206`). `createRuntimeGenerationStore` and the generation store contracts are unchanged. (#855)
+
+### Patch Changes
+
+- cf82ffe: Write the `agentBundleRstest()` and `agentBundleBrowserRstest()` generated modules under `.agent-bundle/test` (`meta.mjs`, `route-setup.mjs`, `browser-app-setup.mjs`) atomically, so concurrent Rstest processes never load a partial `agent-bundle/meta` or setup module (#844)
+- c74702b: Make `agent-bundle build` emit byte-identical artifacts when one source is built from different checkout paths: generated wrappers import project modules by project-relative POSIX specifiers, and the manifest `modelDigest` hashes route, handler, `web`, and `state` paths relative to the project root. The `NormalizedPlugin` model returned by `validate`, `inspect`, and `build` now carries `projectRoot` (#835).
+- ab5ae66: Replace Codex plugins with `codex plugin add` only so nested MCP overrides in `config.toml` survive. Refuse disabled or unknown-enablement Codex replacements (`AB7004`) because the native plugin CLI has no qualified settings-preserving update API. (#824)
+- 7b99b1f: Update the bundled Effect runtime to `effect@4.0.0-rc.117` (with `@effect/platform-node-shared` and `@effect/platform-node` on the same RC). Consumer installs of `agent-bundle` and `@agent-bundle/runtime` no longer pull in `msgpackr`, `msgpackr-extract`, or `fast-check` through `effect`. (#832)
+- a0652c1: Refuse a foreign destination and a same-version marketplace restage from `install.mjs` when the destination lacks paths listed in `agent-bundle.manifest.json`, instead of crashing with `ENOENT`. (#818)
+- 13c9570: Accept a CommonJS `module.exports` server factory as the default export of a
+  stdio MCP entry, so `AB4730` no longer rejects a `.cjs` entry the generated
+  lifecycle shell can run, and reject a SQLite state store at open with the
+  typed `corrupt` error when its journal schema differs in column nullability
+  from the one the current kernel writes. (#850)
+- 7c96689: Add `ToolConfig.excludeClients` to hide generated MCP tools from matching negotiated client-name prefixes and reject direct calls while preserving other clients and CLI/browser projections. (#820)
+- ff7421b: Remove the unused runtime MCP App renderer from the bundled Workbench. App previews keep rendering through the server-issued sandbox frame; the package no longer ships `dist/workbench/src/mcp/APP-RENDERER-LICENSE`, and `NOTICE` and `THIRD_PARTY_NOTICES` drop the MCP Inspector `AppRenderer` attribution. (#845)
+- cb9792d: Generate repository-root host marketplaces with `output.repositoryMarketplace` so committed artifacts install directly from GitHub without hand-written manifests (#827).
+- 10485c4: Preserve `output.repositoryMarketplace` files during temporary MCP, hook, and `serve-app` builds, including failed operations (#828).
+- 6e836aa: Raise the `@agent-bundle/runtime` `zod` peer floor from `^4.5.4` to `^4.6.4`: projects on `zod@4.5.x` or earlier must upgrade their direct `zod` dependency before installing the runtime, or npm rejects the required peer with `ERESOLVE`. `agent-bundle` now compiles its bundled schemas with `zod` 4.6.4, and the `cli-tool` and `mcp-server` scaffold templates pin `zod@4.6.4` to satisfy the new peer. (#842)
+- Updated dependencies [7b99b1f]
+- Updated dependencies [13c9570]
+- Updated dependencies [184ff02]
+- Updated dependencies [18a913e]
+- Updated dependencies [349aa1a]
+- Updated dependencies [6e836aa]
+  - @agent-bundle/runtime@0.2.0
+
 ## 0.2.1
 
 ### Patch Changes
