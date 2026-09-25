@@ -4,7 +4,7 @@ description: 'agent-bundle 的贡献者工作流：三道本地门禁、本地�
 
 # 参与贡献
 
-这一页是给**改动 agent-bundle 本身**的人看的。其中没有任何一项是编写插件的前提——插件作者只需要
+这一页是给**改动 agent-bundle 本身**的人看的。其中没有任何一项是编写插件的前提，插件作者只需要
 `agent-bundle` 与 Node.js，本页内容一概不需要。
 
 仓库是一个 pnpm 工作区。这里以 Node.js 22.19 为下限，原因和框架本身以它为下限是同一个。
@@ -24,7 +24,7 @@ pnpm build
 | --- | --- | --- |
 | `pnpm check` | 本地交付门禁：构建、单元、路由单元、投影与集成测试、lint、类型检查。 | 开发过程中，以及每次推送之前。 |
 | `pnpm check:release` | 与 `pnpm check` 并列的打包证据：`npm pack` dry run、发布审计，以及含脚手架模板矩阵的打包测试池。 | 改动打包、导出或已发布表面之前。 |
-| `pnpm check:local-ci` | 完整的托管 CI 门禁——三个 Node 版本的 verify 矩阵，加上示例、发布与微 eval 作业——在并行的本地 worktree 中运行。 | 作为合并门禁。 |
+| `pnpm check:local-ci` | 完整的托管 CI 门禁，三个 Node 版本的 verify 矩阵，加上示例、发布与微 eval 作业，在并行的本地 worktree 中运行。 | 作为合并门禁。 |
 
 还有一些范围更小的脚本用于迭代：`pnpm test:unit`、`pnpm test:route-unit`、
 `pnpm test:projection`、`pnpm test:integration`、`pnpm lint` 与 `pnpm typecheck`。它们是更快的信号，
@@ -36,7 +36,7 @@ pnpm build
 它把每条腿放进一个隔离的 git worktree，钉在分支的 HEAD 提交上，各自拥有自己的 `node_modules` 与自己的
 临时目录根：
 
-1. 在分支的 HEAD 提交上运行 `pnpm check:local-ci`——未提交的改动**不**在覆盖范围内，运行器发现它们时
+1. 在分支的 HEAD 提交上运行 `pnpm check:local-ci`，未提交的改动**不**在覆盖范围内，运行器发现它们时
    会给出警告。
 2. 如果门禁是绿的，这个分支就可以合并。
 3. 托管 CI 仍会在合并后的提交上运行，并继续充当异步的合并后安全网。如果它与本地运行结论不一致，
@@ -63,7 +63,7 @@ worktree 已经陈旧时，用 `--fresh` 重建它们。
 pnpm changeset
 ```
 
-选择受影响的包与版本级别，并从读者的角度描述这次改动——changeset 是发布说明的文案，不是提交信息。
+选择受影响的包与版本级别，并从读者的角度描述这次改动，changeset 是发布说明的文案，不是提交信息。
 `pnpm version-packages` 应用待处理的 changeset；合并 Version Packages 后，会先解析 pkg.pr.new
 预览，再运行 `pnpm check:release`。私有工作区包，包括示例与本站点，不参与版本管理。
 
@@ -89,7 +89,7 @@ pnpm test:host-install:session:claude
 而不是报告一个它没有挣到的通过。这条边界正是[测试](../guide/development/testing.mdx)中证明级别的全部
 意义所在：一个级别绝不会被当作更强级别的收据来报告。
 
-依赖审查、包预览与 Release packages 工作流出于结构性原因只在托管侧运行——第一项要针对 pull
+依赖审查、包预览与 Release packages 工作流出于结构性原因只在托管侧运行，第一项要针对 pull
 request 的 diff 查询 GitHub 的安全公告数据库，另外两项会发布到 pkg.pr.new；Release packages 还会
 验证远程 commit URL。
 
@@ -123,7 +123,7 @@ pnpm docs:site:preview   # 提供已构建的站点
 
 `pnpm docs:site:build` 就是门禁，`Docs` 工作流会在每个 pull request 上运行它，并把 `main` 部署到
 GitHub Pages。遇到失效的站内链接、失效的锚点、缺失的图片，或某个页面只在一个语言下存在
-时，构建都会失败——最后这一条正是 `guide/`、`reference/`、`examples/` 与 `contributing/` 下每个英文页面
+时，构建都会失败，最后这一条正是 `guide/`、`reference/`、`examples/` 与 `contributing/` 下每个英文页面
 都有一个结构相同的中文对照页的原因。TypeScript 示例在两个语言下保持一致；散文与代码注释需要翻译。
 生成的类型 API、宿主能力、事件、通知与诊断参考页在构建时由仓库中的事实来源渲染而来，只做镜像，不翻译。
 

@@ -36,15 +36,15 @@ default artifact root is `artifact/`, and pointing `output.distPath` or `--outpu
 project with package entries is `AB4706`. `dist` is a mandatory-ignored directory: package outputs never enter project source
 snapshots or Skill and asset discovery.
 
-Outputs are staged and published atomically, and their provenance — bytes, SHA-256, and sorted
-project-relative source inputs — is reported on the build result exactly like artifact files.
+Outputs are staged and published atomically, and their provenance, bytes, SHA-256, and sorted
+project-relative source inputs, is reported on the build result exactly like artifact files.
 
 ### Declarations
 
 `lib.dts` defaults to `true`. Declaration generation resolves `typescript` from the project, so
 add it as a devDependency. It compiles the lib entry's source directory as its own program:
 compiler options come from the project `tsconfig.json` via `extends`, `rootDir` is pinned to the
-entry's directory, and only that subtree is included — test files never fail or pollute the
+entry's directory, and only that subtree is included, test files never fail or pollute the
 package build. Declarations land flat under `dist/`, one `.d.ts` per source module.
 
 The `lib` profile is deliberately thin. A package that needs a multi-format matrix (UMD, multiple
@@ -53,7 +53,7 @@ case where a second bundler config remains, by choice.
 
 ## The executable envelope
 
-A `bin` entry — or an artifact script — whose module exports `main`, or default-exports a
+A `bin` entry, or an artifact script, whose module exports `main`, or default-exports a
 function, receives the generated process envelope:
 
 ```ts
@@ -74,7 +74,7 @@ process exit code, and lets an escaped rejection surface through Node's top-leve
 (stack to stderr, exit code 1). `terminal` is the process's
 [terminal capability](./mcp.mdx#the-terminal-capability): TTY-ness, color, and size for stdout
 and stderr, plus whether the two share one target, probed once before `main` runs by a
-dependency-free module the envelope inlines — a plain script or bin loads no runtime for it.
+dependency-free module the envelope inlines, a plain script or bin loads no runtime for it.
 `hostSurface` is `cli` for a package bin and `script` for an artifact script, so a module shipped
 on both surfaces sees the one it was launched from. A `main` declared with one parameter keeps
 working; the second argument is simply unread. Self-executing modules with no `main` export
@@ -134,7 +134,7 @@ deterministically:
 When `inputSchema` rejects the parsed argv, the shell spells each issue in CLI terms instead of
 printing the raw schema issue JSON: the argument as typed (`--max-files`, `<root>`, or
 `--input.<path>` for a projected MCP command), the expectation, and the received value, one line
-per issue, then the exact usage line and the `--help` hint — all on stderr, exit code `2`:
+per issue, then the exact usage line and the `--help` hint, all on stderr, exit code `2`:
 
 ```text
 Invalid value for --max-files: expected number <= 55000; received 300000.
@@ -153,7 +153,7 @@ same props and renders through the runtime dispatcher against a sibling
 dependency, because the generated executable installs the request context through it.
 
 A rendered command runs inside a render session whose wall clock defaults to 60 seconds. A command
-that legitimately runs longer — `<bin> await <ticket>` over a two-hour build — declares its budget
+that legitimately runs longer, `<bin> await <ticket>` over a two-hour build, declares its budget
 as `config.render: { maxElapsedMs }` (a positive integer of milliseconds up to 24 hours, `AB4835`
 otherwise); the compiled command carries it into the generated executable, and a projected MCP
 command (`routes.mcpCommands`) inherits its tool's. A plain `.ts` command executes without a render
@@ -201,7 +201,7 @@ The compiler does not interpret Zod expressions or follow schema alias chains;
 ### Project one tool as an idiomatic command
 
 A separate CLI route has its own operation identity. A colocated `<tool>.cli.ts` projection module is
-the CLI *surface* projection of the same operation — identity stays `tool:<server>/<tool>` —
+the CLI *surface* projection of the same operation, identity stays `tool:<server>/<tool>`,
 and is never a route. Host projection (`targets`) is unchanged and orthogonal.
 
 The module sits beside the tool, never under `src/cli/**`. Status needs only renames; the
@@ -290,11 +290,11 @@ as a route module (`satisfies` unwraps). `mapInput` is an ordinary named export 
 is recorded statically and loaded only by the CLI bin; the MCP worker never sees the module.
 `mapInput` is a surface adapter, not domain logic: it only reshapes or defaults argv into the
 canonical input (renames, splitting lists, deriving a working directory). Domain validation and
-behaviour stay in the operation — its `inputSchema` refinements and its component. A mapper that
+behaviour stay in the operation, its `inputSchema` refinements and its component. A mapper that
 recreates command logic is the duplication the projection exists to remove. Because the mapper
 may still split or rename a value, a command whose projection exports `mapInput` has its
-`z.enum` choices judged by the canonical schema after `mapInput` runs — so `--regions us,uk`
-reaches the mapper — and a value outside the enum is still exit 2, reported as
+`z.enum` choices judged by the canonical schema after `mapInput` runs, so `--regions us,uk`
+reaches the mapper, and a value outside the enum is still exit 2, reported as
 `Invalid value for --<option>[<index>]: expected one of: …` under the CLI spelling. A projection
 without `mapInput` rejects an unknown enum value while parsing argv, as a `src/cli` route does.
 
@@ -340,8 +340,8 @@ audiobook-curator convert --input \
 The object reaches the tool's own `inputSchema` unchanged, so its defaults, refinements, and
 transforms apply exactly as they do for a `tools/call`; a schema issue is reported under
 `--input.<path>` and a non-object `--input` is refused with exit 2 before any tool runs. The
-command keeps everything else the projection controls — `command`, `aliases`, `description`,
-`confirm`, and `exitCode` — and help, `inspect`, and the artifact manifest record the mode
+command keeps everything else the projection controls, `command`, `aliases`, `description`,
+`confirm`, and `exitCode`, and help, `inspect`, and the artifact manifest record the mode
 (`projection.input: "json"`). The curator's plan-first conversion sets `confirm: false`; its
 nested `conversion.apply` field remains the explicit mutation gate.
 
@@ -367,7 +367,7 @@ run time `invocation.kind` is `'cli'` and `operationId` is that tool id. A route
 `kind: 'cli'` whenever it runs from the generated CLI executable, whichever projection
 mechanism produced the command. The generated MCP server still passes `kind: 'tool'`.
 
-No projection module means no command from this path — the bulk
+No projection module means no command from this path, the bulk
 [`routes.mcpCommands`](#projecting-mcp-tools-into-the-cli) opt-in keeps working for every other
 tool. The MCP `inputSchema`, `tools/list`, annotations, and `_meta` are untouched by any
 projection field. `ToolConfig.inputJsonSchema` supplies optional flag metadata.
@@ -384,13 +384,13 @@ capability that admits it. The artifact bin is a self-contained executable ESM m
 shebang. The npm root copies it unchanged and points `package.json` `bin` directly at it, so help,
 argv parsing, output modes, exit codes, signals, and the complete command set are byte-for-byte
 the same. Both forms resolve plugin code from the root above `bin/` and derive the same framework
-state root from that code root — `~/.agent-bundle/state/<plugin>-<digest>` (or the
-`XDG_STATE_HOME` equivalent), or `AGENT_BUNDLE_STATE_ROOT` when set — so the CLI and MCP server
+state root from that code root, `~/.agent-bundle/state/<plugin>-<digest>` (or the
+`XDG_STATE_HOME` equivalent), or `AGENT_BUNDLE_STATE_ROOT` when set, so the CLI and MCP server
 share one store.
 
-Reach it from the other surfaces with the plugin-root token — `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`
+Reach it from the other surfaces with the plugin-root token, `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`
 in Claude Skill Markdown and hook commands, `${PLUGIN_ROOT}/…` in Codex hooks, `${CURSOR_PLUGIN_ROOT}/…`
-in Cursor hooks — or, from a compiled script, as the sibling
+in Cursor hooks, or, from a compiled script, as the sibling
 `new URL('../bin/<plugin-name>.mjs', import.meta.url)`. `inspect` accounts for the bin as one `cli`
 component per target and the artifact manifest records both files. A target without the `cli`
 capability omits the bin and reports `AB4765`; a host-emitted file at the same path (a `claude.bin`
@@ -426,8 +426,8 @@ version module:
 import meta, { name, packageName, packageVersion, version } from 'agent-bundle/meta';
 ```
 
-`version` is the resolved plugin version, `name` is the host-native plugin slug — never the npm
-package name — and `packageName` / `packageVersion` are the validated npm axes, `undefined` for
+`version` is the resolved plugin version, `name` is the host-native plugin slug, never the npm
+package name, and `packageName` / `packageVersion` are the validated npm axes, `undefined` for
 an unpackaged development project. The compiler replaces the specifier in every compiled surface:
 artifact scripts, the routed CLI, MCP entries, hook wrappers, the package build, and browser MCP
 App bundles. It is a reserved specifier, so the `tools` hatch cannot externalize it and no
@@ -472,8 +472,8 @@ npm publish ./dist --ignore-scripts
 
 ## Prebuilt payloads
 
-Some projects legitimately own their compilation — a coordinated multi-environment bundler
-topology the per-entry hatch cannot express — but still want framework-owned host packaging. The
+Some projects legitimately own their compilation, a coordinated multi-environment bundler
+topology the per-entry hatch cannot express, but still want framework-owned host packaging. The
 top-level `payload` block names already-built directory trees the build packages byte-for-byte at
 stable paths, and `entry: { prebuilt: './dist/…' }` or `handler: { prebuilt: './dist/…' }` points
 the generated host manifests at files inside them without compiling them.
@@ -481,7 +481,7 @@ the generated host manifests at files inside them without compiling them.
 Every payload file keeps its exact relative path, because the framework did not compile these
 files and cannot rewrite the references inside them. Integrity stays content-addressed anyway:
 each payload file lands in the artifact manifest with its SHA-256 and the `prebuilt` file kind,
-and hashes into the project revision. Run your own build first — a missing or empty payload is a
+and hashes into the project revision. Run your own build first, a missing or empty payload is a
 warning under `dev` so a clean checkout works, but `agent-bundle build` refuses it.
 
 Because the compiler never opens payload files, use `definePrebuilt` and
@@ -513,8 +513,8 @@ synthesizes: artifact scripts, MCP entries, hook wrappers, MCP App views, and th
 This is why a consumer never needs a second bundler config file.
 
 The hatch is bounded. The framework invariant hook runs *after* your `tools.rspack`, and the
-resolved-config assertions still run after the merge. A value that breaks an artifact contract —
-async chunks, output roots, self-containment — fails the build with a hard diagnostic instead of
+resolved-config assertions still run after the merge. A value that breaks an artifact contract,
+async chunks, output roots, self-containment, fails the build with a hard diagnostic instead of
 silently overriding the contract. Reserved module specifiers are protected the same way: a hatch
 that externalizes `agent-bundle/mcp-entry`, `agent-bundle/meta`, or `agent-bundle/mcp-apps` fails
 the build. Externalization in general is bounded too: `AB4725` rejects statically visible
@@ -526,8 +526,8 @@ processing off after the hatch and the expression reaches the artifact verbatim.
 customizes *how code compiles*, never *what the artifact promises*.
 
 The hatch merges *beside* the framework profile: `plugins` arrays concatenate, and Rsbuild never
-dedupes plugins by name. Re-adding a plugin the framework already registers — `@rsbuild/plugin-react`
-(`rsbuild:react`), which every synthesized entry and every MCP App view carries —
+dedupes plugins by name. Re-adding a plugin the framework already registers, `@rsbuild/plugin-react`
+(`rsbuild:react`), which every synthesized entry and every MCP App view carries,
 through `tools.rsbuild.plugins` would run it twice, so `agent-bundle validate` reports it as
 `AB4724` naming the plugin and its package. Remove the entry; the framework registers it for you.
 
@@ -536,7 +536,7 @@ compile through Rslib, and MCP App views through `@rsbuild/core`; agent-bundle p
 project installs a single `@rsbuild/core` and a single `@rspack/core`, but that engine is
 agent-bundle's dependency, not yours. A class imported from a separately installed `@rspack/core`
 can therefore have a different identity than the engine executing the config. Never construct
-plugins or run `instanceof` checks against an imported `@rspack/core` — use the utils argument
+plugins or run `instanceof` checks against an imported `@rspack/core`, use the utils argument
 passed to mutator functions instead:
 
 ```ts
@@ -555,14 +555,14 @@ npx agent-bundle inspect --bundler --root .
 npx agent-bundle inspect --bundler --root . --target claude --json
 ```
 
-That dumps the lowered Rspack configuration of every output the build compiles — one entry per
+That dumps the lowered Rspack configuration of every output the build compiles, one entry per
 compiler, produced by the build's own Rslib (executables) or Rsbuild (MCP App views) lowering and
-stopped where the build would start compiling — so the dump cannot drift from what compiles. You
+stopped where the build would start compiling, so the dump cannot drift from what compiles. You
 see the resolved `resolve.alias` map (framework runtime modules beside your own aliases), the
 `externals` list, the plugins as `[object <ClassName>]`, functions as `[function <name>]`, and
 `output.path` as `<output>` (the artifact root) or `<project root>/dist` (the package build). A
-hatch value the build's invariants refuse — aliasing a reserved `agent-bundle/*` specifier, for
-instance — makes the inspection invalid with `AB7001` naming the refusal. Entries the framework
+hatch value the build's invariants refuse, aliasing a reserved `agent-bundle/*` specifier, for
+instance, makes the inspection invalid with `AB7001` naming the refusal. Entries the framework
 wraps also carry the generated wrapper module source.
 
 The full contract for everything on this page is in
@@ -570,5 +570,5 @@ The full contract for everything on this page is in
 
 ## Next
 
-- [Configuration model](./index.mdx) — the rest of the config surface.
-- [Project structure](../start/project-structure.mdx) — where each of these entries lives.
+- [Configuration model](./index.mdx): the rest of the config surface.
+- [Project structure](../start/project-structure.mdx): where each of these entries lives.

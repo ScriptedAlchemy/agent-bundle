@@ -5,8 +5,8 @@ description: 'agent-bundle 配置模型：defineConfig、每个顶层字段，�
 # 配置模型
 
 项目根目录下的 `agent-bundle.config.ts` 就是全部的声明式表面。它是一个小而扁平的对象，保存项目标识、
-target 选择，以及任何单个路由文件都无法拥有的策略。所有结构性的内容——存在哪些 Skill、存在哪些 MCP
-路由、发布哪些脚本——都来自 `src/` 约定，除非你在这里覆盖它。
+target 选择，以及任何单个路由文件都无法拥有的策略。所有结构性的内容，存在哪些 Skill、存在哪些 MCP
+路由、发布哪些脚本，都来自 `src/` 约定，除非你在这里覆盖它。
 
 ```ts twoslash
 import { defineConfig } from 'agent-bundle/config';
@@ -47,8 +47,8 @@ export default defineConfig({
 | `portable` | [Agent Plugins 开放标准](https://agent-plugins.org)（规范 1.0.0）：根目录的 `plugin.json` 与 `mcp.json`。Cursor 原生加载；其余读取该构件的客户端，连同它加载与不加载的界面，都记录在[已记录的第三方客户端](/zh/reference/hosts)中。 |
 
 Amp 插件嵌套在 `.amp/plugins/` 下；其他宿主清单各自位于自己的点目录中，`skills/`、`hooks/`、`mcp/`、
-`scripts/`、`bin/` 与 `assets/` 只输出一份并共享。省略 `targets` 时构建只输出 `portable` 投影。顺序无关紧要——
-`['codex', 'claude']` 与 `['claude', 'codex']` 产生完全相同的字节——而其他任何名称（包括
+`scripts/`、`bin/` 与 `assets/` 只输出一份并共享。省略 `targets` 时构建只输出 `portable` 投影。顺序无关紧要，
+`['codex', 'claude']` 与 `['claude', 'codex']` 产生完全相同的字节，而其他任何名称（包括
 `plugin`）都是未知 target（`AB4100`）。
 
 可移植标准只打包 Skills 与 MCP 服务器，因此规则、命令与钩子在该 target 上是诚实地不可用，而不是被
@@ -67,8 +67,8 @@ Amp 插件嵌套在 `.amp/plugins/` 下；其他宿主清单各自位于自己�
 | `assets` | 显式资源条目，取代根 `assets/` 约定。 |
 | `bin` / `lib` | npm 包构建。见[包入口](./package-entries.mdx)。 |
 | `routes` | 进阶的路由图策略：`routes.servers` 逐服务器模式、`routes.cli`，以及 `routes.mcpCommands` 投影。 |
-| `output` | `distPath` —— 产物根目录的位置；以及 `sourceMap`，生成式可执行文件 source map 的选择加入项（默认关闭）。 |
-| `runtime` | `node` —— 生成可执行文件的最低 Node.js 版本。 |
+| `output` | `distPath`，产物根目录的位置；以及 `sourceMap`，生成式可执行文件 source map 的选择加入项（默认关闭）。 |
+| `runtime` | `node`，生成可执行文件的最低 Node.js 版本。 |
 | `payload` | 按字节打包的预构建目录树（`definePrebuilt`）。 |
 | `state` | 设为 `false` 可禁用 `src/state.ts` 约定。 |
 | `marketplace` | 设为 `true` 时额外输出 Cursor 可选的 `.cursor-plugin/marketplace.json`。Claude Code 与 Codex 无论如何都会输出各自的本地 marketplace 清单。 |
@@ -76,7 +76,7 @@ Amp 插件嵌套在 `.amp/plugins/` 下；其他宿主清单各自位于自己�
 | `dev` | 仅用于开发、绝不会进入产物的设置，例如 `agentApi`。 |
 | `tools` | 唯一的打包器逃生舱。 |
 
-宿主作用域的扩展键——`claude`、`codex`、`cursor`、`portable`——由各个 target 适配器通过声明合并贡献，因此
+宿主作用域的扩展键，`claude`、`codex`、`cursor`、`portable`，由各个 target 适配器通过声明合并贡献，因此
 宿主专属取值留在自己的适配器中，而不会泄漏进编译器核心。普通项目完全不需要任何扩展键。
 
 ## 宿主作用域声明
@@ -94,14 +94,14 @@ shell 形式的 `command` 处理器。各适配器拥有的字段如下：
 | 键 | 字段 | 落点 |
 | --- | --- | --- |
 | `claude`（`ClaudeHostConfig`） | `bin`、`channels`、`defaultEnabled`、`dependencies`、`displayName`、`lspServers`、`marketplace`、`metadata`、`monitors`、`outputStyles`、`settings`、`themes`、`userConfig`、`workflows` | `bin`、`outputStyles` 与 `workflows` 是被复制到插件根同名约定目录的项目目录；`channels`、`dependencies`、`defaultEnabled`、`displayName`、`metadata` 与 `userConfig` 经校验后写入 `.claude-plugin/plugin.json`（`channels` 必须指向输出的 `.mcp.json` 中的服务器）；`marketplace` 丰富生成的 marketplace 条目；`monitors` 与 `themes` 属于实验特性，分别输出 `monitors/monitors.json` 与每个键一份的 `themes/<key>.json`；`lspServers` 与 `settings` 见下文。 |
-| `codex`（`CodexHostConfig`） | `apps`、`author`、`homepage`、`interface`、`keywords`、`license`、`marketplace`、`repository` | `author`、`homepage`、`keywords`、`license` 与 `repository` 是 `.codex-plugin/plugin.json` 中的发布者元数据；`interface`（品牌色、分类、能力、composer 图标、默认提示、开发者名称……）会合并覆盖编译器生成的安装表面默认值；`apps` 把已注册的 MCP 连接 id 映射进根目录的 `.app.json` 兼容文档；`marketplace` 编写输出的 `.agents/plugins/marketplace.json` 条目——`category`（默认为 interface 的分类）、`displayName`（默认为插件名）以及 `policy`，其中 `installation` 取 `AVAILABLE`、`INSTALLED_BY_DEFAULT` 或 `NOT_AVAILABLE`，`authentication` 取 `ON_INSTALL` 或 `ON_USE`；来源始终是本地插件根目录，任何其他键都会报错，而不是被悄悄输出。 |
+| `codex`（`CodexHostConfig`） | `apps`、`author`、`homepage`、`interface`、`keywords`、`license`、`marketplace`、`repository` | `author`、`homepage`、`keywords`、`license` 与 `repository` 是 `.codex-plugin/plugin.json` 中的发布者元数据；`interface`（品牌色、分类、能力、composer 图标、默认提示、开发者名称……）会合并覆盖编译器生成的安装表面默认值；`apps` 把已注册的 MCP 连接 id 映射进根目录的 `.app.json` 兼容文档；`marketplace` 编写输出的 `.agents/plugins/marketplace.json` 条目，`category`（默认为 interface 的分类）、`displayName`（默认为插件名）以及 `policy`，其中 `installation` 取 `AVAILABLE`、`INSTALLED_BY_DEFAULT` 或 `NOT_AVAILABLE`，`authentication` 取 `ON_INSTALL` 或 `ON_USE`；来源始终是本地插件根目录，任何其他键都会报错，而不是被悄悄输出。 |
 | `cursor`（`CursorHostConfig`） | `author`、`category`、`homepage`、`keywords`、`license`、`minClientVersions`、`publisher`、`repository`、`tags` | 叠加到生成的 `.cursor-plugin/plugin.json` 上的清单元数据，每个字段都被固定的 Cursor 插件 schema 接纳。`author` 是封闭的 `{ name, email? }` 对象（没有 `url`）；`minClientVersions` 把客户端标识映射为严格的 `X.Y.Z` semver 字符串，例如 `{ cursor: '3.13.0' }`，其他任何写法都是错误。Cursor 没有文档化的 `nativeHooks` 表面，因此 `cursor` 不扩展 `AgentBundleHostConfig`。 |
 | `portable`（[`PortableManifestConfig`](../../api/index-1.md#portablemanifestconfig)） | `author`、`extensions`、`homepage`、`keywords`、`license`、`repository` | 叠加到输出的根 `plugin.json` 上的 Agent Plugins 1.0.0 §5.4 元数据；`extensions` 把反向域名的客户端命名空间映射为不透明对象载荷（§8）。省略的字段不会出现在清单中。 |
 
 Cursor 插件的其余一切都从跨宿主模型推导。[宿主参考](../../reference/hosts.md)中的宿主能力表
 记录了每个被固定的宿主版本实际认可其中哪些表面。
 
-其中四个块共享的五个描述字段——`author`、`homepage`、`keywords`、`license` 与 `repository`——不必重复声明。
+其中四个块共享的五个描述字段，`author`、`homepage`、`keywords`、`license` 与 `repository`，不必重复声明。
 每个字段默认取项目 `package.json` 中的同名字段，`plugin.metadata` 一次性覆盖所有宿主，而宿主块对自己的产物
 仍然优先。把字段写成 `null` 即可让共享值不出现：写在 `plugin.metadata` 中表示不共享，写在某个宿主块中则只让
 该值不进入那一份清单。解析顺序以及编译器读取的两种 `package.json` 形状，见
@@ -109,11 +109,11 @@ Cursor 插件的其余一切都从跨宿主模型推导。[宿主参考](../../r
 
 有两个 Claude Code 表面值得细看，因为它们的契约比名字所暗示的更窄：
 
-- **`claude.lspServers`** —— 只要 `claude` 在选中的投影之中，就输出为根目录的
+- **`claude.lspServers`**：只要 `claude` 在选中的投影之中，就输出为根目录的
   `.lsp.json`。路径 token 只在 `command`、`args`、`env` 与 `workspaceFolder` 中展开。agent-bundle
   不包含语言服务器二进制文件，请单独安装它，以确保所声明的命令位于 `PATH` 上。Codex、Cursor 与
   可移植格式不会收到这份配置。
-- **`claude.settings`** —— 输出为插件根目录的 `settings.json`，Claude Code 会在插件启用时应用它。
+- **`claude.settings`**：输出为插件根目录的 `settings.json`，Claude Code 会在插件启用时应用它。
   被固定的契约只支持 `agent` 与 `subagentStatusLine`；任何其他键都会被拒绝，而不是发出一个
   Claude Code 会悄悄忽略的默认值。这里不展开任何路径 token，因为 `settings.json` 不在宿主的占位符
   替换表中。在插件 `agents/` 组件仍被推迟期间，声明 `agent` 还会触发一条警告：被引用的 agent 必须
@@ -131,7 +131,7 @@ export default defineConfig({
 });
 ```
 
-生成的可执行文件默认以 Node.js 22.12 及以上为目标。`runtime.node` 抬高这个下限——它永远无法降低——
+生成的可执行文件默认以 Node.js 22.12 及以上为目标。`runtime.node` 抬高这个下限，它永远无法降低，
 所选下限会以 `runtime.node` 记录在产物清单中。
 
 ## JSX 意味着渲染
@@ -156,13 +156,13 @@ capability 或 state 上下文时才调用 `await agent()`。不存在公开的 
 
 ## 可编写的表面
 
-- [Skills](./skills.mdx) —— Markdown Skill、它们的资源，以及渲染式 Skill 源码。
-- [钩子](./hooks.mdx) —— 七个规范生命周期事件与工具选择器。
-- [MCP 服务器与 MCP App](./mcp.mdx) —— 生成式路由服务器、手写 stdio 入口与浏览器 App。
-- [脚本与资源](./scripts-assets.mdx) —— 产物脚本与静态文件。
-- [包入口](./package-entries.mdx) —— `bin`、`lib`、路由式 CLI 与打包器逃生舱。
+- [Skills](./skills.mdx)：Markdown Skill、它们的资源，以及渲染式 Skill 源码。
+- [钩子](./hooks.mdx)：七个规范生命周期事件与工具选择器。
+- [MCP 服务器与 MCP App](./mcp.mdx)：生成式路由服务器、手写 stdio 入口与浏览器 App。
+- [脚本与资源](./scripts-assets.mdx)：产物脚本与静态文件。
+- [包入口](./package-entries.mdx)：`bin`、`lib`、路由式 CLI 与打包器逃生舱。
 
-一条路由如何同时变成 MCP、CLI 与钩子——以及编译器今天仍在哪些地方重复——见
+一条路由如何同时变成 MCP、CLI 与钩子，以及编译器今天仍在哪些地方重复，见
 [编译器架构](../concepts/architecture.mdx)。
 
 处理函数和组件可以直接返回结果，也可以返回 Promise。编译器检查导出声明；生成的运行时检查值是否可调用并等待结果。运行时也会等待 `mapInput`，然后由原始输入 schema 执行一次验证。

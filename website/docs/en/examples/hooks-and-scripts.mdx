@@ -12,7 +12,7 @@ an authored script.
 - **Package:** `@agent-bundle-example/hooks-and-scripts`
 - **Public dependencies:** `agent-bundle` (`workspace:*`)
 - **Targets:** `portable`, `codex`, `claude`
-- **Credentials:** none — the example reads only checked-in JSON under `release/`
+- **Credentials:** none: the example reads only checked-in JSON under `release/`
 - **Source:** [`examples/hooks-and-scripts`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/hooks-and-scripts)
 
 ## What it proves
@@ -21,8 +21,8 @@ an authored script.
   module that calls the application-owned `releaseContext` function. The build bundles that plain
   Node dependency into each host wrapper; it does not start an MCP server or render worker. See
   [Hooks](../guide/authoring/hooks.mdx).
-- **Both script declaration modes.** `verify-release` ships by convention — any unclaimed plain
-  script under `src/scripts/` is discovered — while `detect-risk` stays explicitly configured
+- **Both script declaration modes.** `verify-release` ships by convention: any unclaimed plain
+  script under `src/scripts/` is discovered, while `detect-risk` stays explicitly configured
   because it restricts its targets to `portable`. The example keeps both modes covered on
   purpose.
 - **The framework owns the process envelope.** Both scripts export `main` and return an exit
@@ -31,7 +31,7 @@ an authored script.
   [Scripts and assets](../guide/authoring/scripts-assets.mdx).
 - **Emitted scripts resolve their own assets.** `assets: ['release/*.json']` copies the release
   manifest and risk register once into the artifact root's `assets/`, shared by every target, and
-  each emitted script reads them relative to its own module — never relative to the shell's
+  each emitted script reads them relative to its own module, never relative to the shell's
   working directory.
 - **A failed rebuild keeps the last-good artifact.** That is the reversible walkthrough below.
 
@@ -74,7 +74,7 @@ to expose the last-good tree and artifact. Restore the checked-in handler, press
 again, and wait for **Idle**: a new active epoch replaces the stale catalog and clears the
 diagnostic.
 
-Do not read a Building state as a completed repair — the new active epoch is the evidence.
+Do not read a Building state as a completed repair, the new active epoch is the evidence.
 
 ## Noninteractive checks
 
