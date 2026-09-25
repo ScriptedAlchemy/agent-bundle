@@ -5,7 +5,7 @@
  * Catches bare `rm(`, aliased `import { rm as remove }` calls, and `ns.rm(` or
  * `ns.promises.rm(` when `ns` is a namespace/default import from node:fs, fs, or
  * their /promises forms. The same wrappers as the options argument are unwrapped
- * around the callee and its object, and `?.` member access still counts.
+ * around the callee and its object, and `?.` member access counts.
  *
  * Call, option, and import-binding detection is parser-backed (typescript-5):
  * only real node:fs(/promises) ImportDeclaration bindings count, only Node-bound
