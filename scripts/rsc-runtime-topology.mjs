@@ -63,17 +63,13 @@ const agentBundleDev = new Set([
   'packages/agent-bundle/src/dev/mcp-app-action-validation.ts',
   'packages/agent-bundle/src/dev/mcp-apps/mcp-app-binding-service.ts',
   'packages/agent-bundle/src/dev/mcp-apps/mcp-app-preview-service.ts',
-  'packages/agent-bundle/src/dev/mcp-app-runtime-binding-service.ts',
-  'packages/agent-bundle/src/dev/mcp-app-runtime-preview-service.ts',
   'packages/agent-bundle/src/dev/mcp-apps/mcp-app-routes.ts',
   'packages/agent-bundle/src/dev/mcp-session/mcp-session-service.ts',
   'packages/agent-bundle/src/dev/project-service.ts',
   'packages/agent-bundle/src/dev/runtime-app-message-limits.ts',
-  'packages/agent-bundle/src/dev/runtime-client-surface-proxy.ts',
   'packages/agent-bundle/src/dev/runtime-controller.ts',
   'packages/agent-bundle/src/dev/runtime-generation-store.ts',
   'packages/agent-bundle/src/dev/runtime-mcp-registry.ts',
-  'packages/agent-bundle/src/dev/runtime-mcp-routes.ts',
   'packages/agent-bundle/src/dev/runtime-provider-loader.ts',
   'packages/agent-bundle/src/dev/runtime-provider.ts',
   'packages/agent-bundle/src/dev/runtime-routes.ts',
@@ -88,19 +84,15 @@ const workbenchSource = new Set([
   'packages/workbench/src/runtime-client.ts',
   'packages/workbench/src/runtime-inspector.tsx',
   'packages/workbench/src/runtime-model.ts',
-  'packages/workbench/src/runtime-playground.tsx',
   'packages/workbench/src/runtime-stage.tsx',
   'packages/workbench/src/mcp/mcp-app-client.ts',
   'packages/workbench/src/mcp/mcp-app-preview.tsx',
   'packages/workbench/src/mcp/mcp-page.tsx',
   'packages/workbench/src/mcp/mcp-session-controller.ts',
   'packages/workbench/src/mcp/mcp-session-model.ts',
-  'packages/workbench/src/mcp/runtime-consent-dialog.tsx',
-  'packages/workbench/src/mcp/runtime-consent-queue.ts',
-  'packages/workbench/src/mcp/runtime-mcp-handoff.ts',
 ]);
 
-const workbenchTests = /^(?:packages\/workbench\/tests\/(?:helpers\/runtime-playground-fixture\.ts|(?:mcp-app|mcp-page|mcp-session|runtime-|project-client|rsbuild-workbench|runtime-playground).+\.(?:test|e2e\.test|browser\.test)\.(?:ts|tsx))|packages\/workbench\/scripts\/capture-runtime-playground\.mjs)$/u;
+const workbenchTests = /^(?:packages\/workbench\/tests\/(?:(?:mcp-app|mcp-page|mcp-session|runtime-|project-client|rsbuild-workbench).+\.(?:test|e2e\.test|browser\.test)\.(?:ts|tsx)))$/u;
 const agentBundleTests = /^packages\/agent-bundle\/tests\/(?:normalization|duplicate-key|public-api|canonical-digest|emitted-host|native-host|target-registry|portable|codex|claude|dev-artifact|host-adapters|runtime-|mcp-app|mcp-session|foreground-server|project-service|dev-workbench|rsc-runtime-(?:optional-packaging|topology-script)|playground-service).*\.test\.ts$/u;
 const exampleRuntime = /^examples\/rsc-agent-runtime\/(?:package\.json|rsbuild\.config\.ts|tsconfig\.json|src\/definition\.ts$|src\/(?:build|dev|flight|hook|mcp|rsc|runtime|widget|types)\/|scripts\/(?:capture-widget|eval-evidence|eval-host-environment|eval-hosts)\.mjs$|tests\/(?:dev-provider|generation-materializer|dev-invocation|host-artifacts|runtime-artifact-manifest|mcp-transports|mcp-lowering|rsc-hook|state-and-definition|http-security|eval-evidence|host-extensions|widget-accessibility|docs-contract).+\.(?:ts|tsx)$)/u;
 

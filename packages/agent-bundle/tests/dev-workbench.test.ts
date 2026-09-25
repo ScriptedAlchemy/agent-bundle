@@ -16,7 +16,6 @@ import {
   closeDevServerLifecycle,
   DevServerLifecycleCloseError,
   DevServerStartError,
-  RuntimeClientSurfaceBindings,
   startDevServer,
 } from '../src/dev/workbench-server.ts';
 import type { ForegroundCoordinator, ForegroundServerOptions } from '../src/dev/foreground-server.ts';
@@ -42,18 +41,6 @@ const within = async <Value>(promise: Promise<Value>, milliseconds: number): Pro
     setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
   }),
 ]);
-
-it('requires one canonical foreground origin before opening runtime client surfaces', async () => {
-  const bindings = new RuntimeClientSurfaceBindings(undefined, async () => {
-    throw new Error('Runtime lookup must not open a proxy without a bound foreground.');
-  });
-  await expect(bindings.open('mcp.edit-timeline')).rejects.toThrow('not bound');
-  expect(() => bindings.bindHostOrigin('http://127.0.0.1:42000/not-an-origin')).toThrow('canonical foreground');
-  bindings.bindHostOrigin('http://127.0.0.1:42000');
-  expect(() => bindings.bindHostOrigin('http://127.0.0.1:42000')).toThrow('one canonical foreground origin binding');
-  await expect(bindings.open('mcp.edit-timeline')).resolves.toBeUndefined();
-  await expect(bindings.close()).resolves.toBeUndefined();
-});
 
 const openProjectEventStream = (url: string, cookie: string): Readonly<{
   readonly close: () => void;
@@ -187,67 +174,6 @@ const appPreviewBody = () => ({
   result: { content: [{ text: 'Fixture App ready.', type: 'text' }] },
   toolName: 'show-app',
 });
-
-interface CompilingRuntimeAppState {
-  emit: ((event: { readonly type: 'runtime.generation.activated' | 'runtime.status' }) => void) | undefined;
-  phase: 'active' | 'compiling';
-  subscribes: number;
-  unsubscribes: number;
-}
-
-const writeCompilingRuntimeAppProject = async (root: string, stateKey: string): Promise<void> => {
-  await mkdir(join(root, 'src', 'dev'), { recursive: true });
-  await Promise.all([
-    writeFile(join(root, 'src', 'dev', 'provider.ts'), [
-      `const state = globalThis[${JSON.stringify(stateKey)}];`,
-      "if (state === undefined) throw new Error('Missing compiling Runtime Apps test state.');",
-      'const registry = {',
-      '  close: async () => undefined,',
-      '  closeSession: async () => undefined,',
-      '  open: async () => { throw new Error(\'unused\'); },',
-      '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
-      '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
-      '  session: () => undefined,',
-      '  snapshot: () => undefined,',
-      "  subscribe: () => { state.subscribes += 1; state.emit?.({ type: 'runtime.status' }); return { unsubscribe: () => { state.unsubscribes += 1; } }; },",
-      '};',
-      'export const createDevRuntimeProvider = () => ({',
-      "  descriptor: { environmentVariables: [], id: 'compiling-runtime-apps', label: 'Compiling Runtime Apps', schemaVersion: 1 },",
-      '  start: async (context) => {',
-      '    state.emit = context.emit;',
-      '    return {',
-      '      clientSurface: () => undefined,',
-      '      close: async () => undefined,',
-      '      invoke: async () => { throw new Error(\'unused\'); },',
-      '      mcpRegistry: registry,',
-      "      providerSessionId: 'provider-compiling-runtime-apps',",
-      '      readAsset: async () => undefined,',
-      '      readRunFlight: async () => undefined,',
-      '      reconcilePreparedRuntime: async () => undefined,',
-      '      replay: async () => { throw new Error(\'unused\'); },',
-      "      resetState: async () => ({ stateStoreId: 'state-compiling-runtime-apps', stateVersion: 0 }),",
-      '      run: () => undefined,',
-      '      runs: () => [],',
-      "      status: () => ({ descriptor: { environmentVariables: [], id: 'compiling-runtime-apps', label: 'Compiling Runtime Apps', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: state.phase }),",
-      '      surfaces: () => [],',
-      '    };',
-      '  },',
-      '});',
-      '',
-    ].join('\n')),
-    writeFile(join(root, 'agent-bundle.config.ts'), [
-      "import { defineConfig } from 'agent-bundle';",
-      '',
-      'export default defineConfig({',
-      "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
-      "  plugin: { name: 'compiling-runtime-apps' },",
-      "  skills: ['src/skills/review'],",
-      "  targets: ['portable'],",
-      '});',
-      '',
-    ].join('\n')),
-  ]);
-};
 
 const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
   artifactLayout: Object.freeze({
@@ -715,304 +641,7 @@ it('keeps the ordinary foreground and artifact lane available when provider star
     await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
       status: { diagnostics: [{ phase: 'provider-lifecycle' }], state: 'failed' },
     });
-    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
-    const { token } = await bootstrap.json() as { readonly token: string };
-    await expect(fetch(`${server.url}/api/runtime/apps`, {
-      body: JSON.stringify({ expectedGenerationId: 'missing-generation', profileId: 'portable', runId: 'missing-run' }),
-      headers: { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token },
-      method: 'POST',
-    }).then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
-      body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
-      status: 404,
-    });
   } finally {
-    await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
-  }
-}, 30_000);
-
-it('retains Runtime App routes through invalid config updates and reconciles only repaired or removed declarations', async () => {
-  const project = await createProjectFixture();
-  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-late-runtime-apps-'));
-  const stateKey = `__agentBundleLateRuntimeApps${Date.now()}${Math.random().toString(16).slice(2)}`;
-  const runtimeState = { calls: [] as string[], closes: 0, reconciles: 0, subscribes: 0, unsubscribes: 0 };
-  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof runtimeState | undefined>;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  const config = (targets: string[], marker: string, extension?: string, includeRuntime = true): string => [
-    "import { defineConfig } from 'agent-bundle';",
-    '',
-    'export default defineConfig({',
-    ...(includeRuntime ? ["  dev: { runtime: { provider: './src/dev/provider.ts' } },"] : []),
-    `  fixtureMarker: ${JSON.stringify(marker)},`,
-    "  plugin: { name: 'late-runtime-apps' },",
-    "  skills: ['src/skills/review'],",
-    `  targets: ${JSON.stringify(targets)},`,
-    ...(extension === undefined ? [] : [`  portable: ${extension},`]),
-    '});',
-    '',
-  ].join('\n');
-  try {
-    runtimeGlobal[stateKey] = runtimeState;
-    await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
-    await Promise.all([
-      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
-      writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
-        `const state = globalThis[${JSON.stringify(stateKey)}];`,
-        "if (state === undefined) throw new Error('Missing late Runtime Apps test state.');",
-        'const registry = {',
-        '  close: async () => undefined,',
-        '  closeSession: async () => undefined,',
-        '  open: async () => { throw new Error(\'unused\'); },',
-        '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
-        '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
-        '  session: () => undefined,',
-        '  snapshot: () => undefined,',
-        "  subscribe: () => { state.calls.push('subscribe'); state.subscribes += 1; return { unsubscribe: () => { state.calls.push('unsubscribe'); state.unsubscribes += 1; } }; },",
-        '};',
-        'export const createDevRuntimeProvider = () => ({',
-        "  descriptor: { environmentVariables: [], id: 'late-runtime-apps', label: 'Late Runtime Apps', schemaVersion: 1 },",
-        '  start: async () => ({',
-        '    clientSurface: () => undefined,',
-        "    close: async () => { state.calls.push('close'); state.closes += 1; },",
-        '    invoke: async () => { throw new Error(\'unused\'); },',
-        '    mcpRegistry: registry,',
-        "    providerSessionId: 'provider-late-runtime-apps',",
-        '    readAsset: async () => undefined,',
-        '    readRunFlight: async () => undefined,',
-        "    reconcilePreparedRuntime: async () => { state.calls.push('reconcile'); state.reconciles += 1; },",
-        '    replay: async () => { throw new Error(\'unused\'); },',
-        "    resetState: async () => ({ stateStoreId: 'state-late-runtime-apps', stateVersion: 0 }),",
-        '    run: () => undefined,',
-        '    runs: () => [],',
-        "    status: () => ({ descriptor: { environmentVariables: [], id: 'late-runtime-apps', label: 'Late Runtime Apps', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),",
-        '    surfaces: () => [],',
-        '  }),',
-        '});',
-        '',
-      ].join('\n')),
-      // An unknown target is a model failure, but the valid development
-      // declaration still constructs the fixed runtime controller.
-      writeFile(project.configPath, config(['portable', 'unknown-target'], 'invalid-initial')),
-    ]);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: assetsRoot }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
-    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
-      status: { descriptor: { id: 'late-runtime-apps' }, state: 'active' },
-    });
-    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
-    const { token } = await bootstrap.json() as { readonly token: string };
-    const headers = { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token };
-    const create = () => fetch(`${server!.url}/api/runtime/apps`, {
-      body: JSON.stringify({ expectedGenerationId: 'missing-generation', profileId: 'portable', runId: 'missing-run' }),
-      headers,
-      method: 'POST',
-    });
-    const history = () => fetch(`${server!.url}/api/runtime/runs`, { headers }).then(async (response) => ({ body: await response.json(), status: response.status }));
-
-    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
-      body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
-      status: 404,
-    });
-    expect(runtimeState.subscribes).toBe(0);
-
-    await replaceWatchedSource(project.root, project.configPath, config(['portable'], 'valid-first', '{}'));
-    await within((async () => {
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        const response = await create();
-        const result = { body: await response.json(), status: response.status };
-        if (result.status === 404 && result.body.diagnostic?.code === 'AB8201') return;
-        await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 25); });
-      }
-      throw new Error('Runtime MCP App preview did not attach after the valid config update.');
-    })(), 5_000);
-    expect(runtimeState.subscribes).toBe(1);
-    const stableHistory = await history();
-    expect(stableHistory).toEqual({
-      body: { providerSessionId: expect.any(String), runs: [] },
-      status: 200,
-    });
-    const stableRuntime = {
-      calls: [...runtimeState.calls],
-      closes: runtimeState.closes,
-      reconciles: runtimeState.reconciles,
-      subscribes: runtimeState.subscribes,
-      unsubscribes: runtimeState.unsubscribes,
-    };
-
-    await replaceWatchedSource(project.root, project.configPath, config(['portable'], 'invalid-nonfinite', 'Number.NaN'));
-    const invalid = await fetch(`${server.url}/api/project/rebuild`, {
-      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
-      headers,
-      method: 'POST',
-    }).then(async (response) => ({ body: await response.json(), status: response.status }));
-    expect(invalid).toMatchObject({
-      body: {
-        status: {
-          source: {
-            diagnostics: [{
-              code: 'AB4500',
-              message: 'A registered config extension must contain strict finite JSON data.',
-              sourcePath: project.configPath,
-            }],
-            state: 'invalid',
-          },
-        },
-      },
-      status: 200,
-    });
-    expect(runtimeState).toEqual(stableRuntime);
-    await expect(history()).resolves.toEqual(stableHistory);
-    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
-      body: { diagnostic: { code: 'AB8201', message: 'Runtime MCP App run is not available.' } },
-      status: 404,
-    });
-
-    await expect(fetch(`${server.url}/api/project/rebuild`, {
-      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
-      headers,
-      method: 'POST',
-    }).then((response) => response.status)).resolves.toBe(200);
-    expect(runtimeState).toEqual(stableRuntime);
-
-    await replaceWatchedSource(project.root, project.configPath, config(['portable'], 'valid-repair', '{}'));
-    await expect(fetch(`${server.url}/api/project/rebuild`, {
-      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
-      headers,
-      method: 'POST',
-    }).then((response) => response.status)).resolves.toBe(200);
-    expect(runtimeState).toEqual({
-      calls: [...stableRuntime.calls, 'reconcile'],
-      closes: stableRuntime.closes,
-      reconciles: stableRuntime.reconciles + 1,
-      subscribes: stableRuntime.subscribes,
-      unsubscribes: stableRuntime.unsubscribes,
-    });
-
-    await replaceWatchedSource(project.root, project.configPath, config(['portable'], 'valid-removal', undefined, false));
-    await expect(fetch(`${server.url}/api/project/rebuild`, {
-      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
-      headers,
-      method: 'POST',
-    }).then((response) => response.status)).resolves.toBe(200);
-    expect(runtimeState).toEqual({
-      calls: [...stableRuntime.calls, 'reconcile'],
-      closes: stableRuntime.closes,
-      reconciles: stableRuntime.reconciles + 1,
-      subscribes: stableRuntime.subscribes,
-      unsubscribes: stableRuntime.unsubscribes,
-    });
-    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
-      status: {
-        diagnostics: [{ code: 'AB8200', message: 'Development runtime declaration changed; restart required.', phase: 'provider-lifecycle' }],
-        state: 'failed',
-      },
-    });
-    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
-      body: { diagnostic: { code: 'AB8023', message: 'MCP App operation could not be completed.' } },
-      status: 502,
-    });
-
-    await expect(server.close()).resolves.toBeUndefined();
-    expect(runtimeState.unsubscribes).toBe(1);
-  } finally {
-    delete runtimeGlobal[stateKey];
-    await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
-  }
-}, 60_000);
-
-it('fences a closing foreground before a held valid runtime reconcile can attach an App preview service', async () => {
-  const project = await createProjectFixture();
-  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-late-runtime-close-'));
-  const stateKey = `__agentBundleLateRuntimeClose${Date.now()}${Math.random().toString(16).slice(2)}`;
-  let enteredReconcile: () => void = () => undefined;
-  let releaseReconcile: () => void = () => undefined;
-  const reconcileEntered = new Promise<void>((resolvePromise) => { enteredReconcile = resolvePromise; });
-  const reconcileReleased = new Promise<void>((resolvePromise) => { releaseReconcile = resolvePromise; });
-  const runtimeState = { subscribes: 0, unsubscribes: 0, enteredReconcile, reconcileReleased };
-  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof runtimeState | undefined>;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  const config = (targets: string[]): string => [
-    "import { defineConfig } from 'agent-bundle';",
-    '',
-    'export default defineConfig({',
-    "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
-    "  plugin: { name: 'late-runtime-close' },",
-    "  skills: ['src/skills/review'],",
-    `  targets: ${JSON.stringify(targets)},`,
-    '});',
-    '',
-  ].join('\n');
-  try {
-    runtimeGlobal[stateKey] = runtimeState;
-    await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
-    await Promise.all([
-      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
-      writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
-        `const state = globalThis[${JSON.stringify(stateKey)}];`,
-        "if (state === undefined) throw new Error('Missing late Runtime Apps close state.');",
-        'const registry = {',
-        '  close: async () => undefined,',
-        '  closeSession: async () => undefined,',
-        '  open: async () => { throw new Error(\'unused\'); },',
-        '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
-        '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
-        '  session: () => undefined,',
-        '  snapshot: () => undefined,',
-        '  subscribe: () => { state.subscribes += 1; return { unsubscribe: () => { state.unsubscribes += 1; } }; },',
-        '};',
-        'export const createDevRuntimeProvider = () => ({',
-        "  descriptor: { environmentVariables: [], id: 'late-runtime-close', label: 'Late Runtime Close', schemaVersion: 1 },",
-        '  start: async () => ({',
-        '    clientSurface: () => undefined,',
-        '    close: async () => undefined,',
-        '    invoke: async () => { throw new Error(\'unused\'); },',
-        '    mcpRegistry: registry,',
-        "    providerSessionId: 'provider-late-runtime-close',",
-        '    readAsset: async () => undefined,',
-        '    readRunFlight: async () => undefined,',
-        '    reconcilePreparedRuntime: async () => { state.enteredReconcile(); await state.reconcileReleased; },',
-        '    replay: async () => { throw new Error(\'unused\'); },',
-        "    resetState: async () => ({ stateStoreId: 'state-late-runtime-close', stateVersion: 0 }),",
-        '    run: () => undefined,',
-        '    runs: () => [],',
-        "    status: () => ({ descriptor: { environmentVariables: [], id: 'late-runtime-close', label: 'Late Runtime Close', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),",
-        '    surfaces: () => [],',
-        '  }),',
-        '});',
-        '',
-      ].join('\n')),
-      writeFile(project.configPath, config(['portable', 'unknown-target'])),
-    ]);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: assetsRoot }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
-    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
-    const { token } = await bootstrap.json() as { readonly token: string };
-    const headers = { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token };
-    await replaceWatchedSource(project.root, project.configPath, config(['portable']));
-    const rebuilding = fetch(`${server.url}/api/project/rebuild`, {
-      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
-      headers,
-      method: 'POST',
-    });
-    await within(reconcileEntered, 5_000);
-    const closing = server.close();
-    releaseReconcile();
-    await Promise.allSettled([rebuilding]);
-    await expect(closing).resolves.toBeUndefined();
-    expect(runtimeState.subscribes).toBe(0);
-    expect(runtimeState.unsubscribes).toBe(0);
-  } finally {
-    releaseReconcile();
-    delete runtimeGlobal[stateKey];
     await server?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
@@ -1119,7 +748,6 @@ it('does not reconcile a valid preparation released after foreground close begin
     const stableRuntime = {
       closes: runtimeState.closes,
       reconciles: runtimeState.reconciles,
-      subscribes: runtimeState.subscribes,
     };
 
     await replaceWatchedSource(project.root, project.configPath, config('held-after-close', true));
@@ -1136,8 +764,6 @@ it('does not reconcile a valid preparation released after foreground close begin
     expect(runtimeState).toMatchObject({
       closes: stableRuntime.closes + 1,
       reconciles: stableRuntime.reconciles,
-      subscribes: stableRuntime.subscribes,
-      unsubscribes: 1,
     });
     expect(runtimeState.calls).not.toContain('reconcile');
   } finally {
@@ -1222,103 +848,10 @@ it('does not publish a prepared runtime topology after foreground close begins',
   }
 }, 30_000);
 
-it('attaches Runtime App routes once when a compiling provider later activates, even if registry subscription re-enters status delivery', async () => {
-  const project = await createProjectFixture();
-  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-compiling-runtime-apps-'));
-  const stateKey = `__agentBundleCompilingRuntimeApps${Date.now()}${Math.random().toString(16).slice(2)}`;
-  const runtimeState: CompilingRuntimeAppState = { emit: undefined, phase: 'compiling', subscribes: 0, unsubscribes: 0 };
-  const runtimeGlobal = globalThis as typeof globalThis & Record<string, CompilingRuntimeAppState | undefined>;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  try {
-    runtimeGlobal[stateKey] = runtimeState;
-    await Promise.all([
-      writeCompilingRuntimeAppProject(project.root, stateKey),
-      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
-    ]);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: assetsRoot }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
-    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
-    const { token } = await bootstrap.json() as { readonly token: string };
-    const create = () => fetch(`${server!.url}/api/runtime/apps`, {
-      body: JSON.stringify({ expectedGenerationId: 'missing-generation', profileId: 'portable', runId: 'missing-run' }),
-      headers: { 'content-type': 'application/json', origin: server!.url, 'x-agent-bundle-session': token },
-      method: 'POST',
-    });
-
-    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
-      body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
-      status: 404,
-    });
-    expect(runtimeState.subscribes).toBe(0);
-
-    runtimeState.phase = 'active';
-    runtimeState.emit?.({ type: 'runtime.generation.activated' });
-    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
-      body: { diagnostic: { code: 'AB8201', message: 'Runtime MCP App run is not available.' } },
-      status: 404,
-    });
-    expect(runtimeState.subscribes).toBe(1);
-    runtimeState.emit?.({ type: 'runtime.generation.activated' });
-    runtimeState.emit?.({ type: 'runtime.status' });
-    expect(runtimeState.subscribes).toBe(1);
-
-    await expect(server.close()).resolves.toBeUndefined();
-    expect(runtimeState.unsubscribes).toBe(1);
-  } finally {
-    delete runtimeGlobal[stateKey];
-    await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
-  }
-}, 30_000);
-
-it('does not attach a compiling Runtime App preview service after foreground close fences a late activation', async () => {
-  const project = await createProjectFixture();
-  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-compiling-runtime-close-'));
-  const stateKey = `__agentBundleCompilingRuntimeClose${Date.now()}${Math.random().toString(16).slice(2)}`;
-  const runtimeState: CompilingRuntimeAppState = { emit: undefined, phase: 'compiling', subscribes: 0, unsubscribes: 0 };
-  const runtimeGlobal = globalThis as typeof globalThis & Record<string, CompilingRuntimeAppState | undefined>;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  try {
-    runtimeGlobal[stateKey] = runtimeState;
-    await Promise.all([
-      writeCompilingRuntimeAppProject(project.root, stateKey),
-      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
-    ]);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: assetsRoot }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
-    const closing = server.close();
-    runtimeState.phase = 'active';
-    runtimeState.emit?.({ type: 'runtime.generation.activated' });
-    await expect(closing).resolves.toBeUndefined();
-    expect(runtimeState.subscribes).toBe(0);
-    expect(runtimeState.unsubscribes).toBe(0);
-  } finally {
-    delete runtimeGlobal[stateKey];
-    await server?.close().catch(() => undefined);
-    await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
-  }
-}, 30_000);
-
 it('prepares the optional runtime once with the development config context before provider startup', async () => {
   const project = await createProjectFixture();
   const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-runtime-'));
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  let failedServer: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  const boundOrigins: string[] = [];
-  let resolveSurface: ((binding: { readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string }) => void) | undefined;
-  const pendingSurface = new Promise<{ readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string }>((resolvePromise) => {
-    resolveSurface = resolvePromise;
-  });
-  let proxyCalls = 0;
-  let surfaceCloseCalls = 0;
   // Both fixture records live outside the watched project source. The dev
   // watcher treats every non-ignored path under the project root as source
   // (the project snapshot is broad by design), so a config that appended its
@@ -1381,13 +914,6 @@ it('prepares the optional runtime once with the development config context befor
       open: false,
       port: 0,
       root: project.root,
-      testing: {
-        openRuntimeClientSurface: async (_endpoint, _listener, hostOrigin) => {
-          proxyCalls += 1;
-          boundOrigins.push(hostOrigin);
-          return pendingSurface.then((binding) => binding);
-        },
-      },
     });
 
     const runtimeStorageRoot = join(project.root, '.agent-bundle', 'runtime');
@@ -1414,46 +940,8 @@ it('prepares the optional runtime once with the development config context befor
     expect(runtimeStatus).toMatchObject({ status: { descriptor: { id: 'fixture-runtime' }, state: 'active' } });
     expect(projectStatus).toMatchObject({ status: { runtime: { state: 'configured' } } });
     expect((projectStatus as { readonly status: { readonly runtime?: unknown } }).status.runtime).toEqual({ state: 'configured' });
-    await expect(server.openRuntimeClientSurface('unknown-surface')).resolves.toBeUndefined();
-    const opening = server.openRuntimeClientSurface('timeline');
-    // The test seam records synchronously before returning its unresolved
-    // promise, proving foreground shutdown races an actually pending open.
-    expect(proxyCalls).toBe(1);
-    expect(boundOrigins).toEqual([server.url]);
-    const closing = server.close();
-    expect(surfaceCloseCalls).toBe(0);
-    resolveSurface?.({
-      bootstrapUrl: 'http://127.0.0.1:41112/bootstrap',
-      close: async () => { surfaceCloseCalls += 1; },
-      origin: 'http://127.0.0.1:41112',
-      surfaceId: 'timeline',
-    });
-    await expect(opening).rejects.toThrow('closed');
-    await expect(closing).resolves.toBeUndefined();
-    expect(proxyCalls).toBe(1);
-    expect(surfaceCloseCalls).toBe(1);
-    await expect(server.openRuntimeClientSurface('unknown-surface')).rejects.toThrow('closed');
-    let failedCloseCalls = 0;
-    failedServer = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: assetsRoot }),
-      open: false,
-      port: 0,
-      root: project.root,
-      testing: {
-        openRuntimeClientSurface: async () => ({
-          bootstrapUrl: 'http://127.0.0.1:41113/bootstrap',
-          close: async () => { failedCloseCalls += 1; throw new Error('Completed client surface close failed.'); },
-          origin: 'http://127.0.0.1:41113',
-          surfaceId: 'timeline',
-        }),
-      },
-    });
-    await expect(failedServer.openRuntimeClientSurface('timeline')).resolves.toMatchObject({ surfaceId: 'timeline' });
-    await expect(failedServer.close()).rejects.toMatchObject({ name: 'ForegroundServerCloseError' });
-    expect(failedCloseCalls).toBe(1);
   } finally {
     await server?.close().catch(() => undefined);
-    await failedServer?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), removeTree(assetsRoot)]);
   }
 }, 30_000);
@@ -1996,7 +1484,6 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
 });
 
 it('leaves Agent API ownership to the foreground release while closing every lifecycle resource in order', async () => {
-  const clientFailure = new Error('Runtime client surface cleanup failed.');
   const appFailure = new Error('MCP App cleanup failed.');
   const runtimeFailure = new Error('Runtime cleanup failed.');
   const mcpFailure = new Error('MCP cleanup failed.');
@@ -2009,7 +1496,6 @@ it('leaves Agent API ownership to the foreground release while closing every lif
     mcpApps: { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
     mcpSessions: { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
     runtimeResources: {
-      clientSurfaces: { close: async () => { closeOrder.push('runtime-client-surfaces'); throw clientFailure; } },
       runtime: { close: async () => { closeOrder.push('runtime'); throw runtimeFailure; } },
     },
     playground: { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
@@ -2017,7 +1503,6 @@ it('leaves Agent API ownership to the foreground release while closing every lif
     failures: [
       { error: playgroundFailure, resource: 'playground' },
       { error: appFailure, resource: 'mcp-apps' },
-      { error: clientFailure, resource: 'runtime-client-surfaces' },
       { error: runtimeFailure, resource: 'runtime' },
       { error: mcpFailure, resource: 'mcp-sessions' },
       { error: coordinatorFailure, resource: 'coordinator' },
@@ -2027,7 +1512,6 @@ it('leaves Agent API ownership to the foreground release while closing every lif
   expect(closeOrder).toEqual([
     'playground',
     'mcp-apps',
-    'runtime-client-surfaces',
     'runtime',
     'mcp-sessions',
     'coordinator',
@@ -2088,7 +1572,6 @@ it('passes --no-open, the requested port, and repeatable dev host installs to th
       received.push(options);
       return {
         close: async () => undefined,
-        openRuntimeClientSurface: async () => undefined,
         status: () => ({}) as never,
         url: 'http://127.0.0.1:4100',
       };
@@ -2111,7 +1594,6 @@ it('passes explicit Agent API enablement and disablement through the dev CLI', a
     received.push(options);
     return {
       close: async () => undefined,
-      openRuntimeClientSurface: async () => undefined,
       status: () => ({}) as never,
       url: 'http://127.0.0.1:4100',
     };
@@ -2138,7 +1620,6 @@ it('closes the foreground session once when the dev CLI receives a termination s
     },
     startDevServer: async () => ({
       close: async () => { closeCalls += 1; },
-      openRuntimeClientSurface: async () => undefined,
       status: () => ({}) as never,
       url: 'http://127.0.0.1:4100',
     }),

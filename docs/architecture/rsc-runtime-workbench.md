@@ -29,8 +29,6 @@ packages/
     src/core/types.ts
     src/dev/foreground-server.ts
     src/dev/mcp-app-action-validation.ts
-    src/dev/mcp-app-runtime-binding-service.ts
-    src/dev/mcp-app-runtime-preview-service.ts
     src/dev/mcp-apps/mcp-app-binding-service.ts
     src/dev/mcp-apps/mcp-app-preview-service.ts
     src/dev/mcp-apps/mcp-app-routes.ts
@@ -39,11 +37,9 @@ packages/
     src/dev/playground/playground-store.ts
     src/dev/project-service.ts
     src/dev/runtime-app-message-limits.ts
-    src/dev/runtime-client-surface-proxy.ts
     src/dev/runtime-controller.ts
     src/dev/runtime-generation-store.ts
     src/dev/runtime-mcp-registry.ts
-    src/dev/runtime-mcp-routes.ts
     src/dev/runtime-provider-loader.ts
     src/dev/runtime-provider.ts
     src/dev/runtime-routes.ts
@@ -69,8 +65,6 @@ packages/
     tests/mcp-app-metadata.test.ts
     tests/mcp-app-preview-service.test.ts
     tests/mcp-app-routes.test.ts
-    tests/mcp-app-runtime-binding-service.test.ts
-    tests/mcp-app-runtime-preview-service.test.ts
     tests/mcp-app-sandbox.test.ts
     tests/mcp-apps-compile.test.ts
     tests/mcp-session-routes.test.ts
@@ -85,15 +79,12 @@ packages/
     tests/public-api.test.ts
     tests/rsc-runtime-optional-packaging.test.ts
     tests/rsc-runtime-topology-script.test.ts
-    tests/runtime-client-surface-proxy.test.ts
     tests/runtime-generation-store.test.ts
     tests/runtime-mcp-registry.test.ts
-    tests/runtime-mcp-routes.test.ts
     tests/runtime-provider.test.ts
     tests/runtime-routes.test.ts
   workbench/
     rsbuild.config.ts
-    scripts/capture-runtime-playground.mjs
     src/main.tsx
     src/mcp/mcp-app-client.ts
     src/mcp/mcp-app-preview.tsx
@@ -104,7 +95,6 @@ packages/
     src/runtime-client.ts
     src/runtime-model.ts
     src/styles.css
-    tests/helpers/runtime-playground-fixture.ts
     tests/mcp-app-client.test.ts
     tests/mcp-app-frame.test.ts
     tests/mcp-app-preview-browser.test.ts

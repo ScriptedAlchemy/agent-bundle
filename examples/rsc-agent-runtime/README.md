@@ -56,21 +56,8 @@ pnpm --filter @agent-bundle/rsc-agent-runtime-demo capture:widget -- --output /t
 pnpm docs:runtime-topology
 ```
 
-For contributor Workbench/HMR evidence, use the repository fixture rather than
-the published package:
-
-```bash
-node packages/workbench/scripts/capture-runtime-playground.mjs \
-  --desktop "$PWD/docs/assets/rsc-runtime-workbench/desktop.png" \
-  --hmr-before "$PWD/docs/assets/rsc-runtime-workbench/hmr-before.png" \
-  --hmr-after "$PWD/docs/assets/rsc-runtime-workbench/hmr-after.png" \
-  --compile-error "$PWD/docs/assets/rsc-runtime-workbench/compile-error.png" \
-  --recovered "$PWD/docs/assets/rsc-runtime-workbench/recovered.png" \
-  --evidence /tmp/rsc-runtime-delivery/evidence.json
-```
-
-The `--compile-error` capture shows the Workbench diagnostic the provider
-publishes when a source change fails to compile: code `AB8206`, phase
+When a source change fails to compile, the provider publishes a Workbench
+diagnostic with code `AB8206`, phase
 `source/build`, and a message that carries the Rspack errors themselves, one
 `file:line:col: message` line per error, with the path relative to the example
 root, ANSI colour and the SWC code frame stripped. Breaking `src/rsc/worker.tsx`

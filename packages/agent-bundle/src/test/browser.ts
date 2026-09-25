@@ -19,13 +19,13 @@ import type {
 } from '../dev/mcp-apps/mcp-app-binding-service.ts';
 import { snapshotMcpAppJsonRecord } from '../dev/mcp-apps/mcp-app-json.ts';
 import type { McpAppProfileId } from '../dev/mcp-app-profile-descriptors.ts';
+import type { McpAppConsentCapability } from '../dev/mcp-apps/mcp-app-consent.ts';
 import type {
   McpAppConsentAuthority,
-  McpAppConsentCapability,
   McpAppConsentChallenge,
   McpAppConsentGrant,
   McpAppConsentResolution,
-} from '../dev/mcp-apps/mcp-app-sandbox.ts';
+} from '../dev/mcp-apps/mcp-app-sandbox-types.ts';
 import {
   AGENT_BROWSER_TEST_REGISTRY_SYMBOL_KEY,
   AGENT_BROWSER_TEST_REGISTRY_VERSION,

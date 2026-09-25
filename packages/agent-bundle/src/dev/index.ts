@@ -84,11 +84,6 @@ export {
   type WorkbenchAssetSource,
 } from './foreground-server.ts';
 export { createWorkbenchAssetSource, type WorkbenchAssetSourceOptions } from './workbench-assets.ts';
-export {
-  RuntimeClientSurfaceProxy,
-  runtimeClientSurfaceReloadChannelPath,
-  type RuntimeClientSurfaceConnectionEvent,
-} from './runtime-client-surface-proxy.ts';
 export { routeManifestFor } from './routes/route-manifest.ts';
 export type {
   RouteManifest,
@@ -110,15 +105,6 @@ export {
   type RouteManifestRoutesOptions,
 } from './routes/route-manifest-routes.ts';
 export { RuntimeRoutes, type RuntimeRoutesOptions } from './runtime-routes.ts';
-export { RuntimeMcpRoutes, type RuntimeMcpRoutesOptions } from './runtime-mcp-routes.ts';
-export {
-  McpAppRuntimePreviewService,
-  type CreateMcpAppPreviewRequest,
-  type McpAppBindingOperation,
-  type McpAppOperationResponse,
-  type McpAppPreviewSnapshot,
-  type McpAppRuntimeRoutePreviewService,
-} from './mcp-app-runtime-preview-service.ts';
 export {
   McpSession,
   McpSessionService,
@@ -210,7 +196,6 @@ export {
 export type {
   CreateDevRuntimeProvider,
   DevRuntimeClientSurfaceEndpoint,
-  DevRuntimeClientSurfaceProxyBinding,
   DevRuntimeEventInput,
   DevRuntimeMcpRegistry,
   DevRuntimeMcpRegistryListener,

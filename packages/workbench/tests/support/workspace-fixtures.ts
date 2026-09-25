@@ -14,7 +14,6 @@ import { HookClient } from '../../src/hooks/hook-client.ts';
 import { LifecycleClient } from '../../src/lifecycles/lifecycle-client.ts';
 import { McpAppClient } from '../../src/mcp/mcp-app-client.ts';
 import { ForegroundRouteClient, McpRouteClient } from '../../src/mcp/mcp-route-client.ts';
-import { ProjectClient } from '../../src/project-client.ts';
 import { HostSessionClient } from '../../src/sessions/host-session-client.ts';
 import { SkillClient } from '../../src/skill-client.ts';
 
@@ -240,7 +239,7 @@ export const fakeBackend = (envelope: RouteInvocation = invocation, kind: Invoca
 export const clients = (): WorkspaceClients => {
   const foreground = new ForegroundRouteClient({ fetch: neverFetch });
   return {
-    appClient: new McpAppClient({ foreground, projectClient: new ProjectClient({ fetch: neverFetch }) }),
+    appClient: new McpAppClient({ foreground }),
     evalClient: new EvalClient({ foreground }),
     foreground,
     hookClient: new HookClient({ foreground }),

@@ -128,7 +128,7 @@ moves into one of these positions moves back:
   `DevRuntimeUnavailableError` / `DevRuntimeGenerationConflictError`,
   `PlaygroundService*Error` / `PlaygroundSessionCloseError`,
   `HookPlaygroundCloseError`, `McpProbeTargetNotFoundError`,
-  `McpAppRuntimePreviewError`, `SkillDocumentError`,
+  `SkillDocumentError`,
   `InspectorLauncherError`, `EvalRunEvent*Error`, and
   `EvalServiceBackgroundFailureOverflowError`). The `@agent-bundle/runtime`
   `plugin` entry also has no `effect` import today.
@@ -802,19 +802,18 @@ resolved the current repo practice stands, and new code follows it.
   helpers like `isRecord` and to use the `Predicate` module. The repo's
   shared guards are `core/strict-json.ts` `isRecord` / `isJsonRecord` /
   `isPlainRecord` and `workbench/src/client-helpers.ts` `isRecord`, but the
-  divergence is wider than two helpers: fifteen modules define their own
+  divergence is wider than two helpers: fourteen modules define their own
   private `isRecord` with the same `typeof === 'object' && !== null &&
   !Array.isArray` body (`mcp-server-runtime.ts`, `build/pack-inventory.ts`,
   `install/{install,doctor,cursor-agent-plugins-launch}.ts`,
   `host-contracts/{claude,cursor,portable}-plugin-validation.ts`,
   `adapters/portable-mcp-rules.ts`, `dev/host-install-manager.ts`,
-  `dev/mcp-app-runtime-binding-service.ts`,
   `dev/mcp-apps/{mcp-app-bridge,mcp-app-host-profiles,mcp-app-routes}.ts`,
   `workbench/src/mcp/mcp-app-preview.tsx`), seven more alias a shared guard
-  under the local name, and five emit the same one-liner as a string into
+  under the local name, and four emit the same one-liner as a string into
   generated hook / proxy / sandbox source that intentionally imports nothing
   (`adapters/hook-contract.ts`, `install/surface.ts`,
-  `dev/runtime-client-surface-proxy.ts`, `dev/mcp-apps/mcp-app-sandbox.ts`).
+  `dev/mcp-apps/mcp-app-sandbox.ts`).
   Roughly 400 call sites in total, against about a dozen
   `Predicate.isObject` uses (the install lane). rc.117 `Predicate` has no
   `isRecord`; `Predicate.isObject` is the closest match (`{}`-typed, excludes

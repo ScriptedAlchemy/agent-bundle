@@ -427,11 +427,6 @@ export class DevRuntimeController implements DevRuntimeSession {
     return this.#enqueueReconcile(prepared);
   }
 
-  /** Core-owned observability bridge for fixed client-surface proxy events. */
-  emit(event: DevRuntimeEventInput): void {
-    this.#publish(event);
-  }
-
   replay(request: DevRuntimeReplayRequest): Promise<DevRuntimeRun> {
     return this.#activeSession().replay(request);
   }

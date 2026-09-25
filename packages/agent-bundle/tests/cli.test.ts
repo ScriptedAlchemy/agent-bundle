@@ -234,7 +234,6 @@ it('passes repeatable --workbench-dev-origin values to the public dev API and om
       received.push(options);
       return {
         close: async () => { closeCalls += 1; },
-        openRuntimeClientSurface: async () => undefined,
         status: () => ({}) as never,
         url: 'http://127.0.0.1:4100',
       };

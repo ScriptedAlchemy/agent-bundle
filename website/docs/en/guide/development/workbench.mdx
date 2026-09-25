@@ -577,11 +577,10 @@ is set, `packages/workbench/rsbuild.config.ts` also sets `server.strictPort: tru
 
 **What is proxied.** Only `/api`, every typed Workbench client route plus the
 `/api/project/events` SSE stream, is forwarded to the foreground server. The HTML document, the
-JavaScript and CSS, and the HMR websocket come from the Rsbuild server. MCP App preview and runtime
-client-surface iframes are bound to the foreground origin: the App sandbox exchanges `postMessage`
-frames only with the foreground URL, and runtime client surfaces set their `frame-ancestors` CSP to
-it. They are not covered by this loop, open the foreground URL itself (`http://127.0.0.1:3100`
-above) to work on those pages.
+JavaScript and CSS, and the HMR websocket come from the Rsbuild server. MCP App preview iframes
+are bound to the foreground origin: the App sandbox exchanges `postMessage` frames only with the
+foreground URL. They are not covered by this loop, open the foreground URL itself
+(`http://127.0.0.1:3100` above) to work on those pages.
 
 **The origin rule.** The proxy never rewrites `Origin` (Rsbuild's `changeOrigin` rewrites only
 `Host`), so whenever the browser sends `Origin`, on every mutation, the foreground server sees
