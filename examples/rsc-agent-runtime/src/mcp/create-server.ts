@@ -2,13 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { RESOURCE_MIME_TYPE, registerAppResource, registerAppTool } from '@modelcontextprotocol/ext-apps/server';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type ServerContext } from '@modelcontextprotocol/server';
 
 import { runtimeDefinition } from '../definition.js';
 import { projectName, projectVersion } from '../project-identity.js';
 import { createMcpHandlers } from './handlers.js';
 import { resourceMetadata } from './host-metadata.js';
-import type { McpRequestExtra, ResolveStateOptions } from './resolve-state.js';
+import type { ResolveStateOptions } from './resolve-state.js';
 
 export interface CreateRuntimeMcpServerOptions extends ResolveStateOptions {
   publicMcpUrl?: string;
@@ -30,12 +30,12 @@ export const createRuntimeMcpServer = (options: CreateRuntimeMcpServerOptions = 
       throw new Error(`No MCP handler registered for ${tool.handlerId}`);
     }
 
-    const callback = (input: unknown, extra: McpRequestExtra) =>
+    const callback = (input: unknown, ctx: ServerContext) =>
       handler(
         input !== null && typeof input === 'object' && typeof (input as { limit?: unknown }).limit === 'number'
           ? { limit: (input as { limit: number }).limit }
           : {},
-        extra,
+        ctx,
       );
     const config = {
       _meta: tool._meta,

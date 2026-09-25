@@ -813,7 +813,7 @@ test('recaptures an identical cohort from its immutable checkpoints after an enq
   expect(failed).toHaveLength(1);
 });
 
-test('requires every executable entry to declare its async cohort assets', async () => {
+test('requires the lazily loading stdio entry to declare its async cohort assets', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
   const compilerRoot = join(storageRoot, 'compiler');
   const store = createStore(storageRoot);
@@ -821,7 +821,7 @@ test('requires every executable entry to declare its async cohort assets', async
     await writeCompilerCohort(compilerRoot);
     const manifestPath = join(compilerRoot, 'rsc', 'runtime-assets.json');
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { entries: Record<string, { async?: unknown }> };
-    delete manifest.entries['mcp/http']?.async;
+    delete manifest.entries['mcp/stdio']?.async;
     await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
     const candidate = await store.begin({ id: 'missing-async', sourceRevision: 'source-missing-async' });
     const snapshot = await captureCompilerCohort({

@@ -40,7 +40,7 @@ const requiredEntries = Object.freeze([
   'mcp/stdio',
   'rsc/index',
 ] as const);
-const executableAsyncEntries = Object.freeze(['mcp/http', 'mcp/stdio'] as const);
+const executableAsyncEntries = Object.freeze(['mcp/stdio'] as const);
 const maximumDefinitionStdout = 1024 * 1024;
 const maximumDefinitionStderr = 64 * 1024;
 const definitionTimeoutMs = 5_000;
