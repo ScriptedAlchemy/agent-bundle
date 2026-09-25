@@ -113,10 +113,9 @@ it('packages both react-server render children and renders a route invocation fr
   await expect(access(join(packageRoot, 'dist', 'lifecycle-render-child.js'))).resolves.toBeUndefined();
   await expect(access(join(packageRoot, 'dist', 'route-invocation-child.js'))).resolves.toBeUndefined();
 
-  const [agentBundle, runtime, markdownStream] = await Promise.all([
+  const [agentBundle, runtime] = await Promise.all([
     sharedPackedTarball('agent-bundle'),
     sharedPackedTarball('runtime'),
-    sharedPackedTarball('markdown-stream'),
   ]);
   const listing = await execFile('tar', ['-tf', agentBundle.tarball]);
   expect(listing.stdout).toContain('package/dist/lifecycle-render-child.js');
@@ -129,7 +128,6 @@ it('packages both react-server render children and renders a route invocation fr
     await execFile('npm', ['install', ...cachedNpmInstallArguments,
       agentBundle.tarball,
       runtime.tarball,
-      markdownStream.tarball,
       'react@19.2.8',
       'react-dom@19.2.8',
       'zod@4.5.4',

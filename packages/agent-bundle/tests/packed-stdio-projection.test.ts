@@ -52,10 +52,9 @@ it.each([
   ['release', 'agent-bundle'],
   ['private runtime sibling', 'agent-bundle-runtime-rebundle'],
 ] as const)('serves compiled routes from the %s package across packed process restarts', async (_variant, packageName) => {
-  const [agentBundle, runtime, markdownStream] = await Promise.all([
+  const [agentBundle, runtime] = await Promise.all([
     sharedPackedTarball(packageName),
     sharedPackedTarball('runtime'),
-    sharedPackedTarball('markdown-stream'),
   ]);
   expect(agentBundle.variant).toBe(
     packageName === 'agent-bundle-runtime-rebundle' ? 'runtime-rebundle' : undefined,
@@ -90,7 +89,6 @@ it.each([
     await execFile('npm', ['install', ...cachedNpmInstallArguments,
       agentBundle.tarball,
       runtime.tarball,
-      markdownStream.tarball,
       'react@19.2.8',
       'react-dom@19.2.8',
       'zod@4.5.4',

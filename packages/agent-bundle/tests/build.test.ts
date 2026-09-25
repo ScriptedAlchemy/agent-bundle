@@ -1324,8 +1324,7 @@ it('leaves filesystem URL and worker expressions in the emitted bundle untouched
  * `linked-a` is a symlink to a sibling package, and `linked-a`'s own dependency
  * `linked-b` is another symlink. Rspack records both at their real paths, which
  * carry no `node_modules` segment, so provenance must exclude them by root —
- * including the transitive one the project never declares
- * (`@agent-bundle/runtime` → `rsc-markdown-stream` in this repository).
+ * including the transitive one the project never declares.
  *
  * `hoisted` places the `linked-b` link in the workspace-root `node_modules`,
  * as npm, Yarn, and a hoisting pnpm do, rather than beneath `linked-a`.

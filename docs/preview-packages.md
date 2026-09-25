@@ -18,10 +18,9 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@1
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@1
 ```
 
-`@agent-bundle/runtime` depends on `rsc-markdown-stream`, the Markdown
-renderer behind `MarkdownContent`; its preview tarball points that dependency
-at the renderer's own preview of the same commit, so npm fetches it without a
-separate install. Install the renderer directly only to use it on its own:
+`@agent-bundle/runtime` bundles `rsc-markdown-stream`, the Markdown renderer
+behind `MarkdownContent`, into its own build, so it needs no separate install.
+Install the renderer directly only to use it on its own:
 
 ```sh
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/rsc-markdown-stream@1
@@ -52,8 +51,7 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@5685
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/rsc-markdown-stream@5685521
 ```
 
-pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`);
-pnpm 11 additionally needs the `blockExoticSubdeps` setting described below.
+pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`).
 
 Previews carry the version string `0.0.0-preview-<sha>`, and the publish
 (`--peerDeps`) rewrites every peer range that points at a sibling workspace
@@ -62,22 +60,22 @@ are the optional `@agent-bundle/runtime` peer declared by `agent-bundle` and
 the optional compiler/runtime release-pair record declared by
 `create-agent-bundle` (`@agent-bundle/runtime` itself has no `agent-bundle`
 peer). A regular `dependencies` entry that names a sibling workspace package
-is rewritten to that sibling's same-sha tarball URL: `@agent-bundle/runtime`'s
-`rsc-markdown-stream` dependency resolves to the renderer preview of the same
-commit. Installing both packages from the same sha therefore works with stock npm — no
-`--legacy-peer-deps` needed. Mixing two different shas fails with `ERESOLVE`
+would be rewritten to that sibling's same-sha tarball URL, so no published
+package declares one. Installing both packages from the same sha therefore
+works with stock npm — no `--legacy-peer-deps` needed. Mixing two different shas fails with `ERESOLVE`
 by design; use one sha (or one PR number) for both URLs. Previews published
 before the peer rewrite landed (PR #46, fixing #45) still carry the original
 `agent-bundle@^0.1.0` range on the then-named `@agent-bundle/rsc-runtime`
 package, so pair-installing those older shas with npm still requires
 `--legacy-peer-deps`.
 
-That rewrite is what pnpm 11 rejects by default: `blockExoticSubdeps` (default
+pnpm 11 rejects that URL rewrite by default: `blockExoticSubdeps` (default
 `true` since pnpm 11) forbids a transitive dependency resolved from a tarball
-URL, so `pnpm add` of a preview `@agent-bundle/runtime` fails with
-`ERR_PNPM_EXOTIC_SUBDEP` on its rewritten `rsc-markdown-stream` dependency. Set
-`blockExoticSubdeps: false` in the consuming project's `pnpm-workspace.yaml`,
-or install previews with npm.
+URL. Previews published before `@agent-bundle/runtime` bundled the renderer
+(#831) point its `rsc-markdown-stream` dependency at such a URL, so `pnpm add`
+of those older shas fails with `ERR_PNPM_EXOTIC_SUBDEP` unless the consuming
+project sets `blockExoticSubdeps: false` in `pnpm-workspace.yaml`. Newer
+previews install with stock pnpm 11.
 
 ## How a Version Packages merge flows
 

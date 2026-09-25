@@ -6,11 +6,7 @@ packages:
 # agent-bundle declares @agent-bundle/runtime as an optional peer by plain
 # range, not as a `workspace:` devDependency (npm refuses to install a tarball
 # whose manifest still carries one, #183); this override satisfies that peer
-# from the workspace. @agent-bundle/runtime's rsc-markdown-stream dependency
-# needs no override: it is declared `workspace:^`, which `pnpm pack` and
-# `pnpm publish` rewrite to the caret of the version being packed
-# (packages/agent-bundle/tests/support/shared-pack.ts packs with pnpm for the
-# same reason), and pkg-pr-new rewrites to the sibling preview URL.
+# from the workspace.
 overrides:
   '@agent-bundle/runtime': workspace:*
   '@rspress/plugin-twoslash>typescript': npm:typescript@6.0.3

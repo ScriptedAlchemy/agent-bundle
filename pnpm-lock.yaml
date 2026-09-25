@@ -405,9 +405,6 @@ importers:
       react-server-dom-rspack:
         specifier: 0.1.0
         version: 0.1.0(@rspack/core@2.2.3(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      rsc-markdown-stream:
-        specifier: workspace:^
-        version: link:../rsc-markdown-stream
     devDependencies:
       '@modelcontextprotocol/client':
         specifier: 2.0.0
@@ -439,6 +436,9 @@ importers:
       react-dom:
         specifier: 19.3.0
         version: 19.3.0(react@19.3.0)
+      rsc-markdown-stream:
+        specifier: workspace:^
+        version: link:../rsc-markdown-stream
       zod:
         specifier: 4.5.4
         version: 4.5.4

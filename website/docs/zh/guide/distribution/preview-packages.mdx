@@ -16,7 +16,7 @@ commit URL 固定版本；不需要也不应配置 npm 注册表凭据。
 `.github/workflows/package-preview.yml` 在一次完整构建之后运行 `pnpm preview:publish`。pull request
 直接调用它；`.github/workflows/release.yml` 在每次推送到 `main` 时复用它。它以
 `--previewVersion --peerDeps --no-compact --no-template` 发布 `packages/agent-bundle`、
-`packages/rsc-runtime`、`packages/rsc-markdown-stream`（`@agent-bundle/runtime` 所依赖的 Markdown
+`packages/rsc-runtime`、`packages/rsc-markdown-stream`（`@agent-bundle/runtime` 内联打包的 Markdown
 渲染器）与 `packages/create-agent-bundle`。
 
 pull request 运行按 PR 分组并启用 `cancel-in-progress`，因此更新的推送会取消被取代的 PR 构建。
@@ -36,10 +36,10 @@ PR 引用会解析到**该 PR 最近一次发布的预览**，因此 `@1` 表示
 在 peer 改写落地（PR #46）之前发布的预览包仍携带原始的 `agent-bundle@^0.1.0` peer 范围，因此用 npm
 配对安装那些较早的 SHA 仍然需要 `--legacy-peer-deps`。更新的预览包用原生 npm 即可安装。
 
-原生 pnpm 11 是例外。`@agent-bundle/runtime` 的预览包会把它的 `rsc-markdown-stream` 依赖指向渲染器同一
-SHA 的预览 tarball，而 pnpm 11 的 `blockExoticSubdeps`（默认 `true`）会拒绝从 tarball URL 解析的传递依赖，
-报 `ERR_PNPM_EXOTIC_SUBDEP`。请在消费项目的 `pnpm-workspace.yaml` 中设置 `blockExoticSubdeps: false`，
-或改用 npm 安装预览包。
+在 `@agent-bundle/runtime` 内联打包渲染器（#831）之前发布的预览包，会把它的 `rsc-markdown-stream` 依赖
+指向渲染器同一 SHA 的预览 tarball。原生 pnpm 11 的 `blockExoticSubdeps`（默认 `true`）会以
+`ERR_PNPM_EXOTIC_SUBDEP` 拒绝该 tarball URL，因此这些较早的 SHA 需要在消费项目的 `pnpm-workspace.yaml`
+中设置 `blockExoticSubdeps: false`，或改用 npm。更新的预览包不含 URL 依赖，用原生 pnpm 11 即可安装。
 
 脚手架发布在同一条通道上，其设计意图是直接运行而不是安装：
 

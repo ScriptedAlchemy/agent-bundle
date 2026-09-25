@@ -7,7 +7,6 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
-import markdownStreamManifest from '../../rsc-markdown-stream/package.json' with { type: 'json' };
 import runtimeManifest from '../package.json' with { type: 'json' };
 import {
   cachedNpmInstallArguments,
@@ -47,20 +46,15 @@ interface InstalledManifest {
  */
 describe.sequential('packed @agent-bundle/runtime entry identity', () => {
   it('shares one kernel across every installed subpath and ships without the 1.x MCP SDK', async () => {
-    const [runtime, markdownStream] = await Promise.all([
-      sharedPackedTarball('runtime'),
-      sharedPackedTarball('markdown-stream'),
-    ]);
+    const runtime = await sharedPackedTarball('runtime');
     const consumer = await mkdtemp(join(tmpdir(), 'runtime-packed-identity-'));
     try {
       await writeFile(join(consumer, 'package.json'), '{"name":"runtime-identity-consumer","type":"module","private":true}\n');
-      // The renderer rides along until its version is on the registry; React
-      // is the runtime's required peer; zod is the probe's own import.
+      // React is the runtime's required peer; zod is the probe's own import.
       await execFile('npm', [
         'install',
         ...cachedNpmInstallArguments,
         runtime.tarball,
-        markdownStream.tarball,
         'react@19.2.8',
         'react-dom@19.2.8',
         'zod@4.5.4',
@@ -70,9 +64,7 @@ describe.sequential('packed @agent-bundle/runtime entry identity', () => {
       const manifest = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')) as InstalledManifest;
       expect(Object.keys(manifest.dependencies)).not.toContain('@modelcontextprotocol/sdk');
       expect(manifest.dependencies['@modelcontextprotocol/server']).toBeDefined();
-      // The source manifest says `workspace:^`; the packer ships the caret of
-      // the sibling's version, the same rewrite `pnpm publish` performs.
-      expect(manifest.dependencies['rsc-markdown-stream']).toBe(`^${markdownStreamManifest.version}`);
+      expect(manifest.dependencies).not.toHaveProperty('rsc-markdown-stream');
       expect(manifest.exports['./package.json']).toBe('./package.json');
       expect(manifest.peerDependencies).toEqual(runtimeManifest.peerDependencies);
       for (const range of Object.values(manifest.peerDependencies)) expect(range).not.toBe('*');
@@ -136,6 +128,13 @@ describe.sequential('packed @agent-bundle/runtime entry identity', () => {
         { cwd: consumer, env: installedEnvironment() },
       );
       expect(fileURLToPath(resolved.stdout)).toBe(join(installed, 'package.json'));
+
+      const rendered = await execFile(
+        process.execPath,
+        ['--input-type=module', '--eval', "import { createElement } from 'react'; import { renderToMarkdown } from '@agent-bundle/runtime'; process.stdout.write(await renderToMarkdown(createElement('h1', null, 'Packed')));"],
+        { cwd: consumer, env: installedEnvironment() },
+      );
+      expect(rendered.stdout).toBe('# Packed\n');
     } finally {
       await removeTree(consumer);
     }

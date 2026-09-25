@@ -94,8 +94,7 @@
     "@modelcontextprotocol/server": "2.0.0",
     "effect": "4.0.0-rc.112",
     "flare-redact": "1.6.1",
-    "react-server-dom-rspack": "0.1.0",
-    "rsc-markdown-stream": "workspace:^"
+    "react-server-dom-rspack": "0.1.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",
@@ -108,6 +107,7 @@
     "micromark-extension-gfm": "3.0.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "rsc-markdown-stream": "workspace:^",
     "zod": "4.5.4"
   }
 }

@@ -109,14 +109,12 @@ const writeDefineStateConsumer = async (consumer: string): Promise<void> => {
 const installRuntimeConsumer = async (
   consumer: string,
   runtimeTarball: string,
-  markdownStreamTarball: string,
 ): Promise<void> => {
   await writeDefineStateConsumer(consumer);
   await execFile('npm', [
     'install',
     ...cachedNpmInstallArguments,
     runtimeTarball,
-    markdownStreamTarball,
     `react@${runtimeManifest.devDependencies.react}`,
     `react-dom@${runtimeManifest.devDependencies['react-dom']}`,
     `zod@${consumerZod}`,
@@ -170,13 +168,10 @@ const packNestedZodRuntime = async (runtimeTarball: string, destination: string)
  */
 describe.sequential('packed @agent-bundle/runtime zod peer', () => {
   it('typechecks a consumer zod@4.6.5 defineState schema against one physical peer install', async () => {
-    const [runtime, markdownStream] = await Promise.all([
-      sharedPackedTarball('runtime'),
-      sharedPackedTarball('markdown-stream'),
-    ]);
+    const runtime = await sharedPackedTarball('runtime');
     const consumer = await mkdtemp(join(tmpdir(), 'runtime-zod-peer-'));
     try {
-      await installRuntimeConsumer(consumer, runtime.tarball, markdownStream.tarball);
+      await installRuntimeConsumer(consumer, runtime.tarball);
 
       const installed = join(consumer, 'node_modules', '@agent-bundle', 'runtime');
       const manifest = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')) as InstalledRuntimeManifest;
@@ -196,16 +191,13 @@ describe.sequential('packed @agent-bundle/runtime zod peer', () => {
   }, 180_000);
 
   it('reproduces the cross-minor brand error when the packed runtime depends on zod@4.5.4 exactly', async () => {
-    const [runtime, markdownStream] = await Promise.all([
-      sharedPackedTarball('runtime'),
-      sharedPackedTarball('markdown-stream'),
-    ]);
+    const runtime = await sharedPackedTarball('runtime');
     const workspace = await mkdtemp(join(tmpdir(), 'runtime-zod-nested-'));
     const consumer = join(workspace, 'consumer');
     try {
       await mkdir(consumer);
       const nestedTarball = await packNestedZodRuntime(runtime.tarball, join(workspace, 'nested-runtime'));
-      await installRuntimeConsumer(consumer, nestedTarball, markdownStream.tarball);
+      await installRuntimeConsumer(consumer, nestedTarball);
 
       expect(await installedZodCopies(join(consumer, 'node_modules'))).toEqual([
         { path: '@agent-bundle/runtime/node_modules/zod', version: nestedZod },

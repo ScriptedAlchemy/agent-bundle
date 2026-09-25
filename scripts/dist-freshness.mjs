@@ -63,6 +63,8 @@
  *   files.
  * - rsc-markdown-stream: `dts: false`; `src/index.d.ts` is copied into dist
  *   and lives under `src`, so it is covered.
+ * - @agent-bundle/runtime: inlines the workspace `rsc-markdown-stream`
+ *   (#831), so the renderer's `src` is an input too.
  * - agent-bundle-workbench: an Rsbuild app — `src`, `index.html` (the
  *   template), `THIRD_PARTY_NOTICES` (copied into dist), `rsbuild.config.ts`.
  *   `pnpm build` produces this dist through agent-bundle's
@@ -300,7 +302,7 @@ export const workspaceBuildOutputs = (workspaceRoot = process.cwd()) => Object.f
   {
     name: '@agent-bundle/runtime',
     root: resolve(workspaceRoot, 'packages/rsc-runtime'),
-    inputs: rslibInputs('tsconfig.build.json'),
+    inputs: Object.freeze([...rslibInputs('tsconfig.build.json'), '../rsc-markdown-stream/src']),
     output: 'dist',
   },
   {

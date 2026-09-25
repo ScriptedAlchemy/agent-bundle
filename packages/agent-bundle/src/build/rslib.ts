@@ -362,9 +362,9 @@ const canonicalProjectRoot = async (cwd: string): Promise<string> => {
  * packages by symlink and Rspack records their modules at real paths, which
  * carry no such segment: `@agent-bundle/runtime` resolved to
  * `packages/rsc-runtime` must be excluded by root, and so must the workspace
- * packages *it* depends on (`rsc-markdown-stream`), which the project never
- * declares itself. Registry packages resolve beneath `node_modules`, so their
- * trees are never walked. The project itself is never a root: a dependency
+ * packages *it* depends on, which the project never declares itself.
+ * Registry packages resolve beneath `node_modules`, so their trees are never
+ * walked. The project itself is never a root: a dependency
  * cycle back onto it (A → B → A) must not turn every authored module into an
  * ignored one. Only the root itself is exempt — a dependency linked from
  * inside the project (`<project>/packages/dep`, `file:./vendor/dep`) is still

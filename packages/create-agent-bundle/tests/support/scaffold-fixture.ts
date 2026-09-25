@@ -20,7 +20,6 @@ const execFile = promisify(executeFile);
 interface PackedFixture {
   readonly frameworkTarball: string;
   readonly frameworkVersion: string;
-  readonly markdownStreamTarball: string;
   readonly root: string;
   readonly runnerRoot: string;
   readonly runtimeTarball: string;
@@ -43,12 +42,10 @@ const packFixture = async (): Promise<PackedFixture> => {
     { packOutput: frameworkPack, tarball: frameworkTarball },
     { tarball: scaffolderTarball },
     { packOutput: runtimePack, tarball: runtimeTarball },
-    { tarball: markdownStreamTarball },
   ] = await Promise.all([
     sharedPackedTarball('agent-bundle'),
     sharedPackedTarball('create-agent-bundle'),
     sharedPackedTarball('runtime'),
-    sharedPackedTarball('markdown-stream'),
   ]);
   const pairedRuntimeTarball = join(
     dirname(frameworkTarball),
@@ -66,7 +63,6 @@ const packFixture = async (): Promise<PackedFixture> => {
   return {
     frameworkTarball,
     frameworkVersion: frameworkPack.version,
-    markdownStreamTarball,
     root,
     runnerRoot,
     runtimeTarball,
@@ -75,18 +71,9 @@ const packFixture = async (): Promise<PackedFixture> => {
   };
 };
 
-/**
- * `npm install` for a scaffolded project whose template pins the paired
- * local runtime tarball. That runtime depends on `rsc-markdown-stream` by
- * exact version, which the registry cannot serve until this repository
- * publishes it, so the run-level tarball is offered in the same install and
- * npm dedupes the runtime's edge onto it. `--no-save` leaves the scaffolded
- * manifest exactly as the scaffolder wrote it: a real consumer declares
- * nothing extra.
- */
+/** `npm install` for a scaffolded project whose template pins the paired local runtime tarball. */
 export const installScaffoldedProject = async (projectRoot: string): Promise<void> => {
-  const { markdownStreamTarball } = await fixture();
-  await execFile('npm', ['install', ...npmInstallArguments, '--no-save', markdownStreamTarball], {
+  await execFile('npm', ['install', ...npmInstallArguments], {
     cwd: projectRoot,
     env: installedEnvironment(),
   });

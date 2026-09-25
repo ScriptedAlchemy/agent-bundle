@@ -19,7 +19,7 @@ from, how far you can trust them, and what pinning actually guarantees.
 requests invoke it directly; `.github/workflows/release.yml` reuses it for every push to `main`.
 It publishes `packages/agent-bundle`,
 `packages/rsc-runtime`, `packages/rsc-markdown-stream` (the Markdown renderer
-`@agent-bundle/runtime` depends on), and `packages/create-agent-bundle` with
+`@agent-bundle/runtime` bundles), and `packages/create-agent-bundle` with
 `--previewVersion --peerDeps --no-compact --no-template`.
 
 Pull request runs are grouped by PR with `cancel-in-progress`, so a newer push cancels the
@@ -43,11 +43,11 @@ Previews published before the peer rewrite landed (PR #46) still carry the origi
 `agent-bundle@^0.1.0` peer range, so pair-installing those older SHAs with npm still requires
 `--legacy-peer-deps`. Anything newer installs with stock npm.
 
-Stock pnpm 11 is the exception. The preview of `@agent-bundle/runtime` points its `rsc-markdown-stream`
-dependency at the renderer's same-sha preview tarball, and pnpm 11's `blockExoticSubdeps` (default
-`true`) rejects a transitive dependency resolved from a tarball URL with `ERR_PNPM_EXOTIC_SUBDEP`.
-Set `blockExoticSubdeps: false` in the consuming project's `pnpm-workspace.yaml`, or install previews
-with npm.
+Previews published before `@agent-bundle/runtime` bundled the renderer (#831) point its
+`rsc-markdown-stream` dependency at the renderer's same-sha preview tarball. Stock pnpm 11's
+`blockExoticSubdeps` (default `true`) rejects that tarball URL with `ERR_PNPM_EXOTIC_SUBDEP`, so
+those older SHAs need `blockExoticSubdeps: false` in the consuming project's `pnpm-workspace.yaml`,
+or npm. Newer previews carry no URL dependency and install with stock pnpm 11.
 
 The scaffolder ships on the same channel and is meant to be run rather than installed:
 

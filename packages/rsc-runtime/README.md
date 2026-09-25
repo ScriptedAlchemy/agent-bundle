@@ -59,7 +59,8 @@ APIs, the Agent Document contracts, `createAgentRenderDispatcher`,
 `projectMcpRenderStream`, `createWarmFlightHost`, `decodeAgentFlightStream`,
 and the `@agent-bundle/runtime/flight/server` render entry. Rich Markdown
 authoring rides `rsc-markdown-stream`, the Markdown renderer published from
-this repository's `packages/rsc-markdown-stream`: `renderToMarkdown` /
+this repository's `packages/rsc-markdown-stream` and bundled into this
+package's build: `renderToMarkdown` /
 `renderToMarkdownStream` are re-exported, and the async
 `MarkdownContent` component renders JSX children — headings, lists, GFM
 tables, task lists, nested async components — to one escaped Markdown string
@@ -68,11 +69,9 @@ is the host's: the package declares React/React DOM `^19.2.0` as peers — the
 minor the suite proves, inside the `^19.1.0` its Flight binding
 `react-server-dom-rspack` `0.1.0` (an exact dependency) accepts — and
 react-dom itself insists that `react` and `react-dom` match exactly; the proof
-example compiles them with `rsbuild-plugin-rsc` `0.1.1`. `rsc-markdown-stream`
-is declared `workspace:^`, which pnpm's packer rewrites to the caret of the
-version packed beside it. The package does not own application state,
-persistence, a concrete execution host, or host packaging. Node 22.19 or newer
-is required.
+example compiles them with `rsbuild-plugin-rsc` `0.1.1`. The package does not
+own application state, persistence, a concrete execution host, or host
+packaging. Node 22.19 or newer is required.
 
 Async server utilities and Server Components read the framework request store
 with `const context = await agent()`. The store is a versioned realm singleton

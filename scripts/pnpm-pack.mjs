@@ -1,10 +1,9 @@
 /**
  * Packs one workspace package the way pkg.pr.new ships it. pnpm's packer
- * rewrites `workspace:` ranges to the packed
- * sibling's version (`@agent-bundle/runtime`'s `rsc-markdown-stream:
- * workspace:^` becomes `^<version>`), applies `publishConfig` overrides, and
- * drops the prepublish scripts. `npm pack` would leave `workspace:^` in the
- * tarball's manifest for a consumer's npm to refuse.
+ * rewrites `workspace:` ranges to the packed sibling's version, applies
+ * `publishConfig` overrides, and drops the prepublish scripts. `npm pack`
+ * would leave `workspace:^` in the tarball's manifest for a consumer's npm to
+ * refuse.
  *
  * `pnpm pack --json` prints one object — `name`, `version`, `filename`, and
  * `files: [{ path }]` — with `filename` absolute; it is returned as the bare

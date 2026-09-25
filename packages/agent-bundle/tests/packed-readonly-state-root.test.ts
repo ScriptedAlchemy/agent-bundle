@@ -73,10 +73,9 @@ interface JournalResult {
  * listing never changes.
  */
 it('serves a state-writing tool from a read-only installed artifact without writing beneath it', async () => {
-  const [agentBundle, runtime, markdownStream] = await Promise.all([
+  const [agentBundle, runtime] = await Promise.all([
     sharedPackedTarball('agent-bundle'),
     sharedPackedTarball('runtime'),
-    sharedPackedTarball('markdown-stream'),
   ]);
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-readonly-state-'));
   const project = join(consumer, 'project');
@@ -91,7 +90,6 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     await execFile('npm', ['install', ...cachedNpmInstallArguments,
       agentBundle.tarball,
       runtime.tarball,
-      markdownStream.tarball,
       'react@19.2.8',
       'react-dom@19.2.8',
       'zod@4.5.4',
