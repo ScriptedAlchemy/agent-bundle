@@ -11,7 +11,7 @@ This private, opt-in example shows one React Server Components (RSC) runtime sha
 | RSC render | Agent Document component trees projected from Flight | One request |
 | MCP App UI | Mounted timeline, Refresh, and recoverable row selection | One UI instance |
 
-Native hooks are fresh requests: the compiler-generated client validates one host event, invokes `src/events/tool/after.tsx` in its explicit standalone mode, projects the final Agent Document, and exits. The durable kernel—not a Node module cache or React state—connects later hook processes and MCP calls.
+Native hooks are fresh requests: the compiler-generated client validates one host event, invokes `src/events/tool/after.tsx` in its explicit standalone mode, projects the final Agent Document, and exits. The durable kernel, not a Node module cache or React state, connects later hook processes and MCP calls.
 
 ```tsx
 // The semantic event route receives canonical identity — including the family's
@@ -71,7 +71,7 @@ node packages/workbench/scripts/capture-runtime-playground.mjs \
 
 The `--compile-error` capture shows the Workbench diagnostic the provider
 publishes when a source change fails to compile: code `AB8206`, phase
-`source/build`, and a message that carries the Rspack errors themselves — one
+`source/build`, and a message that carries the Rspack errors themselves, one
 `file:line:col: message` line per error, with the path relative to the example
 root, ANSI colour and the SWC code frame stripped. Breaking `src/rsc/worker.tsx`
 produces, for example:
@@ -83,7 +83,7 @@ src/rsc/worker.tsx:177:6: Module build failed (from builtin:swc-loader): Syntax 
 
 The active generation stays served while the diagnostic is shown, and the next
 successful compile clears it. The development session runs Rsbuild at
-`logLevel: 'silent'`, so the diagnostic — not the provider's console — is the
+`logLevel: 'silent'`, so the diagnostic, not the provider's console, is the
 one place the message lands; the errors are read with the `agent-bundle/api`
 helpers (`rspackStatsErrors`, `formatRspackStatsError`) the framework's own
 `AB4770` App diagnostics use. The production `rsbuild build` has no diagnostic
@@ -118,7 +118,7 @@ Installing
 [the optional RSC Runtime topology](../../docs/architecture/rsc-runtime-workbench.md)
 for the full ownership boundary.
 
-The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and one self-contained composite plugin root at `dist/plugins` (the portable, Claude Code, and Codex projections over the shared payload). `dist/app` holds exactly one HTML file per App entry (`edit-timeline-v1.html`, `standalone.html`) with every script, style, asset, and licence comment inlined — the same invariants the framework's MCP App compiler enforces (`splitChunks: false`, unbounded `dataUriLimit`, no async chunks, `legalComments: 'inline'`); the build fails if the resolved configuration drifts from them or any sibling file would be emitted. The packaging step can also be rerun directly against the current Rsbuild output:
+The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and one self-contained composite plugin root at `dist/plugins` (the portable, Claude Code, and Codex projections over the shared payload). `dist/app` holds exactly one HTML file per App entry (`edit-timeline-v1.html`, `standalone.html`) with every script, style, asset, and licence comment inlined, the same invariants the framework's MCP App compiler enforces (`splitChunks: false`, unbounded `dataUriLimit`, no async chunks, `legalComments: 'inline'`); the build fails if the resolved configuration drifts from them or any sibling file would be emitted. The packaging step can also be rerun directly against the current Rsbuild output:
 
 ```bash
 pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec agent-bundle build --json --output dist/plugins
@@ -334,7 +334,7 @@ workspace on Node's built-in `node:sqlite`, with WAL journaling, transactional
 commits, idempotency-key replay, and exact-revision reads. The retired
 hand-rolled JSONL kernel is gone; this example now only declares its schema,
 events, and reducer. Loading the sqlite driver emits Node's one-time
-`ExperimentalWarning: SQLite is an experimental feature` on stderr — expected
+`ExperimentalWarning: SQLite is an experimental feature` on stderr, expected
 on the supported Node lines (`node:sqlite` needs no flag on Node >= 22.13),
 harmless for hooks and MCP servers (protocol output uses stdout), and absent
 for stateless consumers because the driver lives behind its own subpath. It is

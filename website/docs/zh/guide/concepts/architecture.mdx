@@ -10,7 +10,7 @@ agent-bundle 把一个项目编译为宿主原生的插件。本页描述的是�
 v2 权威清单（[PR #604](https://github.com/ScriptedAlchemy/agent-bundle/pull/604)）。
 
 除非明确写出包名，下文的路径都相对于 `packages/agent-bundle/src/`。类型名就是编译器导出的
-那些——目前还不存在 `ApplicationIR`、`ProjectionIR` 或 `ArtifactIR` 类型。
+那些，目前还不存在 `ApplicationIR`、`ProjectionIR` 或 `ArtifactIR` 类型。
 
 本页描述的输出布局是**复合插件根目录**：产物输出处只有一个目录，由 `targets` 选择其中出现
 哪些宿主投影
@@ -98,24 +98,24 @@ src/scripts/**/*.{ts,tsx,jsx}
 
 冻结后的结果是一个 `CompiledRouteGraph`（`routes/types.ts`）：
 
-- `servers[]` —— `CompiledServerSurface`（`generated` / `custom` / `command` /
+- `servers[]`，`CompiledServerSurface`（`generated` / `custom` / `command` /
   `remote` / `conflict`），每个都持有 kind 为 `tool`、`resource`、`prompt` 或 `app` 的
   `CompiledAgentRoute` 行。
-- `cli?` —— `CompiledCliSurface`（`generated` / `conventional` / `conflict`），带有
+- `cli?`，`CompiledCliSurface`（`generated` / `conventional` / `conflict`），带有
   `CompiledCliCommand` 行，其 argv 语法来自字面量 `config.inputJsonSchema` 或 JSON 输入。
-- `events[]` —— kind 为 `event-route` 的 `CompiledAgentRoute` 行。
-- `scripts[]` —— kind 为 `script`。
-- `providers[]` —— `CompiledProvider`（不是路由 kind；它们包裹执行）。
-- `layouts?` —— `CompiledLayout`（`root` 或 `server` 作用域）。事件路由与浏览器 App
+- `events[]`，kind 为 `event-route` 的 `CompiledAgentRoute` 行。
+- `scripts[]`，kind 为 `script`。
+- `providers[]`，`CompiledProvider`（不是路由 kind；它们包裹执行）。
+- `layouts?`，`CompiledLayout`（`root` 或 `server` 作用域）。事件路由与浏览器 App
   永不被包裹。
-- `contracts?` —— 路由本地的 `config.inputJsonSchema` 元数据，id 为
+- `contracts?`，路由本地的 `config.inputJsonSchema` 元数据，id 为
   `contract:<module>#inputJsonSchema`。
-- `digest` —— 根据项目相对身份和声明元数据计算的 sha256。
-- `diagnostics` —— 路由图错误（`AB48xx` 与 `AB494x`）。
+- `digest`，根据项目相对身份和声明元数据计算的 sha256。
+- `diagnostics`，路由图错误（`AB48xx` 与 `AB494x`）。
 
 每个 `CompiledAgentRoute` 携带 `id`、`kind`、`source`、约定式的 `provenance`、一份静态
 提取的 `config`（或 `emptyRouteConfig`）、可选的有界 `inputSchema`、可选的 `contract`
-（共享的 `RouteContract` id），以及——对 MCP 路由而言——`serverId`。事件路由还携带
+（共享的 `RouteContract` id），以及，对 MCP 路由而言，`serverId`。事件路由还携带
 `event`（来自 `routes/public.ts` 的 `CanonicalAgentEvent`）。
 
 Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及宿主原生的钩子文档**不在**这张
@@ -153,7 +153,7 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 ## 投影层
 
 **投影**是同一个 `NormalizedPlugin` 在某个宿主上的表示。配置键仍然是 `targets`。复合根目录
-落地之后，这个键选择的是哪些投影会被规划进那唯一的输出目录——它并不命名产物、运行时、
+落地之后，这个键选择的是哪些投影会被规划进那唯一的输出目录，它并不命名产物、运行时、
 分发形式或应用。
 
 ### target 从哪里进入
@@ -381,8 +381,8 @@ ENOENT）或 `invalid`。
 
 文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 5`）
 是消费者读取的部分。**编译器记录**（`compiler`，`recordVersion: 1`）是
-这次运行的操作性账目——生产者、项目摘要、来源、适配器修订、固定的
-schema、验证结果——它的变化不会推动 `manifestVersion`；消费者读取方
+这次运行的操作性账目，生产者、项目摘要、来源、适配器修订、固定的
+schema、验证结果，它的变化不会推动 `manifestVersion`；消费者读取方
 永远不需要它。
 
 | 分节 | 记录什么 |
@@ -413,7 +413,7 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 | `build/validate-artifact-mcp.ts` | `projections[]`、MCP 文件 | MCP 文档对照所选宿主 |
 | `build/pack-inventory.ts` | `files[]`、`projections[]`、`application.version`、`compiler.project.packageVersion` | 打包的 tarball 必须包含清单中的每个文件（`AB7010`）；摘要漂移；发布版本对齐；`AB7014` / `AB7015` |
 | `eval/artifact.ts` | `files[]`、`projections[]`、`runtime` | `evalTargetDigests`：对**整张**文件表为每个 `projections[].host` 计算一个摘要（相同字节，不同身份） |
-| `dev/artifacts/artifact-inspection-service.ts` | `files[]`、`compiler.project`、`compiler.provenance[]`、`application`、`distribution`、`projections[]`、`routes`、`executables` | Workbench 产物检视器：从 `files[]` 重建一棵树，按投影各标注一次；应用树经由 `dev/artifacts/application-explorer.ts`（`ArtifactInspection.application`）——一个薄投影，而不是清单的原始形状 |
+| `dev/artifacts/artifact-inspection-service.ts` | `files[]`、`compiler.project`、`compiler.provenance[]`、`application`、`distribution`、`projections[]`、`routes`、`executables` | Workbench 产物检视器：从 `files[]` 重建一棵树，按投影各标注一次；应用树经由 `dev/artifacts/application-explorer.ts`（`ArtifactInspection.application`），一个薄投影，而不是清单的原始形状 |
 | `dev/artifacts/artifact-executables.ts` | `executables.scripts[]` | 按宿主划分的脚本行（取代 `artifact-script-catalog.ts`） |
 | `services/hook-service.ts` | `executables.hooks[]` | `hooks list` / `simulate` |
 | `dev/playground/hook-playground-service.ts` | `executables.hooks[]`（经由 `hook-service`） | Workbench 钩子演练场 |
@@ -523,12 +523,12 @@ Amp 可执行入口指针把它推进到 4，JSON 输入的 CLI 投影模式（`
 
 ## 下一步
 
-- [项目结构](../start/project-structure.mdx) —— 发现所遍历的 `src/` 根目录。
-- [配置模型](../authoring/index.mdx) —— 这些根目录所填充的配置。
-- [MCP 服务器与 MCP App](../authoring/mcp.mdx) 与[钩子](../authoring/hooks.mdx) —— 大多数
+- [项目结构](../start/project-structure.mdx)：发现所遍历的 `src/` 根目录。
+- [配置模型](../authoring/index.mdx)：这些根目录所填充的配置。
+- [MCP 服务器与 MCP App](../authoring/mcp.mdx) 与[钩子](../authoring/hooks.mdx)，大多数
   作者最先遇到的两个可执行表面。
-- [产物清单](../../reference/artifact-manifest.mdx) —— `agent-bundle.manifest.json`
+- [产物清单](../../reference/artifact-manifest.mdx)：`agent-bundle.manifest.json`
   的每一个分节与字段。
-- [Target 与产物](../../reference/targets-artifacts.mdx) —— 复合根目录。
-- [交付捆绑包](../distribution/index.mdx) —— 根目录如何编译，以及其中装了什么。
-- [产物校验](../distribution/validation.mdx) —— 重新读取这份清单的那些检查。
+- [Target 与产物](../../reference/targets-artifacts.mdx)：复合根目录。
+- [交付捆绑包](../distribution/index.mdx)：根目录如何编译，以及其中装了什么。
+- [产物校验](../distribution/validation.mdx)：重新读取这份清单的那些检查。

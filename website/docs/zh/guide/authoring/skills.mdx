@@ -18,8 +18,8 @@ src/skills/release-review/
 └── references/checklist.md
 ```
 
-这样就能随产物发布，无需任何声明。目录中除 `SKILL.md` 之外的所有内容——以及除渲染式 Skill 源文件
-之外，那些是构建输入——都会成为该 Skill 的资源，并保留相对路径复制进产物。
+这样就能随产物发布，无需任何声明。目录中除 `SKILL.md` 之外的所有内容，以及除渲染式 Skill 源文件
+之外，那些是构建输入，都会成为该 Skill 的资源，并保留相对路径复制进产物。
 
 ## 文档
 
@@ -39,7 +39,7 @@ description: Review a release candidate and issue an evidence-based go/no-go ver
 ```
 
 frontmatter 是必需的。缺少 frontmatter 的文档报告 `AB3001`；YAML 无效则报告 `AB3002`。`name` 与
-`description` 是每个宿主都会读取的字段——description 就是激活表面，因此请把它写成「在什么条件下应当
+`description` 是每个宿主都会读取的字段，description 就是激活表面，因此请把它写成「在什么条件下应当
 使用这个 Skill」，而不是写成标题。
 
 指向同级文件的链接是 Skill 引用自身资源的方式。它们在输出文档中保持相对形式，因此在宿主安装的任何
@@ -50,13 +50,13 @@ frontmatter 是必需的。缺少 frontmatter 的文档报告 `AB3001`；YAML �
 宿主会把每个 Skill 的 `name` 与 `description` 载入上下文供模型选择。描述过长或彼此重叠会被截断；
 触发条件含糊会加载错误的 Skill。优先写简短能力加上明确的 **何时使用**，而不是宽泛领域：
 
-避免——任何与数据库沾边都会触发：
+避免，任何与数据库沾边都会触发：
 
 ```md
 description: Create and validate Postgres schema migrations. Use when working with databases, queries, models, or persistence.
 ```
 
-更好——只有真正做迁移时才触发：
+更好，只有真正做迁移时才触发：
 
 ```md
 description: Create and validate Postgres schema migrations. Use when adding or changing a migration, or reviewing its rollout.
@@ -68,7 +68,7 @@ description: Create and validate Postgres schema migrations. Use when adding or 
 把根目录 `SKILL.md` 当作路由器：把较长的特定模式操作流程放入 `references/`，并通过链接说明何时阅读
 （渐进披露）。不要在入口加载所有参考文件，也不要为简短且自包含的 Skill 创建无用的资源目录。
 `assets/` 保存用于输出的文件，而不是必须始终加载到上下文中的指令。曾帮助较弱模型的过细步骤清单，
-往往反而约束较强模型——保留不变量，删掉仪式。
+往往反而约束较强模型，保留不变量，删掉仪式。
 
 正文应让代理保持用户请求的范围：计划或审查不能悄悄变成实施或发布。复用已有授权与当前有效的证据，
 在确需批准前完成相关准备，最后交付所请求的结果及其验证或限制。除非真实工作契约要求，否则不要强制
@@ -97,9 +97,9 @@ export default defineConfig({
 
 ## 宿主扩展
 
-可移植的 Skill 元数据——`name`、`description`、`license`、`compatibility`、`allowed-tools`（Agent Skills
+可移植的 Skill 元数据，`name`、`description`、`license`、`compatibility`、`allowed-tools`（Agent Skills
 的拼写；驼峰式 `allowedTools` 只在 `targets.claude` 下被接受），以及一个
-自由形式的 `metadata` 记录——每个 target 都能理解。宿主专属的键位于各自宿主之下，因此只会抵达该适配器：
+自由形式的 `metadata` 记录，每个 target 都能理解。宿主专属的键位于各自宿主之下，因此只会抵达该适配器：
 
 | 宿主 | 示例 |
 | --- | --- |
@@ -109,12 +109,12 @@ export default defineConfig({
 | `cursor` | `globs`、`icon`、`color`、`paths`、`disableModelInvocation` |
 
 Skill frontmatter 中的 `targets` 就是上述按宿主划分的对象，别无他用；写成列表（如 `targets: ['claude']`）是
-`AB3006`。Skill 会输出到项目选择的每一个 target——不存在按 Skill 限制产物的机制。
+`AB3006`。Skill 会输出到项目选择的每一个 target，不存在按 Skill 限制产物的机制。
 
 Claude Code、Codex、Cursor 与 portable 共享 `skills/<name>/SKILL.md`；Amp 的副本位于
 `.amp/plugins/<plugin>/skills/<name>/SKILL.md`。若某个宿主扩展让共享文档在一个选中宿主上的降级结果
-与另一个宿主不同——例如在 `claude` + `codex` 的构建中写
-`targets: { claude: { effort: high } }`——就是致命的 `AB4103` 冲突。请让输出的文档对每个选中宿主
+与另一个宿主不同，例如在 `claude` + `codex` 的构建中写
+`targets: { claude: { effort: high } }`，就是致命的 `AB4103` 冲突。请让输出的文档对每个选中宿主
 都完全一致，或者把这些宿主分开构建到不同的产物中（每次构建只写一个 `targets` 条目）。
 
 ### Amp 注册与 Skill MCP
@@ -129,7 +129,7 @@ Claude 兼容、内置、个人或工作区来源发现的裸 Skill 名竞争。
 
 ## 路径 token
 
-各宿主的占位符语法并不相同——`${CLAUDE_PLUGIN_ROOT}` 并不是 Cursor 或可移植标准所使用的写法。请改为
+各宿主的占位符语法并不相同，`${CLAUDE_PLUGIN_ROOT}` 并不是 Cursor 或可移植标准所使用的写法。请改为
 编写规范 token，由构建期降级替换成宿主写法：
 
 | Token | 含义 |
@@ -146,8 +146,8 @@ Claude 兼容、内置、个人或工作区来源发现的裸 Skill 名竞争。
 
 ## 渲染式 Skill
 
-当一份 Skill 文档是生成出来的而不是手写的——例如逐环境重复的同一张检查表，或从某个契约推导出的表格
-——请在 `src/skills/<name>/SKILL.tsx`（或 `.ts`）放一个组件。它默认导出一个组件并导出一个
+当一份 Skill 文档是生成出来的而不是手写的，例如逐环境重复的同一张检查表，或从某个契约推导出的表格，
+请在 `src/skills/<name>/SKILL.tsx`（或 `.ts`）放一个组件。它默认导出一个组件并导出一个
 `frontmatter` 记录；构建会把渲染树编译成宿主消费的 `SKILL.md` 文档：
 
 ```tsx
@@ -174,11 +174,11 @@ Markdown 链接（`[path](path)`），不是 token。宿主语法在降级阶段
 渲染源可以导入项目代码，因此文档由插件所发布的同一批源码计算得出；它也可以导入
 `agent-bundle/meta`：加载器提供的 `{ name, packageName, packageVersion, version }` 与编译器烙印到
 每个构建面上的完全相同，所以 Skill 能打印出它所描述的版本。它的 JSX 针对加载器自己的元素工厂编译，
-而不是项目的 `react/jsx-runtime`——渲染器只遍历普通元素对象，不需要任何 React 内部实现——因此求值
+而不是项目的 `react/jsx-runtime`，渲染器只遍历普通元素对象，不需要任何 React 内部实现，因此求值
 不依赖进程如何解析 `react`（包括 route-unit 池的 `react-server` 条件），`inspectWorkbenchSurface`
 可以从任意池检查带有渲染 Skill 的项目。
 
-同目录下手写的 `SKILL.md` 总是胜出——手写文件胜过生成文件——被遮蔽的组件会报告信息级的 `AB4735`
+同目录下手写的 `SKILL.md` 总是胜出，手写文件胜过生成文件，被遮蔽的组件会报告信息级的 `AB4735`
 提示。渲染模块加载失败报告 `AB3003`；未默认导出组件函数、或未导出 `frontmatter` 记录，则报告
 `AB3004`。
 
@@ -208,5 +208,5 @@ Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器�
 
 ## 下一步
 
-- [钩子](./hooks.mdx) —— 对生命周期事件作出反应。
-- [MCP 服务器与 MCP App](./mcp.mdx) —— 暴露工具、资源与提示词。
+- [钩子](./hooks.mdx)：对生命周期事件作出反应。
+- [MCP 服务器与 MCP App](./mcp.mdx)：暴露工具、资源与提示词。

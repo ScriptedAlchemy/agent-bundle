@@ -27,10 +27,10 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
   没有手写的 `src/mcp/curator.ts`，没有逐操作的服务器选择器，也没有 `routes` 设置。每个工具都使用
   `defineTool`，把元数据、schema 与处理器放在同一个定义中。
 - **一个操作，一条命令。** 每个工具都有一个同目录的
-  [`<tool>.cli.ts` 投影模块](../guide/authoring/package-entries.mdx#将一个工具投影为惯用命令)——
+  [`<tool>.cli.ts` 投影模块](../guide/authoring/package-entries.mdx#将一个工具投影为惯用命令)，
   `search_audible.cli.ts` 把工具拼写为 `audible-search`、`--duration`，以及可逗号分隔或重复的
   `--regions`；`prepare_audiobook.cli.ts` 把 `outputRoot` 拼写为 `--output`；
-  `convert_audiobook.cli.ts` 则通过 `--input` 保留完整的嵌套转换契约——因此编译后的图恰好有
+  `convert_audiobook.cli.ts` 则通过 `--input` 保留完整的嵌套转换契约，因此编译后的图恰好有
   16 条 CLI 命令，每条都带着工具自己的身份（`tool:curator/<tool>`）。没有 `src/cli/` 目录，也没有
   `audiobook-curator curator <tool> --input` 这样的孪生命令：投影就是命令。每个投影都声明
   `confirm: false`，因为这些先计划再执行的命令用 `--apply` 而不是 `--yes` 把关变更。
@@ -39,13 +39,13 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
   两套表现层。
 - **Markdown 块就是 JSX。** 组件库中的 `DataList`、`FileList` 原语以及重复分析中的已测量文件表格，都通过
   运行时的 [`MarkdownContent`](../guide/authoring/mcp.mdx#用-jsx-编写富-markdown-块) 组件编写
-  Markdown——`<ul>`/`<li>`、`<strong>` 和一个 GFM `<table>`——而不是手工拼接字符串，因此转义归渲染器
+  Markdown，`<ul>`/`<li>`、`<strong>` 和一个 GFM `<table>`，而不是手工拼接字符串，因此转义归渲染器
   负责，管道输出的 CLI Markdown 与 MCP 文本内容出自同一份输出。
 - **请求上下文是观察出来的，不是假定的。** 约定式的 `src/providers/library.ts` 在每个请求中探测
   `ffmpeg -version` 与 `ffprobe -version`，并连同探测时间一起发布工具可用性。目录资源通过
   `await agent()` 读取它，并渲染实时上下文或一个显式的不可用状态。
 - **持久状态有被挂载的身份。** `src/state.ts` 挂载工作区级持久状态 `audiobook-curator/shelf` 与三个
-  事件。如果状态未挂载，只读的 `review_curation_shelf` 工具——命令行上是 `shelf`——会返回一个空的
+  事件。如果状态未挂载，只读的 `review_curation_shelf` 工具，命令行上是 `shelf`，会返回一个空的
   结构化书架和一条显式的不可用提示，而不是失败。
 - **Suspense 变成 MCP 进度。** `audit_library` 把它的异步分析放到 React `Suspense` 之后，回退内容是一个
   `Agent.Progress` 节点，而这个回退本身就是全部的进度表面：生成的投影器会把它作为 `notifications/progress`
@@ -60,7 +60,7 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
 ## 每条命令都渲染其工具的文档
 
 每条命令运行的就是其工具的组件。交互式终端会就地绘制流式的 `Agent.Progress` 回退；管道输出则是一份
-最终的 Markdown 文档——与 MCP 客户端作为文本内容收到的是同一份标题与报告。`--json` 选择机器输出，
+最终的 Markdown 文档，与 MCP 客户端作为文本内容收到的是同一份标题与报告。`--json` 选择机器输出，
 并输出一个经结果 schema 校验的 JSON 值加一个换行：这是最终的规范 `Agent.Result` 值，绝不是 Markdown
 表现，也绝不是中间的 Suspense 回退，并且与工具调用的 `structuredContent` 逐字节一致。把字段投影为
 flag 的命令仍提供可选的 `--report` 与 `--receipt`；`convert` 则把可选的 `receipt` 放在 JSON
@@ -80,8 +80,8 @@ pnpm --filter @agent-bundle-example/audiobook-curator typecheck
 
 包内的 `pnpm check` 会运行 validate、build、typecheck 与两个测试池。一次
 `agent-bundle build --output artifact` 产出全部内容：位于 `artifact/` 的一个复合插件根目录，承载 Claude
-与 Codex 两个投影——各宿主的清单位于自己的点目录中，共用同一份 Skill、打包后的 CLI 脚本与被生命周期
-包装的 MCP 服务器——以及 `dist/` 下的 npm 包。
+与 Codex 两个投影，各宿主的清单位于自己的点目录中，共用同一份 Skill、打包后的 CLI 脚本与被生命周期
+包装的 MCP 服务器，以及 `dist/` 下的 npm 包。
 
 从仓库根目录启动 `pnpm example:audiobook`，即可进入可视化开发循环：
 
