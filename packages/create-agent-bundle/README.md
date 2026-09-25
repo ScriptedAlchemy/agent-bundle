@@ -13,7 +13,7 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 
 Interactive runs prompt for the project name, the template, and the host
 targets. A run that names both a directory and a template is treated as
-scripted and asks nothing — the remaining values fall back to their defaults.
+scripted and asks nothing, the remaining values fall back to their defaults.
 
 ## Options
 
@@ -21,7 +21,7 @@ scripted and asks nothing — the remaining values fall back to their defaults.
 | --- | --- |
 | `-d, --dir <dir>` | Project directory (also the first positional argument). `foo/bar` scaffolds into `foo/bar` and names the package `bar`; `@scope/name` keeps the scoped package name. |
 | `-t, --template <name>` | `minimal`, `mcp-server`, or `cli-tool`. |
-| `--targets <list>` | Comma-separated host targets: `amp`, `portable`, `claude`, `codex`, `cursor` — every target `agent-bundle` compiles. Default: `portable,codex,claude`. `amp` is refused with the `mcp-server` template, whose compiler-owned local server Amp's skill-scoped MCP contract rejects. |
+| `--targets <list>` | Comma-separated host targets: `amp`, `portable`, `claude`, `codex`, `cursor`, every target `agent-bundle` compiles. Default: `portable,codex,claude`. `amp` is refused with the `mcp-server` template, whose compiler-owned local server Amp's skill-scoped MCP contract rejects. |
 | `--package-manager <name>` | `npm`, `pnpm`, `yarn`, or `bun`. Default: detected from the invoking client. |
 | `--no-install` | Skip installing dependencies after scaffolding. |
 | `--framework-version <spec>` | Pin the project's `agent-bundle` dependency to this spec (a version, a tarball path, or a URL). Runtime templates require the compiler version recorded by this scaffolder release. |
@@ -36,7 +36,7 @@ scripted and asks nothing — the remaining values fall back to their defaults.
 | `cli-tool` | An installable routed CLI from one `src/cli/<command>.ts` route module (generated executable, help, argv grammar, validation), a conventional `src/scripts/<name>.ts` artifact script, and a `src/index.ts` library export with declarations, with the framework test harness wired up. |
 
 Every template ships a `check` script (validate + build + typecheck + tests)
-and validates with zero diagnostics — including the `AB473x` migration
+and validates with zero diagnostics, including the `AB473x` migration
 nudges, because the templates are written against the entry conventions from
 the start.
 
@@ -48,7 +48,7 @@ ships one projection pool at the `cli-dispatch` (`invokeCli`, `cliJson`) and
 `script-dispatch` (`runScript`) levels. In both, `npm test` runs every pool
 the template ships, each as its own labeled run, so a broken route or
 projection fails the ordinary test command; the focused scripts remain for a
-tight loop — `test:unit`, `test:routes`, and `test:projection` in
+tight loop, `test:unit`, `test:routes`, and `test:projection` in
 `mcp-server`, `test:unit` and `test:projection` in `cli-tool`. The `minimal` template compiles no route
 modules, so it ships no harness pool that would pass without addressing
 anything; its README documents the wiring to add with the first route.
