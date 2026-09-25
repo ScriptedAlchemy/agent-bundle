@@ -14,7 +14,6 @@ import type { NormalizedPlugin } from '../src/core/types.ts';
 import {
   installReceiptFile,
   installReceiptFormat,
-  legacyInstallReceiptFormat,
   readInstallReceipt,
   readInstallReceiptFile,
   treeInventory,
@@ -777,7 +776,8 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
     const install = writesFor(target).get('INSTALL.md') ?? '';
     expect(install).toContain(installReceiptFile);
     expect(install).toContain('--replace');
-    expect(install).toContain('`state/`');
+    expect(install).toContain('foreign');
+    expect(install).not.toMatch(/adopt|pre-receipt legacy/u);
     expect(install).toContain('### Uninstall');
     expect(install).toContain('node ./install.mjs --uninstall --plan');
     expect(install).toContain('--purge-data --confirm-purge');
@@ -793,13 +793,12 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
   expect(installer).toContain("argument === '--replace'");
   expect(installer).toContain(`const receiptFile = ${JSON.stringify(installReceiptFile)};`);
   expect(installer).toContain(`const receiptFormat = ${JSON.stringify(installReceiptFormat)};`);
-  expect(installer).toContain(`const legacyReceiptFormat = ${JSON.stringify(legacyInstallReceiptFormat)};`);
+  expect(installer).not.toMatch(/legacy|migratedFrom|stateRoot\b|markerFiles|Adopted/u);
   expect(installer).toContain("if (uninstall && mode === 'local') {");
   expect(installer).toContain("if (uninstall && mode === 'marketplace') {");
   expect(installer).toContain('Refusing to uninstall foreign directory');
   expect(installer).toContain('--purge-data deletes the plugin\'s durable runtime state');
   expect(installer).toContain('Refusing foreign install');
-  expect(installer).toContain('Refusing content collision');
   expect(installer).toContain('Refusing version collision');
   expect(installer).toContain('Refusing to overwrite unowned files');
   expect(installer).toContain("!value.includes('\\\\')");
@@ -831,7 +830,7 @@ const listFiles = async (root: string): Promise<readonly string[]> =>
     .map((entry) => join(entry.parentPath, entry.name).slice(root.length + 1))
     .sort((left, right) => left.localeCompare(right));
 
-it('emitted install.mjs mirrors the core replace policy: no-op, owned-only replace, legacy gate, foreign refusal', async () => {
+it('emitted install.mjs mirrors the core replace policy: no-op, owned-only replace, foreign refusal', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-install-mjs-'));
   const bundle = join(root, 'bundle');
   const home = join(root, 'home');
@@ -938,21 +937,19 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     await rm(join(bundle, 'notes.md'));
     await rm(join(destination, 'notes.md'));
 
-    // Byte-identical legacy copy (receipt-less copies hash as a full tree, so runtime state is cleared
-    // first): plain rerun is a no-op, --replace adopts it by writing the receipt.
+    // A byte-identical copy without a receipt is foreign: refused with and without --replace, never adopted.
+    const receiptText = await readFile(join(destination, installReceiptFile), 'utf8');
     await rm(join(destination, installReceiptFile));
     await removeTree(join(destination, 'state'));
-    const identicalLegacy = await run(installer, [], home);
-    expect(identicalLegacy).toMatchObject({ code: 0, stderr: '' });
-    expect(identicalLegacy.stdout).toContain('Already installed install-fixture@1.2.3');
+    for (const args of [[], ['--replace']]) {
+      const preReceipt = await run(installer, args, home);
+      expect(preReceipt.code).toBe(1);
+      expect(preReceipt.stderr).toContain(`Refusing foreign install at ${destination}`);
+      expect(preReceipt.stderr).toContain('(same content)');
+      expect(preReceipt.stderr).toContain('--replace does not apply');
+    }
     expect(await readInstallReceipt(destination)).toBeUndefined();
-    const adoptedIdentical = await run(installer, ['--replace'], home);
-    expect(adoptedIdentical).toMatchObject({ code: 0, stderr: '' });
-    expect(adoptedIdentical.stdout).toContain('Adopted install-fixture@1.2.3');
-    expect(await readInstallReceipt(destination)).toMatchObject({
-      contentHash: (await treeInventory(bundle)).hash,
-      plugin: 'install-fixture',
-    });
+    await writeFile(join(destination, installReceiptFile), receiptText);
 
     // Owned file -> directory restructure is a replacement, not a collision.
     await rm(join(bundle, 'payload.txt'));
@@ -970,21 +967,20 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
 
     // Only installer-created directories are pruned when a rebuild empties them; a pre-existing
-    // operator directory that a rebuild wrote beneath stays. (This copy was adopted from a legacy
-    // layout above, so `.cursor-plugin` predates the receipt and is not owned either.)
+    // operator directory that a rebuild wrote beneath stays.
     await mkdir(join(destination, 'operator-dir'));
     await mkdir(join(bundle, 'operator-dir'));
     await writeFile(join(bundle, 'operator-dir', 'shipped.md'), '# shipped\n');
     await mkdir(join(bundle, 'skills', 'new'), { recursive: true });
     await writeFile(join(bundle, 'skills', 'new', 'SKILL.md'), '# new\n');
     expect((await run(installer, [], home)).stdout).toContain('Replaced install-fixture@1.2.3');
-    expect((await readInstallReceipt(destination))?.directories).toEqual(['skills', 'skills/new']);
+    expect((await readInstallReceipt(destination))?.directories).toEqual(['.cursor-plugin', 'skills', 'skills/new']);
     await removeTree(join(bundle, 'operator-dir'));
     await removeTree(join(bundle, 'skills'));
     expect((await run(installer, [], home)).stdout).toContain('Replaced install-fixture@1.2.3');
     expect(await readdir(join(destination, 'operator-dir'))).toEqual([]);
     await expect(readdir(join(destination, 'skills'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect((await readInstallReceipt(destination))?.directories).toEqual([]);
+    expect((await readInstallReceipt(destination))?.directories).toEqual(['.cursor-plugin']);
     await removeTree(join(destination, 'operator-dir'));
 
     // A receipt whose inventory drifted is refreshed even when the owned bytes hash equal.
@@ -996,15 +992,15 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     expect(refreshed.stdout).toContain('Replaced install-fixture@1.2.3');
     expect((await readInstallReceipt(destination))?.files).not.toContain('transient.txt');
 
-    // A receipt missing a field reads as absent, exactly like the core reader: the legacy gate applies.
+    // A receipt missing a field reads as absent, exactly like the core reader: the copy is foreign.
     const receipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
     const { host: _host, ...partialReceipt } = receipt;
     await writeFile(join(destination, installReceiptFile), JSON.stringify(partialReceipt));
     await writeFile(join(bundle, 'payload.txt'), 'rebuilt again\n');
     const partial = await run(installer, [], home);
     expect(partial.code).toBe(1);
-    expect(partial.stderr).toContain('Refusing content collision');
-    expect(partial.stderr).toContain('predates install receipts');
+    expect(partial.stderr).toContain('Refusing foreign install');
+    expect(partial.stderr).toContain('same version, different content');
 
     // A receipt claiming runtime state reads as absent too: the durable store is never deletion-eligible.
     await mkdir(join(destination, 'state'), { recursive: true });
@@ -1013,18 +1009,17 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
       ...receipt,
       files: [...(receipt['files'] as string[]), 'state/plugin.sqlite'],
     }));
-    const claimsState = await run(installer, [], home);
-    expect(claimsState.code).toBe(1);
-    expect(claimsState.stderr).toContain('predates install receipts');
+    for (const args of [[], ['--replace']]) {
+      const claimsState = await run(installer, args, home);
+      expect(claimsState.code).toBe(1);
+      expect(claimsState.stderr).toContain('Refusing foreign install');
+    }
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
-    const adoptedOverState = await run(installer, ['--replace'], home);
-    expect(adoptedOverState).toMatchObject({ code: 0, stderr: '' });
-    expect(adoptedOverState.stdout).toContain('Replaced install-fixture@1.2.3');
-    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
-    expect((await readInstallReceipt(destination))?.files.some((file) => file.startsWith('state/'))).toBe(false);
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
     await removeTree(join(destination, 'state'));
+    await writeFile(join(destination, installReceiptFile), JSON.stringify(receipt));
     await writeFile(join(bundle, 'payload.txt'), 'rebuilt\n');
-    await run(installer, [], home);
+    expect((await run(installer, [], home)).stdout).toContain('Already installed install-fixture@1.2.3');
 
     // A receipt that is not a regular file (a FIFO would block the read forever) is refused before reading.
     if (process.platform !== 'win32') {
@@ -1053,21 +1048,19 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     await rm(join(destination, 'skills'));
     await removeTree(join(bundle, 'skills'));
 
-    // Legacy pre-receipt copy with drift: refused with a hash comparison until --replace adopts it.
+    // A drifted copy without a receipt: foreign, refused with the hash comparison, never adopted.
     await rm(join(destination, installReceiptFile));
-    await writeFile(join(destination, 'payload.txt'), 'legacy\n');
-    const legacyHash = (await treeInventory(destination)).hash;
-    const legacy = await run(installer, [], home);
-    expect(legacy.code).toBe(1);
-    expect(legacy.stderr).toContain('Refusing content collision');
-    expect(legacy.stderr).toContain(`content ${legacyHash.slice(0, 12)}`);
-    expect(legacy.stderr).toContain('same version, different content');
-    expect(legacy.stderr).toContain('--replace');
-    const adopted = await run(installer, ['--replace'], home);
-    expect(adopted).toMatchObject({ code: 0, stderr: '' });
-    expect(adopted.stdout).toContain('Replaced install-fixture@1.2.3');
-    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
-    expect(await readInstallReceipt(destination)).toMatchObject({ plugin: 'install-fixture' });
+    await writeFile(join(destination, 'payload.txt'), 'drifted\n');
+    const driftedHash = (await treeInventory(destination)).hash;
+    for (const args of [[], ['--replace']]) {
+      const drifted = await run(installer, args, home);
+      expect(drifted.code).toBe(1);
+      expect(drifted.stderr).toContain('Refusing foreign install');
+      expect(drifted.stderr).toContain(`content ${driftedHash.slice(0, 12)}`);
+      expect(drifted.stderr).toContain('same version, different content');
+    }
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('drifted\n');
+    expect(await readInstallReceipt(destination)).toBeUndefined();
 
     // Foreign directory under the plugin name: refused even with --replace.
     await removeTree(destination);
@@ -1181,8 +1174,8 @@ it('emitted install.mjs reruns a marketplace stage with unlisted files as alread
   }
 });
 
-it('emitted install.mjs --uninstall --force removes present files from a pre-receipt copy and keeps state/', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-legacy-uninstall-'));
+it('emitted install.mjs --uninstall refuses a pre-receipt copy as foreign even with --force', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-pre-receipt-uninstall-'));
   const bundle = join(root, 'bundle');
   const home = join(root, 'home');
   const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
@@ -1201,16 +1194,24 @@ it('emitted install.mjs --uninstall --force removes present files from a pre-rec
         files: [{ path: 'payload.txt' }],
         projections: [{ builtInHost: 'cursor', documents: { plugin: '.cursor-plugin/plugin.json' } }],
       })}\n`),
-      writeFile(join(destination, 'INSTALL.md'), 'legacy\n'),
-      writeFile(join(destination, 'install.mjs'), 'legacy\n'),
+      writeFile(join(destination, 'INSTALL.md'), 'older\n'),
+      writeFile(join(destination, 'install.mjs'), 'older\n'),
       writeFile(join(destination, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
       writeFile(join(destination, 'operator.txt'), 'operator\n'),
       writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n'),
     ]);
 
-    const removed = await run(installer, ['--uninstall', '--force'], home);
-    expect(removed).toMatchObject({ code: 0, stderr: '' });
-    await expect(readFile(join(destination, 'operator.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const before = await listFiles(destination);
+    for (const args of [['--uninstall'], ['--uninstall', '--force']]) {
+      const refused = await run(installer, args, home);
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain(
+        `Refusing to uninstall foreign directory ${destination}: it carries no install receipt naming install-fixture (manifest names "install-fixture")`,
+      );
+      expect(refused.stderr).toContain('--force does not apply to foreign directories');
+    }
+    expect(await listFiles(destination)).toEqual(before);
+    expect(await readFile(join(destination, 'operator.txt'), 'utf8')).toBe('operator\n');
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
   } finally {
     await removeTree(root);
@@ -1287,8 +1288,8 @@ it('emitted install.mjs marks new explicit state roots and retains pre-existing 
   }
 }, 60_000);
 
-it('emitted install.mjs never derives legacy purge ownership from the current environment', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-legacy-state-mjs-'));
+it('emitted install.mjs never derives purge ownership from the current environment for a receipt without a state block', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-stateless-receipt-mjs-'));
   const bundle = join(root, 'bundle');
   const home = join(root, 'home');
   const cursorRoot = join(home, '.cursor');
@@ -1316,20 +1317,8 @@ it('emitted install.mjs never derives legacy purge ownership from the current en
     await writeFile(join(originalStateRoot, 'state.sqlite'), 'original\n');
     const receiptPath = join(destination, installReceiptFile);
     const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
-    const {
-      hostDirectories: _hostDirectories,
-      mode: _mode,
-      registrations: _registrations,
-      scope: _scope,
-      state: _state,
-      stateRoot: _stateRoot,
-      updatedAt: _updatedAt,
-      ...legacy
-    } = receipt;
-    await writeFile(receiptPath, JSON.stringify({
-      ...legacy,
-      format: legacyInstallReceiptFormat,
-    }));
+    const { state: _state, ...withoutState } = receipt;
+    await writeFile(receiptPath, JSON.stringify(withoutState));
     await mkdir(currentStateRoot, { recursive: true });
     await writeFile(currentSentinel, 'unrelated\n');
 
@@ -1347,7 +1336,6 @@ it('emitted install.mjs never derives legacy purge ownership from the current en
     expect(kept.stdout).toContain(`Retained ${currentStateRoot} (unproven)`);
     const remnant = await readInstallReceipt(destination);
     expect(remnant?.state).toBeUndefined();
-    expect(remnant?.stateRoot).toBeUndefined();
 
     const purged = await run(
       installer,
@@ -1360,31 +1348,6 @@ it('emitted install.mjs never derives legacy purge ownership from the current en
     expect(purged.stdout).toContain(`Retained ${currentStateRoot} (unproven)`);
     expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
     expect(await readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).toBe('original\n');
-
-    expect(await run(installer, [], home, originalEnvironment)).toMatchObject({ code: 0, stderr: '' });
-    const currentReceipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
-    const { state: _currentState, ...recordedLegacy } = currentReceipt;
-    await writeFile(receiptPath, JSON.stringify({
-      ...recordedLegacy,
-      stateRoot: { root: originalStateRoot, source: 'derived' },
-    }));
-    const recordedPlan = await run(
-      installer,
-      ['--uninstall', '--purge-data', '--confirm-purge', '--plan'],
-      home,
-      currentEnvironment,
-    );
-    expect(recordedPlan.stdout).toContain('Data (purge): purged');
-    expect(recordedPlan.stdout).toContain(originalStateRoot);
-    expect(recordedPlan.stdout).not.toContain(currentStateRoot);
-    expect(await run(
-      installer,
-      ['--uninstall', '--purge-data', '--confirm-purge'],
-      home,
-      currentEnvironment,
-    )).toMatchObject({ code: 0, stderr: '' });
-    await expect(readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
   } finally {
     await removeTree(root);
   }
@@ -1450,7 +1413,8 @@ it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-ow
     expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
     expect((await run(installer, ['--uninstall'], home)).stdout).toContain('Not installed install-fixture@1.2.3');
 
-    // Durable state and unowned files survive a default uninstall; state goes only with confirmed --purge-data.
+    // Unowned entries survive every uninstall, an in-tree state/ directory included: listed as retained, never
+    // purged (only receipt-recorded state roots are), and keeping the plugin root alive behind a remnant receipt.
     await run(installer, [], home);
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
@@ -1462,35 +1426,36 @@ it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-ow
     expect(keepPlan.stdout).toContain(`Retained unowned under ${destination}:`);
     expect(keepPlan.stdout).toContain('  notes.md');
     expect(keepPlan.stdout).toContain('  scratch/');
+    expect(keepPlan.stdout).toContain('  state/plugin.sqlite');
     const kept = await run(installer, ['--uninstall', '--keep-data'], home);
     expect(kept).toMatchObject({ code: 0, stderr: '' });
-    expect(kept.stdout).toContain(`Data (keep): kept`);
+    expect(kept.stdout).toContain('Data (keep): absent');
     expect(kept.stdout).toContain(`Retained unowned under ${destination}:`);
     expect(kept.stdout).toContain('  notes.md');
     expect(kept.stdout).toContain('  scratch/');
+    expect(kept.stdout).toContain('  state/plugin.sqlite');
     expect(kept.stdout).toContain(`Remnant receipt: ${join(destination, installReceiptFile)}`);
     expect((await readdir(destination)).sort()).toEqual([installReceiptFile, 'notes.md', 'scratch', 'state']);
     // The remnant receipt owns nothing and remembers the host directories the install created.
     expect(await readInstallReceipt(destination)).toMatchObject({ files: [], hostDirectories: ['plugins', 'plugins/local'], registrations: [] });
     await rm(join(destination, 'notes.md'));
     await removeTree(join(destination, 'scratch'));
-    // Reinstalling around the preserved state is an install, not a foreign-directory refusal.
+    // Reinstalling around the retained entries is an install, not a foreign-directory refusal.
     const reinstalled = await run(installer, [], home);
     expect(reinstalled).toMatchObject({ code: 0, stderr: '' });
     expect(reinstalled.stdout).toContain('Installed install-fixture@1.2.3');
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    // --purge-data has no authority over an in-tree state/: it is not a receipt-recorded root, so it stays.
     const purged = await run(installer, ['--uninstall', '--purge-data', '--confirm-purge'], home);
     expect(purged).toMatchObject({ code: 0, stderr: '' });
-    expect(purged.stdout).toContain('Data (purge): purged');
-    expect(purged.stdout).toContain(join(destination, 'state'));
-    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+    expect(purged.stdout).toContain('Data (purge): absent');
+    expect(purged.stdout).toContain('  state/plugin.sqlite');
+    expect(purged.stdout).toContain(`Remnant receipt: ${join(destination, installReceiptFile)}`);
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    expect((await readdir(destination)).sort()).toEqual([installReceiptFile, 'state']);
 
-    // A remnant whose state/ was removed by hand guards nothing: the keep-data no-op applies only while the preserved
-    // data is still there, so a default rerun consumes the remnant receipt and prunes the host directories it recorded.
-    await run(installer, [], home);
-    await mkdir(join(destination, 'state'));
-    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
-    await run(installer, ['--uninstall'], home);
+    // A remnant guarding retained entries is a keep-data no-op; once the operator removes state/ by hand the
+    // remnant guards nothing, and the rerun consumes it and prunes the host directories it recorded.
     expect((await run(installer, ['--uninstall'], home)).stdout).toContain('Not installed install-fixture@1.2.3');
     await removeTree(join(destination, 'state'));
     const emptyRemnant = await run(installer, ['--uninstall'], home);
@@ -1499,7 +1464,7 @@ it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-ow
     expect(emptyRemnant.stdout).toContain('Data (keep): absent');
     expect(emptyRemnant.stdout).not.toContain('Remnant receipt:');
     expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
-    // A state/ emptied by hand (directory left behind) is not durable state either: pruned with the exhausted remnant.
+    // A state/ emptied by hand is still an unowned directory: listed as retained and left in place.
     await run(installer, [], home);
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
@@ -1507,9 +1472,10 @@ it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-ow
     await rm(join(destination, 'state', 'plugin.sqlite'));
     const emptiedState = await run(installer, ['--uninstall'], home);
     expect(emptiedState).toMatchObject({ code: 0, stderr: '' });
-    expect(emptiedState.stdout).toContain('Uninstalled install-fixture@1.2.3');
-    expect(emptiedState.stdout).toContain('state/ under the installed plugin root is empty and is pruned');
-    expect(emptiedState.stdout).not.toContain('Remnant receipt:');
+    expect(emptiedState.stdout).toContain('Not installed install-fixture@1.2.3');
+    expect((await readdir(destination)).sort()).toEqual([installReceiptFile, 'state']);
+    await removeTree(join(destination, 'state'));
+    expect((await run(installer, ['--uninstall'], home)).stdout).toContain('Uninstalled install-fixture@1.2.3');
     expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
 
     // Modified owned content: refused with the hash comparison until --force.
@@ -1525,28 +1491,28 @@ it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-ow
     expect(forced.stdout).toContain('[--force]');
     expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
 
-    // Legacy (receipt-less) copy: AB7009-style refusal, then --force removes the inventoried files only.
+    // A receipt-less copy of this very artifact is foreign: refused with and without --force, nothing touched.
     await run(installer, [], home);
     await rm(join(destination, installReceiptFile));
-    const legacy = await run(installer, ['--uninstall'], home);
-    expect(legacy.code).toBe(1);
-    expect(legacy.stderr).toContain('predates install receipts');
-    const forcedLegacy = await run(installer, ['--uninstall', '--force'], home);
-    expect(forcedLegacy).toMatchObject({ code: 0, stderr: '' });
-    expect(forcedLegacy.stdout).toContain('Receipt: forced-legacy');
-    // The legacy inventory owns no host directories: plugins/local stays (it was not proven ours).
-    expect(await readdir(join(cursorRoot, 'plugins', 'local'))).toEqual([]);
+    const preReceiptFiles = await listFiles(destination);
+    for (const args of [['--uninstall'], ['--uninstall', '--force']]) {
+      const refused = await run(installer, args, home);
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain(`Refusing to uninstall foreign directory ${destination}: it carries no install receipt naming install-fixture (manifest names "install-fixture")`);
+    }
+    expect(await listFiles(destination)).toEqual(preReceiptFiles);
     await removeTree(join(cursorRoot, 'plugins'));
 
-    // A format/1 receipt is consumed as migrated.
+    // A format/1 receipt reads as no receipt: the copy is foreign and the file is left as it was.
     await run(installer, [], home);
     const written = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
-    const { hostDirectories: _h, mode: _m, registrations: _r, scope: _s, updatedAt: _u, ...legacyReceipt } = written;
-    await writeFile(join(destination, installReceiptFile), JSON.stringify({ ...legacyReceipt, format: legacyInstallReceiptFormat }));
-    const migrated = await run(installer, ['--uninstall'], home);
-    expect(migrated).toMatchObject({ code: 0, stderr: '' });
-    expect(migrated.stdout).toContain('Receipt: migrated');
-    // The migrated receipt carried no host directories, so plugins/ stays behind; that is the honest downgrade.
+    const { hostDirectories: _h, mode: _m, registrations: _r, scope: _s, updatedAt: _u, ...formatOne } = written;
+    const formatOneText = JSON.stringify({ ...formatOne, format: 'agent-bundle-install-receipt/1' });
+    await writeFile(join(destination, installReceiptFile), formatOneText);
+    const formatOneRefused = await run(installer, ['--uninstall', '--force'], home);
+    expect(formatOneRefused.code).toBe(1);
+    expect(formatOneRefused.stderr).toContain('Refusing to uninstall foreign directory');
+    expect(await readFile(join(destination, installReceiptFile), 'utf8')).toBe(formatOneText);
     await removeTree(join(cursorRoot, 'plugins'));
     expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
 

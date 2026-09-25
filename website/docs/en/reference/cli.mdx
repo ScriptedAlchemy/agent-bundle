@@ -199,7 +199,8 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 
 The emitted standalone `install.mjs` accepts the same `--replace`. Cursor copies carry an install
 receipt (`.agent-bundle-install.json`), replacement
-touches owned files only, and `--replace` adopts a pre-receipt copy; Claude replacement runs
+touches owned files only, and a directory without a receipt naming this plugin (a copy placed
+before receipts existed included) is foreign, refused with or without `--replace`; Claude replacement runs
 `claude plugin uninstall --keep-data` before reinstalling. Codex replacement is add-only
 (`codex plugin add`) so plugin settings and nested MCP overrides survive. Disabled or
 unknown-enablement Codex replacements are refused (`AB7004`) because the native plugin CLI
@@ -225,9 +226,9 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | `--from <root>` | `process.cwd()` | The composite root whose `agent-bundle.manifest.json` identifies the plugin (name, version, marketplace), read exactly as `install` reads it (`AB7001` on the same conditions). |
 | `--scope <scope>` | `user` | The scope the plugin was installed at (Claude or Amp). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
-| `--keep-data` | on | Keep every recorded framework state root, derived web-data, legacy `state/`, and a recorded Cursor `PLUGIN_DATA` directory. This is the default; the flag makes it explicit and preserves the ownership receipt for a later purge. |
+| `--keep-data` | on | Keep every recorded framework state root, derived web-data, and a recorded Cursor `PLUGIN_DATA` directory. This is the default; the flag makes it explicit and preserves the ownership receipt for a later purge. |
 | `--purge-data` | off | Remove only receipt-recorded, installation-owned durable-data roots. Refused (`AB7008`) without `--confirm-purge`; shared, externally managed, marker-less, foreign-marker, and otherwise unproven roots are retained and listed. |
-| `--force` | off | Proceed without a receipt (legacy Cursor copy, host-only install) or when owned content, version, or staged `HEAD` no longer matches the receipt. A receipt or manifest naming another plugin is refused regardless. |
+| `--force` | off | Proceed without a store receipt for a host-registered install (Claude/Codex, staged Cursor marketplace) or when owned content, version, or staged `HEAD` no longer matches the receipt. A Cursor local directory without a receipt, or a receipt or manifest naming another plugin, is foreign and refused regardless (`AB7007`). |
 | `--plan` | off | Print the exact paths and host registrations that would be removed and change nothing. |
 
 Uninstall removes exactly what the receipt owns: the recorded files and installer-created
@@ -237,11 +238,13 @@ commit), or the host registrations (`claude plugin uninstall <id> --scope <scope
 `claude plugin marketplace remove`, `codex plugin remove` + `codex plugin marketplace remove`,
 the marketplace is retained while another installed plugin still uses it, including a Claude
 install at another scope or in another project known only to Claude's `plugins/installed_plugins.json`
-registry). Unowned entries are retained and listed; a missing receipt is `AB7009` and a mismatch is `AB7007` unless `--force`; a
+registry). Unowned entries are retained and listed, a `state/` directory beside the plugin
+included; a missing store receipt is `AB7009` and a mismatch is `AB7007` unless `--force`; a Cursor
+local directory without a receipt is foreign (`AB7007`) even with `--force`; a
 second run is a `not-installed` no-op. The typed `data.outcome` says what happened to durable
 state per host: Cursor `kept` / `purged` / `absent`; Claude `retained-by-host` (the cached copy is
-orphaned for Claude's ~14-day grace period; a purge removes the effective framework state root,
-derived web-data, legacy `state/`, and `plugins/data/<id>/`); Codex keeps external state by default
+orphaned for Claude's ~14-day grace period; a purge removes the owned framework state roots,
+derived web-data, and `plugins/data/<id>/`); Codex keeps external state by default
 and removes it on a confirmed purge while `codex plugin remove` deletes the cached tree. The
 emitted `install.mjs` accepts `--uninstall` with
 `--mode`, `--keep-data`, `--purge-data --confirm-purge`, `--force`, and `--plan`.
@@ -255,10 +258,10 @@ evidence authorizes deletion. The default
 `AGENT_BUNDLE_STATE_ROOT` is owned only when installation created the previously absent directory
 and wrote its install-identity marker. A pre-existing directory is never recursively removed merely
 because a server or the current uninstall environment names it. Multiple servers and roots are
-recorded and judged independently. A supported older receipt with neither recorded state metadata
-nor a recorded `stateRoot` cannot make the current environment or home a source of purge authority:
-Doctor and uninstall report the observed root as `unrecorded` / unproven and retain it, including
-after `--keep-data`.
+recorded and judged independently. A receipt with no `state` block cannot make the current
+environment or home a source of purge authority: Doctor and uninstall report the observed root as
+`unrecorded` / unproven and retain it, including after `--keep-data`. Only
+`agent-bundle-install-receipt/2` is read; a copy carrying an older receipt is foreign.
 
 ## doctor
 
@@ -287,15 +290,14 @@ Agent Plugins install it proves the emitted installer's placeholder expansion, `
 each observed (Claude and Codex `plugin list --json` rows and `enabled` flags, the Cursor local
 directory, the Cursor marketplace import cache) or typed `unavailable` with the reason no read-only
 surface exposes it (`AB7330`). It inventories the Agent Bundle receipt store under each host root
-and warns about receipts the host no longer honours (`AB7328`), and reports receipts written
-before format 2 as migrated (`AB7329`). A Cursor directory holding only preserved runtime state
-from `uninstall --keep-data` is reported `missing` with an `AB7307` info, not corrupt or foreign.
+and warns about receipts the host no longer honours (`AB7328`). A Cursor directory
+`uninstall --keep-data` left behind with its remnant receipt is reported `missing` with an
+`AB7307` info, not corrupt or foreign; without that receipt, a directory holding only `state/` is
+corrupt (`AB7304`) and foreign (`AB7321`).
 For every installed copy Doctor reports every per-server framework state root, its `native` or
 `derived` source, receipt ownership (`derived`, `marker`, `unowned`, or `unrecorded`), whether its
 evidence is currently purgeable, the servers using it, whether it exists, and whether it is writable.
-For compatibility receipts with a recorded `stateRoot`, Doctor also lists that historical root when
-the current environment resolves elsewhere. A pre-#640 `<plugin root>/state` is reported separately
-and flagged with `AB7332`.
+A `state/` directory beside the plugin is an ordinary unowned entry, not durable state.
 
 ## validate
 

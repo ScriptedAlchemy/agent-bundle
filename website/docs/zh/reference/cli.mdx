@@ -187,7 +187,8 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 | `--replace` | 关闭 | 即使版本不同，也替换该插件已有的 agent-bundle 安装。不带它时，内容完全相同的副本是 `already-installed` 空操作，版本相同但内容哈希不同的副本会被自动替换，版本不同则为 `AB7005`。外来目录总是被拒绝（`AB7005`）。 |
 
 输出的独立 `install.mjs` 接受同样的 `--replace`。Cursor 副本携带安装回执
-（`.agent-bundle-install.json`），替换只触碰归属文件，`--replace` 会接管回执出现之前的副本；Claude 的替换
+（`.agent-bundle-install.json`），替换只触碰归属文件；没有指向本插件回执的目录（包括回执出现之前放置的副本）
+是外来目录，带不带 `--replace` 都会被拒绝；Claude 的替换
 先运行 `claude plugin uninstall --keep-data` 再重新安装。Codex 的替换只执行 `codex plugin add`，以便保留插件设置与嵌套
 MCP 覆盖。已禁用或启用状态未知的 Codex 替换会被拒绝（`AB7004`），因为原生 plugin CLI 没有可保留设置的合格更新 API。
 每次安装都会写入生命周期回执（格式 `agent-bundle-install-receipt/2`：版本、内容哈希、模式、作用域、归属路径、
@@ -209,9 +210,9 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | `--from <root>` | `process.cwd()` | 其 `agent-bundle.manifest.json` 用于识别插件（名称、版本、市场）的组合根目录，读取方式与 `install` 完全相同（相同条件下为 `AB7001`）。 |
 | `--scope <scope>` | `user` | 安装时使用的作用域（Claude 或 Amp）。 |
 | `--mode <mode>` | `local` | 仅限 Cursor：卸载 `local` 副本或已暂存的 `marketplace` 仓库。 |
-| `--keep-data` | 开启 | 保留回执记录的所有框架状态根、推导出的 web-data、旧版 `state/`，以及回执记录的 Cursor `PLUGIN_DATA` 目录。这是默认行为；该标志只是显式声明，并保留归属回执供以后 purge。 |
+| `--keep-data` | 开启 | 保留回执记录的所有框架状态根、推导出的 web-data，以及回执记录的 Cursor `PLUGIN_DATA` 目录。这是默认行为；该标志只是显式声明，并保留归属回执供以后 purge。 |
 | `--purge-data` | 关闭 | 只删除回执记录且由该安装独占的持久数据根。没有 `--confirm-purge` 时被拒绝（`AB7008`）；共享、外部管理、无标记、外来标记及其他无法证明归属的根都会被保留并列出。 |
-| `--force` | 关闭 | 在没有回执（旧版 Cursor 副本、仅宿主侧的安装）或归属内容、版本、暂存 `HEAD` 与回执不再匹配时继续。回执或清单指向另一个插件时无论如何都会被拒绝。 |
+| `--force` | 关闭 | 在宿主已注册的安装（Claude/Codex、暂存的 Cursor 市场）缺少仓库回执，或归属内容、版本、暂存 `HEAD` 与回执不再匹配时继续。没有回执的 Cursor 本地目录，以及回执或清单指向另一个插件的目录，是外来目录，无论如何都会被拒绝（`AB7007`）。 |
 | `--plan` | 关闭 | 打印将被删除的确切路径与宿主注册，不做任何改动。 |
 
 uninstall 只删除回执归属的内容：记录的文件与安装器创建的目录（Cursor 本地，包括安装本身创建的
@@ -219,10 +220,11 @@ uninstall 只删除回执归属的内容：记录的文件与安装器创建的�
 （`claude plugin uninstall <id> --scope <scope> --keep-data` + `claude plugin marketplace remove`，
 `codex plugin remove` + `codex plugin marketplace remove`，若另一个已安装插件仍在使用该市场，则保留市场，
 包括仅记录在 Claude 的 `plugins/installed_plugins.json` 注册表中、位于另一作用域或另一项目的 Claude 安装）。
-非归属条目被保留并列出；缺少回执为 `AB7009`，不匹配为 `AB7007`，除非 `--force`；再次运行是 `not-installed`
+非归属条目被保留并列出，插件旁的 `state/` 目录也在其中；缺少仓库回执为 `AB7009`，不匹配为 `AB7007`，除非 `--force`；
+没有回执的 Cursor 本地目录即使带 `--force` 也是外来目录（`AB7007`）；再次运行是 `not-installed`
 空操作。类型化的 `data.outcome` 按宿主如实说明持久状态的去向：Cursor 为 `kept` / `purged` / `absent`；
-Claude 为 `retained-by-host`（缓存副本在 Claude 约 14 天的宽限期内被标为 orphaned；purge 会删除有效框架状态根、
-推导出的 web-data、旧版 `state/` 与 `plugins/data/<id>/`）；Codex 默认保留外部状态，在确认 purge 时删除它，
+Claude 为 `retained-by-host`（缓存副本在 Claude 约 14 天的宽限期内被标为 orphaned；purge 会删除归属的框架状态根、
+推导出的 web-data 与 `plugins/data/<id>/`）；Codex 默认保留外部状态，在确认 purge 时删除它，
 而 `codex plugin remove` 会删除缓存树。输出的 `install.mjs` 接受
 `--uninstall`，并支持 `--mode`、`--keep-data`、`--purge-data --confirm-purge`、`--force` 与 `--plan`。
 
@@ -232,8 +234,9 @@ Claude 为 `retained-by-host`（缓存副本在 Claude 约 14 天的宽限期内
 `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`）命名空间按构造归该安装独占。显式
 `AGENT_BUNDLE_STATE_ROOT` 只有在安装时原本不存在、由安装器创建并写入安装身份标记时才归该安装所有。
 预先存在的目录绝不会仅因服务器声明或卸载时的当前环境指向它而被递归删除。多个服务器与多个根会分别记录、分别判断。
-如果某份仍受支持的旧回执既没有状态元数据，也没有记录 `stateRoot`，当前环境或 home 就不能提供 purge 权限：
+如果回执没有 `state` 块，当前环境或 home 就不能提供 purge 权限：
 Doctor 与 uninstall 会把观察到的根报告为 `unrecorded` / 无法证明并予以保留，即使之前运行过 `--keep-data` 也一样。
+只读取 `agent-bundle-install-receipt/2`；携带更早回执的副本是外来目录。
 
 ## doctor
 
@@ -256,13 +259,12 @@ Doctor 与 uninstall 会把观察到的根报告为 `unrecorded` / 无法证明�
 `expanded`、`unexpanded`（Cursor 3.18.25 无法启动的规范形式）或 `drifted`（`AB7326`）。带 `--from` 时，它还按宿主报告
 生命周期阶段，placed → registered → enabled → active，每一阶段要么被观察到（Claude 与 Codex 的 `plugin list --json`
 行及其 `enabled` 标志、Cursor 本地目录、Cursor 市场导入缓存），要么被类型化为 `unavailable` 并给出没有只读表面能暴露它
-的原因（`AB7330`）。它还清点每个宿主根目录下的 Agent Bundle 回执仓库，对宿主已不再认可的回执发出警告（`AB7328`），并把
-格式 2 之前写入的回执报告为已迁移（`AB7329`）。仅包含 `uninstall --keep-data` 所保留运行时状态的 Cursor 目录会以
-`AB7307` info 报告为 `missing`，而不是 corrupt 或 foreign。
+的原因（`AB7330`）。它还清点每个宿主根目录下的 Agent Bundle 回执仓库，对宿主已不再认可的回执发出警告（`AB7328`）。
+`uninstall --keep-data` 连同残留回执留下的 Cursor 目录会以 `AB7307` info 报告为 `missing`，而不是 corrupt 或 foreign；
+没有该回执时，仅包含 `state/` 的目录既是 corrupt（`AB7304`）也是 foreign（`AB7321`）。
 对于每份已安装副本，Doctor 会报告每个服务器对应的框架状态根、其 `native` 或 `derived` 来源、回执归属
 （`derived`、`marker`、`unowned` 或 `unrecorded`）、当前证据是否允许 purge、使用它的服务器、是否存在以及是否可写。
-对于记录了 `stateRoot` 的兼容回执，如果当前环境解析到别处，Doctor 还会单独列出这个历史根。
-升级 #640 之前留下的 `<plugin root>/state` 会单独报告，并以 `AB7332` 标记。
+插件旁的 `state/` 目录是普通的非归属条目，不是持久状态。
 
 ## validate
 

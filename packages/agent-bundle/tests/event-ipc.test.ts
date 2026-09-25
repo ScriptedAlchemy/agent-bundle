@@ -249,8 +249,8 @@ it.live('reports read-only runtime identity without an artifact epoch gate', () 
   expect(byPath).toEqual(byId);
 }));
 
-it.live('reports unsupported and unavailable status endpoints distinctly', () => Effect.gen(function*() {
-  const endpointId = `event-ipc-status-unsupported-${crypto.randomUUID()}`;
+it.live('fails a status probe the server rejects and reports a missing endpoint as unavailable', () => Effect.gen(function*() {
+  const endpointId = `event-ipc-status-rejected-${crypto.randomUUID()}`;
   yield* Effect.scoped(Effect.gen(function*() {
     yield* Effect.acquireRelease(
       Effect.promise(() => createEventRuntimeServer({
@@ -260,10 +260,15 @@ it.live('reports unsupported and unavailable status endpoints distinctly', () =>
       })),
       (runtime) => Effect.promise(() => runtime.close()),
     );
-    expect(yield* Effect.promise(() => requestEventRuntimeStatus({
+    const rejected = yield* Effect.promise(() => requestEventRuntimeStatus({
       endpointId,
       timeoutMs: 1_000,
-    }))).toEqual({ status: 'unsupported' });
+    }).then(() => undefined, (error: unknown) => error));
+    expect(rejected).toBeInstanceOf(EventRuntimeTransportError);
+    expect(rejected).toMatchObject({
+      code: 'runtime-failed',
+      message: 'Event runtime request does not match the wire schema.',
+    });
   }));
 
   expect(yield* Effect.promise(() => requestEventRuntimeStatus({

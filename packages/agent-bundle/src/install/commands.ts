@@ -129,13 +129,13 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
   )
     .option('--scope <scope>', 'Host install scope', installScope, 'user')
     .option('--mode <mode>', 'Cursor delivery mode to uninstall: local (default) or marketplace', installMode)
-    .option('--keep-data', 'Keep the plugin\'s durable runtime state (state/) in place; this is the default')
-    .option('--purge-data', 'Also remove the plugin\'s durable runtime state; requires --confirm-purge')
+    .option('--keep-data', 'Keep the plugin\'s durable runtime state in place; this is the default')
+    .option('--purge-data', 'Also remove the receipt-owned durable runtime state; requires --confirm-purge')
     .option('--confirm-purge', 'Confirm that --purge-data may delete durable state')
     .option(
       '--force',
-      'Proceed without an install receipt (legacy or host-only install) or when owned content no longer matches the receipt; ' +
-        'foreign directories are still refused',
+      'Proceed when a host-only install has no store receipt or when owned content no longer matches the receipt; ' +
+        'directories without a receipt naming this plugin are still refused',
     )
     .option('--plan', 'Print the exact paths and host registrations that would be removed without changing anything')
     .option('--json', 'Write one machine-readable JSON document');
