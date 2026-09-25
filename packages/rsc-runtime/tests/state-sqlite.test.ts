@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -143,6 +143,31 @@ describe('sqlite driver storage behavior', () => {
       expect((await second.read()).revision).toBe(0);
       await driver.close();
       await expect(first.read()).rejects.toMatchObject({ code: 'store-closed' });
+    }));
+
+  it('refuses to open a fresh root store beside one under the pre-#201 file name', () =>
+    withRoot(async (root) => {
+      const definition = counterDefinition();
+      const pre201Name = `state-sqlite-test-counter-${Buffer.from(definition.id, 'utf8').toString('hex').slice(0, 12)}.sqlite`;
+      const pre201File = join(root, pre201Name);
+      await writeFile(pre201File, 'pre-#201 store');
+
+      const refusal = createSqliteStateDriver({ root }).open(definition);
+      await expect(refusal).rejects.toMatchObject({ code: 'corrupt', name: 'AgentStateError' });
+      await expect(refusal).rejects.toThrow(`found a store at '${pre201File}' under the pre-#201 file name`);
+      await expect(refusal).rejects.toThrow('Move that file and its -wal/-shm sidecars out of the state root');
+      expect(await readdir(root)).toEqual([pre201Name]);
+      expect(await readFile(pre201File, 'utf8')).toBe('pre-#201 store');
+
+      await rm(pre201File);
+      const store = await createSqliteStateDriver({ root }).open(definition);
+      await store.dispatch('bumped', { by: 1 }, { idempotencyKey: 'k1' });
+      await store.close();
+      // Once the current store exists it is authoritative; a pre-#201 file beside it is not consulted.
+      await writeFile(pre201File, 'pre-#201 store');
+      const reopened = await createSqliteStateDriver({ root }).open(definition);
+      await expect(reopened.read()).resolves.toEqual({ revision: 1, state: { count: 1 } });
+      await reopened.close();
     }));
 
   it('keeps the original commit input while migrating each committed result', () =>

@@ -129,18 +129,20 @@ The driver reads only the layout it writes today. It neither adopts nor migrates
 before that layout, in either of two ways.
 
 A database under the pre-#201 file name, whose suffix was the state id's own leading bytes in hex
-rather than a SHA-256 digest, is never opened. The driver leaves the old file untouched and
-creates a new, empty store beside it under the current name, so the old data is still on disk and
-simply unread.
+rather than a SHA-256 digest, is never opened. When a root-mode store finds that file and no
+database under the current name, the open fails with a `corrupt` `AgentStateError` that names the
+old file, instead of creating an empty store beside it. The old file is left untouched. Once a
+database under the current name exists, the old file is not consulted.
 
 A database under the current file name whose `agent_state_journal` table differs from the one the
 driver creates fails at open with a `corrupt` `AgentStateError` naming the table. Column names,
 their order, and their `NOT NULL` flags all count, so a journal whose `result_state` column is
 nullable, as an older runtime's `ALTER TABLE` left it, is rejected before any row is read.
 
-Recover from either by deleting the stale database files, each `*.sqlite` plus its `-wal` and
-`-shm` sidecars, or the whole state root. The next launch creates a fresh store at the definition's
-initial state. Nothing reconstructs the old history.
+Recover from either by moving the stale database files out of the state root to keep a copy, or
+deleting them: each `*.sqlite` plus its `-wal` and `-shm` sidecars, or the whole state root. The
+next launch creates a fresh store at the definition's initial state. Nothing reconstructs the old
+history.
 
 ## Next
 
