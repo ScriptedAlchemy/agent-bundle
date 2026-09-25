@@ -294,10 +294,10 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root }).prepare('dev');
 
     expect(prepared.source.state).toBe('ready');
-    expect(prepared.devRuntime).toMatchObject({
-      apps: [expect.objectContaining({ name: 'timeline', resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' })],
+    expect(prepared.devRuntime).toEqual({
       provider: './src/dev/provider.ts',
-      servers: [expect.objectContaining({ name: 'timeline', transport: 'stdio' })],
+      servers: [{ id: 'mcp:timeline', name: 'timeline', targets: ['claude', 'codex', 'portable'] }],
+      sourceRevision: expect.any(String),
     });
     // The example declares one semantic event route (src/events/tool/after.tsx)
     // that serves both hosts through the generated native wrappers.

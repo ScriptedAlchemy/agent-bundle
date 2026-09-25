@@ -86,9 +86,10 @@ compiles the `rsc` and `widget` environments into a runtime generation and
 publishes its hook, MCP tool, and resource surfaces to the Workbench runtime
 routes; no browser connects to its loopback Rsbuild server. The `app`
 environment is compiled only by the production build. The session uses
-development entries and output roots while compiling every environment in
-production mode, because production decoders cannot read development Flight
-payloads. `@rsbuild/plugin-react` is configured as
+development entries and output roots while compiling every
+environment in production mode, because
+production decoders cannot read development
+Flight payloads. `@rsbuild/plugin-react` is configured as
 `pluginReact({ fastRefresh: false })`, so no refresh runtime is injected into
 the self-contained App document. The `widget` and `app` web environments set
 `overrideBrowserslist: ['chrome >= 144']` for the Chromium MCP App hosts
