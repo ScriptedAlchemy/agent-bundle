@@ -14,7 +14,6 @@ import { HookClient } from '../../src/hooks/hook-client.ts';
 import { LifecycleClient } from '../../src/lifecycles/lifecycle-client.ts';
 import { McpAppClient } from '../../src/mcp/mcp-app-client.ts';
 import { ForegroundRouteClient, McpRouteClient } from '../../src/mcp/mcp-route-client.ts';
-import { ProjectClient } from '../../src/project-client.ts';
 import { HostSessionClient } from '../../src/sessions/host-session-client.ts';
 import { SkillClient } from '../../src/skill-client.ts';
 
@@ -83,6 +82,7 @@ export const cliLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/cli/audible/search',
   label: 'audible search',
   ref: Object.freeze({ kind: 'cli' as const, path: Object.freeze(['audible', 'search']) }),
+  resultSchemaState: 'unprojectable',
   routeId: 'cli:audible/search',
   source: 'src/cli/audible/search.tsx',
 });
@@ -94,6 +94,7 @@ export const eventLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/events/tool/before',
   label: 'tool/before',
   ref: Object.freeze({ event: 'tool/before', kind: 'event' as const }),
+  resultSchemaState: 'absent',
   routeId: 'event:tool/before',
   source: 'src/events/tool/before.tsx',
 });
@@ -104,6 +105,7 @@ export const appLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/mcp/curator/app/library',
   label: 'library',
   ref: Object.freeze({ kind: 'app' as const, name: 'library', server: 'curator' }),
+  resultSchemaState: 'absent',
   routeId: 'app:curator/library',
   source: 'src/mcp/curator/apps/library.tsx',
 });
@@ -114,6 +116,7 @@ export const skillLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/skills/skill%3Areview',
   label: 'review',
   ref: Object.freeze({ id: 'skill:review', kind: 'skill' as const }),
+  resultSchemaState: 'absent',
   source: 'skills/review/SKILL.md',
 });
 
@@ -123,6 +126,7 @@ export const ruleLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/rules/style',
   label: 'style',
   ref: Object.freeze({ id: 'style', kind: 'rule' as const }),
+  resultSchemaState: 'absent',
   source: 'rules/style.md',
 });
 
@@ -235,7 +239,7 @@ export const fakeBackend = (envelope: RouteInvocation = invocation, kind: Invoca
 export const clients = (): WorkspaceClients => {
   const foreground = new ForegroundRouteClient({ fetch: neverFetch });
   return {
-    appClient: new McpAppClient({ foreground, projectClient: new ProjectClient({ fetch: neverFetch }) }),
+    appClient: new McpAppClient({ foreground }),
     evalClient: new EvalClient({ foreground }),
     foreground,
     hookClient: new HookClient({ foreground }),

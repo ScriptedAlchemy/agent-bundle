@@ -7,7 +7,6 @@ import { createWorkbenchAssetSource } from '../../../agent-bundle/src/dev/workbe
 import type { ProjectEventHub } from '../../../agent-bundle/src/dev/events.ts';
 import { startForegroundServer, type ForegroundProjectEventStreamHandle } from '../../../agent-bundle/src/dev/foreground-server.ts';
 import type { HostDiscoveryServiceOptions } from '../../../agent-bundle/src/dev/playground/host-discovery-service.ts';
-import type { DevRuntimeClientSurfaceProxyBinding } from '../../../agent-bundle/src/dev/runtime-provider.ts';
 import { startDevServer } from '../../../agent-bundle/src/dev/workbench-server.ts';
 import { ensureRuntimeExamplePayload, runtimeExamplePayloads } from './runtime-example-payload.ts';
 import { removeTree } from '../support/remove-tree.ts';
@@ -20,7 +19,6 @@ const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 export interface RuntimePlaygroundFixture {
   close(): Promise<void>;
   disconnectProjectEventStream(): void;
-  openRuntimeClientSurface(surfaceId: string): Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
   publishReplayNoise(): void;
   readonly appStyles: string;
   readonly closed: Promise<void>;
@@ -116,37 +114,15 @@ export const startRuntimePlaygroundFixture = async (
   let closed = false;
   let resolveClosed!: () => void;
   const closedPromise = new Promise<void>((resolve) => { resolveClosed = resolve; });
-  const clientSurfaces = new Set<DevRuntimeClientSurfaceProxyBinding>();
-  const openRuntimeClientSurface = async (surfaceId: string): Promise<DevRuntimeClientSurfaceProxyBinding | undefined> => {
-    const binding = await server.openRuntimeClientSurface(surfaceId);
-    if (binding === undefined) return undefined;
-    const managed: DevRuntimeClientSurfaceProxyBinding = Object.freeze({
-      ...binding,
-      close: async (): Promise<void> => {
-        try {
-          await binding.close();
-        } finally {
-          clientSurfaces.delete(managed);
-        }
-      },
-    });
-    clientSurfaces.add(managed);
-    return managed;
-  };
   const close = async (): Promise<void> => {
     if (closed) return closedPromise;
     closed = true;
-    let clientSurfaceFailure: unknown;
     try {
-      const results = await Promise.allSettled([...clientSurfaces].map((binding) => binding.close()));
-      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-      clientSurfaceFailure = failed?.reason;
       await server.close();
     } finally {
       await removeTree(fixtureWorkspace);
       resolveClosed();
     }
-    if (clientSurfaceFailure !== undefined) throw clientSurfaceFailure;
     return closedPromise;
   };
   return Object.freeze({
@@ -162,7 +138,6 @@ export const startRuntimePlaygroundFixture = async (
         subscriptionCount: foregroundEventHub.subscriptionCount,
       });
     },
-    openRuntimeClientSurface,
     publishReplayNoise: () => {
       for (let index = 0; index < 257; index += 1) {
         foregroundEventHub.publish({

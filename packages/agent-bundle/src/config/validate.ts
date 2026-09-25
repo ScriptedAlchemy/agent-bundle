@@ -3,7 +3,7 @@ import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } fr
 
 import { capabilityIsSupported, cliBinCapability, webSurfaceCapability } from '../adapters/capability-state.ts';
 import { builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts';
-import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
+import { assignsModuleExportsSource, type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
 import { externalizedSpecifiers } from '../build/external-policy.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
@@ -75,9 +75,9 @@ const sourceDiagnostic = (
 });
 
 /**
- * Informational migration nudges (AB4730-AB4735): they surface pre-convention
- * patterns the entry conventions now replace, and they must never gate a
- * build — migrations stay optional, so the severity is always `info`.
+ * Informational convention nudges (AB4731-AB4735): they surface a confusable
+ * state where explicit configuration shadows a conventional file, and they
+ * must never gate a build, so the severity is always `info`.
  */
 const nudgeDiagnostic = (
   code: string,
@@ -615,12 +615,11 @@ const validateMcpApps = (
 const relativePosix = toPosixRelative;
 
 /**
- * AB4730: a local stdio entry whose module never default-exports a factory
- * is self-connecting, so the build cannot wrap it in the framework stdio
- * lifecycle shell. The detection is the same static export scan the build
- * uses to decide the wrap, so the nudge and the build always agree.
+ * AB4730: every local stdio entry is wrapped in the framework stdio lifecycle
+ * shell, which imports the entry's default export as its server factory. A
+ * CommonJS entry's top-level `module.exports` is that default under bundling.
  */
-const selfConnectingEntryNudge = (
+const missingServerFactoryErrors = (
   name: string,
   entry: string | undefined,
   conventionalEntry: string | undefined,
@@ -633,16 +632,17 @@ const selfConnectingEntryNudge = (
     : conventionalEntry;
   if (source === undefined || !bundleScriptExtensions.has(extname(source).toLowerCase())) return [];
   try {
-    if (scanEntryExportsSource(readFileSync(source, 'utf8'), source).hasDefaultExport) return [];
+    const text = readFileSync(source, 'utf8');
+    if (scanEntryExportsSource(text, source).hasDefaultExport || assignsModuleExportsSource(text, source)) return [];
   } catch {
     // An unreadable entry is already reported by the existence diagnostics.
     return [];
   }
-  return [nudgeDiagnostic(
+  return [sourceDiagnostic(
     'AB4730',
-    `MCP server ${JSON.stringify(name)} stdio entry is self-connecting; a default-exported server factory would receive the framework stdio lifecycle shell.`,
+    `MCP server ${JSON.stringify(name)} stdio entry must default-export a server factory.`,
     source,
-    'Optional: default-export a server factory from the entry module to adopt the framework lifecycle; self-connecting entries keep their current behavior.',
+    'Default-export the server factory from the entry module, or declare a prebuilt server with command or url.',
   )];
 };
 
@@ -729,7 +729,7 @@ const validateMcpServer = (
     diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
     diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
     if (!isPrebuiltEntryInput(entry)) {
-      diagnostics.push(...selfConnectingEntryNudge(name, entry, conventionalEntry, loaded));
+      diagnostics.push(...missingServerFactoryErrors(name, entry, conventionalEntry, loaded));
     }
     return diagnostics;
   }
@@ -1962,22 +1962,6 @@ const skillConventionShadowNudges = (
   'Optional: remove the explicit skills configuration to adopt the src/skills/<name>/SKILL.md convention, add the directory to skills, or remove it to silence this nudge.',
 ));
 
-const legacyConventionalDocumentErrors = (
-  loaded: LoadedConfig,
-  discovered: DiscoveredProject,
-): Diagnostic[] => (discovered.legacyConventionalDocuments ?? []).map(({ kind, source }) => {
-  const relativePath = relativePosix(loaded.context.projectRoot, source);
-  const destination = `src/${relativePath}`;
-  return sourceDiagnostic(
-    'AB4736',
-    `${relativePath} uses the removed top-level ${kind} convention and is no longer discovered.`,
-    source,
-    kind === 'skill'
-      ? `Move the document to ${destination}, or cover its directory with explicit skills configuration.`
-      : `Move the document to ${destination}.`,
-  );
-});
-
 const isRspackHatchValue = (value: unknown): boolean =>
   typeof value === 'function' || isRecord(value);
 
@@ -2489,7 +2473,6 @@ export const validateSource = (
   ).diagnostics);
   diagnostics.push(...packageConventionShadowNudges(loaded));
   diagnostics.push(...skillConventionShadowNudges(loaded, discovered));
-  diagnostics.push(...legacyConventionalDocumentErrors(loaded, discovered));
   // Route overrides are validated during discovery; source validation must
   // still observe the config getter so hostile accessors fail closed as AB7001.
   void loaded.config['routes'];

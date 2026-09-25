@@ -24,7 +24,7 @@ even when no error diagnostic was reported.
 | `AB470x` | Package build `bin` configuration (`AB4700`–`AB4705`; `AB4706`: artifact output overlaps `dist`; `AB4707`: `output` shape plus `output.distPath` string and `output.sourceMap` boolean types; `AB4708`–`AB4709`: `output.distPath` root escape and reserved namespace); see below. |
 | `AB471x` | Package build `lib` configuration (`AB4710`–`AB4715`) and declaration generation (`AB4716`); see below. |
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch (`AB4720`–`AB4723`: shape; `AB4724`: a framework-owned Rsbuild plugin re-added through `tools.rsbuild.plugins`; `AB4725`: `tools` externalizes a non-built-in; `AB4726`: a deprecated Rsbuild v2 configuration key; see below). |
-| `AB473x` | Migration nudges (informational; see below). |
+| `AB473x` | Entry conventions: `AB4730` and `AB4737`–`AB4738` are errors, `AB4731`–`AB4735` are informational shadowing nudges, and `AB4736` is retired (see below). |
 | `AB4740`–`AB4751` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
 | `AB4765`–`AB4768` | Artifact-hosted routed CLI and npm lifecycle paths: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it; an npm root cannot select a routed CLI absent from the manifest; or a consumer lifecycle names an unsupported or absent Node path (see below). |
@@ -34,12 +34,12 @@ even when no error diagnostic was reported.
 | `AB5000` | General CLI and adapter failures (see below). |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6005`: the compiler finds a host-pack surface or package-build entry (`dist/bin/*.js`, the Flight workers, or the `lib` entry) that keeps something other than a Node built-in, `pnpapi`, or an emitted sibling external, or an MCP App view that keeps anything external; the emitted-module walk remains only for what the compiler cannot see, an expression `import()` in a compiled module, and the imports and syntax of JavaScript the framework did not compile or a `tools` hatch may have rewritten; a `dist` finding names `dist/<path>`; `AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB6200`–`AB6202` | Workbench artifact inspection over published epochs: `AB6200` the validator threw or an internal post-validation invariant failed, `AB6201` an epoch reference could not be released, `AB6202` unsafe runtime metadata. Artifact-validation diagnostics such as `AB6001` retain their original codes (see below). |
-| `AB700x` | Host installation and uninstallation: bundle identity, host availability, scope, command failure, and collision checks (`AB7000`–`AB7004`: unsupported host, unreadable bundle identity, missing host, scope or mode refusal, host command failure, the same five codes are also the development project service's preparation failures; `AB7001` in detail: the composite root at `--from` cannot be resolved for the host from its `agent-bundle.manifest.json`, the manifest is missing or not canonical, has no `projections[]` row for the host, the row has no host plugin manifest pointer or the pointed file is missing, a `files[]` row is missing or its bytes, size, digest, or executable state differ from the row after npm normalization, `claude`/`codex` have no marketplace identity, or the `cursor` plugin name is not a safe local plugin name; `install`, `uninstall`, and `doctor` never probe `.claude-plugin/plugin.json` or look under `<from>/<host>`; `AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below), plus the `uninstall` refusals `AB7007`–`AB7009` (ownership or content mismatch, unconfirmed data purge, missing receipt; see below). |
+| `AB700x` | Host installation and uninstallation: bundle identity, host availability, scope, command failure, and collision checks (`AB7000`–`AB7004`: unsupported host, unreadable bundle identity, missing host, scope or mode refusal, host command failure, the same five codes are also the development project service's preparation failures; `AB7001` in detail: the composite root at `--from` cannot be resolved for the host from its `agent-bundle.manifest.json`, the manifest is missing or not canonical, has no `projections[]` row for the host, the row has no host plugin manifest pointer or the pointed file is missing, a `files[]` row is missing or its bytes, size, digest, or executable state differ from the row after npm normalization, `claude`/`codex` have no marketplace identity, or the `cursor` plugin name is not a safe local plugin name; `install`, `uninstall`, and `doctor` never probe `.claude-plugin/plugin.json` or look under `<from>/<host>`; `AB7005`: version collision or foreign install; `AB7006`: the host lists the installed copy with load errors; see below), plus the `uninstall` refusals `AB7007`–`AB7009` (ownership or content mismatch, unconfirmed data purge, missing receipt; see below). |
 | `AB7010`–`AB7015` | npm prepack inventory, artifact freshness, package bin targets, release-version agreement, and installed-dependency hygiene (`AB7014`: a dependency no consumer-runtime evidence requires; `AB7015`: a git, remote-tarball, path, or unrewritten workspace-protocol dependency specifier). |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds (`AB7100`–`AB7102`: a development rebuild's compilation, publication, and cleanup; `AB7101` is also the one-shot `build` / `build()` refusal when source changes during compilation; `AB7103`: the development package build; see below). |
-| `AB7300`–`AB7333` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7325`; see below), the Cursor Agent Plugins launch proof (`AB7326`; see below), a disabled Claude install (`AB7327`; see below), lifecycle receipts and activation states (`AB7328`–`AB7330`; see below), the operator `.env` layer of an installed pack (`AB7331`; see below), retained pre-#640 state (`AB7332`; see below), and dangling receipt-owned marketplaces (`AB7333`; see below). `AB7311` and `AB7325` are also emitted by `build` and `validate --artifact` from the Claude load check (see "Claude Code host validation"). |
-| `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
+| `AB7300`–`AB7333` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7325`; see below), the Cursor Agent Plugins launch proof (`AB7326`; see below), a disabled Claude install (`AB7327`; see below), lifecycle receipts and activation states (`AB7328`–`AB7330`; see below), the operator `.env` layer of an installed pack (`AB7331`; see below), the retired `AB7332` (see below), and dangling receipt-owned marketplaces (`AB7333`; see below). `AB7311` and `AB7325` are also emitted by `build` and `validate --artifact` from the Claude load check (see "Claude Code host validation"). |
+| `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
 | `AB8210`–`AB8214` | Workbench semantic lifecycle replay routes (`/api/lifecycles`, `/api/lifecycles/replays`): `AB8210` invalid path, `AB8211` malformed replay request or native envelope (400, carries the shared validator message), `AB8212` replay unavailable or could not be completed, `AB8213` stale manifest binding (409; the page repairs it with refresh → explicit re-run), `AB8214` replay over the 16 MiB budget (413). |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route (`/api/discovery`): `AB8215` invalid path, `AB8216` query string or non-`GET` method (400/405), `AB8217` report over the 16 MiB response limit (413), `AB8218` discovery not available (503). |
 | `AB8219`–`AB8223` | Workbench live MCP probe route (user-initiated, read-only initialize + tools/list): `AB8219` invalid path, `AB8220` invalid request/method, `AB8221` probe target not found, `AB8222` response over the 16 MiB budget, `AB8223` probe unavailable. |
@@ -617,18 +617,19 @@ development-only fallback can never produce a release artifact, so
 | `AB4014` | error | A `plugin.metadata` field is not the shape the shared descriptive layer accepts, or the block declares a field beyond `author`, `homepage`, `keywords`, `license`, and `repository`. The config declared it, so it is an error rather than a withheld value, a blank string or empty array included, where `null` is how a field is opted out. |
 | `AB4015` | warning | A `package.json` descriptive field cannot be shared with any host manifest, a `homepage`, `repository`, or `author.url` the pinned host schemas' `uri` format refuses, an `author.email` their `email` format refuses, or a `repository` in a form this compiler will not convert (`owner/repo` and `github:` shorthands, `git@`/`git://`/`git+ssh`/`git+http` URLs; only `http(s)` and the `git+https://…` URL npm writes, with or without a trailing `.git`, are read). An `author` with any malformed part is withheld whole. The field is withheld rather than guessed at; declare `plugin.metadata.<field>` to share an explicit value. A field the config already overrides is not reported. |
 
-## Migration nudges and convention claims (`AB4730`–`AB4738`)
+## Entry conventions and convention claims (`AB4730`–`AB4738`)
 
 The entry conventions and the framework-owned stdio lifecycle shell (RFC #50)
-replaced patterns consumers previously wrote by hand. When `validate`,
-`inspect`, `build`, or `dev` prepares project source and finds one of those
-pre-convention patterns, it reports a migration diagnostic. `AB4730`–`AB4735`
-are **informational** nudges and never block anything. `AB4736`–`AB4738` are
-errors: the removed top-level authored-document locations are no longer
-discovered, and a conventional script whose `bin` entry would run an export
-the artifact script ignores cannot ship on both surfaces, so the compiler
-refuses to omit or misbuild them silently. The CLI prints these in
-human `validate` output and includes them in every `--json` diagnostics array.
+define how a project's modules reach an artifact. When `validate`, `inspect`,
+`build`, or `dev` prepares project source, it reports what the conventions
+refuse and what they silently shadow. `AB4730`, `AB4737`, and `AB4738` are
+**errors**: an entry the framework cannot wrap, and a conventional script
+whose `bin` entry would run an export the artifact script ignores, cannot
+ship, so the compiler refuses to misbuild them silently. `AB4731`–`AB4735`
+are **informational** nudges for a confusable state where explicit
+configuration shadows a conventional file on disk, and never block anything.
+`AB4736` is retired. The CLI prints these in human `validate` output and
+includes them in every `--json` diagnostics array.
 
 Which explicit config keys *claim* a conventional module out of discovery is
 tabulated in `docs/entry-conventions.md` ("Which config keys claim a
@@ -639,17 +640,23 @@ keeps shipping as an artifact script beside the bin because the two outputs
 are disjoint and both envelopes run the same `main`. That dual-surface shape
 is intentional and raises no diagnostic.
 
-### `AB4730` self-connecting stdio MCP entry
+### `AB4730` stdio MCP entry without a server factory
 
 A local MCP server entry module (explicit `entry:` or the conventional
-`src/mcp/<server-id>.ts`) has no default export, so the build bundles it
-byte-for-byte instead of wrapping it in the framework stdio lifecycle shell
-(console-to-stderr guard, SIGINT/SIGTERM, stdin-EOF exit, bounded shutdown,
-heartbeat). The detection is the same static default-export scan the build
-uses, so the nudge and the build always agree.
+`src/mcp/<server-id>.ts`) has no default export. Every local entry is wrapped
+in the framework stdio lifecycle shell (console-to-stderr guard,
+SIGINT/SIGTERM, stdin-EOF exit, bounded shutdown, heartbeat), and the shell
+calls the module's default export to build the server, so a module without
+one cannot be built. Validation finds the default export with a static scan of
+the entry's top-level statements. A CommonJS entry's top-level
+`module.exports = <factory>` counts as that default export, because the
+bundler exposes the assigned value as the module's `default`, unless the file
+declares its own `module` binding. A narrower `exports.foo = …` or
+`module.exports.foo = …` does not count.
 
-Adopt: default-export a server factory from the entry module. Silence: keep
-the self-connecting entry, its behavior is preserved exactly.
+Recover: default-export the server factory from the entry module, or declare
+a prebuilt server with `command` or `url`, which the framework launches
+as-is and never wraps.
 
 ### `AB4731` `src/cli.ts` shadowed by explicit `bin` config
 
@@ -696,18 +703,15 @@ document beats a generated one, so the component module never compiles.
 Adopt: remove `SKILL.md` so the rendered skill compiles at build. Silence:
 remove the component module.
 
-### `AB4736` legacy top-level authored document location
+### `AB4736` retired
 
-A document still matches a removed top-level convention:
-`skills/<name>/SKILL.md` (or rendered `SKILL.tsx`/`SKILL.ts`),
-`commands/*.md`, or `rules/*.mdc`. These locations are no longer discovered,
-and every unignored legacy document is reported as an error. A top-level
-skill covered by explicit `skills` configuration is claimed and stays valid;
-commands and rules have no equivalent override.
-
-Recover: move the document under `src/skills/`, `src/commands/`, or
-`src/rules/`. Explicit `skills` paths remain valid anywhere. Published
-artifact paths remain `skills/`, `commands/`, and `rules/`.
+The report of documents left in the removed top-level locations
+(`skills/<name>/SKILL.md`, `commands/*.md`, `rules/*.mdc`). Discovery reads
+`src/skills/<name>/SKILL.md`, `src/commands/*.md`, and `src/rules/*.mdc`
+only, so a document at the top level is now ignored without a diagnostic. An
+explicit `skills` path still names a skill directory anywhere in the project,
+including the top level. Published artifact paths remain `skills/`,
+`commands/`, and `rules/`. The code is never reused.
 
 ### `AB4737` rendered script claimed as a package bin entry lacks `main` or the component
 
@@ -1153,8 +1157,8 @@ compile has no correct partial output, so every finding is an error
 An event route uses a `.ts` lightweight handler or a `.tsx` rendered handler. A `.ts`
 handler can return `ctx.render('./name.view.js', data)` to load its separate `.view.tsx`
 sibling. Data must be strict JSON. The compiler uses explicit module boundaries without
-extracting closures. Removed `before`/`preflight` exports, invalid view modules, and event
-helper/path mismatches report `AB4840`. Definition helpers require a direct default call
+extracting closures. Invalid view modules and event helper/path mismatches report
+`AB4840`. Definition helpers require a direct default call
 with an inline object literal; computed options and wrappers report `AB4810`.
 
 Providers load on first `context.provider('<key>')` access. Concurrent readers share the
@@ -1203,7 +1207,7 @@ projections; no static provider subset declaration is required.
 | `AB4837` | error | A compiled executable imports a compiler-carrying framework entry (`agent-bundle`, `/api`, `/config`, `/eval`, `/rstest`, `/test`, or `/test/browser`). The build checks requests after transformation and resolved package export identities, including aliases, and names the importing module. Type-only imports erased by the configured transform are legal. Source-only `inspect` and `validate` do not prove this dependency boundary. Keep compiler calls in a host process, or use `import type` for framework types. |
 | `AB4838` | none | Retired. Schema imports are resolved by the bundler, not an inspection-time interpreter. |
 | `AB4839` | none | Retired. Inspection does not follow schema alias chains. |
-| `AB4840` | error | An event exports removed `before` or `preflight` bindings, its helper disagrees with the conventional path, or its `.view.tsx` sibling is not a valid rendered event module. Use a `.ts` handler and `ctx.render('./name.view.js', data)` for an explicit rendered view. |
+| `AB4840` | error | An event helper disagrees with the conventional path, its `.view.tsx` sibling exports `config`, or its `.view.tsx` sibling is not a valid rendered event module. Use a `.ts` handler and `ctx.render('./name.view.js', data)` for an explicit rendered view. |
 | `AB4843` | error | A `.cli.{ts,tsx}` module under `src/mcp/<server>/tools/` has no sibling tool route `<stem>.{ts,tsx}` (orphan), a `.cli.{ts,tsx}` module sits under `resources/`, `prompts/`, or `apps/`, or a second projection module (`<stem>.cli.ts` beside `<stem>.cli.tsx`) names the same tool, the first in path order wins and the second is reported. The suffix is reserved under `src/mcp/**` only. The message is `CLI projection <module> for tool:<server>/<tool>: <detail>.` (`has no sibling tool route …`, `<other module> already projects this tool …`); a misplaced module names no tool, so its message is `CLI projection <module>: sits under resources/, prompts/, or apps/ …`. `sourcePath` is the projection module's absolute path. Recovery: rename the file to match the sibling tool, or prefix `_` to park it, then inspect again. It is an error because a projection that cannot compile has no correct partial output. |
 | `AB4844` | error | A CLI projection config does not satisfy its closed metadata contract, combines JSON input mode with flag mapping, or relaxes a required key without declaring `mapInput`. The generated runtime checks that a loaded `mapInput` is callable, awaits it, and validates the result through the original input schema. |
 | `AB4845` | error | A CLI projection's grammar does not bind to the tool's contract: `flags`/`positionals` name a key absent from the tool's `RouteContract.input`; a `name`/alias is not kebab-case, is reserved (`help`, `json`, `ndjson`, `version`, and `yes` when confirm), or collides with another option's spelling or alias; `flags.<key>.name` or `flags.<key>.aliases` is declared on a key `positionals` consumes as a bare argument (`description`, `default`, and `required: false` still apply there); the tool's contract has a key `yes` while the command confirms, the shell keys parsed values by canonical key and strips `yes` as the confirmation, so no `name` override reaches the tool (`set confirm: false or rename the key`); or a `command` segment is not a safe identity segment. The message is `CLI projection <module> for tool:<server>/<tool>: <detail>.` and `sourcePath` is the projection module's absolute path. Recovery names the offending key or spelling and the accepted form, then says to inspect again. It is an error because a projection that cannot compile has no correct partial output. |
@@ -1219,7 +1223,7 @@ SQLite lock or shared-memory files.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
-| `AB7316` | warning | An installed bundle's effective or legacy state directory is not writable, or the directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Repair permissions and rerun Doctor; Doctor never repairs state. |
+| `AB7316` | warning | An installed bundle's effective state directory is not writable, or the directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Repair permissions and rerun Doctor; Doctor never repairs state. |
 
 ## Read-only Doctor operator env inventory (`AB7331`)
 
@@ -1234,23 +1238,22 @@ diagnostic.
 | --- | --- | --- |
 | `AB7331` | info / warning | Info: an installed copy (or the `--from` bundle) carries `.env` or `.env.local` at its plugin root; the message names the file and its variable count. Warning: the file exists but cannot be read, so the pack's shells skip it at launch, repair its permissions and rerun Doctor. |
 
-## Read-only Doctor legacy state (`AB7332`)
+## Read-only Doctor framework state roots (`AB7332` retired)
 
 Doctor resolves every installed MCP server's framework state root from its
 canonical code root, declared environment, and execution directory. It reports
 the servers, source, receipt ownership, current purgeability, existence, and
-writability separately from the pre-#640 in-tree location. A runtime location
-without matching receipt ownership remains visible but is never deletion
-authority. In particular, a supported legacy receipt with no recorded state
-location cannot turn the current environment or home into purge authority;
-Doctor reports that observed root as unrecorded and retained. When a
-compatibility receipt does record `stateRoot`, Doctor lists that historical
-root separately if the current environment resolves elsewhere and marks only
-the receipt-recorded derived root purgeable.
+writability. A runtime location without matching receipt ownership remains
+visible but is never deletion authority. In particular, a receipt with no
+`state` block (written before the install could record ownership) cannot turn
+the current environment or home into purge authority; Doctor reports that
+observed root as unrecorded and retained. A `state/` directory beside the
+plugin is an ordinary unowned entry: it is never inventoried as durable
+state, never purged, and is listed by `uninstall` as retained.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
-| `AB7332` | info | `<plugin root>/state` still exists while the installed artifact resolves framework state elsewhere. Move any state that must be retained, or use `uninstall --purge-data --confirm-purge` to remove the in-tree root plus only those effective roots whose receipt ownership is currently purgeable; unrecorded roots remain retained. |
+| `AB7332` | retired | Named an in-tree `<plugin root>/state` directory as legacy durable state. The framework never reads state from the plugin root, and the installer has no authority over that directory; it is reported like any other unowned entry. |
 
 ## Read-only Doctor marketplace sources (`AB7333`)
 
@@ -1262,7 +1265,7 @@ the receipt-recorded derived root purgeable.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
-| `AB7317` | info | A live event runtime implements the older strict protocol and does not expose runtime identity. Restart it after upgrading Agent Bundle. |
+| `AB7317` | retired | Reported a live event runtime that rejected the status request as `unsupported`. Such a runtime is now a failed probe (`AB7318`, `runtime.status: failed`) carrying the runtime's error message. |
 | `AB7318` | error | A live event runtime became unavailable, timed out, or returned an invalid status response during the bounded read-only identity probe. Inspect or restart the runtime, then rerun Doctor. |
 
 ## Read-only Doctor bundle resolution (`AB7306`)
@@ -1343,21 +1346,18 @@ reverses what did complete, the plugin (`plugin uninstall … --keep-data` /
 `plugin remove`) when it was installed, then the marketplace when this run
 created it, before rethrowing; a failed reversal is reported with the exact
 host commands to run before retrying. Nothing is left registered without a
-receipt to record it. A format 1
-receipt (written by #420) is read with those
-fields synthesized (`mode: local`, `scope: user`, one `cursor-local-plugin`
-registration, no host directories) and reported as migrated (`AB7329`); an
-identical rerun of the installer rewrites it as format 2. A current-format
-receipt missing any field reads as absent, exactly like a malformed one.
+receipt to record it. Only `agent-bundle-install-receipt/2` is read: a
+format 1 receipt (written by #420), a current-format receipt missing any
+field, and a malformed one all read as absent, and the copy they sit in is
+foreign.
 
 The receipt never participates in the content hash, and neither do empty
 directories or runtime roots (`state/`): only regular files are plugin content,
 so the artifact hash, the installed tree, and the receipt always describe the
 same entries. Ownership of an existing
-destination is decided as **receipt** (a receipt naming this plugin), **legacy**
-(no receipt, but the emitted `INSTALL.md` + `install.mjs` and a manifest with
-this plugin's name, a copy installed before receipts existed), or **foreign**
-(anything else). Claude and Codex copies are located through the host's own
+destination is decided as **receipt** (a receipt naming this plugin) or
+**foreign** (anything else, a copy installed before receipts existed
+included). Claude and Codex copies are located through the host's own
 `plugin list --json` inventory (Doctor runs it once per host and also lists every
 installed plugin from it; `AB7303` is emitted only when that listing is unusable);
 the host owns those copies, so replacement runs `claude plugin uninstall
@@ -1370,11 +1370,9 @@ settings-preserving update API, and native add would set plugin-level enabled to
 | Installed copy | `install` | `install --replace` | Doctor |
 | --- | --- | --- | --- |
 | Identical content (receipt / host-managed) | `already-installed` no-op | `already-installed` no-op | `current` |
-| Identical content (legacy) | `already-installed` no-op | `adopted`, receipt written, no plugin file changes | `current` |
 | Receipt / host-managed, same version, different content | replaced automatically (`replaced`) | replaced | `stale`, `AB7308` warning |
 | Receipt / host-managed, different version | `AB7005` version collision | replaced | `version-mismatch`, `AB7309` warning |
-| Legacy, different content | `AB7005` content collision | adopted: the artifact's files are rewritten, every other file is left in place and stays unowned, receipt written (`replaced`) | `stale`, `AB7308` warning, recovery names `--replace` |
-| Foreign directory | `AB7005` foreign install | `AB7005` foreign install | `foreign`, `AB7321` warning |
+| Foreign directory (no receipt naming this plugin, a pre-receipt copy included) | `AB7005` foreign install | `AB7005` foreign install | `foreign`, `AB7321` warning |
 | Claude copy listed with `errors` (host refused to load it) | identical content: `AB7006`; otherwise replaced, then `AB7006` if the fresh row still carries `errors` | replaced, then `AB7006` if the fresh row still carries `errors` | `load-failed`, `AB7325` error (see below) |
 | Nothing installed | installed | installed | `not-installed`, `AB7307` info |
 
@@ -1385,7 +1383,7 @@ Cursor replacement is in place and touches owned files only: stale owned files
 are removed and the emptied directories the installer itself created
 (`directories` in the receipt) are pruned, staged files are renamed over their
 predecessors, and the receipt lands last. Entries the installer does not own,
-notably workspace-durable `state/` stores, and any directory that already
+a `state/` directory beside the plugin included, and any directory that already
 existed before the installer wrote beneath it, are never removed or rewritten;
 when a rebuilt artifact introduces a path that an existing unowned entry already
 occupies, replacement aborts before any change (`AB7004`, "Refusing to overwrite
@@ -1408,23 +1406,24 @@ untouched.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
-| `AB7005` | error | `install` refused an existing destination: a different installed version without `--replace`, a legacy pre-receipt copy with different content without `--replace`, or a foreign directory (refused even with `--replace`). | Re-run with `--replace` for the first two cases; remove a foreign directory manually. |
-| `AB7321` | warning | Doctor found a directory at the Cursor install path that is not an agent-bundle install of this plugin: no receipt naming it and no emitted install surface with a matching manifest, or a receipt naming another plugin. The message carries the installed-versus-artifact content-hash comparison. | Remove the foreign directory manually before installing; `--replace` refuses foreign installs by design. |
+| `AB7005` | error | `install` refused an existing destination: a different installed version without `--replace`, or a foreign directory, one without a receipt naming this plugin, refused even with `--replace`. | Re-run with `--replace` for a version collision; remove a foreign directory manually and reinstall. |
+| `AB7321` | warning | Doctor found a directory at the Cursor install path that is not an agent-bundle install of this plugin: no readable receipt naming it, or a receipt naming another plugin. The message carries the installed-versus-artifact content-hash comparison. | Remove the foreign directory manually before installing; `--replace` refuses foreign installs by design. |
 
-A Cursor destination that holds nothing but preserved runtime state (`state/`,
-plus the remnant receipt described below) is what `uninstall --keep-data`
-leaves behind: `install` fills it back in as an `installed` (not a
-replacement, not a foreign refusal), and Doctor reports it as `missing` with an
-`AB7307` info naming the preserved state instead of `AB7321` or `AB7304`. The
-remnant receipt alone does not make a directory "state-only": when `uninstall`
-also retained unowned entries beside (or instead of) `state/`, both the
-inventory finding and the `--from` bundle finding read the directory and the
-`AB7307` message names those retained entries and points at removing them by
-hand, since `uninstall` never will. Preserved state is only what `uninstall`
-would still keep, a `state/` that holds something, and this home's real,
-non-empty `PLUGIN_DATA` directory, so a remnant whose data has since been
-removed or emptied is reported as exhausted, with the default `uninstall` that
-consumes it as the recovery.
+A Cursor destination that holds the remnant receipt described below is what
+`uninstall --keep-data` leaves behind around retained entries: `install` fills
+it back in as an `installed` (not a replacement, not a foreign refusal), and
+Doctor reports it as `missing` with an `AB7307` info instead of `AB7321` or
+`AB7304`. When `uninstall` retained unowned entries (a `state/` directory
+beside the plugin, operator files), both the inventory finding and the `--from`
+bundle finding read the directory and the `AB7307` message names those retained
+entries and points at removing them by hand, since `uninstall` never will.
+Preserved state named by `AB7307` is only this home's real, non-empty
+`PLUGIN_DATA` directory, so a remnant whose data has since been removed or
+emptied is reported as exhausted, with the default `uninstall` that consumes
+it as the recovery. Without the remnant receipt, a directory holding only
+`state/` proves nothing: `install` refuses it as foreign (`AB7005`), Doctor
+reports the entry as corrupt (`AB7304`) and the destination as foreign
+(`AB7321`), and the operator removes it by hand.
 
 ## Managed uninstall (`AB7007`–`AB7009`)
 
@@ -1440,7 +1439,8 @@ open issue). Every mutation is opt-in and bounded by the receipt:
   install created (`~/.cursor/plugins/local`, `~/.cursor/plugins` in a fresh
   home). Unowned entries are listed as retained and never removed, files by
   path, and unowned directories that hold nothing retained as `name/` (the
-  prune only ever touches owned directories, so they survive too). When the
+  prune only ever touches owned directories, so they survive too); a `state/`
+  directory beside the plugin is one of them. When the
   plugin root survives (retained state or unowned entries), a **remnant
   receipt**, `files: []`, `registrations: []`, the carried `hostDirectories`,
   is written there so a later purge can still prune the created directories and
@@ -1500,32 +1500,37 @@ open issue). Every mutation is opt-in and bounded by the receipt:
   a receipt orphaned behind Agent Bundle's back is consumed without running
   any host verb.
 
-Durable runtime state (`state/`: the state kernel and notices journal) is kept
-by default; `--keep-data` says so explicitly. `--purge-data` removes it only
-with `--confirm-purge`. The typed `data.outcome` is honest per host: `kept` /
-`purged` / `absent` (Cursor local, Agent Bundle's own doing),
-`retained-by-host` (Claude 2.1.257 orphans the cached copy, `state/` included,
-for its ~14-day grace period; a purge additionally removes `state/` and
-`plugins/data/<id>/`), `removed-by-host` (codex-cli 0.147.0 deletes the cached
-tree on `plugin remove`), and `unavailable` (Codex has no keep-data option; a
-staged Cursor marketplace holds no runtime state). `--plan` computes the same
+Durable runtime state (the framework state roots the receipt's `state` block
+records with ownership evidence, plus web-data and a recorded `PLUGIN_DATA`
+directory) is kept by default; `--keep-data` says so explicitly. `--purge-data`
+removes it only with `--confirm-purge`, and only the roots whose recorded
+ownership is currently provable; a root the receipt lists as `unowned`, or a
+receipt with no `state` block at all, retains the observed root as `unproven`.
+The typed `data.outcome` is honest per host: `kept` / `purged` / `absent`
+(Cursor local, Agent Bundle's own doing), `retained-by-host` (Claude 2.1.257
+orphans the cached copy for its ~14-day grace period; a purge additionally
+removes the owned state roots and `plugins/data/<id>/`), `removed-by-host`
+(codex-cli 0.147.0 deletes the cached tree on `plugin remove`), and
+`unavailable` (Codex with no external state to preserve; a staged Cursor
+marketplace holds no runtime state). `--plan` computes the same
 report, exact absolute paths, registrations, data decision, without opening a
 writer; planned directories are exactly the ones the run would prune (purged
-`state/` first, then every owned directory that would be left empty, and for
+state roots first, then every owned directory that would be left empty, and for
 store receipts the `<host root>/agent-bundle/receipts` and
 `<host root>/agent-bundle` directories, plus Cursor's
 `agent-bundle/marketplaces`, once the last entry leaves them), never a
 directory kept alive by retained state or unowned entries: `removed` in a
 `--plan` result equals `removed` in the completed one. A second run after a
 successful uninstall is a `not-installed` no-op. When `--keep-data` left
-`state/` (or a written `PLUGIN_DATA` directory) behind under a Cursor local
-root, the remnant receipt written there stays in place (`receipt.status:
-'remnant'`) and a rerun without `--purge-data` is the same `not-installed`
-no-op for as long as that preserved data, or an unowned entry the uninstall
-retained, is still there; `--purge-data --confirm-purge` removes the
-preserved state and prunes the root. Once the preserved data has been removed
-or emptied by hand (an empty `state/` or `PLUGIN_DATA` directory holds no
-data, so it is pruned like an installer-created directory rather than kept),
+preserved data (a written `PLUGIN_DATA` directory) or retained unowned entries
+behind under a Cursor local root, the remnant receipt written there stays in
+place (`receipt.status: 'remnant'`) and a rerun without `--purge-data` is the
+same `not-installed` no-op for as long as that data or those entries are still
+there; `--purge-data --confirm-purge` removes the preserved state and prunes
+the root once nothing unowned remains. Once the preserved data has been removed
+or emptied by hand (an empty `PLUGIN_DATA` directory holds no data, so it is
+pruned like an installer-created directory rather than kept) and the retained
+entries are gone,
 the remnant guards nothing, and the next run, with or without `--purge-data`,
 consumes it: the receipt, the empty plugin root, and the host and
 `plugin-data` directories it recorded. Doctor reports such a remnant as
@@ -1533,9 +1538,9 @@ exhausted (`AB7307`) instead of claiming preserved state that is gone.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
-| `AB7007` | error | `uninstall` refused a mismatch or a foreign target: the owned files hash differently from the receipt, the cached host copy differs from the receipt in version or content, the staged repository's `HEAD` is not the recorded commit or its working tree is dirty / unverifiable, the receipt names another plugin, the directory is not this plugin's install at all, or a destination / `state/` entry is a symlink or special file. | `--force` overrides content and `HEAD` mismatches (the receipt-owned set is still the only thing removed); a receipt or manifest naming another plugin, and symlinked entries, are refused regardless, inspect and remove them manually. |
+| `AB7007` | error | `uninstall` refused a mismatch or a foreign target: the owned files hash differently from the receipt, the cached host copy differs from the receipt in version or content, the staged repository's `HEAD` is not the recorded commit or its working tree is dirty / unverifiable, the receipt names another plugin, the directory is not this plugin's install at all, or a destination entry the receipt owns is a symlink or special file. | `--force` overrides content and `HEAD` mismatches (the receipt-owned set is still the only thing removed); a receipt or manifest naming another plugin, and symlinked entries, are refused regardless, inspect and remove them manually. |
 | `AB7008` | error | `--purge-data` without `--confirm-purge`, `--purge-data` together with `--keep-data`, or (Claude) `--purge-data` while the same plugin is installed at another scope or in another project (a live `plugin list --json` row, an entry in Claude's `plugins/installed_plugins.json` registry, or a stored receipt for the same plugin), the cached copy and `plugins/data/<id>/` are scope-less and still in use, or while `claude plugin list --json` or that registry cannot be read to prove there is no other scope. | Pass `--purge-data --confirm-purge` to delete durable state, or neither flag to keep it; for a shared Claude scope, uninstall without `--purge-data` and purge after the last scope is removed. |
-| `AB7009` | error | `uninstall` found the install but no receipt proving Agent Bundle owns it: a Cursor local copy in the pre-receipt legacy layout, a staged marketplace repository without its store receipt, or a host-registered Claude/Codex copy without its store receipt. | Re-run with `--force` (a legacy Cursor copy is removed by its inventory, `state/` kept; a host-CLI install is removed through the host verbs), or reinstall with `--replace` first to record a receipt. |
+| `AB7009` | error | `uninstall` found a host-registered install but no store receipt proving Agent Bundle made it: a staged Cursor marketplace repository without its store receipt, or a host-registered Claude/Codex copy without its store receipt. A Cursor local copy without a receipt is foreign (`AB7007`), never `AB7009`. | Re-run with `--force` (the staged repository is removed wholesale; a host-CLI install is removed through the host verbs), or reinstall with `--replace` first to record a receipt. |
 
 The Cursor and portable host-install proofs (`tests/host-install-proof.test.ts`,
 `tests/packed-host-install-proof.test.ts`) snapshot the isolated home before
@@ -1571,7 +1576,7 @@ inventory finding and on the bundle finding).
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
 | `AB7328` | warning | A store receipt is orphaned, the host no longer holds the registration it records (Claude/Codex listing lacks the plugin, a Claude `project`/`local` receipt is checked by `plugin list --json` run from its recorded `projectRoot`, and is `unknown`, never orphaned, when that root cannot be listed; the staged Cursor marketplace repository is gone), or the receipt store / a receipt file could not be read or is not a valid receipt. | `agent-bundle uninstall <host> --from <bundle-dir> [--mode marketplace]` consumes an orphaned receipt; reinstall to rewrite an invalid one; repair permissions. |
-| `AB7329` | info | A receipt predates lifecycle receipts (`agent-bundle-install-receipt/1`) and was read with synthesized `mode`, `scope`, `registrations`, and `hostDirectories`. Doctor never rewrites it. | Rerun `agent-bundle install` (or `install.mjs`) once; an identical copy rewrites the receipt as format 2 without changing plugin files. `uninstall` accepts the migrated receipt as is. |
+| `AB7329` | retired | Reported a format 1 receipt (`agent-bundle-install-receipt/1`) read with synthesized lifecycle fields. Format 1 receipts are no longer read; a copy carrying one is foreign (`AB7321`), and Doctor never rewrites the file. | Remove the directory by hand and reinstall. |
 | `AB7330` | info | The bundle's lifecycle stage on this host and its four observations; the message lists every `unavailable` stage with its reason. When Claude lists the plugin at several scopes the observations aggregate every row, a stage holds only when it holds for every listed copy, and the evidence names the scopes that are disabled, unplaced, or carry no enabled flag, so the report never depends on Claude's row order. | Stage-specific: register (`agent-bundle install`), enable (`claude plugin enable`, Codex `/plugins`, Cursor Customize), or complete the Cursor import; unavailable stages need no action and are never guessed. |
 
 ## Live development into hosts (`AB7200`–`AB7202`, `AB7210`–`AB7211`, `AB8024`–`AB8025`)
@@ -1858,7 +1863,7 @@ foreground server accepts.
 | `AB8007` | 404 / 405 / 500 | `Route was not found.`, no asset at the path, or `/mcp` when the Agent API is not composed; `Route does not accept this method.`, a route received a method it does not serve; `Request could not be completed.`, a handler threw something other than a request diagnostic. | Check the method and path; for a 500, read the dev-server log for the underlying error. |
 | `AB8008` | 400 | `Request host is not this foreground server.`, the `Host` header does not name this server's loopback URL. | Address the server by the URL `agent-bundle dev` printed. |
 | `AB8009` | 415 | `Request body must use application/json.`, a JSON route received a body without an `application/json` content type. | Send `content-type: application/json`. |
-| `AB8010` | 413 | `Request body exceeds 64 KiB.`, the default `readBody` bound; the runtime MCP routes apply the same bound. Playground routes raise a 1 MiB bound under `AB8085`. | Send a smaller body. |
+| `AB8010` | 413 | `Request body exceeds 64 KiB.`, the default `readBody` bound. Playground routes raise a 1 MiB bound under `AB8085`. | Send a smaller body. |
 | `AB8011` | 404 | `Skill workbench service is not available.`, a `/api/skills/**` route was requested but the server was composed without the Skill document service. | Nothing to fix in the project; the Skill pages need a server composed with the Skill service. |
 | `AB8012` | 400 | `Skill route path is not valid.`, a `/api/skills/**` path does not match the source or generated Skill tree, document, or resource shapes, or a segment does not decode. | Use the Skill links the Workbench renders. |
 
@@ -1874,14 +1879,14 @@ foreground server accepts.
 | `AB8018` | 409 | `MCP session epoch is no longer available; the project changed underneath the session.`, the epoch the session was opened against is no longer available after the project changed. | Open a new session against the current epoch. |
 | `AB8019` | 400 / 502 | `MCP session could not be opened.` (400, on create) or `MCP session operation could not be completed.` (502), the service threw something the route does not map to a more specific code. | Read the dev-server log for the underlying error, then retry. |
 
-### MCP App previews (`/api/mcp/apps/**`, `/api/mcp/sessions/<id>/apps`, `/api/runtime/apps/**`)
+### MCP App previews (`/api/mcp/apps/**`, `/api/mcp/sessions/<id>/apps`)
 
 | Code | Status | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB8020` | 400 / 404 | `MCP App route path is not valid.`, an App route whose binding id or operation segment is missing or does not decode, or an unknown operation under `/api/mcp/apps/<binding>/`. `agent-bundle serve-app` answers unknown paths with `Not found.` (404) under the same code. | Use the App routes the Workbench MCP page issues. |
 | `AB8021` | 400 | `MCP App request has an invalid shape.`, the request body does not match the operation's expected fields. | Send the fields the operation defines. |
-| `AB8022` | 404 / 410 / 503 | `MCP App routes are not available.`, 404 without the preview service, 503 after shutdown; `MCP App preview is not available.` (404), the binding id is unknown; `Runtime MCP App preview was revoked.` (410), the runtime binding has been revoked. `agent-bundle serve-app` reports `MCP App host is not ready.` (503) before its host finishes starting. | Re-open the App preview; after 410 the page must create a new binding. |
-| `AB8023` | 404 / 409 / 413 / 502 | `MCP App operation could not be completed.` (502), an unmapped service failure; `Runtime MCP App operation exceeded its 30 second deadline.` (502); `Runtime MCP App operation response could not be encoded.` (502) or `… exceeds its transport bound.` (413), the result of a runtime App operation could not cross the bounded host-to-App channel. On `/web/<server>/<app>`: `MCP App could not be opened.` (502), the launch, opening call, or page render failed; `Target "…" is not a declared projection that launches MCP server …` (404), an invalid `?target=`, never a fallback; `No declared projection of this artifact launches MCP server …` (404); `The declared projections launch MCP server … differently; pick one explicitly with ?target=<…>.` (409). | Read the dev-server log; shrink or split the App operation result if the bound was hit; on `/web`, pass a `?target=` the message names. |
+| `AB8022` | 404 / 503 | `MCP App routes are not available.`, 404 without the preview service, 503 after shutdown; `MCP App preview is not available.` (404), the binding id is unknown. `agent-bundle serve-app` reports `MCP App host is not ready.` (503) before its host finishes starting. | Re-open the App preview. |
+| `AB8023` | 404 / 409 / 502 | `MCP App operation could not be completed.` (502), an unmapped service failure. On `/web/<server>/<app>`: `MCP App could not be opened.` (502), the launch, opening call, or page render failed; `Target "…" is not a declared projection that launches MCP server …` (404), an invalid `?target=`, never a fallback; `No declared projection of this artifact launches MCP server …` (404); `The declared projections launch MCP server … differently; pick one explicitly with ?target=<…>.` (409). | Read the dev-server log; on `/web`, pass a `?target=` the message names. |
 
 ### Hook playground (`/api/hooks/**`)
 

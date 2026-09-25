@@ -172,6 +172,7 @@ export const cliBinRslibEntries = (
     source: entry.source,
     sourceInputs: entry.sourceInputs,
     virtualSource: generatedCliBinEntrySource({
+      projectRoot: model.projectRoot,
       commands: cli.commands,
       plugin: {
         ...(model.metadata.description === undefined ? {} : { description: model.metadata.description }),
@@ -210,6 +211,7 @@ export const cliBinRslibEntries = (
       source: entry.source,
       sourceInputs: entry.sourceInputs,
       virtualSource: generatedRenderedRouteWorkerSource({
+        projectRoot: model.projectRoot,
         layouts: model.layouts ?? [],
         ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
         providers: model.providers ?? [],

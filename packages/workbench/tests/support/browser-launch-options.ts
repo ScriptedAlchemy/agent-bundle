@@ -3,8 +3,7 @@ import type { LaunchOptions } from 'playwright';
 /**
  * Environment variable that selects the browser binary every Workbench browser
  * suite launches — the shared `e2e` fixture in workbench-e2e.ts and its
- * per-file forks, the raw `chromium.launch()` suites, and the nightly
- * capture-runtime-playground.mjs driver all read {@link browserLaunchOptions}:
+ * per-file forks and the raw `chromium.launch()` suites all read {@link browserLaunchOptions}:
  *
  * - unset (or empty) or `chrome` — branded Google Chrome (`channel: 'chrome'`),
  *   the local developer default: whichever Chrome stable the machine has.

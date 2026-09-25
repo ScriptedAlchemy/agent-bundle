@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Option, Path, PlatformError } from 'effect';
+import { ByteSize, Effect, FileSystem, Layer, Option, Path, PlatformError } from 'effect';
 import { describe, expect, it } from 'effect-rstest';
 
 import { assertLocalFrameworkTarball } from '../src/framework.ts';
@@ -25,7 +25,7 @@ const fileInfo = (type: FileSystem.File.Type): FileSystem.File.Info => ({
   mtime: Option.none(),
   nlink: Option.none(),
   rdev: Option.none(),
-  size: FileSystem.Size(0),
+  size: ByteSize.bytes(0),
   type,
   uid: Option.none(),
 });

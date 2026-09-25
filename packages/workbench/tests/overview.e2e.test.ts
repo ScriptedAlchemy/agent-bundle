@@ -36,21 +36,22 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
     writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
-      "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
       "import { z } from 'zod';",
       '',
-      "const server = new McpServer({ name: 'playground-fixture', version: '1.0.0' });",
-      "server.registerTool('echo', { description: 'Echo one message.', inputSchema: z.object({ message: z.string() }) }, async ({ message }) => ({",
-      "  content: [{ type: 'text', text: `Echo: ${message}` }],",
-      '}));',
-      "server.registerTool('wait', { description: 'Wait for cancellation.' }, async () => new Promise(() => {}));",
-      "server.registerResource('fixture', 'ui://fixture/resource.txt', { mimeType: 'text/plain' }, async (uri) => ({",
-      "  contents: [{ mimeType: 'text/plain', text: 'fixture resource', uri: uri.href }],",
-      '}));',
-      "server.registerPrompt('fixture', { description: 'Fixture prompt.' }, async () => ({",
-      "  messages: [{ role: 'user', content: { type: 'text', text: 'fixture prompt' } }],",
-      '}));',
-      'await server.connect(new StdioServerTransport());',
+      'export default () => {',
+      "  const server = new McpServer({ name: 'playground-fixture', version: '1.0.0' });",
+      "  server.registerTool('echo', { description: 'Echo one message.', inputSchema: z.object({ message: z.string() }) }, async ({ message }) => ({",
+      "    content: [{ type: 'text', text: `Echo: ${message}` }],",
+      '  }));',
+      "  server.registerTool('wait', { description: 'Wait for cancellation.' }, async () => new Promise(() => {}));",
+      "  server.registerResource('fixture', 'ui://fixture/resource.txt', { mimeType: 'text/plain' }, async (uri) => ({",
+      "    contents: [{ mimeType: 'text/plain', text: 'fixture resource', uri: uri.href }],",
+      '  }));',
+      "  server.registerPrompt('fixture', { description: 'Fixture prompt.' }, async () => ({",
+      "    messages: [{ role: 'user', content: { type: 'text', text: 'fixture prompt' } }],",
+      '  }));',
+      '  return server;',
+      '};',
       '',
     ].join('\n')),
     writeFile(join(root, 'agent-bundle.config.ts'), [
@@ -91,7 +92,6 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
     const epochId = artifact.activeEpoch.id;
     const modelDigest = artifact.activeEpoch.modelDigest;
-    await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
     const manifest = JSON.parse(await readFile(join(project.root, '.agent-bundle', 'epochs', epochId, 'mcp.json'), 'utf8')) as {
       readonly mcpServers: Readonly<{
         readonly fixture: Readonly<{ readonly args?: readonly string[]; readonly command: string }>;
@@ -235,7 +235,6 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     if (changedArtifact.state === 'missing') throw new Error('Registered extension update removed the active artifact epoch.');
     expect(changedArtifact.activeEpoch.id).not.toBe(epochId);
     expect(changedArtifact.activeEpoch.modelDigest).not.toBe(modelDigest);
-    await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
     expect(await page.locator('body').textContent()).not.toContain(initialConfigValue);
     expect(await page.locator('body').textContent()).not.toContain(changedConfigValue);
     await expectHeading(page, 'MCP playground');

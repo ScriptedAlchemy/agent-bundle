@@ -2,6 +2,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import { operatorEnvLayerImport } from '../build/launch-env-shell.ts';
+import { generatedModuleSpecifier } from '../build/meta.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
 import {
   canonicalHookEvents,
@@ -23,6 +24,8 @@ export interface TargetHookWrapper {
   readonly nativeEvent: string;
   /** The computed native tool matcher, absent when the host applies the hook unconditionally. */
   readonly nativeMatcher?: string;
+  /** The project root the hook's absolute sources lie under. */
+  readonly projectRoot: string;
   readonly relativePath: string;
   readonly target: string;
 }
@@ -934,7 +937,7 @@ const eventRouteHandlerWrapperSource = (
     "import { spawn } from 'node:child_process';",
     "import { fileURLToPath } from 'node:url';",
     `import { ${projectBindings.join(', ')} } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
-    `import gateHandler from ${JSON.stringify(handler.source)};`,
+    `import gateHandler from ${JSON.stringify(generatedModuleSpecifier(entry.projectRoot, handler.source))};`,
     "import { available, resolvePluginRoot, runAgentRequest, unavailable, useAgent } from '@agent-bundle/runtime/request';",
     "import { resolveStandaloneLineage } from '@agent-bundle/runtime/lineage';",
     "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)), stateAnchor: 'user-data' });",
@@ -1061,7 +1064,7 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   // it evaluates before the handler module — a module-level `process.env`
   // read there sees the composed environment.
   operatorEnvLayerImport,
-  `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
+  `import * as handlerModule from ${JSON.stringify(generatedModuleSpecifier(entry.projectRoot, entry.hook.source))};`,
   'const target = "cursor";',
   `const canonicalEvent = ${JSON.stringify(entry.event)};`,
   `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
@@ -1415,6 +1418,7 @@ export const planHooks = (
       ...(contract.indexedWrappers === false ? { indexed: false as const } : {}),
       nativeEvent,
       ...(matcher === undefined ? {} : { nativeMatcher: matcher }),
+      projectRoot: model.projectRoot,
       relativePath,
       target,
       ...(timeout === undefined ? {} : { timeout }),
@@ -1473,7 +1477,7 @@ export const nativeHookWrapperSource = (
     // The installed pack's operator `.env` layer (#469): the first import, so
     // it evaluates before the handler module (see cursorHookWrapperSource).
     operatorEnvLayerImport,
-    `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
+    `import * as handlerModule from ${JSON.stringify(generatedModuleSpecifier(entry.projectRoot, entry.hook.source))};`,
     `const target = ${JSON.stringify(entry.target)};`,
     `const canonicalEvent = ${JSON.stringify(entry.event)};`,
     `const nativeEvent = ${JSON.stringify(nativeEvent)};`,

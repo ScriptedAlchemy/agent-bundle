@@ -559,8 +559,8 @@ codexPluginIt(
       homeByteIdentical: false,
       host: 'codex',
       hostResidue: ['codex-empty-config', 'codex-empty-directories'],
-      // codex-cli 0.147.0 deletes the cached tree (state/ included) on `plugin remove` and has no keep-data option.
-      keepData: 'unavailable',
+      // codex-cli 0.147.0 deletes the cached tree on `plugin remove`; the receipt-recorded state root lives outside it.
+      keepData: 'kept',
       plan: 'no-op',
       proofLevel: proofLabel,
       purgeData: 'purged',
@@ -586,7 +586,7 @@ it('uninstalls the Cursor local copy by its receipt and leaves the isolated home
     plan: 'no-op',
     proofLevel: proofLabel,
     purgeData: 'purged',
-    refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+    refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7007', unconfirmedPurge: 'AB7008' },
     registrations: { 'cursor-local-plugin': 'removed' },
     rerun: 'not-installed',
     status: 'passed',

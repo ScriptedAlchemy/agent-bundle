@@ -116,6 +116,7 @@ const runCodex = async (
   });
 
 const model: NormalizedPlugin = {
+  projectRoot: '/workspace',
   extensions: {},
   hooks: [],
   marketplace: true,
@@ -1292,6 +1293,7 @@ nativeIt('accepts emitted Claude userConfig under strict native validation', asy
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-user-config-'));
   const outputRoot = join(root, 'plugin');
   const model: NormalizedPlugin = {
+    projectRoot: '/workspace',
     extensions: {
       claude: {
         id: 'extension:claude',

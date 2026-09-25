@@ -709,15 +709,18 @@ forwards the real server's `none`, and a plain script's `main` receives the
 real child process's probe (two pipes). A test that wants other values injects
 `context.terminal` through the same seam as every identity axis.
 
-### Migration nudges
+### Convention diagnostics
 
-Source validation reports **informational** nudges (never errors, migrations
-stay optional) when a project exhibits a pre-convention pattern: `AB4730` for
-a self-connecting stdio entry that a default-exported factory would upgrade
-to the framework lifecycle shell, and `AB4731`/`AB4732`/`AB4733` when
-`src/cli.ts`, `src/index.ts`, or `src/mcp/<server-id>.ts` exists but explicit
-configuration shadows it. `bin: false` / `lib: false` opt-outs stay silent.
-See `docs/diagnostics.md` for each trigger and how to adopt or silence it.
+Source validation reports `AB4730` as an **error** when a local stdio MCP
+entry has no default export: the framework lifecycle shell calls that export
+to build the server, so such a module cannot be built. A CommonJS entry may
+assign the factory to `module.exports` instead; the bundler exposes that
+value as the module's `default`, and the scan counts it. It reports
+**informational** nudges (never errors) when `src/cli.ts`, `src/index.ts`, or
+`src/mcp/<server-id>.ts` exists but explicit configuration shadows it
+(`AB4731`/`AB4732`/`AB4733`). `bin: false` / `lib: false` opt-outs stay
+silent. See `docs/diagnostics.md` for each trigger and how to recover from or
+silence it.
 
 ## Generated entry shells
 
@@ -1051,8 +1054,8 @@ server still passes `kind: 'tool'`.
 
 ### The stdio MCP lifecycle shell
 
-An MCP server entry that **default-exports a server factory** is served under
-the framework lifecycle:
+Every local MCP server entry **default-exports a server factory** and is
+served under the framework lifecycle:
 
 ```ts
 // src/mcp/curator.ts — the whole stdio entry a consumer writes
@@ -1071,15 +1074,18 @@ race against wedged transports, and heartbeat/activity logging on stderr
 (5-minute interval, 60-second activity throttle, labeled with the server
 name).
 
-Self-connecting entries, modules that construct and connect a transport at
-top level without a default export, keep today's behavior byte for byte: no
-lifecycle shell and no operator `.env` layer (#469); an entry that wants the
-layer calls `applyOperatorEnv` from `agent-bundle/launch-env` itself,
-passing its own declared `env` block as `manifestEnv` if a passed-through
-manifest default should yield to the file as it does in the generated shell.
-That module is aliased into every stdio entry, shell or not, so the import is
-inlined from this package rather than resolved through the plugin's own
-`node_modules`, and a `tools` hatch can never externalize it.
+A module that constructs and connects a transport at top level without a
+default export cannot be built: source validation reports `AB4730` as an
+error. A CommonJS entry's top-level `module.exports = <factory>` is that
+default export under bundling; `exports.foo = …` and `module.exports.foo = …`
+are named and do not satisfy it. A server the framework should launch as-is
+instead of compiling is
+declared with `command` or `url`, or as a `{ prebuilt: ... }` entry the
+consumer's own build produced. The operator `.env` layer (#469) comes from
+`agent-bundle/launch-env`, which the shell's prelude applies; that module is
+aliased into every stdio entry, so the import is inlined from this package
+rather than resolved through the plugin's own `node_modules`, and a `tools`
+hatch can never externalize it.
 
 Every served tool call is one ordinary `tools/call`: optional
 `notifications/progress` while the caller's progress token is live, then one
@@ -1456,8 +1462,8 @@ canonical precedence order (highest wins):
 | 1 (lowest) | Manifest env | Entries declared in the server config plus the injected plugin-root anchor, path tokens expanded. |
 
 Installed packs get the same layer and the same order without `mcp run`
-(#469): every artifact shell that runs plugin code, the stdio MCP entry of a
-factory-exporting server (a self-connecting entry has no shell), the hook
+(#469): every artifact shell that runs plugin code, the stdio MCP entry of
+every local server, the hook
 wrappers that execute handlers or render standalone, and the artifact CLI
 `bin/<name>.mjs`, applies `agent-bundle/launch-env` (`src/launch-env.ts`,
 plain Node, inlined into the bundle) at startup. It reads `<plugin

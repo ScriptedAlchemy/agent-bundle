@@ -32,6 +32,7 @@ const hook = (event: NormalizedHook['event'], name: string): NormalizedHook => (
  * under `hooks` (#462/#463, fixed in #470).
  */
 const cargoHaulerShape: NormalizedPlugin = {
+  projectRoot: '/workspace',
   extensions: {},
   hooks: [
     hook('sessionStart', 'session-start'),

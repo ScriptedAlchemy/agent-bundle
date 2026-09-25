@@ -461,7 +461,7 @@ it('rejects non-JSON MCP App metadata before normalization', async () => {
   try {
     await mkdir(join(root, 'src'), { recursive: true });
     await mkdir(join(root, 'views'), { recursive: true });
-    await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
+    await writeFile(join(root, 'src', 'server.ts'), 'export default () => ({});\n');
     await writeFile(join(root, 'views', 'dashboard.ts'), 'document.body.textContent = "dashboard";\n');
 
     for (const [name, value] of [
@@ -492,11 +492,7 @@ it('rejects non-JSON MCP App metadata before normalization', async () => {
       expect(diagnostics.filter(({ severity }) => severity === 'error').map(({ code }) => code)).toEqual([
         'AB4338',
       ]);
-      // The self-connecting fixture entry additionally draws the AB4730
-      // migration nudge, which must stay informational.
-      expect(diagnostics.filter(({ severity }) => severity !== 'error')).toEqual([
-        expect.objectContaining({ code: 'AB4730', severity: 'info' }),
-      ]);
+      expect(diagnostics.filter(({ severity }) => severity !== 'error')).toEqual([]);
     }
   } finally {
     await removeTree(root);
@@ -514,6 +510,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       [
         'import { message } from "./message.ts";',
         'process.stderr.write(`${message}\\n`);',
+        'export default () => ({});',
         '',
       ].join('\n'),
     );
@@ -566,7 +563,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
     const bundle = await readFile(join(mcpRoot, outputName), 'utf8');
     expect(bundle).toContain('bundled');
     expect(bundle).not.toContain('./message.ts');
-    expect(bundle).not.toContain('agent-bundle');
+    expect(bundle).not.toMatch(/from\s*["']agent-bundle\//u);
 
     // Every selected host's document points at that one bundle in its own
     // dialect: the portable and Claude documents sit at their conventional
@@ -659,65 +656,6 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph,
     })).rejects.toThrow();
     expect(await readFile(join(outputRoot, 'mcp', outputName), 'utf8')).toBe(previousBundle);
-  } finally {
-    await removeTree(root);
-  }
-}, 30_000);
-
-it('inlines agent-bundle/launch-env into a self-connecting entry so it can apply the operator .env layer itself (#469)', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-self-connecting-env-'));
-  try {
-    await mkdir(join(root, 'src'), { recursive: true });
-    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
-    // No default export: the entry gets no lifecycle shell, so it applies the
-    // layer first thing, anchored exactly as a shell would (the documented recipe).
-    await writeFile(join(root, 'src', 'probe.ts'), [
-      "import { fileURLToPath } from 'node:url';",
-      "import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env';",
-      '',
-      "const layer = applyOperatorEnv({ pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });",
-      "process.stdout.write(`${JSON.stringify({ applied: layer.applied, file: process.env.PROBE_FILE ?? null, host: process.env.PROBE_HOST ?? null })}\\n`);",
-      '',
-    ].join('\n'));
-    const model = await normalizeProject(
-      loadedProject(root, {
-        mcp: { servers: { probe: { entry: './src/probe.ts' } } },
-        plugin: { name: 'mcp-self-connecting-env' },
-        targets: ['portable'],
-      }),
-      { skills: [] },
-      registry,
-    );
-    const outputRoot = join(root, 'artifact');
-    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
-    expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
-    const [entry] = result.compiledMcpEntries;
-    // The inlined loader is framework runtime, never authored-source evidence.
-    expect(entry).toMatchObject({
-      id: 'mcp:probe',
-      sourceInputs: [join(root, 'agent-bundle.config.ts'), join(root, 'src', 'probe.ts')],
-      target: 'portable',
-    });
-
-    const bundle = await readFile(entry!.output, 'utf8');
-    // Self-contained (the alias resolved to the framework's own module) and
-    // still shell-free: the entry's own top-level code is what runs first.
-    expect(bundle).not.toMatch(/from\s*["']agent-bundle\//u);
-    expect(bundle).not.toContain('runGeneratedStdioMcpEntry');
-    expect(bundle).toContain('AGENT_BUNDLE_ENV_FILE');
-
-    // `<plugin root>/.env` is one directory above `mcp/`; it fills the gap and
-    // an exported variable still wins.
-    const pluginRoot = outputRoot;
-    const probe = async (env: Readonly<Record<string, string>>): Promise<unknown> => {
-      const run = await runNodeScript({ args: [entry!.output], env });
-      expect(run).toMatchObject({ code: 0, stderr: '' });
-      return JSON.parse(run.stdout);
-    };
-    expect(await probe({ PROBE_HOST: 'from-host' })).toEqual({ applied: [], file: null, host: 'from-host' });
-    await writeFile(join(pluginRoot, '.env'), 'PROBE_FILE=from-file\nPROBE_HOST=from-file\n');
-    expect(await probe({ PROBE_HOST: 'from-host' })).toEqual({ applied: ['PROBE_FILE'], file: 'from-file', host: 'from-host' });
-    expect(await probe({ AGENT_BUNDLE_ENV_FILE: 'none', PROBE_HOST: 'from-host' })).toEqual({ applied: [], file: null, host: 'from-host' });
   } finally {
     await removeTree(root);
   }
@@ -1039,6 +977,7 @@ it('injects one release identity into both the Node bundle and the browser MCP A
       "import meta from 'agent-bundle/meta';",
       "import { name, packageName, version } from 'agent-bundle/meta';",
       'export const serverIdentity = [name, version, packageName, meta.packageVersion];',
+      'export default () => ({});',
       '',
     ].join('\n'));
     await writeFile(join(root, 'views', 'dashboard.ts'), [
@@ -1111,6 +1050,7 @@ it('compiles one shared MCP App once and serves it from every identically declar
     const serverSource = [
       "import apps from 'agent-bundle/mcp-apps';",
       'export const bundledApps = apps;',
+      'export default () => ({});',
       '',
     ].join('\n');
     await writeFile(join(root, 'src', 'library.ts'), serverSource);
@@ -1132,12 +1072,7 @@ it('compiles one shared MCP App once and serves it from every identically declar
       plugin: { name: 'mcp-app-shared' },
       targets: ['portable'],
     };
-    // Both fixture entries are deliberately self-connecting registry probes,
-    // so validation reports exactly the two informational AB4730 nudges.
-    expect(validateSource(loadedProject(root, config), { skills: [] }, registry)).toEqual([
-      expect.objectContaining({ code: 'AB4730', severity: 'info' }),
-      expect.objectContaining({ code: 'AB4730', severity: 'info' }),
-    ]);
+    expect(validateSource(loadedProject(root, config), { skills: [] }, registry)).toEqual([]);
 
     const model = await normalizeProject(loadedProject(root, config), { skills: [] }, registry);
     const outputRoot = join(root, 'dist');
@@ -1509,6 +1444,52 @@ it('creates session state only after setup succeeds and always inherits the stdi
   }
 }, 30_000);
 
+it('accepts a CommonJS stdio entry whose server factory is module.exports, and runs it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-cjs-entry-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
+      join(root, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+    await writeFile(join(root, 'src', 'server.cjs'), [
+      "const { McpServer } = require('@modelcontextprotocol/server');",
+      '',
+      'module.exports = () => {',
+      "  const server = new McpServer({ name: 'cjs-server', version: '1.0.0' });",
+      "  server.registerTool('ping', { description: 'Answer a ping.' }, async () => ({",
+      "    content: [{ type: 'text', text: 'pong' }],",
+      '  }));',
+      '  return server;',
+      '};',
+      '',
+    ].join('\n'));
+    const config: AgentBundleConfig = {
+      mcp: { servers: { cjs: { entry: './src/server.cjs' } } },
+      plugin: { name: 'mcp-cjs-fixture' },
+      targets: ['portable'],
+    };
+    // The shell reads the entry's `default`, which is what the bundler makes
+    // of `module.exports`; AB4730 must not refuse an entry it can run.
+    expect(validateSource(loadedProject(root, config), { skills: [] }, registry)).toEqual([]);
+
+    const model = await normalizeProject(loadedProject(root, config), { skills: [] }, registry);
+    const artifact = join(root, 'dist');
+    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
+
+    await expect(new McpService().list({ artifact, server: 'cjs', target: 'portable' })).resolves.toMatchObject({
+      server: { name: 'cjs-server', version: '1.0.0' },
+      tools: [{ name: 'ping' }],
+    });
+  } finally {
+    await removeTree(root);
+  }
+}, 30_000);
+
 it('serves compiler-bundled MCP App resources from a copied artifact without project source', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-resource-'));
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-consumer-'));
@@ -1529,29 +1510,30 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
       join(root, 'src', 'server.ts'),
       [
         "import { McpServer } from '@modelcontextprotocol/server';",
-        "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
         "import apps from 'agent-bundle/mcp-apps';",
         '',
-        "const server = new McpServer({ name: 'app-resource-fixture', version: '1.0.0' });",
-        'for (const app of apps) {',
-        '  server.registerResource(app.name, app.resourceUri, {',
-        '    mimeType: app.mimeType,',
-        '    _meta: app._meta,',
-        '  }, async (uri) => ({',
-        '    contents: [{ mimeType: app.mimeType, text: app.html, uri: uri.href }],',
+        'export default () => {',
+        "  const server = new McpServer({ name: 'app-resource-fixture', version: '1.0.0' });",
+        '  for (const app of apps) {',
+        '    server.registerResource(app.name, app.resourceUri, {',
+        '      mimeType: app.mimeType,',
+        '      _meta: app._meta,',
+        '    }, async (uri) => ({',
+        '      contents: [{ mimeType: app.mimeType, text: app.html, uri: uri.href }],',
+        '    }));',
+        '  }',
+        '  const [app] = apps;',
+        "  if (app === undefined) throw new Error('Expected bundled MCP App.');",
+        "  server.registerTool('show-dashboard', {",
+        "    description: 'Open the bundled dashboard.',",
+        '    _meta: { ui: { resourceUri: app.resourceUri } },',
+        '  }, async () => ({',
+        '    _meta: { ui: { resourceUri: app.resourceUri } },',
+        "    content: [{ type: 'text', text: 'dashboard ready' }],",
+        '    structuredContent: { resourceUri: app.resourceUri, view: app.name },',
         '  }));',
-        '}',
-        'const [app] = apps;',
-        "if (app === undefined) throw new Error('Expected bundled MCP App.');",
-        "server.registerTool('show-dashboard', {",
-        "  description: 'Open the bundled dashboard.',",
-        '  _meta: { ui: { resourceUri: app.resourceUri } },',
-        '}, async () => ({',
-        '  _meta: { ui: { resourceUri: app.resourceUri } },',
-        "  content: [{ type: 'text', text: 'dashboard ready' }],",
-        '  structuredContent: { resourceUri: app.resourceUri, view: app.name },',
-        '}));',
-        'await server.connect(new StdioServerTransport());',
+        '  return server;',
+        '};',
         '',
       ].join('\n'),
     );
@@ -1652,40 +1634,43 @@ it('lists tools from a validated copied artifact without reading project source'
       join(root, 'src', 'server.ts'),
       [
         "import { McpServer } from '@modelcontextprotocol/server';",
-        "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
         '',
-        "const server = new McpServer({ name: 'fixture-server', version: '1.0.0' });",
-        "server.registerTool('inspect', { description: 'Inspect the launched artifact.' }, async () => {",
-        "  process.stderr.write('fixture stderr\\n');",
-        '  return {',
-        "    content: [{ type: 'text' as const, text: JSON.stringify({",
-        '      args: process.argv.slice(2),',
-        '      data: process.env.FIXTURE_DATA,',
-        '      root: process.env.FIXTURE_ROOT,',
-        '    }) }],',
-        '  };',
-        '});',
-        "server.registerTool('tool-error', { description: 'Return a tool-level error.' }, async () => ({",
-        "  content: [{ type: 'text' as const, text: 'expected failure' }],",
-        '  isError: true,',
-        '}));',
-        "server.registerTool('noisy', { description: 'Exceed the stderr limit.' }, async () => {",
-        "  process.stderr.write('x'.repeat(1_000_001));",
-        "  return { content: [{ type: 'text' as const, text: 'too noisy' }] };",
-        '});',
-        "server.registerTool('hang', { description: 'Wait for cancellation.' }, async () => new Promise(() => {}));",
-        "server.registerTool('rich', {",
-        "  _meta: { 'openai/outputTemplate': 'ui://fixture/tool.html', ui: { resourceUri: 'ui://fixture/tool.html' } },",
-        "  description: 'Return an Apps-compatible result.',",
-        "}, async () => ({",
-        '  _meta: { ui: { resourceUri: \'ui://fixture/result.html\' } },',
-        '  content: [',
-        "    { type: 'resource_link' as const, name: 'fixture', uri: 'ui://fixture/tool.html' },",
-        "    { type: 'resource' as const, resource: { mimeType: 'text/plain', text: 'embedded fixture', uri: 'ui://fixture/embedded.txt' } },",
-        '  ],',
-        "  structuredContent: { view: 'fixture', value: 42 },",
-        '}));',
-        'await server.connect(new StdioServerTransport());',
+        'export default () => {',
+        "  const server = new McpServer({ name: 'fixture-server', version: '1.0.0' });",
+        "  server.registerTool('inspect', { description: 'Inspect the launched artifact.' }, async () => {",
+        "    process.stderr.write('fixture stderr\\n');",
+        '    return {',
+        "      content: [{ type: 'text' as const, text: JSON.stringify({",
+        '        args: process.argv.slice(2),',
+        '        data: process.env.FIXTURE_DATA,',
+        '        root: process.env.FIXTURE_ROOT,',
+        '      }) }],',
+        '    };',
+        '  });',
+        "  server.registerTool('tool-error', { description: 'Return a tool-level error.' }, async () => ({",
+        "    content: [{ type: 'text' as const, text: 'expected failure' }],",
+        '    isError: true,',
+        '  }));',
+        "  server.registerTool('noisy', { description: 'Exceed the stderr limit.' }, async () => {",
+        // Flushed before the result so the parent reads it all, whatever the
+        // lifecycle shell does at transport close.
+        "    await new Promise((resolve) => { process.stderr.write('x'.repeat(1_000_001), () => { resolve(undefined); }); });",
+        "    return { content: [{ type: 'text' as const, text: 'too noisy' }] };",
+        '  });',
+        "  server.registerTool('hang', { description: 'Wait for cancellation.' }, async () => new Promise(() => {}));",
+        "  server.registerTool('rich', {",
+        "    _meta: { 'openai/outputTemplate': 'ui://fixture/tool.html', ui: { resourceUri: 'ui://fixture/tool.html' } },",
+        "    description: 'Return an Apps-compatible result.',",
+        "  }, async () => ({",
+        '    _meta: { ui: { resourceUri: \'ui://fixture/result.html\' } },',
+        '    content: [',
+        "      { type: 'resource_link' as const, name: 'fixture', uri: 'ui://fixture/tool.html' },",
+        "      { type: 'resource' as const, resource: { mimeType: 'text/plain', text: 'embedded fixture', uri: 'ui://fixture/embedded.txt' } },",
+        '    ],',
+        "    structuredContent: { view: 'fixture', value: 42 },",
+        '  }));',
+        '  return server;',
+        '};',
         '',
       ].join('\n'),
     );
@@ -1733,7 +1718,8 @@ it('lists tools from a validated copied artifact without reading project source'
     const result = await new api.McpService!().list({ artifact, server: 'fixture', target: 'portable' });
     expect(result).toMatchObject({
       server: { name: 'fixture-server', version: '1.0.0' },
-      stderr: '',
+      // The lifecycle shell logs one activity heartbeat on the first request.
+      stderr: expect.stringContaining('[fixture] stdio heartbeat (activity)'),
       tools: [
         { name: 'inspect' },
         { name: 'tool-error' },
@@ -1757,7 +1743,7 @@ it('lists tools from a validated copied artifact without reading project source'
     });
     expect(invoked).toMatchObject({
       result: { content: [{ text: expect.any(String), type: 'text' }] },
-      stderr: 'fixture stderr\n',
+      stderr: expect.stringContaining('fixture stderr\n'),
     });
     const inspected = invoked as {
       readonly result: { readonly content: readonly [{ readonly text: string }] };

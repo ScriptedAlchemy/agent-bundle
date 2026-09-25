@@ -1,13 +1,3 @@
-import type {
-  DevRuntimeMcpAppRunBinding,
-  DevRuntimeMcpOperationRequest,
-  DevRuntimeMcpOperationResult,
-  DevRuntimeMcpRegistryReconcileResult,
-  DevRuntimeMcpSessionControlRequest,
-  DevRuntimeMcpSessionRequest,
-  RuntimeVector,
-} from '../../../agent-bundle/src/contracts/runtime.ts';
-import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isMcpSessionTarget, type McpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import { exactKeys, isLoopbackHttpUrl, isRecord } from '../client-helpers.ts';
 import { hasOnlyOwnKeys } from '../strict-json.ts';
@@ -32,36 +22,6 @@ export interface McpRouteSession {
   readonly connection: McpRouteConnection;
   readonly id: string;
   readonly timeoutMs: number;
-}
-
-/** Browser-safe projection of a runtime session. Provider and state-store IDs remain server-owned. */
-export interface McpRouteRuntimeSession {
-  readonly binding: DevRuntimeMcpAppRunBinding;
-  readonly connection: McpRouteConnection;
-  readonly state: 'connecting' | 'ready' | 'restarting' | 'failed' | 'closed';
-}
-
-/** The stable identity fields a runtime binding is compared by. */
-export type McpRuntimeBindingIdentity = Pick<
-  DevRuntimeMcpAppRunBinding,
-  | 'definitionDigest'
-  | 'registryRevision'
-  | 'serverDigest'
-  | 'serverName'
-  | 'sessionId'
-  | 'sessionRevision'
-  | 'target'
-  | 'transportDigest'
->;
-
-export const sameRuntimeBinding = (left: McpRuntimeBindingIdentity, right: McpRuntimeBindingIdentity): boolean =>
-  left.definitionDigest === right.definitionDigest && left.registryRevision === right.registryRevision &&
-  left.serverDigest === right.serverDigest && left.serverName === right.serverName && left.sessionId === right.sessionId &&
-  left.sessionRevision === right.sessionRevision && left.target === right.target && left.transportDigest === right.transportDigest;
-
-export interface McpRouteRuntimeRestart {
-  readonly reconcile: DevRuntimeMcpRegistryReconcileResult;
-  readonly session: McpRouteRuntimeSession;
 }
 
 export type McpInspectorRouteState = 'exited' | 'idle' | 'running' | 'starting';
@@ -253,10 +213,6 @@ const routeSession = (value: unknown): McpRouteSession => {
   });
 };
 
-const nonempty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
-const positive = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
-const nonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-
 const foregroundAbortError = (): Error => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
 
 /** Waits for an operation without allowing one caller's signal to cancel shared work. */
@@ -285,141 +241,6 @@ export const awaitWithAbort = <Value>(
       (error: unknown) => settle(() => reject(error)),
     );
   });
-};
-
-const runtimeVector = (value: unknown): RuntimeVector => {
-  const vector = asRecord(value);
-  if (
-    !nonempty(vector.providerSessionId) || !nonempty(vector.runtimeGenerationId) || !nonempty(vector.sourceRevision) ||
-    !nonempty(vector.stateStoreId) || !nonnegative(vector.stateVersion) ||
-    (vector.artifactEpochId !== undefined && !nonempty(vector.artifactEpochId))
-  ) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid operation vector.');
-  return Object.freeze({
-    ...(vector.artifactEpochId === undefined ? {} : { artifactEpochId: vector.artifactEpochId }),
-    providerSessionId: vector.providerSessionId,
-    runtimeGenerationId: vector.runtimeGenerationId,
-    sourceRevision: vector.sourceRevision,
-    stateStoreId: vector.stateStoreId,
-    stateVersion: vector.stateVersion,
-  });
-};
-
-const runtimeSession = (value: unknown): McpRouteRuntimeSession => {
-  const session = asRecord(value);
-  const binding = asRecord(session.binding);
-  if (
-    Object.keys(session).length !== 3 || Object.keys(binding).length !== 8 ||
-    Object.hasOwn(binding, 'providerSessionId') || Object.hasOwn(binding, 'stateStoreId') ||
-    !nonempty(binding.definitionDigest) || !positive(binding.registryRevision) ||
-    !nonempty(binding.serverDigest) || !nonempty(binding.serverName) || !nonempty(binding.sessionId) ||
-    !positive(binding.sessionRevision) || !nonempty(binding.target) ||
-    !nonempty(binding.transportDigest) ||
-    !['connecting', 'ready', 'restarting', 'failed', 'closed'].includes(session.state as string)
-  ) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid session.');
-  return Object.freeze({
-    binding: Object.freeze({
-      definitionDigest: binding.definitionDigest,
-      registryRevision: binding.registryRevision,
-      serverDigest: binding.serverDigest,
-      serverName: binding.serverName,
-      sessionId: binding.sessionId,
-      sessionRevision: binding.sessionRevision,
-      target: binding.target,
-      transportDigest: binding.transportDigest,
-    }),
-    connection: routeConnection(session.connection),
-    state: session.state as McpRouteRuntimeSession['state'],
-  });
-};
-
-const runtimeReconcile = (value: unknown): DevRuntimeMcpRegistryReconcileResult => {
-  const reconcile = asRecord(value);
-  if (
-    !hasExactKeys(reconcile, ['action', 'invalidatedBindings', 'registryRevision', 'restartedSessionIds', 'runtimeGenerationId', 'sequence']) ||
-    !['implementation-updated', 'sessions-restarted', 'restart-failed'].includes(reconcile.action as string) ||
-    !positive(reconcile.registryRevision) || !nonempty(reconcile.runtimeGenerationId) || !positive(reconcile.sequence) ||
-    !Array.isArray(reconcile.invalidatedBindings) || !Array.isArray(reconcile.restartedSessionIds) ||
-    !reconcile.invalidatedBindings.every((binding) => {
-      const current = isRecord(binding) ? binding : undefined;
-      return current !== undefined && hasExactKeys(current, ['sessionId', 'sessionRevision']) && nonempty(current.sessionId) && positive(current.sessionRevision);
-    }) || !reconcile.restartedSessionIds.every(nonempty)
-  ) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid reconcile result.');
-  return Object.freeze({
-    action: reconcile.action as DevRuntimeMcpRegistryReconcileResult['action'],
-    invalidatedBindings: Object.freeze(reconcile.invalidatedBindings.map((binding) => {
-      const current = binding as Readonly<Record<string, unknown>>;
-      return Object.freeze({ sessionId: current.sessionId as string, sessionRevision: current.sessionRevision as number });
-    })),
-    registryRevision: reconcile.registryRevision,
-    restartedSessionIds: Object.freeze([...reconcile.restartedSessionIds] as string[]),
-    runtimeGenerationId: reconcile.runtimeGenerationId,
-    sequence: reconcile.sequence,
-  });
-};
-
-const runtimeRestart = (value: unknown, request: DevRuntimeMcpSessionControlRequest): McpRouteRuntimeRestart => {
-  const response = asRecord(value);
-  if (Object.keys(response).length !== 2) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid restart response.');
-  const reconcile = runtimeReconcile(response.reconcile);
-  const session = runtimeSession(response.session);
-  if (
-    reconcile.action !== 'sessions-restarted' || !reconcile.restartedSessionIds.includes(request.sessionId) ||
-    !reconcile.invalidatedBindings.some((binding) => binding.sessionId === request.sessionId && binding.sessionRevision === request.expectedSessionRevision) ||
-    session.state !== 'ready' || session.binding.sessionId !== request.sessionId ||
-    session.binding.sessionRevision !== request.expectedSessionRevision + 1 || session.binding.registryRevision !== reconcile.registryRevision
-  ) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned a restart snapshot that does not match its reconciliation evidence.');
-  return Object.freeze({ reconcile, session });
-};
-
-const runtimeOperation = (value: unknown): DevRuntimeMcpOperationResult => {
-  const result = asRecord(value);
-  if (!nonempty(result.operationId) || !nonempty(result.sessionId) || !positive(result.sessionRevision) || result.value === undefined) {
-    throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid operation result.');
-  }
-  return Object.freeze({
-    operationId: result.operationId,
-    sessionId: result.sessionId,
-    sessionRevision: result.sessionRevision,
-    value: detachedJson(result.value) as DevRuntimeMcpOperationResult['value'],
-    vector: runtimeVector(result.vector),
-  });
-};
-
-const runtimeOpenRequest = (request: DevRuntimeMcpSessionRequest): DevRuntimeMcpSessionRequest => {
-  if (!nonempty(request.serverName) || !nonempty(request.target) || (request.expectedRegistryRevision !== undefined && !positive(request.expectedRegistryRevision))) {
-    throw new McpRouteClientError('AB8015', 'Runtime MCP session request is not valid.');
-  }
-  return Object.freeze({
-    ...(request.expectedRegistryRevision === undefined ? {} : { expectedRegistryRevision: request.expectedRegistryRevision }),
-    serverName: request.serverName,
-    target: request.target,
-  });
-};
-
-const runtimeControlRequest = (request: DevRuntimeMcpSessionControlRequest): DevRuntimeMcpSessionControlRequest => {
-  if (!nonempty(request.sessionId) || !positive(request.expectedSessionRevision)) {
-    throw new McpRouteClientError('AB8015', 'Runtime MCP session control request is not valid.');
-  }
-  return Object.freeze({ expectedSessionRevision: request.expectedSessionRevision, sessionId: request.sessionId });
-};
-
-const runtimeOperationRequest = (request: DevRuntimeMcpOperationRequest): DevRuntimeMcpOperationRequest => {
-  if (!positive(request.expectedSessionRevision)) throw new McpRouteClientError('AB8015', 'Runtime MCP operation request is not valid.');
-  if (request.kind === 'list-tools' || request.kind === 'list-resources') return Object.freeze({ expectedSessionRevision: request.expectedSessionRevision, kind: request.kind });
-  if (request.kind === 'read-resource' && nonempty(request.uri)) {
-    return Object.freeze({ expectedSessionRevision: request.expectedSessionRevision, kind: 'read-resource', uri: request.uri });
-  }
-  if (request.kind === 'call-tool' && nonempty(request.name)) {
-    const argumentsSnapshot = detachedJson(request.arguments);
-    if (!isRecord(argumentsSnapshot)) throw new McpRouteClientError('AB8015', 'Runtime MCP operation request is not valid.');
-    return Object.freeze({
-      arguments: argumentsSnapshot as JsonObject,
-      expectedSessionRevision: request.expectedSessionRevision,
-      kind: 'call-tool',
-      name: request.name,
-    });
-  }
-  throw new McpRouteClientError('AB8015', 'Runtime MCP operation request is not valid.');
 };
 
 const inspectorRouteStates: readonly McpInspectorRouteState[] = Object.freeze(['exited', 'idle', 'running', 'starting']);
@@ -846,49 +667,6 @@ export class McpRouteClient {
     return response.closed;
   }
 
-  async openRuntime(request: DevRuntimeMcpSessionRequest): Promise<McpRouteRuntimeSession> {
-    const input = runtimeOpenRequest(request);
-    return runtimeSession(asRecord(await this.#json('/api/runtime/mcp/sessions', {
-      body: JSON.stringify(input),
-      headers: { 'content-type': 'application/json' },
-      method: 'POST',
-    })).session);
-  }
-
-  async restartRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<McpRouteRuntimeRestart> {
-    const input = runtimeControlRequest(request);
-    return runtimeRestart(asRecord(await this.#json(`${this.#runtimeSessionPath(input.sessionId)}/restart`, {
-      body: JSON.stringify(input),
-      headers: { 'content-type': 'application/json' },
-      method: 'POST',
-    })), input);
-  }
-
-  async closeRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<void> {
-    const input = runtimeControlRequest(request);
-    const response = asRecord(await this.#json(this.#runtimeSessionPath(input.sessionId), {
-      body: JSON.stringify(input),
-      headers: { 'content-type': 'application/json' },
-      method: 'DELETE',
-    }));
-    if (response.closed !== true) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid close response.');
-  }
-
-  async executeRuntime(sessionId: string, request: DevRuntimeMcpOperationRequest, signal?: AbortSignal): Promise<DevRuntimeMcpOperationResult> {
-    const path = this.#runtimeSessionPath(sessionId);
-    const input = runtimeOperationRequest(request);
-    const result = runtimeOperation(asRecord(await this.#json(`${path}/rpc`, {
-      body: JSON.stringify(input),
-      headers: { 'content-type': 'application/json' },
-      method: 'POST',
-      ...(signal === undefined ? {} : { signal }),
-    })).result);
-    if (result.sessionId !== sessionId || result.sessionRevision !== input.expectedSessionRevision) {
-      throw new McpRouteClientError('AB8204', 'Runtime MCP operation response does not match the requested session revision.');
-    }
-    return result;
-  }
-
   async inspectorStatus(): Promise<McpInspectorRouteStatus> {
     return inspectorRouteStatus(await this.#json('/api/inspector/status'));
   }
@@ -936,13 +714,6 @@ export class McpRouteClient {
   #sessionPath(id: string): string {
     if (id.length === 0) throw new McpRouteClientError('AB8015', 'MCP session is not available.');
     return `/api/mcp/sessions/${encode(id)}`;
-  }
-
-  #runtimeSessionPath(id: string): string {
-    if (!nonempty(id) || id.includes('\0') || id.includes('/') || id.includes('\\')) {
-      throw new McpRouteClientError('AB8015', 'Runtime MCP session is not available.');
-    }
-    return `/api/runtime/mcp/sessions/${encode(id)}`;
   }
 }
 

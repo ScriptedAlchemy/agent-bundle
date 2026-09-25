@@ -26,6 +26,7 @@ const echoRoute = {
   id: 'tool:fixture/echo',
   kind: 'tool',
   provenance: { kind: 'conventional' },
+  resultSchemaState: 'unprojectable' as const,
   serverId: 'mcp:fixture',
   source: 'src/mcp/fixture/tools/echo.tsx',
 } as const;

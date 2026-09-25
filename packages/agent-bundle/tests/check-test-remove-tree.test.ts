@@ -70,7 +70,7 @@ it('exempts the canonical removeTree helper and formats lint failures', () => {
     `await fs.rm(root, { ${recursiveTrue} });`,
   ]);
   expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', escaped)).toEqual([
-    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree.',
+    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree (removeTreeSync if it cannot await).',
   ]);
 });
 
@@ -110,7 +110,7 @@ it('matches $-suffixed removal aliases literally', () => {
     "import { rm as remove$ } from 'node:fs/promises';",
     `await remove$(root, { ${recursiveTrue} })`,
   ]))).toEqual([
-    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree.',
+    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree (removeTreeSync if it cannot await).',
   ]);
 });
 
@@ -211,7 +211,7 @@ it('still gates aliased and namespace Node fs.rm without maxRetries', () => {
     "import { rm as remove } from 'node:fs/promises';",
     `await remove(path, { ${recursiveTrue} });`,
   ]))).toEqual([
-    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree.',
+    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree (removeTreeSync if it cannot await).',
   ]);
 
   const aliasedRetried = recursiveRmCalls(sample([
@@ -311,6 +311,36 @@ it('does not let a parameter shadow a computed method key or decorator', () => {
     `  @hook(rm(root, { ${recursiveTrue} })) run(rm) {}`,
     '}',
   ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 3 })]);
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    'class Suite {',
+    `  run(@hook(rm(root, { ${recursiveTrue} })) rm) {}`,
+    `  constructor(@hook(rm(root, { ${recursiveTrue} })) rm) {}`,
+    '}',
+  ]))).toEqual([
+    expect.objectContaining({ hasRetries: false, line: 3 }),
+    expect.objectContaining({ hasRetries: false, line: 4 }),
+  ]);
+
+  expect(recursiveRmCalls(sample([
+    "import * as fs from 'node:fs/promises';",
+    `class Suite { run(@hook(fs.rm(root, { ${recursiveTrue} })) fs) {} }`,
+  ]))).toEqual([expect.objectContaining({ hasRetries: false, line: 2 })]);
+});
+
+it('does not let a nested-block var hide a call outside its function', () => {
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    'function setup() { if (ready) { var rm = mockRm; } }',
+    `function cleanup() { rm(root, { ${recursiveTrue} }); }`,
+    `function reset(done = () => rm(root, { ${recursiveTrue} })) { { var rm = mockRm; } }`,
+    `class Suite { static { { var rm = mockRm; } } run() { rm(root, { ${recursiveTrue} }); } }`,
+  ]))).toEqual([
+    expect.objectContaining({ hasRetries: false, line: 3 }),
+    expect.objectContaining({ hasRetries: false, line: 4 }),
+    expect.objectContaining({ hasRetries: false, line: 5 }),
+  ]);
 });
 
 it('parses TSX and JS test files with their own script kind', () => {
@@ -320,13 +350,13 @@ it('parses TSX and JS test files with their own script kind', () => {
     `await rm(root, { ${recursiveTrue} });`,
   ]);
   expect(bareRecursiveRmFailures('packages/workbench/tests/view.test.tsx', tsx)).toEqual([
-    'packages/workbench/tests/view.test.tsx:3 bare recursive rm. Use removeTree.',
+    'packages/workbench/tests/view.test.tsx:3 bare recursive rm. Use removeTree (removeTreeSync if it cannot await).',
   ]);
   expect(bareRecursiveRmFailures('packages/agent-bundle/tests/fixture.mjs', sample([
     "import * as fs from 'node:fs/promises';",
     `await fs.rm(root, { ${recursiveTrue} });`,
   ]))).toEqual([
-    'packages/agent-bundle/tests/fixture.mjs:2 bare recursive rm. Use removeTree.',
+    'packages/agent-bundle/tests/fixture.mjs:2 bare recursive rm. Use removeTree (removeTreeSync if it cannot await).',
   ]);
 });
 
@@ -349,7 +379,7 @@ it('flags promises-namespace and asserted options without maxRetries', () => {
     "import { promises as fs } from 'node:fs';",
     `await fs.rm(path, { ${recursiveTrue} });`,
   ]))).toEqual([
-    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree.',
+    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree (removeTreeSync if it cannot await).',
   ]);
   expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', sample([
     "import { promises as fs } from 'node:fs';",
@@ -365,7 +395,7 @@ it('flags promises-namespace and asserted options without maxRetries', () => {
     "import { rm } from 'node:fs/promises';",
     `await rm(root, { ${recursiveTrue} } as const);`,
   ]))).toEqual([
-    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree.',
+    'packages/agent-bundle/tests/example.test.ts:2 bare recursive rm. Use removeTree (removeTreeSync if it cannot await).',
   ]);
 
   expect(recursiveRmCalls(sample([
@@ -387,4 +417,107 @@ it('flags promises-namespace and asserted options without maxRetries', () => {
     `await rm(root, { ${recursiveTrue}, maxRetries: 5 } satisfies Options);`,
     `await rm(root, <const>{ ${recursiveTrue}, maxRetries: 5 });`,
   ]))).toEqual([]);
+});
+
+it('unwraps non-null asserted options, alone and nested in other wrappers', () => {
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    "import * as fs from 'node:fs/promises';",
+    "import { promises as fsp } from 'node:fs';",
+    `await rm(root, { ${recursiveTrue} }!);`,
+    `await fs.rm(root, { ${recursiveTrue} }!);`,
+    `await fsp.rm(root, { ${recursiveTrue} }!);`,
+    `await rm(root, ({ ${recursiveTrue} } as const)!);`,
+    `await rm(root, { ${recursiveTrue} }! satisfies Options);`,
+    `await rm(root, <Options>{ ${recursiveTrue} }!);`,
+    `await rm(root, ({ ${recursiveTrue} })<Options>);`,
+  ]))).toEqual([4, 5, 6, 7, 8, 9, 10].map((line) => expect.objectContaining({ hasRetries: false, line })));
+
+  expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', sample([
+    "import { rm } from 'node:fs/promises';",
+    `await rm(root, { ${recursiveTrue}, maxRetries: 5 }!);`,
+    `await rm(root, ({ ${recursiveTrue}, maxRetries: 5 } as const)!);`,
+  ]))).toEqual([]);
+});
+
+it('flags fs.promises.rm and wrapped callees or callee objects', () => {
+  const flaggedLines = (count: number) => Array.from(
+    { length: count },
+    (_, index) => expect.objectContaining({ hasRetries: false, line: index + 4 }),
+  );
+
+  expect(recursiveRmCalls(sample([
+    "import fs from 'node:fs';",
+    "import * as nodeFs from 'node:fs';",
+    "import fsp from 'node:fs/promises';",
+    `await fs.promises.rm(root, { ${recursiveTrue} });`,
+    `await nodeFs.promises.rm(root, { ${recursiveTrue} });`,
+    `await fs.promises!.rm(root, { ${recursiveTrue} });`,
+    `await (fs.promises as typeof fsp).rm(root, { ${recursiveTrue} });`,
+    `await fsp.rm(root, { ${recursiveTrue} });`,
+  ]))).toEqual(flaggedLines(5));
+
+  expect(recursiveRmCalls(sample([
+    "import { rm } from 'node:fs/promises';",
+    "import * as fs from 'node:fs/promises';",
+    '',
+    `await (rm)(root, { ${recursiveTrue} });`,
+    `await rm!(root, { ${recursiveTrue} });`,
+    `await (rm as typeof rm)(root, { ${recursiveTrue} });`,
+    `await (rm satisfies Remove)(root, { ${recursiveTrue} });`,
+    `await (<Remove>rm)(root, { ${recursiveTrue} });`,
+    `await ((rm)!)(root, { ${recursiveTrue} });`,
+    `await fs!.rm(root, { ${recursiveTrue} });`,
+    `await (fs as typeof fs).rm(root, { ${recursiveTrue} });`,
+    `await (fs.rm)(root, { ${recursiveTrue} });`,
+    `await fs?.rm(root, { ${recursiveTrue} });`,
+    `await rm?.(root, { ${recursiveTrue} });`,
+  ]))).toEqual(flaggedLines(11));
+
+  expect(recursiveRmCalls(sample([
+    "import fs from 'node:fs';",
+    "import { rm } from 'node:fs/promises';",
+    `function cleanup(fs) { return fs.promises.rm(root, { ${recursiveTrue} }); }`,
+    `{ const rm = mockRm; await (rm)!(root, { ${recursiveTrue} }); }`,
+    `const reset = (fs) => (fs as Mock)!.rm(root, { ${recursiveTrue} });`,
+    `await other.promises.rm(root, { ${recursiveTrue} });`,
+    `await fs.other.rm(root, { ${recursiveTrue} });`,
+  ]))).toEqual([]);
+});
+
+it('flags recursive rmSync, rmdir, and rmdirSync with the same rules', () => {
+  expect(recursiveRmCalls(sample([
+    "import { rmSync, rmdirSync as removeDirSync } from 'node:fs';",
+    "import { rmdir } from 'node:fs/promises';",
+    "import * as fs from 'node:fs';",
+    `rmSync(root, { force: true, ${recursiveTrue} });`,
+    `removeDirSync(root, { ${recursiveTrue} });`,
+    `await rmdir(root, { ${recursiveTrue} });`,
+    `fs.rmSync(root, { ${recursiveTrue} });`,
+    `await fs.promises.rmdir(root, { ${recursiveTrue} });`,
+    `(fs.rmdirSync)!(root, { ${recursiveTrue} });`,
+  ]))).toEqual([4, 5, 6, 7, 8, 9].map((line) => expect.objectContaining({ hasRetries: false, line })));
+
+  expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', sample([
+    "import { rmSync, rmdirSync } from 'node:fs';",
+    'rmSync(file);',
+    `rmSync(root, { ${recursiveTrue}, maxRetries: 5 });`,
+    `rmdirSync(root, { ${recursiveTrue}, maxRetries: 5 });`,
+    'rmdirSync(root);',
+    `const cleanup = (rmSync) => rmSync(root, { ${recursiveTrue} });`,
+    `other.rmSync(root, { ${recursiveTrue} });`,
+  ]))).toEqual([]);
+});
+
+it('treats maxRetries: 0 as not retried', () => {
+  expect(bareRecursiveRmFailures('packages/agent-bundle/tests/example.test.ts', sample([
+    "import { rm } from 'node:fs/promises';",
+    "import { rmSync } from 'node:fs';",
+    `await rm(root, { ${recursiveTrue}, maxRetries: 0 });`,
+    `rmSync(root, { ${recursiveTrue}, "maxRetries": 0x0 });`,
+    `await rm(root, { ${recursiveTrue}, maxRetries: 1 });`,
+  ]))).toEqual([
+    'packages/agent-bundle/tests/example.test.ts:3 bare recursive rm. Use removeTree (removeTreeSync if it cannot await).',
+    'packages/agent-bundle/tests/example.test.ts:4 bare recursive rm. Use removeTree (removeTreeSync if it cannot await).',
+  ]);
 });

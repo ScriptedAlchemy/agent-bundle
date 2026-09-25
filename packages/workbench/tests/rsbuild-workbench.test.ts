@@ -37,7 +37,6 @@ it('hashes production JS, CSS, and assets so the foreground can cache them immut
     output: {
       copy: [
         { from: join(workbenchRoot, 'THIRD_PARTY_NOTICES'), to: 'THIRD_PARTY_NOTICES', toType: 'file' },
-        { from: join(workbenchRoot, 'src/mcp/APP-RENDERER-LICENSE'), to: 'src/mcp/APP-RENDERER-LICENSE', toType: 'file' },
       ],
       filenameHash: true,
       filename: {

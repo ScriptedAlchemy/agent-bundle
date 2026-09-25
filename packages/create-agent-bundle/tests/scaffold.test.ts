@@ -267,7 +267,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     expect(cliManifest.devDependencies['@agent-bundle/runtime'])
       .toBe(runtimeSpecForFramework(cliTool.frameworkSpec, testPairing));
     expect(cliManifest.devDependencies['react-dom']).toBe('19.3.0');
-    expect(cliManifest.devDependencies['zod']).toBe('4.5.4');
+    expect(cliManifest.devDependencies['zod']).toBe('4.6.4');
 
     const mcpManifest = yield* readJson<{
       readonly devDependencies: Record<string, string>;

@@ -14,7 +14,6 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const workbenchRoot = join(workspaceRoot, 'packages', 'workbench');
-const appRendererLicense = join('src', 'mcp', 'APP-RENDERER-LICENSE');
 let built: Promise<void> | undefined;
 
 const buildPackage = async (): Promise<void> => {
@@ -27,7 +26,7 @@ describe.sequential('workbench package build', () => {
 const hashedWorkbenchBundle = (kind: 'css' | 'js'): RegExp =>
   kind === 'css' ? /^index\.[a-f0-9]{8}\.css$/u : /^index\.[a-f0-9]{8}\.js$/u;
 
-it('copies content-hashed prebuilt workbench assets and the exact app-renderer license into the package distribution', async () => {
+it('copies content-hashed prebuilt workbench assets and third-party notices into the package distribution', async () => {
   await buildPackage();
 
   await expect(access(join(packageRoot, 'dist', 'workbench', 'index.html'))).resolves.toBeUndefined();
@@ -35,9 +34,8 @@ it('copies content-hashed prebuilt workbench assets and the exact app-renderer l
   const hashedJs = (await readdir(jsRoot)).find((name) => hashedWorkbenchBundle('js').test(name));
   if (hashedJs === undefined) throw new Error('Expected a content-hashed workbench index.js.');
   await expect(readFile(join(jsRoot, hashedJs), 'utf8')).resolves.toContain('Workbench navigation');
-  await expect(readFile(join(packageRoot, 'dist', 'workbench', 'THIRD_PARTY_NOTICES'), 'utf8')).resolves.toContain('MCP Inspector');
-  await expect(readFile(join(packageRoot, 'dist', 'workbench', appRendererLicense), 'utf8')).resolves.toBe(
-    await readFile(join(workbenchRoot, appRendererLicense), 'utf8'),
+  await expect(readFile(join(packageRoot, 'dist', 'workbench', 'THIRD_PARTY_NOTICES'), 'utf8')).resolves.toBe(
+    await readFile(join(workbenchRoot, 'THIRD_PARTY_NOTICES'), 'utf8'),
   );
 }, 60_000);
 
@@ -76,7 +74,6 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     const listing = await execFile('tar', ['-tf', tarball]);
     expect(listing.stdout).toContain('package/dist/workbench/index.html');
     expect(listing.stdout).toContain('package/dist/workbench/THIRD_PARTY_NOTICES');
-    expect(listing.stdout).toContain('package/dist/workbench/src/mcp/APP-RENDERER-LICENSE');
     expect(listing.stdout).not.toMatch(/package\/dist\/workbench\/.*\.map$/mu);
     expect(listing.stdout).toMatch(/package\/dist\/workbench\/static\/js\/index\.[a-f0-9]{8}\.js$/mu);
     expect(listing.stdout).toMatch(/package\/dist\/workbench\/static\/css\/index\.[a-f0-9]{8}\.css$/mu);
@@ -132,7 +129,7 @@ it('packages both react-server render children and renders a route invocation fr
       markdownStream.tarball,
       'react@19.2.8',
       'react-dom@19.2.8',
-      'zod@4.5.4',
+      'zod@4.6.4',
     ], { cwd: consumer, env: installedEnvironment() });
     await mkdir(join(project, 'src', 'mcp', 'status', 'tools'), { recursive: true });
     await Promise.all([

@@ -29,8 +29,6 @@ packages/
     src/core/types.ts
     src/dev/foreground-server.ts
     src/dev/mcp-app-action-validation.ts
-    src/dev/mcp-app-runtime-binding-service.ts
-    src/dev/mcp-app-runtime-preview-service.ts
     src/dev/mcp-apps/mcp-app-binding-service.ts
     src/dev/mcp-apps/mcp-app-preview-service.ts
     src/dev/mcp-apps/mcp-app-routes.ts
@@ -39,11 +37,9 @@ packages/
     src/dev/playground/playground-store.ts
     src/dev/project-service.ts
     src/dev/runtime-app-message-limits.ts
-    src/dev/runtime-client-surface-proxy.ts
     src/dev/runtime-controller.ts
     src/dev/runtime-generation-store.ts
     src/dev/runtime-mcp-registry.ts
-    src/dev/runtime-mcp-routes.ts
     src/dev/runtime-provider-loader.ts
     src/dev/runtime-provider.ts
     src/dev/runtime-routes.ts
@@ -62,16 +58,19 @@ packages/
     tests/host-adapters.native.test.ts
     tests/host-adapters.test.ts
     tests/mcp-app-binding-service.test.ts
+    tests/mcp-app-bridge-cancellation.test.ts
     tests/mcp-app-bridge.test.ts
+    tests/mcp-app-diagnostics.test.ts
     tests/mcp-app-host-profiles.test.ts
     tests/mcp-app-metadata.test.ts
     tests/mcp-app-preview-service.test.ts
     tests/mcp-app-routes.test.ts
-    tests/mcp-app-runtime-binding-service.test.ts
-    tests/mcp-app-runtime-preview-service.test.ts
     tests/mcp-app-sandbox.test.ts
+    tests/mcp-apps-compile.test.ts
     tests/mcp-session-routes.test.ts
     tests/mcp-session-service.test.ts
+    tests/mcp-session-trace-publisher.test.ts
+    tests/native-host-sessions.test.ts
     tests/normalization.test.ts
     tests/playground-service.test.ts
     tests/portable-adapter.test.ts
@@ -80,34 +79,22 @@ packages/
     tests/public-api.test.ts
     tests/rsc-runtime-optional-packaging.test.ts
     tests/rsc-runtime-topology-script.test.ts
-    tests/runtime-client-surface-proxy.test.ts
     tests/runtime-generation-store.test.ts
     tests/runtime-mcp-registry.test.ts
-    tests/runtime-mcp-routes.test.ts
     tests/runtime-provider.test.ts
     tests/runtime-routes.test.ts
   workbench/
     rsbuild.config.ts
-    scripts/capture-runtime-playground.mjs
     src/main.tsx
     src/mcp/mcp-app-client.ts
-    src/mcp/mcp-app-frame.tsx
     src/mcp/mcp-app-preview.tsx
     src/mcp/mcp-page.tsx
     src/mcp/mcp-session-controller.ts
     src/mcp/mcp-session-model.ts
-    src/mcp/runtime-app-bridge.ts
-    src/mcp/runtime-consent-dialog.tsx
-    src/mcp/runtime-consent-queue.ts
-    src/mcp/runtime-mcp-handoff.ts
     src/project-client.ts
     src/runtime-client.ts
-    src/runtime-inspector.tsx
     src/runtime-model.ts
-    src/runtime-playground.tsx
-    src/runtime-stage.tsx
     src/styles.css
-    tests/helpers/runtime-playground-fixture.ts
     tests/mcp-app-client.test.ts
     tests/mcp-app-frame.test.ts
     tests/mcp-app-preview-browser.test.ts
@@ -117,21 +104,11 @@ packages/
     tests/mcp-session-controller.test.ts
     tests/mcp-session-model.test.ts
     tests/mcp-session-timeout.e2e.test.ts
-    tests/runtime-app-bridge.test.ts
+    tests/runtime-backend.test.ts
     tests/runtime-client.test.ts
-    tests/runtime-consent-dialog.test.ts
-    tests/runtime-consent-queue.test.ts
     tests/runtime-contract-compile.test.ts
-    tests/runtime-document-atoms-disposal.test.ts
-    tests/runtime-inspector.test.ts
-    tests/runtime-mcp-handoff.test.ts
+    tests/runtime-controller.test.ts
     tests/runtime-model.test.ts
-    tests/runtime-playground-capture-cleanup.test.ts
-    tests/runtime-playground-capture.test.ts
-    tests/runtime-playground-hmr.e2e.test.ts
-    tests/runtime-playground.e2e.test.ts
-    tests/runtime-playground.test.ts
-    tests/runtime-stage.test.ts
 examples/
   rsc-agent-runtime/
     package.json
@@ -144,7 +121,9 @@ examples/
     src/build/serialize-definition.ts
     src/definition.ts
     src/dev/canonical-json.ts
+    src/dev/compile-diagnostics.ts
     src/dev/definition-entry.ts
+    src/dev/durable-tree.ts
     src/dev/environment-checkpoint-store.ts
     src/dev/generation-materializer.ts
     src/dev/inspection-security.ts
@@ -171,7 +150,6 @@ examples/
     src/runtime/contracts.ts
     src/runtime/state-definition.ts
     src/runtime/state-file.ts
-    src/types/mcp-ext-apps-react.d.ts
     src/types/react-server-dom-rspack.d.ts
     src/types/styles.d.ts
     src/widget/App.tsx
@@ -186,7 +164,6 @@ examples/
     tests/host-artifacts.test.ts
     tests/host-extensions.test.tsx
     tests/http-security.test.ts
-    tests/mcp-lowering.test.tsx
     tests/mcp-transports.integration.test.ts
     tests/rsc-hook.integration.test.ts
     tests/runtime-artifact-manifest.test.ts
@@ -251,12 +228,11 @@ are never gated. `ProjectStatus.hostAdoption` exposes the adopted epoch and the
 latest evaluation, and the Overview renders it as **Host adoption** beside the
 published build, so a rejected epoch is visible rather than silently skipped.
 
-The RSC result tree is not the MCP App document. A current preview moves through
-`McpAppPreview`, `SecureAppRenderer`, the official App renderer, the
-generation-bound bridge, and the runtime client-surface proxy to an opaque-origin
-App iframe. The direct frame, bridge, handoff, proxy, message-limit, binding,
-preview-service, routes, mounted-page, and real-browser tests retained above
-are the single lifecycle boundary for that binding.
+The RSC result tree is not the MCP App document. An App route preview moves
+through `McpAppPreview`, which mounts the server-issued sandbox proxy iframe and
+drives it with the frame relay (`web-host/browser/frame-relay.ts`) over the
+Workbench App routes. The frame-relay, preview, routes, mounted-page, and
+real-browser tests retained above are the lifecycle boundary for that binding.
 
 Portable is the baseline. ChatGPT/OpenAI and Claude Workbench profiles are local
 compatibility simulations, not vendor certification. Native terminal evidence

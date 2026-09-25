@@ -29,6 +29,7 @@ const distributionRows = {
 } as const;
 
 const plugin: NormalizedPlugin = Object.freeze({
+  projectRoot: '/workspace',
   extensions: Object.freeze({}),
   hooks: Object.freeze([]),
   marketplace: true as const,

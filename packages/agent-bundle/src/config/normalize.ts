@@ -1350,6 +1350,7 @@ export const normalizeProject = async (
   const extensions = normalizeExtensions(loaded, registry, configProvenance);
   const lspServers = normalizeLspServers(extensions, targetNames);
   const model: NormalizedPlugin = {
+    projectRoot: loaded.context.projectRoot,
     ...(assets.length === 0 ? {} : { assets }),
     ...(commands.length === 0 ? {} : { commands }),
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),

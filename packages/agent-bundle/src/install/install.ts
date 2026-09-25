@@ -29,7 +29,6 @@ import {
   installReceiptScopeKey,
   installReceiptStorePath,
   isRemnantReceipt,
-  isRuntimeStateRemnant,
   readInstallReceipt,
   readInstallReceiptFile,
   replaceInstalledTree,
@@ -50,11 +49,7 @@ export type InstallHost = BundleIdentityHost;
 export type DevInstallHost = Exclude<InstallHost, 'amp'>;
 export type PublicInstallHost = Exclude<InstallHost, 'amp' | 'cursor'>;
 export type InstallScope = 'local' | 'project' | 'user';
-/**
- * `adopted`: a byte-identical pre-receipt Cursor copy gained its receipt under
- * `--replace`; no plugin file changed.
- */
-export type InstallResultState = 'adopted' | 'already-installed' | 'installed' | 'replaced' | 'staged';
+export type InstallResultState = 'already-installed' | 'installed' | 'replaced' | 'staged';
 
 /**
  * Cursor delivery mode: `local` copies into `~/.cursor/plugins/local/<name>`
@@ -811,10 +806,8 @@ const collisionMessage = (
       return `Refusing foreign install at ${destination}: ${detail}; the directory is not an agent-bundle install of ` +
         `${identity.plugin}, so --replace does not apply. Remove it manually if it is stale.`;
     case 'version-mismatch':
-      return `Refusing version collision at ${destination}: ${detail}. Re-run with --replace to replace this agent-bundle install.`;
     case 'stale':
-      return `Refusing content collision at ${destination}: ${detail}; this copy predates install receipts. ` +
-        'Re-run with --replace once to adopt it; later same-version rebuilds replace automatically.';
+      return `Refusing version collision at ${destination}: ${detail}. Re-run with --replace to replace this agent-bundle install.`;
     case 'current':
       return `Install at ${destination} is current.`;
     default: {
@@ -1045,56 +1038,24 @@ const installCursor = Effect.fnUntraced(function*(
       return { ...base, contentHash: artifact.hash, state: 'already-installed' } as const;
     }
     const installedManifest = yield* liftPromise(() => readInstalledManifest(destination));
-    const compared = yield* liftPromise(() => compareInstalledTree({
+    const comparison = yield* liftPromise(() => compareInstalledTree({
       artifact,
       destination,
       installedManifest,
       plugin: identity.plugin,
       version: identity.version,
     }));
-    // `uninstall --keep-data` leaves a shell holding only state/ (plus, normally, a remnant receipt that owns no
-    // files): a reinstall fills it back in around the preserved durable state instead of refusing it as foreign
-    // (nothing in it is anyone's plugin content) and reports an install, not a replacement.
-    const remnant = compared.ownership === 'receipt' && compared.receipt !== undefined
-      ? isRemnantReceipt(compared.receipt)
-      : compared.ownership === 'foreign' && (yield* liftPromise(() => isRuntimeStateRemnant(destination)));
-    const comparison: InstalledTreeComparison = remnant && compared.ownership === 'foreign'
-      ? { ...compared, ownership: 'legacy', status: 'stale' }
-      : compared;
+    // `uninstall --keep-data` leaves a remnant receipt that owns no files: a reinstall fills the shell back in
+    // around the retained entries and reports an install, not a replacement.
+    const remnant = comparison.receipt !== undefined && isRemnantReceipt(comparison.receipt);
     if (comparison.status === 'current') {
-      if (comparison.ownership === 'legacy' && options.replace === true) {
-        // Adoption created nothing: the legacy copy's directories are not the installer's to prune.
-        const adoptedReceipt = createInstallReceipt({
-          ...receipt,
-          directories: [],
-          hostDirectories: [],
-          inventory: artifact,
-        });
-        yield* liftPromise(() => writeInstallReceipt(destination, adoptedReceipt));
-        yield* liftPromise(() => attachCursorStateOwnership(destination, environment, home));
-        return { ...base, contentHash: artifact.hash, state: 'adopted' } as const;
-      }
-      // A receipt-managed identical copy whose receipt predates format/2 is upgraded in place: the
-      // lifecycle fields are synthesized exactly as the reader migrates them, and nothing else changes.
-      if (comparison.ownership === 'receipt' && comparison.receipt?.migratedFrom !== undefined) {
-        const previous = comparison.receipt;
-        yield* liftPromise(() => writeInstallReceipt(destination, createInstallReceipt({
-          ...receipt,
-          directories: previous.directories,
-          hostDirectories: previous.hostDirectories,
-          installedAt: previous.installedAt,
-          inventory: artifact,
-          updatedAt: new Date().toISOString(),
-        })));
-      }
       if (comparison.ownership === 'receipt' && comparison.receipt?.state === undefined) {
         yield* liftPromise(() => attachCursorStateOwnership(destination, environment, home));
       }
       return { ...base, contentHash: artifact.hash, state: 'already-installed' } as const;
     }
-    const replaceable = (comparison.status === 'stale' && comparison.ownership === 'receipt') || remnant
-      ? true
-      : comparison.status !== 'foreign' && options.replace === true;
+    const replaceable = comparison.ownership === 'receipt' &&
+      (comparison.status === 'stale' || remnant || options.replace === true);
     if (!replaceable) {
       return yield* Effect.fail(failure('AB7005', collisionMessage(destination, identity, comparison), 'cursor'));
     }
@@ -1116,7 +1077,7 @@ const installCursor = Effect.fnUntraced(function*(
       home,
       comparison.receipt?.state,
     ));
-    // Filling a state-only shell is a fresh install of plugin content, not a replacement of any.
+    // Filling a remnant shell is a fresh install of plugin content, not a replacement of any.
     if (remnant) return { ...base, contentHash: artifact.hash, state: 'installed' } as const;
     return {
       ...base,

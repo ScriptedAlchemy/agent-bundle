@@ -1,15 +1,24 @@
 /**
- * Test teardown that deletes a tree calls `removeTree`. A bare `rm` with
- * `recursive: true` and no `maxRetries` races a late writer and flakes with ENOTEMPTY.
+ * Test teardown that deletes a tree calls `removeTree` (`removeTreeSync` where it
+ * cannot await). A bare `rm` with `recursive: true` and no nonzero `maxRetries`
+ * races a late writer and flakes with ENOTEMPTY. `rmSync`, `rmdir`, and
+ * `rmdirSync` follow the same rules as `rm`.
  *
- * Catches bare `rm(`, aliased `import { rm as remove }` calls, and `ns.rm(` when
- * `ns` is a namespace/default import from node:fs, fs, or their /promises forms.
+ * Catches bare `rm(`, aliased `import { rm as remove }` calls, and `ns.rm(` or
+ * `ns.promises.rm(` when `ns` is a namespace/default import from node:fs, fs, or
+ * their /promises forms. The same wrappers as the options argument are unwrapped
+ * around the callee and its object, and `?.` member access counts.
+ * ponytail: only literal options and direct import bindings are read; options held
+ * in a variable or spread, a non-literal `recursive`, a non-literal `maxRetries`
+ * (counted as retried), and indirect bindings (local
+ * aliases, destructuring, dynamic import/require, `ns['rm']`, `.call`) are not
+ * followed. Closing that needs data-flow analysis, not a wider AST match.
  *
  * Call, option, and import-binding detection is parser-backed (typescript-5):
  * only real node:fs(/promises) ImportDeclaration bindings count, only Node-bound
  * call expressions are considered, and `recursive` / `maxRetries` are read from
  * the second argument's object-literal properties (including quoted keys,
- * shorthand `maxRetries`, and Parenthesized / As / Satisfies wrappers). Nested
+ * shorthand `maxRetries`, and Parenthesized / As / Satisfies / `<T>` / `!` / instantiation wrappers). Nested
  * objects in the path argument, member calls, comments, strings, regexes, and
  * template substitutions are handled by the AST rather than text masking.
  * Named `promises` rebinds from `fs` / `node:fs` count as `.rm` carriers.
@@ -34,6 +43,8 @@ const roots = [
 
 const nodeFsSpecifier = /^(?:node:)?fs(?:\/promises)?$/u;
 
+const removalNames = new Set(['rm', 'rmSync', 'rmdir', 'rmdirSync']);
+
 const isRemoveTreeHelper = (file) => /(?:^|\/)remove-tree\.ts$/u.test(file.replaceAll('\\', '/'));
 
 const walk = async (directory, files) => {
@@ -52,7 +63,7 @@ const walk = async (directory, files) => {
 };
 
 /**
- * Named/aliased rm bindings and namespace/default/`promises` bindings that expose .rm.
+ * Named/aliased removal bindings and namespace/default/`promises` bindings that expose them.
  * Import bindings are collected from the TypeScript AST so comments and local
  * identifiers cannot forge Node fs.rm bindings.
  */
@@ -97,7 +108,7 @@ export const removalBindings = (text, fileName = 'bindings.ts') => {
         ? element.name.text
         : element.propertyName.text;
       const localName = element.name.text;
-      if (importedName === 'rm') {
+      if (removalNames.has(importedName)) {
         bareNames.add(localName);
         continue;
       }
@@ -125,6 +136,8 @@ const unwrapExpression = (node) => {
       || ts.isAsExpression(current)
       || ts.isSatisfiesExpression(current)
       || ts.isTypeAssertionExpression(current)
+      || ts.isNonNullExpression(current)
+      || ts.isExpressionWithTypeArguments(current)
     )
   ) {
     current = current.expression;
@@ -154,7 +167,10 @@ const statementDeclares = (statement, name) => {
   return false;
 };
 
-/** `from` is the child the walk came up through; names, computed keys, and decorators sit outside the function scope. */
+/**
+ * `from` is the child the walk came up through; names, computed keys, and decorators
+ * (including parameter decorators) sit outside the function scope.
+ */
 const functionLikeDeclares = (node, from, name) => {
   if (
     !(
@@ -189,6 +205,11 @@ const identifierIsLocallyShadowed = (identifier) => {
   let from = identifier;
   let current = identifier.parent;
   while (current !== undefined) {
+    if (ts.isDecorator(current) && ts.isParameter(current.parent)) {
+      from = current.parent.parent;
+      current = from.parent;
+      continue;
+    }
     if (
       ts.isSourceFile(current)
       || ts.isBlock(current)
@@ -242,25 +263,28 @@ const optionsFlags = (optionsArg) => {
     if (key === 'recursive' && property.initializer.kind === ts.SyntaxKind.TrueKeyword) {
       recursive = true;
     }
-    if (key === 'maxRetries') hasRetries = true;
+    if (key === 'maxRetries') {
+      const retries = unwrapExpression(property.initializer);
+      hasRetries = !ts.isNumericLiteral(retries) || Number(retries.text) !== 0;
+    }
   }
   return { recursive, hasRetries };
 };
 
-const isNodeBoundRmCall = (expression, bareNames, namespaceNames) => {
+/** `fs.promises.rm` counts for any fs namespace; on a /promises namespace it is only an extra flag. */
+const isNodeBoundRmCall = (callee, bareNames, namespaceNames) => {
+  const expression = unwrapExpression(callee);
   if (ts.isIdentifier(expression)) {
     return bareNames.has(expression.text) && !identifierIsLocallyShadowed(expression);
   }
-  if (
-    ts.isPropertyAccessExpression(expression)
-    && !expression.questionDotToken
-    && expression.name.text === 'rm'
-    && ts.isIdentifier(expression.expression)
-  ) {
-    return namespaceNames.has(expression.expression.text)
-      && !identifierIsLocallyShadowed(expression.expression);
+  if (!ts.isPropertyAccessExpression(expression) || !removalNames.has(expression.name.text)) return false;
+  let object = unwrapExpression(expression.expression);
+  if (ts.isPropertyAccessExpression(object) && object.name.text === 'promises') {
+    object = unwrapExpression(object.expression);
   }
-  return false;
+  return ts.isIdentifier(object)
+    && namespaceNames.has(object.text)
+    && !identifierIsLocallyShadowed(object);
 };
 
 const scriptKindFor = (fileName) => {
@@ -305,7 +329,7 @@ export const bareRecursiveRmFailures = (file, text) => {
   const failures = [];
   for (const call of recursiveRmCalls(text, file)) {
     if (call.hasRetries) continue;
-    failures.push(`${file}:${call.line} bare recursive rm. Use removeTree.`);
+    failures.push(`${file}:${call.line} bare recursive rm. Use removeTree (removeTreeSync if it cannot await).`);
   }
   return failures;
 };

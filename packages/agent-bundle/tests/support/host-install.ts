@@ -5,6 +5,7 @@ import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'no
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 
+import { userDataStateRoot } from '@agent-bundle/runtime';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { parse as parseYaml } from 'yaml';
@@ -2709,13 +2710,14 @@ export interface HostUninstallProofReport {
   readonly host: DevInstallHost;
   /** Classified host-owned residue after uninstall, relative to the host root; empty when byte-identical. */
   readonly hostResidue: readonly HostResidueClass[];
-  readonly keepData: 'kept' | 'retained-by-host' | 'unavailable';
+  readonly keepData: 'kept' | 'retained-by-host';
   readonly plan: 'no-op';
   readonly proofLevel: string;
   readonly purgeData: 'purged' | 'removed-by-host';
   readonly refusals: {
     readonly foreignOrMismatch: 'AB7007';
-    readonly missingReceipt: 'AB7009';
+    /** A receipt-less Cursor copy is foreign (AB7007); a host-CLI install without a store receipt is AB7009. */
+    readonly missingReceipt: 'AB7007' | 'AB7009';
     readonly unconfirmedPurge: 'AB7008';
   };
   readonly registrations: Readonly<Record<string, 'already-absent' | 'removed'>>;
@@ -2792,6 +2794,7 @@ export const runHostUninstallProof = async (
     ...(host === 'claude' ? { CLAUDE_CONFIG_DIR: config } : {}),
     ...(host === 'codex' ? { CODEX_HOME: config } : {}),
     HOME: home,
+    XDG_STATE_HOME: join(root, 'state-home'),
   });
   const hostRoot = host === 'cursor' ? home : config;
   const bundle = fixture.bundles[host];
@@ -2812,7 +2815,8 @@ export const runHostUninstallProof = async (
   const receiptPath = host === 'cursor'
     ? join(installedRoot, '.agent-bundle-install.json')
     : join(config, 'agent-bundle', 'receipts', `${plugin}.${marketplace}.user.json`);
-  const stateDirectory = join(installedRoot, 'state');
+  // The framework state root the receipt records for the installed copy: the only durable state a purge may remove.
+  const stateDirectory = userDataStateRoot(installedRoot, environment, home);
   try {
     const untouched = await snapshotTree(hostRoot);
     const homeBefore = await snapshotTree(home);
@@ -2915,52 +2919,50 @@ export const runHostUninstallProof = async (
     const homeByteIdentical = treesIdentical(before, afterUninstall);
     assertProof(host !== 'cursor' || homeByteIdentical, `Cursor uninstall did not leave the home byte-identical: ${JSON.stringify(difference)}`);
 
-    // Data policy: --keep-data preserves durable state (or says honestly why it cannot), a confirmed purge removes it.
+    // Data policy: --keep-data preserves the receipt-recorded state root, a confirmed purge removes it.
     await install();
     await mkdir(stateDirectory, { recursive: true });
     await writeFile(join(stateDirectory, 'plugin.sqlite'), 'durable\n');
     const kept = await uninstall(['--keep-data']);
     const keepOutcome = kept.data?.outcome;
     assertProof(
-      keepOutcome === 'kept' || keepOutcome === 'retained-by-host' || keepOutcome === 'unavailable',
+      keepOutcome === 'kept' || keepOutcome === 'retained-by-host',
       `${host} --keep-data reported an unexpected outcome: ${JSON.stringify(kept.data)}`,
     );
-    if (keepOutcome !== 'unavailable') {
-      await access(join(stateDirectory, 'plugin.sqlite')).catch(() => fail(`${host} --keep-data did not preserve state/plugin.sqlite.`));
-    }
+    await access(join(stateDirectory, 'plugin.sqlite')).catch(() => fail(`${host} --keep-data did not preserve the recorded state root.`));
     if (host === 'cursor') {
       assertProof(kept.remnantReceipt === receiptPath, 'Cursor --keep-data wrote no remnant receipt beside the preserved state.');
     }
     await install();
-    if (host !== 'cursor') {
-      // Codex deletes the cache on remove and Claude's reinstall rewrites the cached copy from the bundle, so
-      // the host itself discarded the marker; recreate it so the purge run has state to report on.
-      await mkdir(stateDirectory, { recursive: true });
-      await writeFile(join(stateDirectory, 'plugin.sqlite'), 'durable\n');
-    }
     const purged = await uninstall(['--purge-data', '--confirm-purge']);
     const purgeOutcome = purged.data?.outcome;
     assertProof(purgeOutcome === 'purged' || purgeOutcome === 'removed-by-host', `${host} --purge-data reported an unexpected outcome: ${JSON.stringify(purged.data)}`);
     await access(stateDirectory).then(
-      () => fail(`${host} --purge-data --confirm-purge left state/ behind.`),
+      () => fail(`${host} --purge-data --confirm-purge left the recorded state root behind.`),
       () => undefined,
     );
     if (host === 'cursor') {
       assertProof(treesIdentical(before, await snapshotTree(hostRoot)), 'Cursor keep→reinstall→purge cycle did not restore the home byte-identically.');
     }
 
-    // Refusals: a missing receipt (AB7009) and a mismatch between the installed copy and the receipt (AB7007).
+    // Refusals: a missing receipt and a mismatch between the installed copy and the receipt (AB7007).
     await install();
     await rm(receiptPath);
-    await expectRefusal(lifecycle('uninstall'), 'AB7009', `${host} uninstall without a receipt`);
-    // A receipt-less Cursor copy is the pre-receipt legacy layout (`forced-legacy`); a host-CLI install with no
-    // store receipt is `forced-missing`. Both need --force and both remove only what the receipt (or, for the
-    // legacy layout, the inventory) proves is this plugin's.
-    const forced = await uninstall(['--force']);
-    assertProof(
-      forced.state === 'uninstalled' && (forced.receipt?.status === 'forced-missing' || forced.receipt?.status === 'forced-legacy'),
-      `${host} uninstall --force did not proceed: ${JSON.stringify(forced)}`,
-    );
+    const missingReceipt = host === 'cursor' ? 'AB7007' : 'AB7009';
+    await expectRefusal(lifecycle('uninstall'), missingReceipt, `${host} uninstall without a receipt`);
+    if (host === 'cursor') {
+      // A receipt-less Cursor copy is foreign: nothing proves it is this plugin's, so --force does not apply.
+      await expectRefusal(lifecycle('uninstall', ['--force']), 'AB7007', 'cursor uninstall --force without a receipt');
+      await access(join(installedRoot, 'INSTALL.md')).catch(() => fail('Cursor refused a foreign uninstall but removed files anyway.'));
+      await removeTree(installedRoot);
+    } else {
+      // A host-CLI install with no store receipt is `forced-missing`: --force removes what the host lists as this plugin's.
+      const forced = await uninstall(['--force']);
+      assertProof(
+        forced.state === 'uninstalled' && forced.receipt?.status === 'forced-missing',
+        `${host} uninstall --force did not proceed: ${JSON.stringify(forced)}`,
+      );
+    }
     await install();
     await writeFile(join(installedRoot, 'INSTALL.md'), '# tampered\n');
     await expectRefusal(lifecycle('uninstall'), 'AB7007', `${host} uninstall of a modified copy`);
@@ -2976,7 +2978,7 @@ export const runHostUninstallProof = async (
       plan: 'no-op',
       proofLevel,
       purgeData: purgeOutcome,
-      refusals: Object.freeze({ foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' }),
+      refusals: Object.freeze({ foreignOrMismatch: 'AB7007', missingReceipt, unconfirmedPurge: 'AB7008' }),
       registrations: Object.freeze(registrations),
       rerun: 'not-installed',
       status: 'passed',
@@ -3007,10 +3009,11 @@ export const runPortableUninstallProof = async (
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-host-uninstall-portable-'));
   try {
     await mkdir(join(home, '.cursor'), { recursive: true });
-    const environment = isolatedEnvironment(options.environment, { HOME: home });
+    const environment = isolatedEnvironment(options.environment, { HOME: home, XDG_STATE_HOME: join(home, 'state-home') });
     const installer = join(fixture.portableBundle, 'install.mjs');
     const destination = join(home, '.cursor', 'plugins', 'local', portablePlugin);
     const receiptPath = join(destination, '.agent-bundle-install.json');
+    const stateRoot = userDataStateRoot(destination, environment, home);
     const runInstaller = (args: readonly string[]): Promise<CommandResult> =>
       run(process.execPath, [installer, ...args], { cwd: fixture.portableBundle, environment });
     const expectOk = async (args: readonly string[], prefix: string): Promise<string> => {
@@ -3033,21 +3036,26 @@ export const runPortableUninstallProof = async (
     await expectOk(['--uninstall'], `Not installed ${portablePlugin}@${version}`);
 
     await expectOk([], `Installed ${portablePlugin}@${version}`);
-    await mkdir(join(destination, 'state'));
-    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(join(stateRoot, 'plugin.sqlite'), 'durable\n');
     const kept = await expectOk(['--uninstall', '--keep-data'], `Uninstalled ${portablePlugin}@${version}`);
     assertProof(kept.includes('Data (keep): kept'), 'Portable --keep-data did not report kept state.');
-    await access(join(destination, 'state', 'plugin.sqlite')).catch(() => fail('Portable --keep-data did not preserve state/.'));
+    await access(join(stateRoot, 'plugin.sqlite')).catch(() => fail('Portable --keep-data did not preserve the recorded state root.'));
     await expectOk([], `Installed ${portablePlugin}@${version}`);
     const purged = await expectOk(['--uninstall', '--purge-data', '--confirm-purge'], `Uninstalled ${portablePlugin}@${version}`);
     assertProof(purged.includes('Data (purge): purged'), 'Portable confirmed purge did not report purged state.');
+    await access(stateRoot).then(() => fail('Portable confirmed purge left the recorded state root behind.'), () => undefined);
+    await removeTree(join(home, 'state-home'));
     assertProof(treesIdentical(before, await snapshotTree(home)), 'Portable keep→reinstall→purge did not restore the home byte-identically.');
 
+    // A receipt-less copy is foreign: refused with and without --force, and nothing under it is touched.
     await expectOk([], `Installed ${portablePlugin}@${version}`);
     await rm(receiptPath);
-    const missing = await runInstaller(['--uninstall']);
-    assertProof(missing.exitCode === 1 && missing.stderr.includes('predates install receipts'), 'Portable uninstall without a receipt was not refused.');
-    await expectOk(['--uninstall', '--force'], `Uninstalled ${portablePlugin}@${version}`);
+    for (const args of [['--uninstall'], ['--uninstall', '--force']]) {
+      const missing = await runInstaller(args);
+      assertProof(missing.exitCode === 1 && missing.stderr.includes('Refusing to uninstall foreign directory'), `Portable ${args.join(' ')} without a receipt was not refused.`);
+    }
+    await access(join(destination, 'install.mjs')).catch(() => fail('Portable refused uninstall still removed files.'));
     await removeTree(join(home, '.cursor', 'plugins'));
     await mkdir(destination, { recursive: true });
     await writeFile(join(destination, 'payload.txt'), 'someone else\n');

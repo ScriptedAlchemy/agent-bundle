@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { assertExitFailure, assertSuccess, assertTrue, deepStrictEqual, strictEqual } from "@effect/vitest/utils"
 import {
   Array,
+  ByteSize,
   Cause,
   Channel,
   Clock,
@@ -625,6 +626,18 @@ describe("Stream", () => {
           assert.deepStrictEqual(result, ["a", "b", "c"])
         }))
 
+      it.effect("emits a carriage-return-terminated line before pulling upstream again", () =>
+        Effect.gen(function*() {
+          const result = yield* Stream.succeed("a\r").pipe(
+            Stream.concat(Stream.fail("boom")),
+            Stream.splitLines,
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.result
+          )
+          assert.deepStrictEqual(result, Result.succeed(["a"]))
+        }))
+
       it.effect("emits the final line when the stream does not end with a newline", () =>
         Effect.gen(function*() {
           const result = yield* splitLines(["a\nb\nc\n", "d\ne"])
@@ -714,7 +727,7 @@ describe("Stream", () => {
         let evaluated = false
         const chunks = [new Uint8Array([1, 2]), new Uint8Array([3, 4])]
         const result = yield* Stream.fromIterable(chunks).pipe(
-          Stream.limitBytes(5, () => {
+          Stream.limitBytes("5 B", () => {
             evaluated = true
             return Stream.empty
           }),
@@ -730,7 +743,7 @@ describe("Stream", () => {
         let evaluated = false
         const chunks = [new Uint8Array([1, 2]), new Uint8Array([3, 4])]
         const result = yield* Stream.fromIterable(chunks).pipe(
-          Stream.limitBytes(4, () => {
+          Stream.limitBytes(ByteSize.bytes(4), () => {
             evaluated = true
             return Stream.empty
           }),
@@ -748,7 +761,7 @@ describe("Stream", () => {
         const after = new Uint8Array([7])
         const fallback = new Uint8Array([8, 9])
         const result = yield* Stream.make(first, crossing, after).pipe(
-          Stream.limitBytes(5, () => Stream.succeed(fallback)),
+          Stream.limitBytes(ByteSize.bytes(5), () => Stream.succeed(fallback)),
           Stream.runCollect
         )
 
@@ -945,6 +958,22 @@ describe("Stream", () => {
           Effect.exit
         )
         assertExitFailure(exit, Cause.die(defect))
+      }))
+
+    it.effect("catchDefect", () =>
+      Effect.gen(function*() {
+        const defect = new Error("boom")
+        const recovered = yield* Stream.die(defect).pipe(
+          Stream.catchDefect((caught) => Stream.succeed(caught)),
+          Stream.runCollect
+        )
+        const failed = yield* Stream.fail("failure").pipe(
+          Stream.catchDefect(() => Stream.succeed("recovered")),
+          Stream.runCollect,
+          Effect.exit
+        )
+        assert.deepStrictEqual(recovered, [defect])
+        assertExitFailure(failed, Cause.fail("failure"))
       }))
 
     it.effect("catchIf with refinement", () =>
@@ -1337,7 +1366,7 @@ describe("Stream", () => {
       Effect.gen(function*() {
         const stream = Stream.make(1, 2, 3, 4, 5)
         const { result1, result2 } = yield* Effect.all({
-          result1: stream.pipe(Stream.scan(0, (acc, curr) => acc + curr), Stream.runCollect),
+          result1: stream.pipe(Stream.scan(() => 0, (acc, curr) => acc + curr), Stream.runCollect),
           result2: Stream.runCollect(stream).pipe(
             Effect.map((chunk) => Array.scan(chunk, 0, (acc, curr) => acc + curr))
           )
@@ -1348,7 +1377,7 @@ describe("Stream", () => {
     it.effect("scanEffect", () =>
       Effect.gen(function*() {
         const result = yield* Stream.make(1, 2, 3, 4, 5).pipe(
-          Stream.scanEffect(0, (acc, curr) => Effect.succeed(acc + curr)),
+          Stream.scanEffect(() => 0, (acc, curr) => Effect.succeed(acc + curr)),
           Stream.runCollect
         )
 
@@ -1568,6 +1597,34 @@ describe("Stream", () => {
       assert.deepStrictEqual(actual, grouped(expected, size))
     })
   )
+
+  it.effect.each([
+    { size: 200001, lengths: [200000] },
+    { size: 200000, lengths: [200000] },
+    { size: 199999, lengths: [199999, 1] }
+  ])("rechunk preserves a large source chunk with target $size", ({ lengths, size }) =>
+    Effect.gen(function*() {
+      const values = Array.makeBy(200000, (i) => i)
+      const actual = yield* Stream.fromArray(values).pipe(
+        Stream.rechunk(size),
+        Stream.chunks,
+        Stream.runCollect
+      )
+      assert.deepStrictEqual(actual.map((chunk) => chunk.length), lengths)
+      assert.deepStrictEqual(actual.flat(), values)
+    }))
+
+  it.effect("rechunk preserves large input split across source chunks", () =>
+    Effect.gen(function*() {
+      const values = Array.makeBy(200001, (i) => i)
+      const actual = yield* Stream.fromArrays(values.slice(0, 1), values.slice(1)).pipe(
+        Stream.rechunk(200002),
+        Stream.chunks,
+        Stream.runCollect
+      )
+      assert.deepStrictEqual(actual.map((chunk) => chunk.length), [200001])
+      assert.deepStrictEqual(actual.flat(), values)
+    }))
 
   it.effect("rechunk and grouped normalize their chunk size", () =>
     Effect.gen(function*() {
@@ -4245,12 +4302,29 @@ describe("Stream", () => {
   })
 
   describe("partition", () => {
+    it.effect("defaults to a capacity of 16", () =>
+      Effect.gen(function*() {
+        let pulled = 0
+        yield* Stream.range(0, 31).pipe(
+          Stream.rechunk(1),
+          Stream.tap(() =>
+            Effect.sync(() => {
+              pulled++
+            })
+          ),
+          Stream.partition(Result.succeed)
+        )
+        yield* TestClock.adjust(0)
+        // Sixteen elements are buffered; the next offer is blocked.
+        assert.strictEqual(pulled, 17)
+      }).pipe(Effect.scoped))
+
     it.effect("values", () =>
       Effect.gen(function*() {
         const { result1, result2 } = yield* pipe(
           Stream.range(0, 5),
           Stream.partition((n) => n % 2 === 0 ? Result.succeed(n) : Result.fail(n)),
-          Effect.flatMap(([odds, evens]) =>
+          Effect.flatMap(([evens, odds]) =>
             Effect.all({
               result1: Stream.runCollect(evens),
               result2: Stream.runCollect(odds)
@@ -4268,7 +4342,7 @@ describe("Stream", () => {
           Stream.make(0),
           Stream.concat(Stream.fail("boom")),
           Stream.partition((n) => n % 2 === 0 ? Result.succeed(n) : Result.fail(n)),
-          Effect.flatMap(([odds, evens]) =>
+          Effect.flatMap(([evens, odds]) =>
             Effect.all({
               result1: Effect.flip(Stream.runCollect(evens)),
               result2: Effect.flip(Stream.runCollect(odds))
@@ -4284,8 +4358,8 @@ describe("Stream", () => {
       Effect.gen(function*() {
         const { result1, result2, result3 } = yield* pipe(
           Stream.range(0, 5),
-          Stream.partition((n) => n % 2 === 0 ? Result.succeed(n) : Result.fail(n), { bufferSize: 1 }),
-          Effect.flatMap(([odds, evens]) =>
+          Stream.partition((n) => n % 2 === 0 ? Result.succeed(n) : Result.fail(n), { capacity: 1 }),
+          Effect.flatMap(([evens, odds]) =>
             Effect.gen(function*() {
               const ref = yield* Ref.make(Array.empty<number>())
               const latch = yield* Deferred.make<void>()
@@ -4377,7 +4451,7 @@ describe("Stream", () => {
         const { result1, result2 } = yield* pipe(
           Stream.range(0, 5),
           Stream.partition((n) => n % 2 === 0 ? Result.succeed(n) : Result.fail(n)),
-          Effect.flatMap(([odds, evens]) =>
+          Effect.flatMap(([evens, odds]) =>
             Effect.all({
               result1: Stream.runCollect(evens),
               result2: Stream.runCollect(odds)
@@ -4395,7 +4469,7 @@ describe("Stream", () => {
           Stream.make(0),
           Stream.concat(Stream.fail("boom")),
           Stream.partition((n) => n % 2 === 0 ? Result.succeed(n) : Result.fail(n)),
-          Effect.flatMap(([odds, evens]) =>
+          Effect.flatMap(([evens, odds]) =>
             Effect.all({
               result1: Effect.flip(Stream.runCollect(evens)),
               result2: Effect.flip(Stream.runCollect(odds))
@@ -4411,8 +4485,8 @@ describe("Stream", () => {
       Effect.gen(function*() {
         const { result1, result2, result3 } = yield* pipe(
           Stream.range(0, 5),
-          Stream.partition((n) => (n % 2 === 0 ? Result.succeed(n) : Result.fail(n)), { bufferSize: 1 }),
-          Effect.flatMap(([odds, evens]) =>
+          Stream.partition((n) => (n % 2 === 0 ? Result.succeed(n) : Result.fail(n)), { capacity: 1 }),
+          Effect.flatMap(([evens, odds]) =>
             Effect.gen(function*() {
               const ref = yield* Ref.make(Array.empty<number>())
               const latch = yield* (Deferred.make<void>())
@@ -4452,7 +4526,7 @@ describe("Stream", () => {
         const { evens, odds } = yield* pipe(
           Stream.range(0, 5),
           Stream.partition((n: number) => n % 2 === 0 ? Result.succeed(n) : Result.fail(n)),
-          Effect.flatMap(([fail, pass]) =>
+          Effect.flatMap(([pass, fail]) =>
             Effect.all({
               evens: Stream.runCollect(pass),
               odds: Stream.runCollect(fail)

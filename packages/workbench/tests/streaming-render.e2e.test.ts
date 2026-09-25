@@ -40,7 +40,7 @@ e2e('renders a compiled MCP tool\'s Suspense fallback before its gated child rel
       ].join('\n'),
       files: {
         ...gatedRouteFiles,
-        'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module","version":"1.0.0"}\n',
+        'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.6.4"},"type":"module","version":"1.0.0"}\n',
       },
       prefix: 'agent-bundle-streaming-render-e2e-',
     }),

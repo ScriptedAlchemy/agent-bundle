@@ -13,14 +13,13 @@ import {
   type McpAppBinding,
   type McpAppJsonValue,
 } from './mcp-app-binding-service.ts';
-import { createMcpAppConsentActionDigest } from './mcp-app-consent.ts';
+import { createMcpAppConsentActionDigest, type McpAppConsentCapability } from './mcp-app-consent.ts';
 import { cloneMcpAppJson, snapshotMcpAppJson, snapshotMcpAppJsonRecord } from './mcp-app-json.ts';
 import type {
   McpAppConsentAuthority,
-  McpAppConsentCapability,
   McpAppSandboxCsp,
   McpAppSandboxPermissions,
-} from './mcp-app-sandbox.ts';
+} from './mcp-app-sandbox-types.ts';
 import { MCP_APP_PROTOCOL_VERSION } from '../mcp-app-profile-descriptors.ts';
 
 export { MCP_APP_PROTOCOL_VERSION } from '../mcp-app-profile-descriptors.ts';

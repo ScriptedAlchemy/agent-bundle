@@ -268,7 +268,6 @@ it('queues one latest selected-fixture run only after a same-provider generation
   expect(effectFor(createRuntimeModel({ bootstrap: nextGeneration, profiles }))).toBeUndefined();
   expect(effectFor(settledFor(event(1, 'runtime.status', undefined, 'provider-a', 'generation-b'), nextGeneration))).toBeUndefined();
   expect(effectFor(settledFor(event(1, 'runtime.generation.failed', undefined, 'provider-a', 'generation-b'), nextGeneration))).toBeUndefined();
-  expect(effectFor(reduce(initial, { event: event(1, 'runtime.hmr.client-connected', { connectionCount: 1, surfaceId: 'weather' }), type: 'event.received' }))).toBeUndefined();
   expect(effectFor(settledFor(event(1, 'runtime.generation.activated', undefined, 'provider-b', 'generation-b'), providerRestart))).toBeUndefined();
   expect(effectFor(reduce(conflicted, { bootstrap: nextGeneration, type: 'bootstrap.received' }))).toBeUndefined();
 });
@@ -312,28 +311,14 @@ it('announces each runtime generation failure once without replacing the selecte
   ]);
 });
 
-it('turns a replay gap into exactly one bootstrap and clears HMR connection knowledge', () => {
-  const connected = reduce(model(), { event: event(1, 'runtime.hmr.client-connected', { connectionCount: 2, surfaceId: 'weather' }), type: 'event.received' });
+it('turns a replay gap into exactly one bootstrap', () => {
   const gap = { earliestAvailableSequence: 6, latestDroppedSequence: 5, requestedAfterSequence: 1, type: 'replay.gap' } as const;
-  const first = reduce(connected, { event: gap, type: 'event.received' });
+  const first = reduce(model(), { event: gap, type: 'event.received' });
   const second = reduce(first, { event: gap, type: 'event.received' });
 
-  expect(connected.hmrClientCountBySurface.weather).toBe(2);
-  expect(connected.hmrClientCountKnownSurfaces).toEqual(['weather']);
   expect(first.replayGap).toEqual(gap);
-  expect(first.hmrClientCountKnownSurfaces).toEqual([]);
   expect(first.activeEffect).toMatchObject({ kind: 'bootstrap' });
   expect(second).toBe(first);
-});
-
-it('uses ordered HMR count replacements and never treats hmrReady as a browser connection', () => {
-  const original = model({ status: status({ hmrReady: true }) });
-  const connected = reduce(original, { event: event(1, 'runtime.hmr.client-connected', { connectionCount: 4, surfaceId: 'weather' }), type: 'event.received' });
-  const disconnected = reduce(connected, { event: event(2, 'runtime.hmr.client-disconnected', { connectionCount: 1, surfaceId: 'weather' }), type: 'event.received' });
-
-  expect(original.hmrClientCountKnownSurfaces).toEqual([]);
-  expect(disconnected.hmrClientCountBySurface.weather).toBe(1);
-  expect(disconnected.hmrClientCountKnownSurfaces).toEqual(['weather']);
 });
 
 it('requires confirmation for a mutable run and retains the draft after a conflict without retrying', () => {
@@ -414,7 +399,6 @@ it('clears incompatible provider history and retains a labelled previous last-go
   expect(restarted.previousProviderLastGood).toMatchObject({ label: 'Previous provider session', run: { id: 'last-good' } });
   expect(Object.isFrozen(restarted.previousProviderLastGood)).toBe(true);
   expect(Object.isFrozen(restarted.previousProviderLastGood?.run)).toBe(true);
-  expect(restarted.hmrClientCountKnownSurfaces).toEqual([]);
   expect(recovered.previousProviderLastGood).toBeUndefined();
 });
 
@@ -497,16 +481,13 @@ it('rejects a stale provider run injected into a fresh-provider bootstrap', () =
   })).toThrow(/provider session/i);
 });
 
-it('handles foreign and run lifecycle events through browser-only effects without fabricating HMR counts', () => {
+it('handles foreign and run lifecycle events through browser-only effects', () => {
   const foreign = reduce(model(), { event: event(1, 'runtime.status', undefined, 'provider-b', 'generation-b'), type: 'event.received' });
   const started = reduce(model(), { event: event(1, 'runtime.run.started', undefined, 'provider-a', 'generation-a'), type: 'event.received' });
-  const malformedHmr = reduce(model(), { event: event(1, 'runtime.hmr.client-connected', { surfaceId: 'weather' }), type: 'event.received' });
   const generic = reduce(model(), { event: event(1, 'runtime.mcp.ready'), type: 'event.received' });
 
   expect(effectFor(foreign)).toMatchObject({ kind: 'bootstrap', triggerSequence: 1 });
-  expect(foreign.hmrClientCountKnownSurfaces).toEqual([]);
   expect(effectFor(started)).toMatchObject({ kind: 'bootstrap', triggerSequence: 1 });
-  expect(malformedHmr.hmrClientCountKnownSurfaces).toEqual([]);
   expect(effectFor(generic)).toMatchObject({ kind: 'bootstrap', triggerSequence: 1 });
 });
 
@@ -759,22 +740,6 @@ it('coalesces background read overflow to history bootstrap without losing confi
   expect(resetQueued.pendingEffect).toMatchObject({ kind: 'reset-state' });
 });
 
-it('clears malformed HMR evidence by named surface or globally while ignoring lower sequences', () => {
-  const connected = reduce(model(), { event: event(4, 'runtime.hmr.client-connected', { connectionCount: 2, surfaceId: 'weather' }), type: 'event.received' });
-  const malformedNamed = reduce(connected, { event: event(5, 'runtime.hmr.client-disconnected', { connectionCount: 'bad', surfaceId: 'weather' }), type: 'event.received' });
-  const twoKnown = reduce(malformedNamed,
-    { event: event(6, 'runtime.hmr.client-connected', { connectionCount: 1, surfaceId: 'weather' }), type: 'event.received' },
-    { event: event(7, 'runtime.hmr.client-connected', { connectionCount: 1, surfaceId: 'other' }), type: 'event.received' },
-  );
-  const malformedGlobal = reduce(twoKnown, { event: event(8, 'runtime.hmr.client-disconnected', { connectionCount: 0 }), type: 'event.received' });
-  const lower = reduce(twoKnown, { event: event(7, 'runtime.hmr.client-disconnected', { connectionCount: 'bad', surfaceId: 'weather' }), type: 'event.received' });
-
-  expect(malformedNamed.hmrClientCountBySurface.weather).toBeUndefined();
-  expect(malformedNamed.hmrClientCountKnownSurfaces).toEqual([]);
-  expect(malformedGlobal.hmrClientCountKnownSurfaces).toEqual([]);
-  expect(lower).toBe(twoKnown);
-});
-
 it('admits terminal state-version progress only for stable same-run evidence', () => {
   const input = { city: 'London', filters: ['today'] } as const;
   const running = {
@@ -827,17 +792,16 @@ it('never applies runtime events at or below the replay-gap recovery watermark',
   const gap = { earliestAvailableSequence: 9, latestDroppedSequence: 8, requestedAfterSequence: 1, type: 'replay.gap' } as const;
   const recovered = reduce(model(), { event: gap, type: 'event.received' });
   const stale = reduce(recovered, {
-    event: event(7, 'runtime.hmr.client-connected', { connectionCount: 2, surfaceId: 'weather' }),
+    event: event(7, 'runtime.mcp.ready'),
     type: 'event.received',
   });
   const next = reduce(stale, {
-    event: event(9, 'runtime.hmr.client-connected', { connectionCount: 3, surfaceId: 'weather' }),
+    event: event(9, 'runtime.mcp.ready'),
     type: 'event.received',
   });
 
   expect(stale).toBe(recovered);
   expect(next.lastConsumedEventSequence).toBe(9);
-  expect(next.hmrClientCountBySurface.weather).toBe(3);
 });
 
 it('preserves one direct read-only or replay operation through a full effect queue', () => {

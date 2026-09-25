@@ -101,8 +101,11 @@ const measure = async () => {
       samplesMs.push(measureOnce(hookPath));
     }
     const rounded = samplesMs.map((value) => Math.round(value * 100) / 100);
+    const manifest = JSON.parse(
+      await readFile(join(workspaceRoot, 'packages', 'agent-bundle', 'package.json'), 'utf8'),
+    );
     return {
-      effect: '4.0.0-rc.112',
+      effect: manifest.dependencies.effect,
       hookPath: 'hooks/<generated-session-start>.mjs',
       kind: 'generated-stdio-hook-cold-start',
       maxMs: Math.round(Math.max(...rounded) * 100) / 100,
