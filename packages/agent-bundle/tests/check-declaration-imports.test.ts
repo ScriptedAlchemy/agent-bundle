@@ -18,7 +18,7 @@ import { removeTree } from './support/remove-tree.ts';
 const manifest: DeclarationManifest = {
   name: 'fixture-package',
   dependencies: { effect: '4.0.0', '@modelcontextprotocol/client': '2.0.0' },
-  devDependencies: { zod: '4.5.4', 'typescript-5': 'npm:typescript@5.9.3', '@types/node': '26.4.0' },
+  devDependencies: { zod: '4.6.4', 'typescript-5': 'npm:typescript@5.9.3', '@types/node': '26.4.0' },
   exports: {
     '.': { types: './dist/index.d.ts', import: './dist/index.js' },
     './routes': { types: './dist/routes/public.d.ts', import: './dist/routes.js' },
@@ -172,7 +172,7 @@ describe('declarationImportViolations', () => {
     const report = declarationImportViolations({
       manifest: {
         name: 'agent-bundle',
-        devDependencies: { zod: '4.5.4' },
+        devDependencies: { zod: '4.6.4' },
         exports: { './app': { types: './dist/app.d.ts', import: './dist/app.js' } },
       },
       packedPaths: ['dist/app.d.ts', 'dist/app.js'],
@@ -410,7 +410,7 @@ describe('the packed-declaration gate', () => {
     type: 'module',
     exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' }, './package.json': './package.json' },
     dependencies: { effect: '4.0.0' },
-    devDependencies: { zod: '4.5.4' },
+    devDependencies: { zod: '4.6.4' },
   };
   const badFiles = {
     'package.json': `${JSON.stringify(badManifest, null, 2)}\n`,
@@ -445,7 +445,7 @@ describe('the packed-declaration gate', () => {
   });
 
   it('passes the same pack once the import is declared, and lets --strict fail internal declarations', async () => {
-    const goodManifest = { ...badManifest, name: 'good-fixture', dependencies: { effect: '4.0.0', zod: '4.5.4' }, devDependencies: {} };
+    const goodManifest = { ...badManifest, name: 'good-fixture', dependencies: { effect: '4.0.0', zod: '4.6.4' }, devDependencies: {} };
     const root = await writeFixturePack({
       ...badFiles,
       'package.json': `${JSON.stringify(goodManifest, null, 2)}\n`,

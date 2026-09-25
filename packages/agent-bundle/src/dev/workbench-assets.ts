@@ -39,9 +39,9 @@ const packageRoot = basename(import.meta.dirname) === 'dist'
 
 const defaultRoot = (): string => resolve(packageRoot, 'dist', 'workbench');
 
-// The Workbench build copies its attribution files into the asset tree without
-// an extension (`THIRD_PARTY_NOTICES`, `src/mcp/APP-RENDERER-LICENSE`). Those
-// conventional names are plain text a browser should render; every other
+// The Workbench build copies its attribution file into the asset tree without
+// an extension (`THIRD_PARTY_NOTICES`). Such conventional license and notice
+// names are plain text a browser should render; every other
 // extensionless file keeps the binary fallback.
 const noticeFileName = /^(?:[a-z0-9]+[-_])*(?:licen[cs]e|notices?|copying)$/iu;
 

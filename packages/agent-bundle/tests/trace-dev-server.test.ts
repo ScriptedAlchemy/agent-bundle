@@ -39,7 +39,7 @@ it('serves replay and live trace entries and lowers build failures', { timeout: 
       '',
     ].join('\n'),
     files: {
-      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.6.4"},"type":"module"}\n',
       'src/events/tool/before.tsx': [
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
