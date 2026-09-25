@@ -329,7 +329,7 @@ export const bareRecursiveRmFailures = (file, text) => {
   const failures = [];
   for (const call of recursiveRmCalls(text, file)) {
     if (call.hasRetries) continue;
-    failures.push(`${file}:${call.line} bare recursive rm. Use removeTree.`);
+    failures.push(`${file}:${call.line} bare recursive rm. Use removeTree (removeTreeSync if it cannot await).`);
   }
   return failures;
 };

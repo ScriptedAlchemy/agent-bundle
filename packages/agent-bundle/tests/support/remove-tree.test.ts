@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import { mkdir, mkdtemp, rm as removeDirectory, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,4 +46,26 @@ it('removeTreeSync deletes a nested tree and tolerates a missing path', async ()
   removeTreeSync(root);
   await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
   removeTreeSync(root);
+});
+
+it('removeTreeSync retries ENOTEMPTY with backoff and surfaces a persistent one', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'remove-tree-sync-retry-'));
+  await writeFile(join(root, 'kept.txt'), 'x\n');
+  let attempts = 0;
+  const started = Date.now();
+  removeTreeSync(root, (path, options) => {
+    attempts += 1;
+    if (attempts === 1) throw emptyError;
+    rmSync(path, options);
+  });
+  expect(attempts).toBe(2);
+  expect(Date.now() - started).toBeGreaterThanOrEqual(45);
+  await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+
+  let persistent = 0;
+  expect(() => removeTreeSync(root, () => {
+    persistent += 1;
+    throw emptyError;
+  })).toThrow(emptyError);
+  expect(persistent).toBe(6);
 });
