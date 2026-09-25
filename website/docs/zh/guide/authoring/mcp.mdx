@@ -501,6 +501,18 @@ export default () => new McpServer({ name: 'curator', version: '1.0.0' });
 这层保护之所以重要，是因为 stdout 承载着 JSON-RPC 帧：任何被导入模块中一次走神的 `console.log` 都会
 破坏协议流。
 
+CommonJS 入口把同一个工厂函数赋给 `module.exports`，打包器会把它暴露为该模块的默认导出：
+
+```js
+// src/mcp/curator.cjs
+const { McpServer } = require('@modelcontextprotocol/server');
+
+module.exports = () => new McpServer({ name: 'curator', version: '1.0.0' });
+```
+
+只有整体赋值才算数。`exports.curator = …` 与 `module.exports.curator = …` 都是具名导出，外壳两者都
+不读取。
+
 在顶层构造并连接传输层、且没有默认导出的模块无法构建：源码校验会把 `AB4730` 报告为**错误**。不希望
 被编译的服务器请用 `command` 或 `url` 声明，或声明为由你自己的构建产出的 `{ prebuilt: ... }` 入口。
 

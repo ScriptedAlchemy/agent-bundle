@@ -8,7 +8,7 @@ import ts from 'typescript-5';
 import { claudeAdapter } from '../src/adapters/claude.ts';
 import { cursorHookWrapperSource, nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
 import type { NoticeDeliveryAdvertisement } from '../src/adapters/notice-delivery.ts';
-import { scanEntryExportsSource } from '../src/build/entry-exports.ts';
+import { assignsModuleExportsSource, scanEntryExportsSource } from '../src/build/entry-exports.ts';
 import * as entryShellModule from '../src/build/entry-shell.ts';
 import { launchEnvLayerSpecifier, operatorEnvLayerImport, operatorEnvLayerModuleSource, operatorEnvLayerVirtualModule } from '../src/build/launch-env-shell.ts';
 import { stableJson } from '../src/core/digest.ts';
@@ -57,6 +57,22 @@ describe('entry export scanning', () => {
     expect(scanEntryExportsSource('const f = 1;\nexport default f;').hasDefaultExport).toBe(true);
     expect(scanEntryExportsSource("export type { Thing as default } from './types.ts';").hasDefaultExport).toBe(false);
     expect(scanEntryExportsSource('export type { main } from "./types.ts";').hasMainExport).toBe(false);
+  });
+
+  it('keeps module.exports out of the shared export scan', () => {
+    expect(scanEntryExportsSource('module.exports = () => server;', '/app/entry.cjs')).toEqual({
+      hasDefaultExport: false,
+      hasMainExport: false,
+    });
+  });
+
+  it('recognizes only a top-level module.exports assignment to an unbound module', () => {
+    expect(assignsModuleExportsSource('module.exports = () => server;', '/app/entry.cjs')).toBe(true);
+    expect(assignsModuleExportsSource('exports.foo = () => server;', '/app/entry.cjs')).toBe(false);
+    expect(assignsModuleExportsSource('module.exports.foo = 1;', '/app/entry.cjs')).toBe(false);
+    expect(assignsModuleExportsSource('if (ok) { module.exports = 1; }', '/app/entry.cjs')).toBe(false);
+    expect(assignsModuleExportsSource('const module = { exports: null };\nmodule.exports = factory;', '/app/entry.mts')).toBe(false);
+    expect(assignsModuleExportsSource("import module from './m.ts';\nmodule.exports = factory;", '/app/entry.ts')).toBe(false);
   });
 
   it('never matches inside comments, strings, or template literals', () => {

@@ -312,6 +312,11 @@ export const matrix = async (): Promise<void> => {
 };
 ```
 
+资源路由的 fixture，以及 `apps: 'explicit'` 下 MCP App 路由的 fixture，必须设置
+`kind: 'resource'`。写成空的 `{}` 会让该路由的 `coverage` 检查以
+`resource/app route fixture must be { kind: "resource" }` 失败；仅有键名并不算覆盖该路由。反过来，
+工具、prompt 与命令行路由拒绝这个 `kind`，它们的 fixture 携带的是 `input`。
+
 打包与已安装宿主这两个入口接受同样的 fixture 形状，外加它们所针对的会话：`runPackedContractMatrix`
 需要那个已打开的打包会话，以及在移除源码*之前*编译出的清单；而 `runInstalledHostContractMatrix` 需要
 `openInstalledHostMcpServer` 返回的会话以及同一份清单。

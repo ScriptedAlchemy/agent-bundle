@@ -1444,6 +1444,52 @@ it('creates session state only after setup succeeds and always inherits the stdi
   }
 }, 30_000);
 
+it('accepts a CommonJS stdio entry whose server factory is module.exports, and runs it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-cjs-entry-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
+      join(root, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+    await writeFile(join(root, 'src', 'server.cjs'), [
+      "const { McpServer } = require('@modelcontextprotocol/server');",
+      '',
+      'module.exports = () => {',
+      "  const server = new McpServer({ name: 'cjs-server', version: '1.0.0' });",
+      "  server.registerTool('ping', { description: 'Answer a ping.' }, async () => ({",
+      "    content: [{ type: 'text', text: 'pong' }],",
+      '  }));',
+      '  return server;',
+      '};',
+      '',
+    ].join('\n'));
+    const config: AgentBundleConfig = {
+      mcp: { servers: { cjs: { entry: './src/server.cjs' } } },
+      plugin: { name: 'mcp-cjs-fixture' },
+      targets: ['portable'],
+    };
+    // The shell reads the entry's `default`, which is what the bundler makes
+    // of `module.exports`; AB4730 must not refuse an entry it can run.
+    expect(validateSource(loadedProject(root, config), { skills: [] }, registry)).toEqual([]);
+
+    const model = await normalizeProject(loadedProject(root, config), { skills: [] }, registry);
+    const artifact = join(root, 'dist');
+    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
+
+    await expect(new McpService().list({ artifact, server: 'cjs', target: 'portable' })).resolves.toMatchObject({
+      server: { name: 'cjs-server', version: '1.0.0' },
+      tools: [{ name: 'ping' }],
+    });
+  } finally {
+    await removeTree(root);
+  }
+}, 30_000);
+
 it('serves compiler-bundled MCP App resources from a copied artifact without project source', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-resource-'));
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-consumer-'));

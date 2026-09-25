@@ -100,17 +100,39 @@ const COMPACTED_KERNEL_FORMAT = 2;
 const READABLE_KERNEL_FORMATS: readonly number[] = Object.freeze([KERNEL_FORMAT, COMPACTED_KERNEL_FORMAT]);
 
 /**
- * Column order of every table `initialize` creates. A pre-existing table
- * whose columns differ is not this kernel's schema and fails closed as
- * `corrupt` instead of surfacing a raw SQLite error on the first statement
- * that names a missing column.
+ * Column order and nullability of every table `initialize` creates, written
+ * as the `PRAGMA table_info` signature each `CREATE TABLE` below produces. A
+ * pre-existing table whose columns differ is not this kernel's schema and
+ * fails closed as `corrupt` instead of surfacing a raw SQLite error on the
+ * first statement that names a missing column. Nullability is part of that
+ * identity: a column this kernel reads unconditionally but an earlier layout
+ * left nullable holds rows it cannot decode, and those must fail at open
+ * rather than on the row that happens to be NULL.
  */
 const TABLE_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  agent_state_head: ['id', 'revision', 'state'],
-  agent_state_journal: ['revision', 'kind', 'name', 'payload', 'state', 'result_state', 'to_version', 'idempotency_key', 'committed_at'],
-  agent_state_meta: ['id', 'definition_id', 'schema_version', 'kernel_format'],
-  agent_state_pruned_keys: ['idempotency_key', 'revision', 'canonical_input'],
+  agent_state_head: ['id', 'revision NOT NULL', 'state NOT NULL'],
+  agent_state_journal: [
+    'revision',
+    'kind NOT NULL',
+    'name',
+    'payload',
+    'state',
+    'result_state NOT NULL',
+    'to_version',
+    'idempotency_key NOT NULL',
+    'committed_at NOT NULL',
+  ],
+  agent_state_meta: ['id', 'definition_id NOT NULL', 'schema_version NOT NULL', 'kernel_format NOT NULL'],
+  agent_state_pruned_keys: ['idempotency_key', 'revision NOT NULL', 'canonical_input NOT NULL'],
 });
+
+interface TableInfoRow {
+  readonly name: string;
+  readonly notnull: number;
+}
+
+const columnSignature = (column: TableInfoRow): string =>
+  column.notnull === 0 ? column.name : `${column.name} NOT NULL`;
 
 export interface SqliteStateDriverOptions {
   /**
@@ -848,8 +870,8 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
       `);
       const definition = this.#definition;
       for (const [table, columns] of Object.entries(TABLE_COLUMNS)) {
-        const actual = (transactionDb.prepare(`PRAGMA table_info(${table})`).all() as unknown as { readonly name: string }[])
-          .map((column) => column.name);
+        const actual = (transactionDb.prepare(`PRAGMA table_info(${table})`).all() as unknown as TableInfoRow[])
+          .map(columnSignature);
         if (actual.join(',') !== columns.join(',')) {
           throw new AgentStateError(
             'corrupt',
