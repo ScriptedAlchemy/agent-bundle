@@ -620,6 +620,7 @@ describe('generated bin normalization', () => {
       id: 'cli:inspect',
       kind: 'cli',
       provenance: { kind: 'conventional', relativePath: 'src/cli/inspect.ts' },
+      resultSchemaState: 'unprojectable' as const,
       source: '/project/src/cli/inspect.ts',
     }],
     ...overrides,

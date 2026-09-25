@@ -145,8 +145,8 @@ export interface CompiledAgentRoute {
   /** Static cheap gate; present only on event routes that declare a valid relative default re-export. */
   readonly handler?: CompiledEventHandler;
   readonly provenance: RouteProvenance;
-  /** Omitted only by legacy or manually assembled graphs, where consumers must treat the declaration as unknown. */
-  readonly resultSchemaState?: RouteResultSchemaState;
+  /** Static declaration evidence: absent, unknown (module text unavailable), or unprojectable (named `resultSchema`). */
+  readonly resultSchemaState: RouteResultSchemaState;
   /** The owning MCP server id (`mcp:<name>`); MCP route kinds only. */
   readonly serverId?: string;
   /** Absolute route module path. */

@@ -119,7 +119,7 @@ const resultSchemaRows = (
         ? 'Unavailable · this invocation recorded no structured result.'
         : 'Available · open Structured result.',
   );
-  const state = leaf.resultSchemaState ?? 'unknown';
+  const state = leaf.resultSchemaState;
   switch (state) {
     case 'absent':
       return [

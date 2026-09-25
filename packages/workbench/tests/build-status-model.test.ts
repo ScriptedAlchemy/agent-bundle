@@ -182,6 +182,7 @@ const treeWith = (source: string): ApplicationTree => ({
       key: '/routes/scripts/sync',
       label: 'sync',
       ref: { kind: 'script', name: 'sync' },
+      resultSchemaState: 'unprojectable' as const,
       routeId: 'script:sync',
       source,
     }],
