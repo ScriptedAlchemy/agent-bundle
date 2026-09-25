@@ -4,15 +4,6 @@ import type {
   DevRuntimeAssetRequest,
   DevRuntimeDescriptor,
   DevRuntimeInvocationRequest,
-  DevRuntimeMcpOperationRequest,
-  DevRuntimeMcpOperationResult,
-  DevRuntimeMcpRegistryReconcileInput,
-  DevRuntimeMcpRegistryReconcileResult,
-  DevRuntimeMcpRegistryReplayGap,
-  DevRuntimeMcpRegistrySnapshot,
-  DevRuntimeMcpSessionControlRequest,
-  DevRuntimeMcpSessionRequest,
-  DevRuntimeMcpSessionSnapshot,
   DevRuntimeReplayRequest,
   DevRuntimeRun,
   DevRuntimeStateIdentity,
@@ -20,20 +11,6 @@ import type {
   DevRuntimeStatus,
   DevRuntimeSurface,
 } from './runtime-protocol.ts';
-
-/** Trusted-process-only compiler endpoint; never serialize it into runtime JSON. */
-export interface DevRuntimeClientSurfaceEndpoint {
-  readonly entryPath: string;
-  readonly httpOrigin: string;
-  readonly httpPathPrefixes: readonly string[];
-  /**
-   * Provider-owned Runtime App reload authority. The provider invokes every
-   * subscribed listener after a successful, changed App environment compile;
-   * the returned function detaches that listener.
-   */
-  readonly subscribeReload: (listener: () => void) => () => void;
-  readonly surfaceId: string;
-}
 
 /** Trusted normalized input from ProjectService; never serialize to the browser. */
 export interface DevRuntimePreparedMcpServer {
@@ -72,9 +49,6 @@ export interface DevRuntimePreparedProject {
 export interface DevRuntimeEventInput {
   readonly correlationId?: string;
   readonly details?: JsonObject;
-  readonly mcpRegistryRevision?: number;
-  readonly mcpSessionId?: string;
-  readonly mcpSessionRevision?: number;
   readonly runId?: string;
   readonly runtimeGenerationId?: string;
   readonly type:
@@ -84,10 +58,7 @@ export interface DevRuntimeEventInput {
     | 'runtime.generation.failed'
     | 'runtime.run.started'
     | 'runtime.run.completed'
-    | 'runtime.run.failed'
-    | 'runtime.mcp.restarting'
-    | 'runtime.mcp.ready'
-    | 'runtime.mcp.failed';
+    | 'runtime.run.failed';
 }
 
 export interface DevRuntimeStartContext {
@@ -101,54 +72,9 @@ export interface DevRuntimeStartContext {
   readonly storageRoot: string;
 }
 
-export type DevRuntimeMcpRegistryMessage =
-  | DevRuntimeMcpRegistryReconcileResult
-  | DevRuntimeMcpRegistryReplayGap;
-
-export type DevRuntimeMcpRegistryListener = (message: DevRuntimeMcpRegistryMessage) => void;
-
-export interface DevRuntimeMcpRegistrySubscription {
-  unsubscribe(): void;
-}
-
-export interface DevRuntimeMcpSessionCloseObservation {
-  readonly closed: boolean;
-  unsubscribe(): void;
-}
-
-export interface DevRuntimeMcpSessionExecuteOptions {
-  readonly signal?: AbortSignal;
-}
-
-export interface DevRuntimeMcpSessionView {
-  execute(request: DevRuntimeMcpOperationRequest, options?: DevRuntimeMcpSessionExecuteOptions): Promise<DevRuntimeMcpOperationResult>;
-  snapshot(): DevRuntimeMcpSessionSnapshot;
-  watchClosed(listener: (reason?: unknown) => Promise<void> | void): DevRuntimeMcpSessionCloseObservation;
-}
-
-export interface DevRuntimeMcpSession extends DevRuntimeMcpSessionView {
-  close(): Promise<void>;
-}
-
-export interface DevRuntimeMcpRegistry {
-  closeSession(request: DevRuntimeMcpSessionControlRequest): Promise<void>;
-  close(): Promise<void>;
-  open(request: DevRuntimeMcpSessionRequest): Promise<DevRuntimeMcpSession>;
-  reconcile(input: DevRuntimeMcpRegistryReconcileInput): Promise<DevRuntimeMcpRegistryReconcileResult>;
-  restart(request: DevRuntimeMcpSessionControlRequest): Promise<DevRuntimeMcpRegistryReconcileResult>;
-  session(sessionId: string): DevRuntimeMcpSessionView | undefined;
-  snapshot(): DevRuntimeMcpRegistrySnapshot | undefined;
-  subscribe(
-    options: Readonly<{ readonly afterSequence?: number }>,
-    listener: DevRuntimeMcpRegistryListener,
-  ): DevRuntimeMcpRegistrySubscription;
-}
-
 export interface DevRuntimeSession {
-  readonly mcpRegistry: DevRuntimeMcpRegistry;
   /** Server-only controller identity; it does not depend on an active generation. */
   readonly providerSessionId: string;
-  clientSurface(surfaceId: string): DevRuntimeClientSurfaceEndpoint | undefined;
   close(): Promise<void>;
   invoke(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun>;
   readAsset(request: DevRuntimeAssetRequest): Promise<DevRuntimeAsset | undefined>;

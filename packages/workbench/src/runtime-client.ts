@@ -248,35 +248,9 @@ const traceSpan = (value: unknown): DevRuntimeTraceSpan => {
 
 const inspection = (value: unknown, runId: string): DevRuntimeInspectionEnvelope => {
   const response = record(value);
-  if (!hasOnly(response, ['agentVisible', 'app', 'flight', 'modelVisible', 'native', 'protocol', 'state', 'trace', 'tree']) ||
+  if (!hasOnly(response, ['agentVisible', 'flight', 'modelVisible', 'native', 'protocol', 'state', 'trace', 'tree']) ||
     !isRecord(response.state) || !hasOnly(response.state, ['identity', 'snapshot']) || !Array.isArray(response.trace) || !Array.isArray(response.tree)) {
     throw invalid('Runtime route returned an invalid inspection envelope.');
-  }
-  const app = response.app === undefined ? undefined : record(response.app, 'Runtime route returned an invalid App inspection.');
-  let appSnapshot: DevRuntimeInspectionEnvelope['app'];
-  if (app !== undefined) {
-    const binding = record(app.mcpBinding, 'Runtime route returned an invalid App inspection.');
-    if (!hasOnly(app, ['mcpBinding', 'resourceUri', 'surfaceId']) ||
-      !hasOnly(binding, ['definitionDigest', 'registryRevision', 'serverDigest', 'serverName', 'sessionId', 'sessionRevision', 'target', 'transportDigest']) ||
-      !nonemptyString(app.resourceUri) || !nonemptyString(app.surfaceId) || !nonemptyString(binding.definitionDigest) ||
-      !nonnegativeInteger(binding.registryRevision) || !nonemptyString(binding.serverDigest) || !nonemptyString(binding.serverName) ||
-      !nonemptyString(binding.sessionId) || !nonnegativeInteger(binding.sessionRevision) || !nonemptyString(binding.target) || !nonemptyString(binding.transportDigest)) {
-      throw invalid('Runtime route returned an invalid App inspection.');
-    }
-    appSnapshot = Object.freeze({
-      mcpBinding: Object.freeze({
-        definitionDigest: binding.definitionDigest,
-        registryRevision: binding.registryRevision,
-        serverDigest: binding.serverDigest,
-        serverName: binding.serverName,
-        sessionId: binding.sessionId,
-        sessionRevision: binding.sessionRevision,
-        target: binding.target,
-        transportDigest: binding.transportDigest,
-      }),
-      resourceUri: app.resourceUri,
-      surfaceId: app.surfaceId,
-    });
   }
   const flight = response.flight === undefined ? undefined : record(response.flight, 'Runtime route returned an invalid Flight inspection.');
   if (flight !== undefined && (!hasOnly(flight, ['bytes', 'downloadPath', 'preview', 'truncated']) || !nonnegativeInteger(flight.bytes) ||
@@ -289,7 +263,6 @@ const inspection = (value: unknown, runId: string): DevRuntimeInspectionEnvelope
   }
   return Object.freeze({
     ...(response.agentVisible === undefined ? {} : { agentVisible: jsonValue(response.agentVisible) }),
-    ...(appSnapshot === undefined ? {} : { app: appSnapshot }),
     ...(flight === undefined ? {} : { flight: Object.freeze({
       bytes: flight.bytes as number,
       downloadPath: flightDownloadPath,

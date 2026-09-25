@@ -348,7 +348,7 @@ export type {
 // The `dev.runtime.provider` protocol (#485): everything a provider module
 // accepts through `start()` or hands back through its session, the two errors
 // a provider throws to get the documented Workbench behaviour, and the
-// generation store and MCP registry a session drives (below). Test-only
+// generation store a session drives (below). Test-only
 // services (`ProjectService`, `EpochStore`, the provider loader) stay internal.
 export {
   DevRuntimeGenerationConflictError,
@@ -356,16 +356,7 @@ export {
 } from './dev/runtime-provider.ts';
 export type {
   CreateDevRuntimeProvider,
-  DevRuntimeClientSurfaceEndpoint,
   DevRuntimeEventInput,
-  DevRuntimeMcpRegistry,
-  DevRuntimeMcpRegistryListener,
-  DevRuntimeMcpRegistryMessage,
-  DevRuntimeMcpRegistrySubscription,
-  DevRuntimeMcpSession,
-  DevRuntimeMcpSessionCloseObservation,
-  DevRuntimeMcpSessionExecuteOptions,
-  DevRuntimeMcpSessionView,
   DevRuntimePreparedMcpApp,
   DevRuntimePreparedMcpServer,
   DevRuntimePreparedProject,
@@ -382,20 +373,6 @@ export type {
   DevRuntimeFixture,
   DevRuntimeInspectionEnvelope,
   DevRuntimeInvocationRequest,
-  DevRuntimeMcpAppRunBinding,
-  DevRuntimeMcpConnectionState,
-  DevRuntimeMcpInvalidatedBinding,
-  DevRuntimeMcpOperationRequest,
-  DevRuntimeMcpOperationResult,
-  DevRuntimeMcpRegistryReconcileInput,
-  DevRuntimeMcpRegistryReconcileResult,
-  DevRuntimeMcpRegistryReplayGap,
-  DevRuntimeMcpRegistrySnapshot,
-  DevRuntimeMcpServerDescriptor,
-  DevRuntimeMcpSessionBinding,
-  DevRuntimeMcpSessionControlRequest,
-  DevRuntimeMcpSessionRequest,
-  DevRuntimeMcpSessionSnapshot,
   DevRuntimeReplayRequest,
   DevRuntimeRun,
   DevRuntimeStateIdentity,
@@ -406,13 +383,12 @@ export type {
   DevRuntimeTreeNode,
   RuntimeVector,
 } from './dev/runtime-protocol.ts';
-// The generation store and MCP registry a session drives, as effect-free
-// contracts plus their constructors: the classes behind them throw
-// `YieldableFrameworkError`s and so may not enter a public declaration graph.
-export { createRuntimeGenerationStore, createRuntimeMcpRegistry } from './dev/runtime-store-factories.ts';
+// The generation store a session drives, as an effect-free contract plus its
+// constructor: the class behind it throws `YieldableFrameworkError`s and so may
+// not enter a public declaration graph.
+export { createRuntimeGenerationStore } from './dev/runtime-store-factories.ts';
 export type {
   DevRuntimeGenerationStore,
-  DevRuntimeProviderMcpRegistry,
   RuntimeGeneration,
   RuntimeGenerationActivationGuard,
   RuntimeGenerationAsset,
@@ -428,15 +404,6 @@ export type {
   RuntimeGenerationStoreOptions,
   RuntimeGenerationValidationInput,
   RuntimeGenerationValidator,
-  RuntimeMcpCommittedActivationReconcile,
-  RuntimeMcpConnection,
-  RuntimeMcpConnector,
-  RuntimeMcpExecutionContext,
-  RuntimeMcpExecutionValue,
-  RuntimeMcpPreparedActivationReconcile,
-  RuntimeMcpRegistryCloseFailure,
-  RuntimeMcpRegistryErrorCode,
-  RuntimeMcpRegistryOptions,
 } from './dev/runtime-store-contracts.ts';
 
 export interface StructuredLogger {

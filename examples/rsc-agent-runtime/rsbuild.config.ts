@@ -5,7 +5,6 @@ import { dirname, join } from 'node:path';
 import {
   defineConfig,
   type RsbuildConfig,
-  type RsbuildDevServer,
   type RsbuildPlugin,
   type Rspack,
 } from '@rsbuild/core';
@@ -29,11 +28,10 @@ import { emitRuntimeArtifacts } from './src/build/emit-artifacts.js';
 export const rscRuntimeBrowserHost = Object.freeze(['chrome >= 144'] as const);
 
 /**
- * The compiler App is an opaque srcdoc child (`hmr: false`) and the
- * runtime-surface outer document owns the one HMR socket. Fast Refresh
- * would inject a refresh runtime into a self-contained HTML document that
- * must never receive a browser HMR credential. The Flight widget is client
- * JS, not a refreshable SPA.
+ * The development session serves no browser client (`hmr: false`). Fast
+ * Refresh would inject a refresh runtime into a self-contained HTML document
+ * that must never receive a browser HMR credential. The Flight widget is
+ * client JS, not a refreshable SPA.
  */
 export const rscRuntimeReactPluginOptions = Object.freeze({ fastRefresh: false } as const);
 
@@ -75,13 +73,6 @@ const isCompileEnvironmentName = (value: string): value is RscRuntimeCompileEnvi
 export interface RscRuntimeRsbuildConfigOptions {
   readonly compilerRoot?: string;
   readonly mode: 'development' | 'production';
-  /**
-   * Provider-owned reload signal: invoked once for each later successful,
-   * changed App environment compilation. This callback replaces
-   * `hot.send('full-reload')`, so no consumer has to parse Rsbuild's private
-   * WebSocket envelope to learn that the App surface changed.
-   */
-  readonly onAppReload?: () => void;
   readonly onCompile?: Readonly<{
     /**
      * Allocates the monotonic identity for one completed MultiStats cohort.
@@ -121,65 +112,6 @@ export interface RscRuntimeRsbuildConfigOptions {
     }): Promise<void>;
   }>;
 }
-
-const appOutputContentHash = (stats: Rspack.Stats): string | undefined => {
-  try {
-    const assets = [...stats.compilation.getAssets()].sort((left, right) =>
-      left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
-    const hash = createHash('sha256');
-    hash.update(`${assets.length}:`);
-    for (const asset of assets) {
-      const name = Buffer.from(asset.name);
-      const content = asset.source.buffer();
-      hash.update(`${name.byteLength}:`);
-      hash.update(name);
-      hash.update(`${content.byteLength}:`);
-      hash.update(content);
-    }
-    return hash.digest('hex');
-  } catch {
-    return undefined;
-  }
-};
-
-const runtimeAppReloadPlugin = (
-  onAppReload: NonNullable<RscRuntimeRsbuildConfigOptions['onAppReload']>,
-): RsbuildPlugin => {
-  let devServer: RsbuildDevServer | undefined;
-  let lastAppOutput: string | undefined;
-  return {
-    name: 'agent-bundle:rsc-runtime-app-reload',
-    setup(api) {
-      api.onAfterCreateCompiler(({ environments }) => {
-        if (environments.app === undefined) {
-          throw new Error('RSC runtime compiler did not expose the App environment.');
-        }
-      });
-      api.onBeforeStartDevServer(({ server }) => {
-        devServer = server;
-        lastAppOutput = undefined;
-      });
-      api.onCloseDevServer(() => {
-        devServer = undefined;
-        lastAppOutput = undefined;
-      });
-      api.onAfterEnvironmentCompile(({ environment, isFirstCompile, stats }) => {
-        if (devServer === undefined || environment.name !== 'app' || stats === undefined || stats.hasErrors()) return;
-        // Rspack stats hashes can change across watch completions whose
-        // emitted App bytes are identical. The complete asset set is the
-        // browser-visible identity; an unreadable set remains unidentifiable
-        // and reloads at least once without clobbering the retained identity.
-        const output = appOutputContentHash(stats);
-        if (output !== undefined) {
-          if (lastAppOutput === output) return;
-          lastAppOutput = output;
-        }
-        if (isFirstCompile) return;
-        onAppReload();
-      });
-    },
-  };
-};
 
 const emitRuntimeManifest = (): RsbuildPlugin => ({
   apply: 'build',
@@ -316,10 +248,10 @@ const runtimeCompileObserverPlugin = (
           const environmentHashes = Object.freeze(Object.fromEntries(
             compileEnvironmentNames.map((name) => [name, cohortHashes.get(name) as string]),
           )) as RscRuntimeCompileEnvironmentHashes;
-          // The App environment ships through its own dev-server surface, so
-          // only the rsc and widget children define the source revision that
-          // decides whether a new runtime generation is needed. The App child
-          // hash still selects which staged App checkpoint joins the cohort.
+          // Only the rsc and widget children define the source revision that
+          // decides whether a new runtime generation is needed; an App-only
+          // edit joins the next generation. The App child hash still selects
+          // which staged App checkpoint joins the cohort.
           const hashes = (['rsc', 'widget'] as const).map((name) => [name, cohortHashes.get(name) as string]);
           const sourceRevision = createHash('sha256').update(JSON.stringify(hashes)).digest('hex');
           snapshot = await observer.capture({
@@ -383,8 +315,7 @@ export const createRscRuntimeRsbuildConfig = (
       // Port 0 lets the OS assign the listener. Rsbuild's default (3000 with an
       // incrementing probe) makes every concurrent runtime session on a host
       // race for the same first candidate, which surfaces as EADDRINUSE when
-      // suites run in parallel. Consumers read the resolved port back from
-      // `rsbuild.context.devServer`.
+      // suites run in parallel.
       server: { host: '127.0.0.1', port: 0, printUrls: false },
     } : {}),
     plugins: [
@@ -392,7 +323,6 @@ export const createRscRuntimeRsbuildConfig = (
       pluginRSC({ environments: { server: 'rsc', client: 'widget' } }),
       emitRuntimeManifest(),
       selfContainedAppPlugin(),
-      ...(options.onAppReload === undefined ? [] : [runtimeAppReloadPlugin(options.onAppReload)]),
       ...(options.onCompile === undefined ? [] : [runtimeCompileObserverPlugin(options.onCompile)]),
     ],
     environments: {
@@ -456,9 +386,8 @@ export const createRscRuntimeRsbuildConfig = (
       app: {
         ...(development ? {
           dev: {
-            // The trusted runtime-surface outer document owns the one HMR
-            // socket.  The compiler App itself runs in an opaque srcdoc child
-            // and must never receive a browser HMR credential or connection.
+            // The development session serves no browser client; the compiled
+            // App must never receive a browser HMR credential or connection.
             hmr: false,
             liveReload: false,
           },

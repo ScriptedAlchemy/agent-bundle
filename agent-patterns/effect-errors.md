@@ -26,8 +26,8 @@ onto those classes at the boundary. It does not replace them.
 - Typed fail, framework-process class (dev seam / eval service, extends
   `YieldableFrameworkError` or `YieldableCodedError` from
   `packages/agent-bundle/src/effect/errors.ts`):
-  `return yield* new RuntimeMcpRegistryError('RUNTIME_MCP_REGISTRY_CLOSED', message)`.
-  `Effect.fail(new RuntimeMcpRegistryError(...))` is equally valid; do not
+  `return yield* new RuntimeGenerationStoreError('RUNTIME_GENERATION_CLOSED', message)`.
+  `Effect.fail(new RuntimeGenerationStoreError(...))` is equally valid; do not
   churn call sites for style.
 - Defect (bug): `Effect.die(defect)`: not for expected fail-closed states.
 - Recover: `Effect.catch`, `Effect.catchTag` when the error is tagged.

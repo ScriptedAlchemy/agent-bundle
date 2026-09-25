@@ -83,20 +83,6 @@ const state = { stateStoreId: 'state-a', stateVersion: 1 } satisfies DevRuntimeS
 
 const inspection = {
   agentVisible: { summary: 'Sunny' },
-  app: {
-    mcpBinding: {
-      definitionDigest: 'definition-a',
-      registryRevision: 1,
-      serverDigest: 'server-a',
-      serverName: 'weather',
-      sessionId: 'session-a',
-      sessionRevision: 1,
-      target: 'portable',
-      transportDigest: 'transport-a',
-    },
-    resourceUri: 'ui://weather/app.html',
-    surfaceId: 'app/weather',
-  },
   modelVisible: { summary: 'Sunny' },
   native: { status: 200 },
   protocol: { jsonrpc: '2.0' },

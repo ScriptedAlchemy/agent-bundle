@@ -22,18 +22,15 @@ import {
   TargetRegistry,
   createDefaultRegistry,
   createRuntimeGenerationStore,
-  createRuntimeMcpRegistry,
 } from '../src/api.ts';
 import type {
   DevRuntimeDescriptor,
   DevRuntimeInspectionEnvelope,
-  DevRuntimeMcpServerDescriptor,
   DevRuntimeProvider,
   DevRuntimeSession,
   DevRuntimeStartContext,
   RuntimeGenerationCandidate,
   RuntimeGenerationStoreOptions,
-  RuntimeMcpRegistryOptions,
   TargetAdapter,
   TargetHookContract,
   TargetMcpRuntimeContract,
@@ -164,20 +161,14 @@ it('exposes the dev.runtime.provider protocol from the advanced API (#485)', () 
       throw new DevRuntimeUnavailableError(`no runtime for ${context.projectRoot}`);
     },
   } satisfies DevRuntimeProvider;
-  const server: DevRuntimeMcpServerDescriptor = {
-    definitionDigest: 'd', name: 'fixture', resources: [], serverDigest: 's', target: 'portable', tools: [], transportDigest: 't',
-  };
   const envelope: Pick<DevRuntimeInspectionEnvelope, 'trace'> = { trace: [] };
   const candidate: Pick<RuntimeGenerationCandidate, 'id'> = { id: 'gen-1' };
   const storeOptions: Pick<RuntimeGenerationStoreOptions<unknown>, 'storageRoot'> = { storageRoot: '/tmp/never-opened' };
-  const registryOptions: Pick<RuntimeMcpRegistryOptions, 'stateStoreId'> = { stateStoreId: 'state' };
 
   expect(provider.descriptor.id).toBe('synthetic');
-  expect(server.name).toBe('fixture');
   expect(envelope.trace).toEqual([]);
   expect(candidate.id).toBe('gen-1');
   expect(storeOptions.storageRoot).toBe('/tmp/never-opened');
-  expect(registryOptions.stateStoreId).toBe('state');
   // The two errors a provider throws for the documented Workbench behaviour carry their codes.
   expect(new DevRuntimeUnavailableError().code).toBe('AB8201');
   expect(new DevRuntimeGenerationConflictError('gen-2', 'gen-1')).toMatchObject({
@@ -185,10 +176,9 @@ it('exposes the dev.runtime.provider protocol from the advanced API (#485)', () 
     code: 'AB8204',
     expectedGenerationId: 'gen-2',
   });
-  // The store and registry ship as effect-free contracts plus constructors;
-  // their classes throw YieldableFrameworkErrors and stay behind the boundary.
+  // The store ships as an effect-free contract plus constructor; its class
+  // throws YieldableFrameworkErrors and stays behind the boundary.
   expect(typeof createRuntimeGenerationStore).toBe('function');
-  expect(typeof createRuntimeMcpRegistry).toBe('function');
 });
 
 it('loads every public subpath and reports the package version', async () => {

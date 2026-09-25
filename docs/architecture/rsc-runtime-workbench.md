@@ -39,7 +39,6 @@ packages/
     src/dev/runtime-app-message-limits.ts
     src/dev/runtime-controller.ts
     src/dev/runtime-generation-store.ts
-    src/dev/runtime-mcp-registry.ts
     src/dev/runtime-provider-loader.ts
     src/dev/runtime-provider.ts
     src/dev/runtime-routes.ts
@@ -80,7 +79,6 @@ packages/
     tests/rsc-runtime-optional-packaging.test.ts
     tests/rsc-runtime-topology-script.test.ts
     tests/runtime-generation-store.test.ts
-    tests/runtime-mcp-registry.test.ts
     tests/runtime-provider.test.ts
     tests/runtime-routes.test.ts
   workbench/
@@ -208,12 +206,10 @@ is local to that invocation. Durable Runtime export/evaluation promotion,
 provider adapters, authenticated APIs, and timeline UI ownership are not wired
 by this topology.
 
-Artifact epoch, runtime generation, state version, definition digest, MCP
-session, and run identity are separate axes. A generation is staged and
-validated, then atomically activated; leases keep the immutable generation
-available for a selected run. Failed preparation retains the last good active
-generation. Static MCP definitions and the broker survive independently of
-generation-pinned invocations and binding authority.
+Artifact epoch, runtime generation, state version, and run identity are
+separate axes. A generation is staged and validated, then atomically
+activated; leases keep the immutable generation available for a selected run.
+Failed preparation retains the last good active generation.
 
 Host-facing adoption is a further, separately gated axis (#179 / #218 stage 4).
 `EpochAdoptionPolicy` sits between `artifact.available` and the two surfaces a

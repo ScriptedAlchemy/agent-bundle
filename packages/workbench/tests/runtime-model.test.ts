@@ -484,7 +484,7 @@ it('rejects a stale provider run injected into a fresh-provider bootstrap', () =
 it('handles foreign and run lifecycle events through browser-only effects', () => {
   const foreign = reduce(model(), { event: event(1, 'runtime.status', undefined, 'provider-b', 'generation-b'), type: 'event.received' });
   const started = reduce(model(), { event: event(1, 'runtime.run.started', undefined, 'provider-a', 'generation-a'), type: 'event.received' });
-  const generic = reduce(model(), { event: event(1, 'runtime.mcp.ready'), type: 'event.received' });
+  const generic = reduce(model(), { event: event(1, 'runtime.generation.compiling'), type: 'event.received' });
 
   expect(effectFor(foreign)).toMatchObject({ kind: 'bootstrap', triggerSequence: 1 });
   expect(effectFor(started)).toMatchObject({ kind: 'bootstrap', triggerSequence: 1 });
@@ -576,25 +576,11 @@ it('covers runtime reducer invalid controls, ordered read effects, and settled l
   expect(() => reduce(model(), { input: Number.NaN as unknown as JsonValue, raw: 'NaN', type: 'draft.replace' })).toThrow(/finite/i);
 });
 
-it('parses optional App inspection evidence and rejects every provider envelope layer through public routes', async () => {
+it('parses optional Flight inspection evidence and rejects every provider envelope layer through public routes', async () => {
   const original = run('app-evidence');
   if (original.status !== 'succeeded') throw new Error('Expected succeeded fixture.');
   const appResult = {
     ...original.result,
-    app: {
-        mcpBinding: {
-          definitionDigest: 'definition-a',
-          registryRevision: 1,
-          serverDigest: 'server-a',
-          serverName: 'weather',
-          sessionId: 'session-a',
-          sessionRevision: 1,
-          target: 'portable',
-          transportDigest: 'transport-a',
-        },
-        resourceUri: 'ui://weather/app.html',
-        surfaceId: 'weather',
-    },
     flight: { bytes: 8, downloadPath: '/api/runtime/runs/app-evidence/flight', preview: 'flight', truncated: false },
   };
   const withApp = {
@@ -609,7 +595,7 @@ it('parses optional App inspection evidence and rejects every provider envelope 
   });
   await appClient.bootstrap();
   await expect(appClient.createRun({ input: {}, surfaceId: 'weather', target: 'portable' }))
-    .resolves.toMatchObject({ result: { app: { resourceUri: 'ui://weather/app.html' } } });
+    .resolves.toMatchObject({ result: { flight: { downloadPath: '/api/runtime/runs/app-evidence/flight' } } });
 
   const invalidBootstrap = async (statusBody: unknown, surfacesBody: unknown = { surfaces: [surface()] }, runsBody: unknown = { providerSessionId: 'provider-a', runs: [run('base')] }): Promise<void> => {
     await expect(clientFor({
@@ -637,7 +623,7 @@ it('parses optional App inspection evidence and rejects every provider envelope 
   await invalidRun({ ...run('bad-run'), status: 'unknown' });
   await invalidRun({ ...withApp, result: { ...appResult, tree: [{ children: [], id: '', kind: 'component', label: 'bad' }] } });
   await invalidRun({ ...withApp, result: { ...appResult, trace: [{ id: 'trace', phase: 'rsc', startedAt: 'no-date', status: 'succeeded' }] } });
-  await invalidRun({ ...withApp, result: { ...appResult, app: { ...appResult.app, resourceUri: '' } } });
+  await invalidRun({ ...withApp, result: { ...appResult, app: { resourceUri: 'ui://weather/app.html' } } });
   await invalidRun({ ...withApp, result: { ...appResult, flight: { bytes: -1, preview: 'flight', truncated: false } } });
   const invalidStateClient = clientFor({
     '/api/runtime/runs?limit=50': { providerSessionId: 'provider-a', runs: [run('initial')] },
@@ -792,11 +778,11 @@ it('never applies runtime events at or below the replay-gap recovery watermark',
   const gap = { earliestAvailableSequence: 9, latestDroppedSequence: 8, requestedAfterSequence: 1, type: 'replay.gap' } as const;
   const recovered = reduce(model(), { event: gap, type: 'event.received' });
   const stale = reduce(recovered, {
-    event: event(7, 'runtime.mcp.ready'),
+    event: event(7, 'runtime.generation.compiling'),
     type: 'event.received',
   });
   const next = reduce(stale, {
-    event: event(9, 'runtime.mcp.ready'),
+    event: event(9, 'runtime.generation.compiling'),
     type: 'event.received',
   });
 

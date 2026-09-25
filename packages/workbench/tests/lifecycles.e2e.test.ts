@@ -98,6 +98,39 @@ e2e(
         }
         return (body as { readonly token: string }).token;
       });
+      // The example's MCP server is a prebuilt entry, so the Application tree
+      // has no tool leaf for it; the runtime run route is its host boundary.
+      const runtimeRun = async (request: Readonly<Record<string, unknown>>) => page.evaluate(async ({ body, token }) => {
+        const response = await fetch('/api/runtime/runs', {
+          body: JSON.stringify(body),
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json', 'x-agent-bundle-session': token },
+          method: 'POST',
+        });
+        if (!response.ok) throw new Error(`Runtime run failed with ${String(response.status)}.`);
+        return (await response.json() as { readonly run: { readonly result?: Record<string, unknown>; readonly status: string } }).run;
+      }, { body: request, token: sessionToken });
+      const hookRun = await runtimeRun({
+        input: {
+          cwd: '/tmp',
+          hook_event_name: 'PostToolUse',
+          session_id: 'lifecycle-runtime-kernel',
+          tool_input: { file_path: 'runtime-kernel.txt' },
+          tool_name: 'Write',
+          tool_use_id: 'lifecycle-runtime-kernel-write',
+        },
+        surfaceId: 'hook.claude',
+        target: 'claude',
+      });
+      expect(hookRun.status).toBe('succeeded');
+      const timeline = await runtimeRun({ input: {}, surfaceId: 'mcp.render_edit_timeline', target: 'portable' });
+      expect(timeline.status).toBe('succeeded');
+      expect(Object.keys(timeline.result ?? {}).sort()).toEqual(['flight', 'modelVisible', 'protocol', 'state', 'trace', 'tree']);
+      expect(timeline.result?.['protocol']).toMatchObject({
+        structuredContent: {
+          edits: expect.arrayContaining([expect.objectContaining({ host: 'claude', path: '/tmp/runtime-kernel.txt' })]),
+        },
+      });
       const manifestDigest = async (): Promise<string> => page.evaluate(async (token) => {
         const response = await fetch('/api/lifecycles', {
           credentials: 'same-origin',

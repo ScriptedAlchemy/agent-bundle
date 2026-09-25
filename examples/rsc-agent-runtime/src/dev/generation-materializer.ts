@@ -2,7 +2,7 @@ import { lstat, mkdir, readdir, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname, isAbsolute, join } from 'node:path';
 
-import { canonicalJson, digestValue, freezeJson } from './canonical-json.js';
+import { canonicalJson, freezeJson } from './canonical-json.js';
 import { assertInside, copyTree, digestBytes, fsyncPath, isSafeSegment, writeFileDurably } from './durable-tree.js';
 import { emitRuntimeArtifacts } from '../build/emit-artifacts.js';
 import type {
@@ -18,7 +18,6 @@ import type {
 } from '../runtime/contracts.js';
 import type { JsonObject, JsonValue } from 'agent-bundle';
 import type {
-  DevRuntimeMcpServerDescriptor,
   DevRuntimePreparedProject,
   RuntimeGenerationActivationGuard,
   RuntimeGenerationAsset,
@@ -546,70 +545,16 @@ const validateAppSurfaceAssets = (
   }
 };
 
-const transportProjection = (preparedRuntime: DevRuntimePreparedProject): JsonValue => freezeJson({
-  provider: preparedRuntime.provider,
-  servers: preparedRuntime.servers.map((server) => ({
-    args: server.args === undefined ? undefined : [...server.args],
-    command: server.command,
-    cwd: server.cwd,
-    env: server.env === undefined ? undefined : Object.fromEntries(Object.entries(server.env).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => [key, digestValue(value)])),
-    headers: server.headers === undefined ? undefined : Object.fromEntries(Object.entries(server.headers).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => [key, digestValue(value)])),
-    id: server.id,
-    name: server.name,
-    source: server.source,
-    targets: [...server.targets],
-    transport: server.transport,
-    url: server.url,
-  })),
-});
-
-type RuntimeDefinitionPreparedProject = Readonly<{
-  readonly apps: readonly RscRuntimeAppDefinition[];
-}>;
-
-const appDefinitions = (preparedRuntime: RuntimeDefinitionPreparedProject): readonly RscRuntimeAppDefinition[] =>
+const appDefinitions = (preparedRuntime: DevRuntimePreparedProject): readonly RscRuntimeAppDefinition[] =>
   freezeJson(preparedRuntime.apps.map((app) => ({
-    ...(app._meta === undefined ? {} : { _meta: app._meta }),
     id: app.id,
     name: app.name,
     resourceUri: app.resourceUri,
-    serverId: app.serverId,
-    serverName: app.serverName,
-    targets: [...app.targets],
   })).sort((left, right) => {
     const leftJson = canonicalJson(left);
     const rightJson = canonicalJson(right);
     return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
   })) as unknown as readonly RscRuntimeAppDefinition[];
-
-const runtimeDefinitionProjection = (
-  definition: SerializedRuntimeDefinition,
-  preparedRuntime: RuntimeDefinitionPreparedProject,
-): JsonValue => freezeJson({
-  apps: appDefinitions(preparedRuntime),
-  definition,
-});
-
-export const runtimeDefinitionDigest = (
-  definition: SerializedRuntimeDefinition,
-  preparedRuntime: RuntimeDefinitionPreparedProject,
-): string => digestValue(runtimeDefinitionProjection(definition, preparedRuntime));
-
-const descriptors = (
-  preparedRuntime: DevRuntimePreparedProject,
-  definition: SerializedRuntimeDefinition,
-  definitionDigest: string,
-  serverDigest: string,
-  transportDigest: string,
-): readonly DevRuntimeMcpServerDescriptor[] => Object.freeze(preparedRuntime.servers.flatMap((server) => server.targets.map((target) => Object.freeze({
-  definitionDigest,
-  name: server.name,
-  resources: Object.freeze(definition.resources.map((resource) => freezeJson(resource) as JsonObject)),
-  serverDigest,
-  target,
-  tools: Object.freeze(definition.tools.map((tool) => freezeJson(tool) as JsonObject)),
-  transportDigest,
-}))));
 
 const metadataFromSnapshot = async (
   snapshot: RscRuntimeCapturedGenerationSnapshot,
@@ -625,14 +570,6 @@ const metadataFromSnapshot = async (
   if (canonicalJson(parsedDefinition) !== definitionBytes.toString('utf8')) {
     throw new Error('Captured runtime definition is not canonical.');
   }
-  const capturedAppDefinitions = appDefinitions(snapshot.preparedRuntime);
-  const definitionDigest = runtimeDefinitionDigest(snapshot.definition, snapshot.preparedRuntime);
-  const environmentHashes = Object.freeze({
-    rsc: digestValue(assets.filter((asset) => asset.path.startsWith('rsc/'))),
-    widget: digestValue(assets.filter((asset) => asset.path.startsWith('widget/'))),
-  });
-  const serverDigest = digestValue(environmentHashes);
-  const transportDigest = digestValue(transportProjection(snapshot.preparedRuntime));
   const entries = Object.freeze(Object.fromEntries(requiredEntries.map((entry) => {
     const assetsForEntry = runtimeAssets.entries[entry];
     const path = assetsForEntry?.initial?.js?.[0];
@@ -640,16 +577,10 @@ const metadataFromSnapshot = async (
     return [entry, `rsc/${path}`];
   })));
   return Object.freeze({
-    appDefinitions: capturedAppDefinitions,
-    definitionDigest,
+    appDefinitions: appDefinitions(snapshot.preparedRuntime),
     entries,
-    environmentHashes,
-    preparedRevision: snapshot.preparedRuntime.sourceRevision,
-    serverDigest,
-    servers: descriptors(snapshot.preparedRuntime, parsedDefinition, definitionDigest, serverDigest, transportDigest),
     stateStoreId,
     surfaceAssets: surfaceAssets(snapshot.preparedRuntime, assets),
-    transportDigest,
   });
 };
 
@@ -688,66 +619,27 @@ export const captureRuntimeGenerationSnapshot = async (
 
 const decodeMetadata = (value: JsonValue): RscRuntimeGenerationMetadata => {
   if (!isJsonObject(value)) throw new TypeError('Runtime generation metadata is malformed.');
-  const required = ['appDefinitions', 'definitionDigest', 'entries', 'environmentHashes', 'preparedRevision', 'serverDigest', 'servers', 'stateStoreId', 'surfaceAssets', 'transportDigest'];
+  const required = ['appDefinitions', 'entries', 'stateStoreId', 'surfaceAssets'];
   if (Object.keys(value).some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     throw new TypeError('Runtime generation metadata has an invalid schema.');
   }
-  const { appDefinitions, definitionDigest, entries, environmentHashes, preparedRevision, serverDigest, servers, stateStoreId, surfaceAssets, transportDigest } = value;
-  if (typeof definitionDigest !== 'string' || typeof serverDigest !== 'string' || typeof transportDigest !== 'string' ||
-    typeof preparedRevision !== 'string' || typeof stateStoreId !== 'string' ||
-    !sha256Expression.test(definitionDigest) || !sha256Expression.test(serverDigest) || !sha256Expression.test(transportDigest) ||
-    !Array.isArray(appDefinitions) || !isJsonObject(entries) || !isJsonObject(environmentHashes) || !Array.isArray(servers) || !isJsonObject(surfaceAssets)) {
+  const { appDefinitions, entries, stateStoreId, surfaceAssets } = value;
+  if (typeof stateStoreId !== 'string' || !Array.isArray(appDefinitions) || !isJsonObject(entries) || !isJsonObject(surfaceAssets)) {
     throw new TypeError('Runtime generation metadata is malformed.');
   }
-  if (preparedRevision.length === 0 || stateStoreId.length === 0 ||
-    Object.keys(entries).length !== requiredEntries.length || requiredEntries.some((entry) => typeof entries[entry] !== 'string') ||
-    Object.keys(environmentHashes).length !== 2 || typeof environmentHashes.rsc !== 'string' || typeof environmentHashes.widget !== 'string' ||
-    !sha256Expression.test(environmentHashes.rsc) || !sha256Expression.test(environmentHashes.widget)) {
-    throw new TypeError('Runtime generation environment digests are malformed.');
+  if (stateStoreId.length === 0 ||
+    Object.keys(entries).length !== requiredEntries.length || requiredEntries.some((entry) => typeof entries[entry] !== 'string')) {
+    throw new TypeError('Runtime generation entries are malformed.');
   }
 
   const decodedAppDefinitions = appDefinitions.map((value): RscRuntimeAppDefinition => {
     if (!isJsonObject(value)) throw new TypeError('Runtime generation App definition is malformed.');
-    const fields = ['_meta', 'id', 'name', 'resourceUri', 'serverId', 'serverName', 'targets'];
-    const requiredFields = ['id', 'name', 'resourceUri', 'serverId', 'serverName', 'targets'];
-    if (Object.keys(value).some((key) => !fields.includes(key)) || requiredFields.some((field) => !(field in value)) ||
-      typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.resourceUri !== 'string' ||
-      typeof value.serverId !== 'string' || typeof value.serverName !== 'string' ||
-      !Array.isArray(value.targets) || !value.targets.every((target) => typeof target === 'string') ||
-      ('template' in value && typeof value.template !== 'string')) {
+    const fields = ['id', 'name', 'resourceUri'];
+    if (Object.keys(value).some((key) => !fields.includes(key)) || fields.some((field) => !(field in value)) ||
+      typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.resourceUri !== 'string') {
       throw new TypeError('Runtime generation App definition is malformed.');
     }
-    const meta = '_meta' in value ? freezeJson(value._meta) : undefined;
-    if (meta !== undefined && !isJsonObject(meta)) throw new TypeError('Runtime generation App definition metadata is malformed.');
-    return Object.freeze({
-      ...(meta === undefined ? {} : { _meta: meta }),
-      id: value.id,
-      name: value.name,
-      resourceUri: value.resourceUri,
-      serverId: value.serverId,
-      serverName: value.serverName,
-      targets: Object.freeze([...value.targets]),
-    });
-  });
-
-  const decodedServers = servers.map((value): DevRuntimeMcpServerDescriptor => {
-    if (!isJsonObject(value)) throw new TypeError('Runtime generation server descriptor is malformed.');
-    const fields = ['definitionDigest', 'name', 'resources', 'serverDigest', 'target', 'tools', 'transportDigest'];
-    if (Object.keys(value).some((key) => !fields.includes(key)) || fields.some((field) => !(field in value)) ||
-      typeof value.definitionDigest !== 'string' || typeof value.name !== 'string' || typeof value.serverDigest !== 'string' ||
-      typeof value.target !== 'string' || typeof value.transportDigest !== 'string' ||
-      !Array.isArray(value.resources) || !value.resources.every(isJsonObject) || !Array.isArray(value.tools) || !value.tools.every(isJsonObject)) {
-      throw new TypeError('Runtime generation server descriptor is malformed.');
-    }
-    return Object.freeze({
-      definitionDigest: value.definitionDigest,
-      name: value.name,
-      resources: Object.freeze(value.resources.map((resource) => freezeJson(resource) as JsonObject)),
-      serverDigest: value.serverDigest,
-      target: value.target,
-      tools: Object.freeze(value.tools.map((tool) => freezeJson(tool) as JsonObject)),
-      transportDigest: value.transportDigest,
-    });
+    return Object.freeze({ id: value.id, name: value.name, resourceUri: value.resourceUri });
   });
 
   const decodedSurfaceAssets: Record<string, readonly RscRuntimeSurfaceAsset[]> = {};
@@ -773,15 +665,9 @@ const decodeMetadata = (value: JsonValue): RscRuntimeGenerationMetadata => {
   }
   return Object.freeze({
     appDefinitions: Object.freeze(decodedAppDefinitions),
-    definitionDigest,
     entries: Object.freeze(Object.fromEntries(requiredEntries.map((entry) => [entry, entries[entry] as string]))),
-    environmentHashes: Object.freeze({ rsc: environmentHashes.rsc, widget: environmentHashes.widget }),
-    preparedRevision,
-    serverDigest,
-    servers: Object.freeze(decodedServers),
     stateStoreId,
     surfaceAssets: Object.freeze(decodedSurfaceAssets),
-    transportDigest,
   });
 };
 
@@ -811,19 +697,10 @@ export const validateRscRuntimeGenerationMetadata = async (
   validateRuntimeAssetCoverage(runtimeAssets, input.assets);
   const definitionBytes = await readFile(join(input.root, ...definitionFile.split('/')));
   const definition = parseDefinition(JSON.parse(definitionBytes.toString('utf8')));
-  if (canonicalJson(definition) !== definitionBytes.toString('utf8') ||
-    runtimeDefinitionDigest(definition, Object.freeze({ apps: metadata.appDefinitions })) !== metadata.definitionDigest) {
-    throw new TypeError('Runtime generation definition digest is inconsistent.');
+  if (canonicalJson(definition) !== definitionBytes.toString('utf8')) {
+    throw new TypeError('Runtime generation definition is not canonical.');
   }
   await validateClientReferenceRelationship(input.root, input.assets);
-  const expectedEnvironmentHashes = Object.freeze({
-    rsc: digestValue(input.assets.filter((asset) => asset.path.startsWith('rsc/'))),
-    widget: digestValue(input.assets.filter((asset) => asset.path.startsWith('widget/'))),
-  });
-  if (metadata.environmentHashes.rsc !== expectedEnvironmentHashes.rsc || metadata.environmentHashes.widget !== expectedEnvironmentHashes.widget ||
-    metadata.serverDigest !== digestValue(expectedEnvironmentHashes)) {
-    throw new TypeError('Runtime generation implementation digest is inconsistent.');
-  }
   const declaredSurfaceAssets = metadata.surfaceAssets as Readonly<Record<string, readonly RscRuntimeSurfaceAsset[]>>;
   for (const [surface, descriptors] of Object.entries(declaredSurfaceAssets)) {
     const requestPaths = new Set<string>();
@@ -835,11 +712,6 @@ export const validateRscRuntimeGenerationMetadata = async (
     }
   }
   validateAppSurfaceAssets(metadata.appDefinitions, declaredSurfaceAssets);
-  for (const descriptor of metadata.servers) {
-    if (descriptor.definitionDigest !== metadata.definitionDigest || descriptor.serverDigest !== metadata.serverDigest || descriptor.transportDigest !== metadata.transportDigest) {
-      throw new TypeError('Runtime generation server descriptor digest is inconsistent.');
-    }
-  }
   return metadata;
 };
 
