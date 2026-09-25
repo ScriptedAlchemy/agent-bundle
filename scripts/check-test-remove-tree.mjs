@@ -9,7 +9,7 @@
  * only real node:fs(/promises) ImportDeclaration bindings count, only Node-bound
  * call expressions are considered, and `recursive` / `maxRetries` are read from
  * the second argument's object-literal properties (including quoted keys,
- * shorthand `maxRetries`, and Parenthesized / As / Satisfies wrappers). Nested
+ * shorthand `maxRetries`, and Parenthesized / As / Satisfies / `<T>` / `!` / instantiation wrappers). Nested
  * objects in the path argument, member calls, comments, strings, regexes, and
  * template substitutions are handled by the AST rather than text masking.
  * Named `promises` rebinds from `fs` / `node:fs` count as `.rm` carriers.
@@ -125,6 +125,8 @@ const unwrapExpression = (node) => {
       || ts.isAsExpression(current)
       || ts.isSatisfiesExpression(current)
       || ts.isTypeAssertionExpression(current)
+      || ts.isNonNullExpression(current)
+      || ts.isExpressionWithTypeArguments(current)
     )
   ) {
     current = current.expression;

@@ -222,7 +222,7 @@ const createWebOnlyFixture = async (): Promise<string> => {
       '});',
       '',
     ].join('\n')),
-    writeProjectFile(root, 'src/mcp/status.ts', "process.stderr.write('status server\\n');\n"),
+    writeProjectFile(root, 'src/mcp/status.ts', "process.stderr.write('status server\\n');\nexport default () => ({});\n"),
     writeProjectFile(root, 'views/status.html', '<!doctype html><html><body><main id="view"></main></body></html>\n'),
     writeProjectFile(root, 'views/status.ts', "document.querySelector('#view')!.textContent = 'web-only status';\n"),
   ]);

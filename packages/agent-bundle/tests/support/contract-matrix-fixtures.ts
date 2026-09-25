@@ -83,7 +83,7 @@ const lifecycleFixture = (revisionOffset = 0): ContractRouteFixture => ({
 /** Shared route-harness fixtures for projection-level contract matrix tests. */
 export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixture> => ({
   'prompt:harness/summarize': { input: { note: 'chapter one' } },
-  'resource:harness/notes': {},
+  'resource:harness/notes': { kind: 'resource' },
   'tool:harness/catalog': { input: { genre: 'mystery' }, resultCompat: 'additive' },
   'tool:harness/context': { resultCompat: 'closed' },
   'tool:harness/echo': { input: { message: 'contract matrix' }, resultCompat: 'additive' },
