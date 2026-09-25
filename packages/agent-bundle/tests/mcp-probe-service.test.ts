@@ -1047,6 +1047,7 @@ it('removes the fresh plugin data directory after every probe', async () => {
     });
 
     await service.probe({ host: 'claude', serverName: 'timeline' });
+    await service.settle();
 
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {

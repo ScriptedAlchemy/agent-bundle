@@ -492,12 +492,14 @@ it('enforces a process timeout and output cap even when the child ignores termin
   const harness = await loadNativeClaudeContract();
   expect(harness).toBeDefined();
 
+  // The timeout must outlast child Node startup, or SIGTERM lands before the
+  // child installs its handler and the default action kills it.
   const timedOut = await harness!.runNativeClaudeProcess({
     args: ['-e', 'process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000);'],
     cwd: process.cwd(),
     environment: process.env,
     executable: process.execPath,
-  }, { gracePeriodMs: 100, maxOutputBytes: 64, timeoutMs: 300 });
+  }, { gracePeriodMs: 100, maxOutputBytes: 64, timeoutMs: 2_000 });
   expect(timedOut).toMatchObject({ exitCode: null, signal: 'SIGKILL', termination: 'timed-out' });
 
   const oversized = await harness!.runNativeClaudeProcess({

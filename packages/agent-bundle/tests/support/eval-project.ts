@@ -20,7 +20,11 @@ export interface SeedEvalProjectOptions {
   readonly targets?: readonly string[];
 }
 
-const evalEntryPoint = resolve(process.cwd(), 'packages/agent-bundle/src/eval/index.ts');
+// The defining modules, not src/eval/index.ts: suite discovery loads through
+// Jiti with the module cache off, and the barrel's graph took ~30s per
+// discovery on a loaded host, past eval admission deadlines.
+const evalSuiteModule = resolve(process.cwd(), 'packages/agent-bundle/src/eval/suite.ts');
+const evalAssertionsModule = resolve(process.cwd(), 'packages/agent-bundle/src/eval/assertions.ts');
 // defineConfig's defining module, not the package entry: seeded configs load
 // through Jiti with the module cache off, so re-exporting src/index.ts made
 // every config load re-transpile the whole package graph (~5s per project).
@@ -101,7 +105,11 @@ export const seedEvalProject = async (
         type: 'module',
       }),
     ),
-    writeFile(join(root, 'node_modules/agent-bundle/eval.ts'), `export * from ${JSON.stringify(evalEntryPoint)};\n`),
+    writeFile(join(root, 'node_modules/agent-bundle/eval.ts'), [
+      `export { defineEvalSuite } from ${JSON.stringify(evalSuiteModule)};`,
+      `export { expectOutcome, expectSkillActivation } from ${JSON.stringify(evalAssertionsModule)};`,
+      '',
+    ].join('\n')),
     writeFile(
       join(root, 'node_modules/agent-bundle/index.ts'),
       `export { defineConfig } from ${JSON.stringify(sourceEntryPoint)};\n`,
