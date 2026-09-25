@@ -288,9 +288,9 @@ alias a custom runner must add; it never reports a fabricated identity.
 `src/skills/<name>/SKILL.md` ships with no declaration. Config wins,
 conventions fill: declaring `skills:` replaces the directory convention
 entirely, and validation reports `AB4734` for any conventional skill directory
-the explicit list leaves uncovered. Skills at the removed top-level
-`skills/<name>/` location are an `AB4736` error unless explicit `skills`
-config claims them.
+the explicit list leaves uncovered. Discovery reads `src/skills/` only, so a
+directory at the removed top-level `skills/<name>/` location is ignored
+unless an explicit `skills` path names it.
 
 A skill whose document is generated (power tier, never required) puts
 `SKILL.tsx` (or `SKILL.ts`) in the skill directory instead of `SKILL.md`. The
@@ -622,11 +622,11 @@ manifest. A root whose selection includes `cursor` or `portable` also
 includes a standalone `install.mjs`. Its staged copy is idempotent for identical
 content, records an install receipt (`.agent-bundle-install.json`: plugin,
 version, content hash, owned files and directories), replaces a same-version stale copy of its
-own plugin in place (owned files only; legacy `state/` survives, while current builds keep
-framework state outside the plugin root), and accepts
-`--replace` to replace a different installed version or adopt
-a pre-receipt copy. Foreign directories are refused with a content-hash
-comparison. It never invokes sudo or changes PATH. `agent-bundle install <host>
+own plugin in place (owned files only; unowned entries survive, and framework
+state lives outside the plugin root), and accepts
+`--replace` to replace a different installed version. A directory without a
+receipt naming this plugin, a copy placed before receipts existed included, is
+foreign and refused with a content-hash comparison; remove it by hand. It never invokes sudo or changes PATH. `agent-bundle install <host>
 [--replace]` applies the same policy for every host, and `agent-bundle doctor
 --from` reports the installed copy versus the artifact as `current`, `stale`,
 `version-mismatch`, `foreign`, or `not-installed` (see the package README's
@@ -644,8 +644,7 @@ host root, the host `registrations` it performed in order, and `installedAt` /
 `updatedAt`. Cursor local copies carry it in-tree; Claude, Codex, and Cursor
 marketplace-mode installs keep theirs in `<host root>/agent-bundle/receipts/`.
 `install --replace`, `uninstall`, and `doctor` all consume the same document;
-a receipt written before #101 is read with its lifecycle fields synthesized and
-diagnosed (`AB7329`), never rejected.
+only format 2 is read, and a copy carrying an older receipt is foreign.
 
 ```sh
 agent-bundle uninstall claude --from artifact --plan      # exact paths and host verbs, no writer
@@ -657,13 +656,15 @@ node artifact/install.mjs --uninstall [--plan] [--mode marketplace]
 
 Uninstall removes exactly what the receipt owns and reverses exactly the
 registrations it recorded; anything else stays and is listed as retained.
-Legacy durable runtime state (`state/`) is kept unless `--purge-data --confirm-purge`
-(current builds keep framework state outside the plugin root);
+Durable runtime state (the framework state roots the receipt records with
+ownership evidence) is kept unless `--purge-data --confirm-purge`; an unowned
+`state/` directory beside the plugin is retained and listed, never purged;
 the typed `data.outcome` says what the host itself decided where Agent Bundle
 cannot (`retained-by-host` for Claude's ~14-day orphaned copy,
-`removed-by-host` / `unavailable` for Codex, which has no keep-data option). A
-missing receipt or an owned-content mismatch is refused (`AB7009`, `AB7007`)
-unless `--force`; a receipt or manifest naming another plugin is refused
+`removed-by-host` for Codex, which has no keep-data option). A missing store
+receipt for a host-registered install or an owned-content mismatch is refused
+(`AB7009`, `AB7007`) unless `--force`; a Cursor local directory without a
+receipt, or a receipt or manifest naming another plugin, is foreign and refused
 regardless; `--purge-data` without `--confirm-purge` is `AB7008`; a second run is
 a `not-installed` no-op. `doctor --from` adds the lifecycle stage per host,
 placed → registered → enabled → active, each observed or typed `unavailable`

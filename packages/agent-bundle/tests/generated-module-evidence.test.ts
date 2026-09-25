@@ -73,6 +73,7 @@ const cliRoute = (root: string): CompiledAgentRoute => ({
   id: 'cli:report',
   kind: 'cli',
   provenance: { kind: 'conventional', relativePath: 'src/cli/report.ts' },
+  resultSchemaState: 'unprojectable' as const,
   source: join(root, 'src', 'cli', 'report.ts'),
 });
 

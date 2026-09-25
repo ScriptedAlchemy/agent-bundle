@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
-import { exists, isPreservedRuntimeRoot } from '../core/paths.ts';
+import { exists } from '../core/paths.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { cacheHasPlugin, readHeadCommit } from './cursor-hooks-registration.ts';
@@ -40,12 +40,9 @@ import { installedBundleInventory, readBundleIdentity, type PluginIdentity } fro
 import {
   assertRealAncestors,
   createInstallReceipt,
-  directoriesOf,
   emptyContentHash,
-  hasInstallSurfaceMarkers,
   hashOwnedFiles,
   installReceiptFile,
-  installReceiptFormat,
   installReceiptStoreDirectory,
   isRemnantReceipt,
   listStoredInstallReceipts,
@@ -55,7 +52,6 @@ import {
   removeStoredInstallReceipt,
   shortHash,
   simulateRemoveStoredInstallReceipt,
-  treeInventory,
   writeInstallReceipt,
   writeStoredInstallReceipt,
   type InstallReceipt,
@@ -66,7 +62,6 @@ import {
 import {
   inspectInstalledStateOwnership,
   installedWebDataRoot,
-  isRecordedDerivedStateRoot,
   resolveInstalledStateRoot,
 } from './state-root.ts';
 
@@ -75,9 +70,9 @@ import {
  * `install`. Every mutation is opt-in, fail-closed, and bounded by what the
  * install receipt records — owned files and directories, the host
  * registrations the installer performed, and the host directories it created.
- * Nothing outside that set is ever removed; durable runtime state (`state/`,
- * the state kernel and notices journal) is kept unless `--purge-data` is
- * confirmed explicitly. `--plan` computes the same result without opening a
+ * Nothing outside that set is ever removed; durable runtime state (the roots
+ * the receipt's `state` block records with ownership evidence) is kept unless
+ * `--purge-data` is confirmed explicitly. `--plan` computes the same result without opening a
  * writer, and a second run after a successful uninstall is a `not-installed`
  * no-op.
  */
@@ -87,9 +82,9 @@ export type UninstallDataPolicy = 'keep' | 'purge';
 /**
  * What happened to the plugin's durable runtime state. `kept`/`purged`/`absent`
  * are Agent Bundle's own doing; `retained-by-host` (Claude keeps the orphaned
- * cache copy, `state/` included, for its ~14-day grace period) and
- * `removed-by-host` (Codex deletes the cached tree, `state/` included, on
- * `plugin remove`) name the host behaviour that decided instead; `unavailable`
+ * cache copy for its ~14-day grace period) and `removed-by-host` (Codex
+ * deletes the cached tree on `plugin remove`) name the host behaviour that
+ * decided instead; `unavailable`
  * means the delivery has no Agent Bundle-owned runtime state (an Amp directory
  * plugin or a staged marketplace repository).
  */
@@ -127,19 +122,16 @@ export interface UninstallRegistrationReport extends InstallRegistration {
 
 /**
  * How the receipt drove this run: `consumed` (read, honoured, removed),
- * `migrated` (a format/1 receipt read with synthesized lifecycle fields),
- * `forced-missing`/`forced-legacy`/`forced-mismatch` (`--force` overrode a
- * missing receipt, a pre-receipt legacy copy, or an owned-content hash
- * mismatch), `missing` (nothing installed; no receipt to consume), `remnant`
- * (a remnant receipt from an earlier `--keep-data` uninstall was found and
- * left in place because only preserved state remains and it is being kept).
+ * `forced-missing`/`forced-mismatch` (`--force` overrode a host-registered
+ * copy with no store receipt, or an owned-content hash mismatch), `missing`
+ * (nothing installed; no receipt to consume), `remnant` (a remnant receipt
+ * from an earlier `--keep-data` uninstall was found and left in place because
+ * only retained entries remain and they are being kept).
  */
 export type UninstallReceiptStatus =
   | 'consumed'
-  | 'forced-legacy'
   | 'forced-mismatch'
   | 'forced-missing'
-  | 'migrated'
   | 'missing'
   | 'remnant';
 
@@ -147,7 +139,6 @@ export interface UninstallReceiptReport {
   readonly contentHash?: string;
   readonly format?: string;
   readonly installedAt?: string;
-  readonly migratedFrom?: string;
   readonly path: string;
   readonly status: UninstallReceiptStatus;
   readonly version?: string;
@@ -192,10 +183,9 @@ export interface UninstallBundleOptions {
   readonly confirmPurge?: boolean;
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
   /**
-   * Proceed without a receipt (a pre-receipt legacy copy, or a host-registered
-   * copy with no store receipt) or when owned content no longer matches the
-   * receipt. Foreign directories — a receipt or manifest naming another plugin
-   * — are refused regardless.
+   * Proceed when a host-registered copy has no store receipt, or when owned
+   * content no longer matches the receipt. Directories without a receipt
+   * naming this plugin are foreign and refused regardless.
    */
   readonly force?: boolean;
   readonly from: string;
@@ -254,9 +244,8 @@ const receiptReport = (path: string, receipt: InstallReceipt | undefined, status
   Object.freeze({
     ...(receipt === undefined ? {} : {
       contentHash: receipt.contentHash,
-      format: receipt.migratedFrom ?? installReceiptFormat,
+      format: receipt.format,
       installedAt: receipt.installedAt,
-      ...(receipt.migratedFrom === undefined ? {} : { migratedFrom: receipt.migratedFrom }),
       version: receipt.version,
     }),
     path,
@@ -306,9 +295,9 @@ const wouldPrune = async (path: string, gone: Set<string>): Promise<boolean> => 
 
 /**
  * Unowned entries under `root` that survive the uninstall, POSIX-relative: regular files (and symlinks, listed
- * but never followed) that are not owned and not runtime state, plus unowned directories holding nothing
- * retained (`name/`), which the prune never touches because only owned directories are candidates. A directory
- * that holds a retained entry is implied by that entry and is not listed itself.
+ * but never followed) that are not owned, plus unowned directories holding nothing retained (`name/`), which
+ * the prune never touches because only owned directories are candidates. A directory that holds a retained
+ * entry is implied by that entry and is not listed itself.
  */
 const listRetained = async (
   root: string,
@@ -327,7 +316,7 @@ const listRetained = async (
     let kept = 0;
     for (const name of entries) {
       const child = relativePath === '' ? name : `${relativePath}/${name}`;
-      if (relativePath === '' && (name === installReceiptFile || isPreservedRuntimeRoot(name))) continue;
+      if (relativePath === '' && name === installReceiptFile) continue;
       const metadata = await lstat(join(root, child));
       if (metadata.isDirectory() && !metadata.isSymbolicLink()) {
         const below = await visit(child);
@@ -350,17 +339,15 @@ interface CursorLocalOwnership {
   readonly directories: readonly string[];
   readonly files: readonly string[];
   readonly hostDirectories: readonly string[];
-  readonly receipt: InstallReceipt | undefined;
+  readonly receipt: InstallReceipt;
   readonly status: UninstallReceiptStatus;
 }
 
 /**
  * Decides what a Cursor local uninstall may remove. A receipt naming this
  * plugin owns exactly its files and directories; its owned content must hash
- * to the recorded content hash unless `--force`. Without a receipt, only a
- * legacy layout (emitted install surface plus a manifest naming this plugin)
- * may be removed, and only under `--force`, by its inventory. Anything else is
- * foreign and is refused with or without `--force`.
+ * to the recorded content hash unless `--force`. A directory without such a
+ * receipt is foreign and is refused with or without `--force`.
  */
 const cursorLocalOwnership = async (
   destination: string,
@@ -370,34 +357,13 @@ const cursorLocalOwnership = async (
   const receipt = await readInstallReceipt(destination);
   if (receipt === undefined) {
     const manifest = await readInstalledManifest(destination);
-    const legacy = manifest?.name === identity.plugin && await hasInstallSurfaceMarkers(destination);
-    if (!legacy) {
-      throw failure(
-        'AB7007',
-        `Refusing to uninstall foreign directory ${destination}: it carries no install receipt and is not a ` +
-          `recognizable agent-bundle install of ${identity.plugin}` +
-          `${manifest === undefined ? ' (no loader manifest)' : ` (manifest names ${JSON.stringify(manifest.name)})`}. ` +
-          'Remove it manually if it is stale; --force does not apply to foreign directories.',
-        'cursor',
-      );
-    }
-    if (!force) {
-      throw failure(
-        'AB7009',
-        `Refusing to uninstall ${destination} without an install receipt: this copy predates install receipts, so ` +
-          'ownership cannot be proven. Re-run with --force to remove its inventoried plugin files (runtime state ' +
-          'under state/ is kept unless --purge-data --confirm-purge is passed), or reinstall with --replace first to adopt it.',
-        'cursor',
-      );
-    }
-    const inventory = await treeInventory(destination);
-    return {
-      directories: directoriesOf(inventory.files),
-      files: inventory.files,
-      hostDirectories: [],
-      receipt: undefined,
-      status: 'forced-legacy',
-    };
+    throw failure(
+      'AB7007',
+      `Refusing to uninstall foreign directory ${destination}: it carries no install receipt naming ${identity.plugin}` +
+        `${manifest === undefined ? ' (no loader manifest)' : ` (manifest names ${JSON.stringify(manifest.name)})`}. ` +
+        'Remove it manually if it is stale; --force does not apply to foreign directories.',
+      'cursor',
+    );
   }
   if (receipt.plugin !== identity.plugin) {
     throw failure(
@@ -408,7 +374,7 @@ const cursorLocalOwnership = async (
     );
   }
   const installedContentHash = await hashOwnedFiles(destination, receipt.files);
-  let status: UninstallReceiptStatus = receipt.migratedFrom === undefined ? 'consumed' : 'migrated';
+  let status: UninstallReceiptStatus = 'consumed';
   if (installedContentHash !== receipt.contentHash) {
     if (!force) {
       throw failure(
@@ -449,8 +415,6 @@ const realPluginDataDirectory = async (cursorRoot: string, pluginData: string): 
 interface CursorLocalData {
   /** Installer-created `PLUGIN_DATA` directory that nothing wrote to: pruned like a created host directory, never "data". */
   readonly emptyPluginData?: string;
-  /** A `state/` directory holding nothing: not durable state, so it is pruned rather than kept alive as a remnant. */
-  readonly emptyState?: string;
   readonly emptyStateFiles: readonly string[];
   readonly emptyStateRoots: readonly string[];
   /** Whether any durable state root exists. */
@@ -462,23 +426,20 @@ interface CursorLocalData {
 const cursorLocalData = async (
   destination: string,
   policy: UninstallDataPolicy,
-  receipt: InstallReceipt | undefined,
+  receipt: InstallReceipt,
   cursorRoot: string,
   plugin: string,
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
 ): Promise<CursorLocalData> => {
-  const stateDirectory = join(destination, 'state');
-  const webData = receipt?.webDataRoot ?? installedWebDataRoot(destination, home);
+  const webData = receipt.webDataRoot ?? installedWebDataRoot(destination, home);
   const paths: string[] = [];
   const retainedState: { path: string; reason: string }[] = [];
   const emptyStateFiles: string[] = [];
   const emptyStateRoots: string[] = [];
   const kinds: string[] = [];
-  let emptyState: string | undefined;
-  if (receipt?.state !== undefined) {
+  if (receipt.state !== undefined) {
     for (const root of receipt.state.roots) {
-      if (root.root === stateDirectory) continue;
       const decision = await inspectInstalledStateOwnership(receipt.state, root);
       if (decision.action === 'purge') {
         paths.push(root.root);
@@ -491,22 +452,11 @@ const cursorLocalData = async (
       }
     }
   } else {
-    const observed = receipt?.stateRoot ?? await resolveInstalledStateRoot(destination, 'cursor', environment, home);
-    if (observed.root !== stateDirectory && await realDirectory(observed.root, 'cursor') !== undefined) {
-      if (isRecordedDerivedStateRoot(receipt?.stateRoot, observed.root)) {
-        paths.push(observed.root);
-        kinds.push(`derived framework state root ${observed.root}`);
-      } else {
-        retainedState.push({ path: observed.root, reason: 'unproven' });
-      }
-    }
-  }
-  if (await realDirectory(stateDirectory, 'cursor') !== undefined) {
-    if ((await readdir(stateDirectory)).length === 0) {
-      emptyState = stateDirectory;
-    } else {
-      paths.push(stateDirectory);
-      kinds.push('state/ (state kernel, notices journal)');
+    // A receipt without a `state` block was written between the two receipt writes of a Cursor install: the
+    // observed root is real but unproven, so it is retained until a reinstall records ownership.
+    const observed = await resolveInstalledStateRoot(destination, 'cursor', environment, home);
+    if (await realDirectory(observed.root, 'cursor') !== undefined) {
+      retainedState.push({ path: observed.root, reason: 'unproven' });
     }
   }
   if (await realDirectory(webData, 'cursor') !== undefined) {
@@ -515,7 +465,7 @@ const cursorLocalData = async (
   }
   // The receipt's cursorExpansion records the PLUGIN_DATA directory the installer created for this copy; only the
   // directory at this home's own plugin-data location is receipt-owned — a recorded path elsewhere is left alone.
-  const recorded = receipt?.cursorExpansion?.pluginData;
+  const recorded = receipt.cursorExpansion?.pluginData;
   const expected = cursorPluginDataDirectory(cursorRoot, plugin);
   let emptyPluginData: string | undefined;
   let foreignPluginData: string | undefined;
@@ -537,16 +487,13 @@ const cursorLocalData = async (
   if (paths.length === 0 && retainedState.length === 0) {
     return {
       ...(emptyPluginData === undefined ? {} : { emptyPluginData }),
-      ...(emptyState === undefined ? {} : { emptyState }),
       emptyStateFiles: Object.freeze(emptyStateFiles),
       emptyStateRoots: Object.freeze(emptyStateRoots),
       present: false,
       report: Object.freeze({
-        detail: `No durable runtime state exists (${
-          emptyState === undefined ? 'no state/ under the installed plugin root' : 'state/ under the installed plugin root is empty and is pruned'
-        }${
-          emptyPluginData === undefined ? '' : `; the installer-created PLUGIN_DATA directory ${emptyPluginData} is empty and is pruned`
-        }).${foreignNote}`,
+        detail: `No durable runtime state exists${
+          emptyPluginData === undefined ? '' : ` (the installer-created PLUGIN_DATA directory ${emptyPluginData} is empty and is pruned)`
+        }.${foreignNote}`,
         outcome: 'absent',
         paths: Object.freeze([]),
         policy,
@@ -559,7 +506,6 @@ const cursorLocalData = async (
     : ` Retained ${retainedState.map((entry) => `${entry.path} (${entry.reason})`).join(', ')} because the receipt does not prove exclusive ownership.`;
   return {
     ...(emptyPluginData === undefined ? {} : { emptyPluginData }),
-    ...(emptyState === undefined ? {} : { emptyState }),
     emptyStateFiles: Object.freeze(emptyStateFiles),
     emptyStateRoots: Object.freeze(emptyStateRoots),
     present: true,
@@ -641,14 +587,11 @@ const uninstallCursorLocal = async (
     if (metadata.isSymbolicLink() || !metadata.isFile()) throw unsupportedEntry(path, 'cursor');
     files.push(path);
   }
-  files.push(...data.emptyStateFiles);
-  if (ownership.receipt !== undefined || await exists(receiptPath)) files.push(receiptPath);
+  files.push(...data.emptyStateFiles, receiptPath);
   // External state kept by --keep-data needs the remnant receipt and recorded ownership so a later purge can
   // remove the same root even though no plugin content remains.
-  const keepRoot = policy === 'keep' &&
-    [...data.report.paths, ...(data.report.retained ?? []).map((entry) => entry.path)]
-      .some((path) => path !== join(destination, 'state'));
-  const pluginDataRecorded = ownership.receipt?.cursorExpansion?.pluginData === cursorPluginDataDirectory(cursorRoot, identity.plugin);
+  const keepRoot = policy === 'keep' && (data.report.paths.length > 0 || (data.report.retained ?? []).length > 0);
+  const pluginDataRecorded = ownership.receipt.cursorExpansion?.pluginData === cursorPluginDataDirectory(cursorRoot, identity.plugin);
   const directoryCandidates = [
     ...ownership.directories.map((directory) => join(destination, directory)),
     ...(keepRoot ? [] : [destination]),
@@ -656,20 +599,19 @@ const uninstallCursorLocal = async (
     // The installer created PLUGIN_DATA and its agent-bundle parents; once empty they go too — never while
     // receipts, marketplaces, or another plugin's data keep them alive.
     ...(data.emptyPluginData === undefined ? [] : [data.emptyPluginData]),
-    ...(data.emptyState === undefined ? [] : [data.emptyState]),
     ...data.emptyStateRoots,
     ...(pluginDataRecorded ? [join(cursorRoot, 'agent-bundle', 'plugin-data'), join(cursorRoot, 'agent-bundle')] : []),
   ];
   const ownedDirectories = new Set(ownership.directories);
   const retained = await listRetained(destination, owned, ownedDirectories);
-  const remnantOnly = ownership.receipt !== undefined && isRemnantReceipt(ownership.receipt);
+  const remnantOnly = isRemnantReceipt(ownership.receipt);
   const purging = data.present && policy === 'purge';
   if (remnantOnly && policy !== 'purge' && (data.present || retained.length > 0) && files.length === 1 && files[0] === receiptPath) {
     // A rerun over what an earlier `--keep-data` uninstall left behind, still keeping data that is still there
     // (or unowned entries that keep the root alive): nothing to remove, so the remnant receipt stays in place and
-    // the run is the documented no-op. Once the preserved state is gone — state/ or the PLUGIN_DATA directory
-    // removed or emptied by hand — the remnant guards nothing, and the rerun below consumes it (receipt, empty
-    // plugin root, the host and plugin-data directories it recorded) like an explicit purge would.
+    // the run is the documented no-op. Once the preserved state is gone — the recorded roots or the PLUGIN_DATA
+    // directory removed or emptied by hand — the remnant guards nothing, and the rerun below consumes it
+    // (receipt, empty plugin root, the host and plugin-data directories it recorded) like an explicit purge would.
     return Object.freeze({
       ...base,
       data: data.report,
@@ -726,22 +668,22 @@ const uninstallCursorLocal = async (
     // directory instead of calling it corrupt. A reinstall fills it back in as an `installed`.
     await writeInstallReceipt(destination, createInstallReceipt({
       // A kept PLUGIN_DATA directory stays receipt-owned through the remnant's expansion record.
-      ...(ownership.receipt?.cursorExpansion === undefined ||
+      ...(ownership.receipt.cursorExpansion === undefined ||
         !data.report.paths.includes(ownership.receipt.cursorExpansion.pluginData)
         ? {}
         : { cursorExpansion: ownership.receipt.cursorExpansion }),
       host: 'cursor',
       hostDirectories: ownership.hostDirectories,
-      ...(ownership.receipt === undefined ? {} : { installedAt: ownership.receipt.installedAt }),
+      installedAt: ownership.receipt.installedAt,
       inventory: { files: [], hash: emptyContentHash },
       mode: 'local',
       plugin: identity.plugin,
       registrations: [],
       scope: 'user',
-      ...(ownership.receipt?.state === undefined ? {} : { state: ownership.receipt.state }),
+      ...(ownership.receipt.state === undefined ? {} : { state: ownership.receipt.state }),
       ...(keepRoot ? { webDataRoot: data.webDataRoot } : {}),
       updatedAt: new Date().toISOString(),
-      version: ownership.receipt?.version ?? identity.version,
+      version: ownership.receipt.version,
     }));
     remnantReceipt = receiptPath;
   }
@@ -848,9 +790,7 @@ const uninstallCursorMarketplace = async (
       state: 'not-installed',
     });
   }
-  let status: UninstallReceiptStatus = receipt === undefined
-    ? 'forced-missing'
-    : receipt.migratedFrom === undefined ? 'consumed' : 'migrated';
+  let status: UninstallReceiptStatus = receipt === undefined ? 'forced-missing' : 'consumed';
   const recorded = receipt?.registrations.find((registration) => registration.kind === 'cursor-marketplace-staging');
   if (repo !== undefined) {
     if (receipt === undefined) {
@@ -1173,14 +1113,8 @@ const publicHostData = async (
     }
   }
   if (entry !== undefined) {
-    const legacyStateRoot = join(entry.installPath, 'state');
-    const candidates = [
-      ...(host === 'codex' && policy === 'keep' ? [] : [legacyStateRoot]),
-      installedWebDataRoot(entry.installPath, home),
-    ];
-    for (const path of candidates) {
-      if (!paths.includes(path) && await realDirectory(path, host) !== undefined) paths.push(path);
-    }
+    const webDataRoot = installedWebDataRoot(entry.installPath, home);
+    if (!paths.includes(webDataRoot) && await realDirectory(webDataRoot, host) !== undefined) paths.push(webDataRoot);
     if (receipt?.state === undefined) {
       const observed = await resolveInstalledStateRoot(entry.installPath, host, environment, home);
       if (
@@ -1246,7 +1180,7 @@ const publicHostData = async (
             : ` Retained ${retainedState.map((entry) => `${entry.path} (${entry.reason})`).join(', ')} because the receipt does not prove exclusive ownership.`
         }`
         : host === 'claude'
-          ? '`claude plugin uninstall --keep-data` orphans the cached copy for Claude\'s ~14-day grace period; Agent Bundle preserves the effective framework state root, legacy state/, web-data, and plugins/data.'
+          ? '`claude plugin uninstall --keep-data` orphans the cached copy for Claude\'s ~14-day grace period; Agent Bundle preserves the effective framework state root, web-data, and plugins/data.'
           : '`codex plugin remove` deletes the cached plugin tree, but Agent Bundle preserves the external framework state root and web-data.',
       outcome: policy === 'purge'
         ? paths.length > 0 ? 'purged' : 'kept'
@@ -1330,9 +1264,7 @@ const uninstallPublicCli = async (
       state: 'not-installed',
     });
   }
-  let status: UninstallReceiptStatus = receipt === undefined
-    ? 'forced-missing'
-    : receipt.migratedFrom === undefined ? 'consumed' : 'migrated';
+  let status: UninstallReceiptStatus = receipt === undefined ? 'forced-missing' : 'consumed';
   if (entry !== undefined) {
     if (receipt === undefined) {
       if (!force) {
@@ -1340,7 +1272,7 @@ const uninstallPublicCli = async (
           'AB7009',
           `Refusing to uninstall ${id} from ${host}${entry.scope === undefined ? '' : ` (scope ${entry.scope})`}: the host ` +
             `reports it installed at ${entry.installPath} but no agent-bundle receipt exists at ${receiptPath}, so this ` +
-            'install was not made by agent-bundle or predates lifecycle receipts. ' +
+            'install was not made by agent-bundle. ' +
             `Re-run with --force to uninstall through \`${host} plugin ${host === 'claude' ? 'uninstall' : 'remove'}\` anyway.`,
           host,
         );
@@ -1612,9 +1544,7 @@ const uninstallAmp = async (
     );
   }
   const installedHash = await hashOwnedFiles(location.destination, receipt.files);
-  const status: UninstallReceiptStatus = installedHash === receipt.contentHash
-    ? receipt.migratedFrom === undefined ? 'consumed' : 'migrated'
-    : 'forced-mismatch';
+  const status: UninstallReceiptStatus = installedHash === receipt.contentHash ? 'consumed' : 'forced-mismatch';
   if (installedHash !== receipt.contentHash && !force) {
     throw failure(
       'AB7007',

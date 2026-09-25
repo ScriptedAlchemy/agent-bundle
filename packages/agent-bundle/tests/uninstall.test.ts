@@ -224,27 +224,27 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
     expect(conflicting.diagnostics[0]?.code).toBe('AB7008');
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
 
-    // --plan lists only the directories the run can actually prune: the plugin root is kept alive by state/ and
-    // the unowned note, so it is not planned for removal and the remnant receipt is announced instead.
+    // --plan lists only the directories the run can actually prune: the plugin root is kept alive by the unowned
+    // entries (state/ is one of them), so it is not planned for removal and the remnant receipt is announced instead.
     const keepPlan = await uninstallBundle({ ...options, keepData: true, plan: true });
     expect(keepPlan.removed.directories).not.toContain(destination);
     expect(keepPlan.removed.directories).toContain(join(destination, '.cursor-plugin'));
     // skills/ is owned but skills/drafts is not: the unowned directory survives and keeps skills/ alive.
     expect(keepPlan.removed.directories).not.toContain(join(destination, 'skills'));
     expect(keepPlan.remnantReceipt).toBe(join(destination, installReceiptFile));
-    expect(keepPlan.retained).toEqual(['operator-notes.md', 'scratch/', 'skills/drafts/']);
-    // Purging state/ still leaves the note, so the root survives that plan too; the purged directory is listed as one.
+    expect(keepPlan.retained).toEqual(['operator-notes.md', 'scratch/', 'skills/drafts/', 'state/plugin.sqlite']);
+    // Only the receipt-recorded derived root is purge authority; the in-tree state/ is never a data path.
     const purgePlan = await uninstallBundle({ ...options, confirmPurge: true, plan: true, purgeData: true });
-    expect(purgePlan.data.paths).toEqual([derivedStateRoot, join(destination, 'state')]);
-    expect(purgePlan.removed.directories.slice(0, 2)).toEqual([derivedStateRoot, join(destination, 'state')]);
+    expect(purgePlan.data.paths).toEqual([derivedStateRoot]);
+    expect(purgePlan.removed.directories[0]).toBe(derivedStateRoot);
     expect(purgePlan.removed.directories).not.toContain(destination);
-    expect(purgePlan.removed.files).not.toContain(join(destination, 'state'));
+    expect(purgePlan.removed.directories).not.toContain(join(destination, 'state'));
 
     const kept = await uninstallBundle({ ...options, keepData: true });
     expect(kept).toMatchObject({
-      data: { outcome: 'kept', paths: [derivedStateRoot, join(destination, 'state')], policy: 'keep' },
+      data: { outcome: 'kept', paths: [derivedStateRoot], policy: 'keep' },
       remnantReceipt: join(destination, installReceiptFile),
-      retained: ['operator-notes.md', 'scratch/', 'skills/drafts/'],
+      retained: ['operator-notes.md', 'scratch/', 'skills/drafts/', 'state/plugin.sqlite'],
       state: 'uninstalled',
     });
     expect(kept.removed.directories).toEqual(keepPlan.removed.directories);
@@ -255,10 +255,11 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
     expect(await readInstallReceipt(destination)).toMatchObject({ files: [], hostDirectories: [], mode: 'local', registrations: [] });
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
     expect(await readFile(join(derivedStateRoot, 'plugin.sqlite'), 'utf8')).toBe('derived\n');
-    expect(formatUninstallResult(kept)).toContain('Retained 3 unowned entries');
+    expect(formatUninstallResult(kept)).toContain('Retained 4 unowned entries');
     expect(formatUninstallResult(kept)).toContain('Remnant receipt:');
 
-    // Reinstall beside the retained state (an install, not a replacement), then purge it with confirmation.
+    // Reinstall beside the retained entries (an install, not a replacement), then purge the derived root with
+    // confirmation; state/ stays retained and keeps the root and its remnant receipt alive.
     await rm(join(destination, 'operator-notes.md'));
     await removeTree(join(destination, 'scratch'));
     // skills/ survived the uninstall (its unowned child kept it alive), so a reinstall would find it pre-existing
@@ -268,15 +269,18 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
     const purged = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
     expect(purged).toMatchObject({
-      data: { outcome: 'purged', paths: [derivedStateRoot, join(destination, 'state')], policy: 'purge' },
-      retained: [],
+      data: { outcome: 'purged', paths: [derivedStateRoot], policy: 'purge' },
+      remnantReceipt: join(destination, installReceiptFile),
+      retained: ['state/plugin.sqlite'],
       state: 'uninstalled',
     });
-    expect(purged.remnantReceipt).toBeUndefined();
-    // A purged state/ tree is a directory and is reported as one, ahead of the pruned owned directories.
-    expect(purged.removed.directories.slice(0, 2)).toEqual([derivedStateRoot, join(destination, 'state')]);
-    expect(purged.removed.files).not.toContain(join(destination, 'state'));
+    // The purged derived root is a directory and is reported as one, ahead of the pruned owned directories.
+    expect(purged.removed.directories[0]).toBe(derivedStateRoot);
     await expect(readdir(derivedStateRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    // Once the operator removes state/ by hand, the exhausted remnant is consumed and the home is byte-identical.
+    await removeTree(join(destination, 'state'));
+    expect(await uninstallBundle(options)).toMatchObject({ data: { outcome: 'absent' }, state: 'uninstalled' });
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
   } finally {
     await removeTree(fixture.cleanupRoot);
@@ -294,27 +298,31 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     await installBundle(options);
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
-    // Keep: plugins/ and plugins/local cannot be pruned (they hold the state), so the remnant receipt remembers them.
+    // Keep: plugins/ and plugins/local cannot be pruned (the unowned state/ keeps the root alive), so the remnant
+    // receipt remembers them.
     const kept = await uninstallBundle(options);
-    expect(kept.remnantReceipt).toBe(join(destination, installReceiptFile));
+    expect(kept).toMatchObject({ data: { outcome: 'absent' }, remnantReceipt: join(destination, installReceiptFile), retained: ['state/plugin.sqlite'] });
     expect(await readInstallReceipt(destination)).toMatchObject({ hostDirectories: ['plugins', 'plugins/local'], registrations: [] });
-    // Uninstalling the remnant itself while still keeping the data is the documented no-op: nothing to remove, the
-    // remnant receipt stays in place unchanged, and the run reports `not-installed`.
+    // Uninstalling the remnant itself while the retained entry is still there is the documented no-op: nothing to
+    // remove, the remnant receipt stays in place unchanged, and the run reports `not-installed`.
     const remnantBefore = await readFile(join(destination, installReceiptFile), 'utf8');
     const rerun = await uninstallBundle(options);
     expect(rerun).toMatchObject({
-      data: { outcome: 'kept' },
+      data: { outcome: 'absent' },
       receipt: { status: 'remnant' },
       registrations: [{ action: 'already-absent', kind: 'cursor-local-plugin' }],
       remnantReceipt: join(destination, installReceiptFile),
       removed: { directories: [], files: [] },
+      retained: ['state/plugin.sqlite'],
       state: 'not-installed',
     });
     expect(await readFile(join(destination, installReceiptFile), 'utf8')).toBe(remnantBefore);
     expect(await uninstallBundle({ ...options, plan: true })).toMatchObject({ receipt: { status: 'remnant' }, state: 'not-installed' });
-    // Reinstall around the state carries the host directories forward; a confirmed purge then restores the home exactly.
+    // Reinstall around the retained entry carries the host directories forward; once the operator removes state/,
+    // a confirmed purge restores the home exactly.
     expect(await installBundle(options)).toMatchObject({ state: 'installed' });
     expect(await readInstallReceipt(destination)).toMatchObject({ hostDirectories: ['plugins', 'plugins/local'], registrations: [{ kind: 'cursor-local-plugin' }] });
+    await removeTree(join(destination, 'state'));
     const purged = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
     expect(purged.removed.directories).toEqual(expect.arrayContaining([join(cursorRoot, 'plugins', 'local'), join(cursorRoot, 'plugins')]));
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
@@ -341,20 +349,23 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     expect(consumed.remnantReceipt).toBeUndefined();
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
 
-    // A state/ directory emptied by hand (the directory itself left behind) is not durable state either: the remnant
-    // is exhausted, the empty state/ is pruned with the root, and the home is byte-identical again.
+    // A state/ directory emptied by hand is still an unowned directory: the uninstall never prunes it, so the remnant
+    // stays a no-op until the operator removes the directory itself.
     await installBundle(options);
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
     expect((await uninstallBundle(options)).remnantReceipt).toBe(join(destination, installReceiptFile));
     await rm(join(destination, 'state', 'plugin.sqlite'));
-    const emptiedState = await uninstallBundle(options);
-    expect(emptiedState).toMatchObject({
-      data: { detail: expect.stringContaining('state/ under the installed plugin root is empty and is pruned'), outcome: 'absent' },
-      receipt: { status: 'consumed' },
-      state: 'uninstalled',
+    expect(await uninstallBundle(options)).toMatchObject({
+      receipt: { status: 'remnant' },
+      removed: { directories: [], files: [] },
+      retained: ['state/'],
+      state: 'not-installed',
     });
-    expect(emptiedState.removed.directories).toEqual([join(destination, 'state'), destination, join(cursorRoot, 'plugins', 'local'), join(cursorRoot, 'plugins')]);
+    await removeTree(join(destination, 'state'));
+    const emptiedState = await uninstallBundle(options);
+    expect(emptiedState).toMatchObject({ data: { outcome: 'absent' }, receipt: { status: 'consumed' }, state: 'uninstalled' });
+    expect(emptiedState.removed.directories).toEqual([destination, join(cursorRoot, 'plugins', 'local'), join(cursorRoot, 'plugins')]);
     expect(emptiedState.remnantReceipt).toBeUndefined();
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
 
@@ -872,21 +883,22 @@ it('refuses Cursor local uninstalls without proof of ownership unless forced, an
     expect(await uninstallBundle({ ...options, force: true })).toMatchObject({ receipt: { status: 'forced-mismatch' }, state: 'uninstalled' });
     await expect(readdir(destination)).rejects.toMatchObject({ code: 'ENOENT' });
 
-    // Legacy pre-receipt layout: refused (AB7009) until --force, which removes the inventoried files only.
+    // A copy without a receipt (placed before receipts existed) is foreign: refused with and without --force,
+    // and nothing under it is touched.
     await installBundle(options);
     await rm(receiptPath);
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
-    const legacy = await failureOf(uninstallBundle(options));
-    expect(legacy.diagnostics[0]).toMatchObject({ code: 'AB7009', target: 'cursor' });
-    expect(legacy.diagnostics[0]?.message).toContain('predates install receipts');
-    const forcedLegacy = await uninstallBundle({ ...options, force: true });
-    expect(forcedLegacy).toMatchObject({
-      data: { outcome: 'kept' },
-      receipt: { status: 'forced-legacy' },
-      state: 'uninstalled',
-    });
-    expect((await readdir(destination)).sort()).toEqual([installReceiptFile, 'state']);
+    const preReceipt = await snapshotTree(destination);
+    for (const force of [false, true]) {
+      const refused = await failureOf(uninstallBundle({ ...options, force }));
+      expect(refused.diagnostics[0]).toMatchObject({ code: 'AB7007', target: 'cursor' });
+      expect(refused.diagnostics[0]?.message).toContain(
+        `Refusing to uninstall foreign directory ${destination}: it carries no install receipt naming uninstall-fixture (manifest names "uninstall-fixture")`,
+      );
+      expect(refused.diagnostics[0]?.message).toContain('--force does not apply to foreign directories');
+    }
+    expect(diffTreeSnapshots(preReceipt, await snapshotTree(destination))).toEqual({ added: [], changed: [], removed: [] });
     await removeTree(destination);
 
     // A receipt naming another plugin, or a directory that is not ours at all: refused even with --force.
@@ -918,40 +930,36 @@ it('refuses Cursor local uninstalls without proof of ownership unless forced, an
   }
 });
 
-it('consumes a migrated format/1 Cursor receipt without a crash', async () => {
+it('treats a format/1 Cursor receipt as no receipt: install and uninstall refuse the copy as foreign', async () => {
   const fixture = await createFixture('cursor');
   const cursorRoot = join(fixture.home, '.cursor');
   await mkdir(join(cursorRoot, 'plugins', 'local'), { recursive: true });
   const destination = join(cursorRoot, 'plugins', 'local', 'uninstall-fixture');
   const options = { from: fixture.bundleRoot, home: fixture.home, host: 'cursor' as const };
   try {
-    const before = await snapshotTree(fixture.home);
     await installBundle(options);
     const receiptPath = join(destination, installReceiptFile);
     const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
-    const { hostDirectories: _h, mode: _m, registrations: _r, scope: _s, updatedAt: _u, ...legacy } = receipt;
-    await writeFile(receiptPath, JSON.stringify({ ...legacy, format: 'agent-bundle-install-receipt/1' }));
-    expect((await readInstallReceipt(destination))?.migratedFrom).toBe('agent-bundle-install-receipt/1');
+    const { hostDirectories: _h, mode: _m, registrations: _r, scope: _s, updatedAt: _u, ...formatOne } = receipt;
+    await writeFile(receiptPath, JSON.stringify({ ...formatOne, format: 'agent-bundle-install-receipt/1' }));
+    expect(await readInstallReceipt(destination)).toBeUndefined();
+    const before = await snapshotTree(fixture.home);
 
-    // An identical rerun of install upgrades the receipt in place without touching plugin files.
-    const upgraded = await installBundle(options);
-    expect(upgraded.state).toBe('already-installed');
-    expect(await readInstallReceipt(destination)).toMatchObject({ format: installReceiptFormat, mode: 'local' });
-    expect((await readInstallReceipt(destination))?.migratedFrom).toBeUndefined();
-
-    await writeFile(receiptPath, JSON.stringify({ ...legacy, format: 'agent-bundle-install-receipt/1' }));
-    const result = await uninstallBundle(options);
-    expect(result).toMatchObject({
-      receipt: { migratedFrom: 'agent-bundle-install-receipt/1', status: 'migrated' },
-      state: 'uninstalled',
-    });
+    const install = await failureOf(installBundle({ ...options, replace: true }));
+    expect(install.diagnostics[0]).toMatchObject({ code: 'AB7005', target: 'cursor' });
+    expect(install.diagnostics[0]?.message).toContain(`Refusing foreign install at ${destination}`);
+    for (const force of [false, true]) {
+      const uninstall = await failureOf(uninstallBundle({ ...options, force }));
+      expect(uninstall.diagnostics[0]).toMatchObject({ code: 'AB7007', target: 'cursor' });
+      expect(uninstall.diagnostics[0]?.message).toContain(`Refusing to uninstall foreign directory ${destination}`);
+    }
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
   } finally {
     await removeTree(fixture.cleanupRoot);
   }
 });
 
-it('never derives legacy receipt purge ownership from the current environment', async () => {
+it('never derives purge ownership from the current environment for a receipt without a state block', async () => {
   const fixture = await createFixture('cursor');
   const cursorRoot = join(fixture.home, '.cursor');
   await mkdir(join(cursorRoot, 'plugins', 'local'), { recursive: true });
@@ -968,20 +976,8 @@ it('never derives legacy receipt purge ownership from the current environment', 
     await writeFile(join(originalStateRoot, 'state.sqlite'), 'original\n');
     const receiptPath = join(destination, installReceiptFile);
     const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
-    const {
-      hostDirectories: _hostDirectories,
-      mode: _mode,
-      registrations: _registrations,
-      scope: _scope,
-      state: _state,
-      stateRoot: _stateRoot,
-      updatedAt: _updatedAt,
-      ...legacy
-    } = receipt;
-    await writeFile(receiptPath, JSON.stringify({
-      ...legacy,
-      format: 'agent-bundle-install-receipt/1',
-    }));
+    const { state: _state, ...withoutState } = receipt;
+    await writeFile(receiptPath, JSON.stringify(withoutState));
     await mkdir(currentStateRoot, { recursive: true });
     await writeFile(currentSentinel, 'unrelated\n');
 
@@ -1007,7 +1003,6 @@ it('never derives legacy receipt purge ownership from the current environment', 
     });
     const remnant = await readInstallReceipt(destination);
     expect(remnant?.state).toBeUndefined();
-    expect(remnant?.stateRoot).toBeUndefined();
 
     const purged = await uninstallBundle({
       ...options,
@@ -1022,35 +1017,6 @@ it('never derives legacy receipt purge ownership from the current environment', 
     });
     expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
     expect(await readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).toBe('original\n');
-
-    // The #642 compatibility receipt remains authoritative only for the exact derived root it recorded.
-    await installBundle({ ...options, environment: originalEnvironment });
-    const currentReceipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
-    const { state: _currentState, ...recordedLegacy } = currentReceipt;
-    await writeFile(receiptPath, JSON.stringify({
-      ...recordedLegacy,
-      stateRoot: { root: originalStateRoot, source: 'derived' },
-    }));
-    const recordedPlan = await uninstallBundle({
-      ...options,
-      confirmPurge: true,
-      environment: currentEnvironment,
-      plan: true,
-      purgeData: true,
-    });
-    expect(recordedPlan.data).toMatchObject({
-      outcome: 'purged',
-      paths: [originalStateRoot],
-    });
-    expect(recordedPlan.removed.directories).not.toContain(currentStateRoot);
-    await uninstallBundle({
-      ...options,
-      confirmPurge: true,
-      environment: currentEnvironment,
-      purgeData: true,
-    });
-    await expect(readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
   } finally {
     await removeTree(fixture.cleanupRoot);
   }
@@ -1418,15 +1384,17 @@ it.each([
       });
       // The cache copy and plugins/data/<id> are scope-less: while the project scope still uses them, purging
       // from the user scope is refused before any host verb runs.
+      const dataDirectory = join(hostRoot, 'plugins', 'data', 'uninstall-fixture@uninstall-fixture-marketplace');
       await cp(fixture.bundleRoot, installPath, { recursive: true });
-      await mkdir(join(installPath, 'state'), { recursive: true });
-      await writeFile(join(installPath, 'state', 'plugin.sqlite'), 'durable\n');
+      await mkdir(dataDirectory, { recursive: true });
+      await writeFile(join(dataDirectory, 'notes.txt'), 'data\n');
       const sharedPurge = await failureOf(uninstallBundle({ ...options, commandRunner: scoped.runner, confirmPurge: true, purgeData: true }));
       expect(sharedPurge.diagnostics[0]).toMatchObject({ code: 'AB7008', target: 'claude' });
       expect(sharedPurge.diagnostics[0]?.message).toContain('(scope project)');
       expect(scoped.calls.map((call) => call.args.join(' '))).not.toContain(uninstall);
-      expect(await readFile(join(installPath, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+      expect(await readFile(join(dataDirectory, 'notes.txt'), 'utf8')).toBe('data\n');
       await removeTree(installPath);
+      await removeTree(dataDirectory);
       scoped.calls.length = 0;
       const otherScope = await uninstallBundle({ ...options, commandRunner: scoped.runner });
       expect(otherScope.registrations.find((registration) => registration.kind === 'claude-marketplace')).toMatchObject({
@@ -1514,15 +1482,16 @@ it.each([
       await writeFile(elsewhere, pluginOnlyReceipt('uninstall-fixture', '/elsewhere/project'));
       await installBundle(options);
       await cp(fixture.bundleRoot, installPath, { recursive: true });
-      await mkdir(join(installPath, 'state'), { recursive: true });
-      await writeFile(join(installPath, 'state', 'plugin.sqlite'), 'durable\n');
+      await mkdir(dataDirectory, { recursive: true });
+      await writeFile(join(dataDirectory, 'notes.txt'), 'data\n');
       calls.length = 0;
       const receiptSharedPurge = await failureOf(uninstallBundle({ ...options, confirmPurge: true, purgeData: true }));
       expect(receiptSharedPurge.diagnostics[0]).toMatchObject({ code: 'AB7008', target: 'claude' });
       expect(receiptSharedPurge.diagnostics[0]?.message).toContain(`receipt ${elsewhere} (scope project in /elsewhere/project)`);
       expect(calls.map((call) => call.args.join(' '))).not.toContain(uninstall);
-      expect(await readFile(join(installPath, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+      expect(await readFile(join(dataDirectory, 'notes.txt'), 'utf8')).toBe('data\n');
       await removeTree(installPath);
+      await removeTree(dataDirectory);
       calls.length = 0;
       // --plan announces the move without writing it.
       const planMove = await uninstallBundle({ ...options, plan: true });
@@ -1558,11 +1527,12 @@ it.each([
       await writeFile(otherPlugin, pluginOnlyReceipt('other-fixture', '/elsewhere/other'));
       await installBundle(options);
       await cp(fixture.bundleRoot, installPath, { recursive: true });
-      await mkdir(join(installPath, 'state'), { recursive: true });
-      await writeFile(join(installPath, 'state', 'plugin.sqlite'), 'durable\n');
+      await mkdir(dataDirectory, { recursive: true });
+      await writeFile(join(dataDirectory, 'notes.txt'), 'data\n');
       calls.length = 0;
       const byOtherReceipt = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
-      expect(byOtherReceipt).toMatchObject({ data: { outcome: 'purged' }, state: 'uninstalled' });
+      expect(byOtherReceipt).toMatchObject({ data: { outcome: 'purged', paths: [dataDirectory] }, state: 'uninstalled' });
+      await expect(readdir(dataDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
       expect(byOtherReceipt.registrations.find((registration) => registration.kind === 'claude-marketplace')).toMatchObject({
         action: 'retained',
         detail: expect.stringContaining(`receipt ${otherPlugin}`),
@@ -1598,16 +1568,17 @@ it.each([
         { projectPath: '/elsewhere/by-hand', scope: 'project' },
       ] }));
       await cp(fixture.bundleRoot, installPath, { recursive: true });
-      await mkdir(join(installPath, 'state'), { recursive: true });
-      await writeFile(join(installPath, 'state', 'plugin.sqlite'), 'durable\n');
+      await mkdir(dataDirectory, { recursive: true });
+      await writeFile(join(dataDirectory, 'notes.txt'), 'data\n');
       calls.length = 0;
       const registrySharedPurge = await failureOf(uninstallBundle({ ...options, confirmPurge: true, purgeData: true }));
       expect(registrySharedPurge.diagnostics[0]).toMatchObject({ code: 'AB7008', target: 'claude' });
       expect(registrySharedPurge.diagnostics[0]?.message)
         .toContain('uninstall-fixture@uninstall-fixture-marketplace (scope project in /elsewhere/by-hand, per plugins/installed_plugins.json)');
       expect(calls.map((call) => call.args.join(' '))).not.toContain(uninstall);
-      expect(await readFile(join(installPath, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+      expect(await readFile(join(dataDirectory, 'notes.txt'), 'utf8')).toBe('data\n');
       await removeTree(installPath);
+      await removeTree(dataDirectory);
       calls.length = 0;
       const byRegistry = await uninstallBundle(options);
       expect(byRegistry.registrations.find((registration) => registration.kind === 'claude-marketplace')).toMatchObject({
@@ -1627,11 +1598,11 @@ it.each([
         'uninstall-fixture@uninstall-fixture-marketplace': [{ scope: 'user' }],
       }));
       await cp(fixture.bundleRoot, installPath, { recursive: true });
-      await mkdir(join(installPath, 'state'), { recursive: true });
-      await writeFile(join(installPath, 'state', 'plugin.sqlite'), 'durable\n');
+      await mkdir(dataDirectory, { recursive: true });
+      await writeFile(join(dataDirectory, 'notes.txt'), 'data\n');
       calls.length = 0;
       const byOtherRegistered = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
-      expect(byOtherRegistered).toMatchObject({ data: { outcome: 'purged' }, state: 'uninstalled' });
+      expect(byOtherRegistered).toMatchObject({ data: { outcome: 'purged', paths: [dataDirectory] }, state: 'uninstalled' });
       expect(byOtherRegistered.registrations.find((registration) => registration.kind === 'claude-marketplace')).toMatchObject({
         action: 'retained',
         detail: expect.stringContaining('other-fixture@uninstall-fixture-marketplace (scope local in /elsewhere/other, per plugins/installed_plugins.json)'),
@@ -1729,30 +1700,27 @@ it('purges Claude durable state only when confirmed and reports the host-retaine
     await mkdir(dataDirectory, { recursive: true });
     await writeFile(join(dataDirectory, 'notes.txt'), 'data\n');
 
+    // The host-cached tree, an in-tree state/ included, belongs to Claude; only plugins/data/<id>/ is a data path.
     const kept = await uninstallBundle({ ...options, plan: true });
-    expect(kept.data).toMatchObject({
-      outcome: 'retained-by-host',
-      paths: [join(installPath, 'state'), dataDirectory],
-      policy: 'keep',
-    });
+    expect(kept.data).toMatchObject({ outcome: 'retained-by-host', paths: [dataDirectory], policy: 'keep' });
     expect(kept.data.detail).toContain('--keep-data');
 
-    // The plan and the run report the purged state trees as the directories they are, never as files.
+    // The plan and the run report the purged data directory as the directory it is, never as a file.
     const purgePlan = await uninstallBundle({ ...options, confirmPurge: true, plan: true, purgeData: true });
-    expect(purgePlan.removed.directories.slice(0, 2)).toEqual([join(installPath, 'state'), dataDirectory]);
+    expect(purgePlan.removed.directories[0]).toBe(dataDirectory);
     expect(purgePlan.removed.files).toEqual([expect.stringContaining('uninstall-fixture.uninstall-fixture-marketplace.user.json')]);
     const purged = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
-    expect(purged.data).toMatchObject({ outcome: 'purged', paths: [join(installPath, 'state'), dataDirectory], policy: 'purge' });
-    expect(purged.removed.directories.slice(0, 2)).toEqual([join(installPath, 'state'), dataDirectory]);
+    expect(purged.data).toMatchObject({ outcome: 'purged', paths: [dataDirectory], policy: 'purge' });
+    expect(purged.removed.directories[0]).toBe(dataDirectory);
     expect(purged.removed.files).toEqual([expect.stringContaining('uninstall-fixture.uninstall-fixture-marketplace.user.json')]);
-    await expect(readdir(join(installPath, 'state'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(installPath, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
     await expect(readdir(dataDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await removeTree(fixture.cleanupRoot);
   }
 });
 
-it('never derives legacy host-receipt purge ownership from the current environment', async () => {
+it('never derives host-receipt purge ownership from the current environment without a state block', async () => {
   const fixture = await createFixture('claude');
   const hostRoot = join(fixture.cleanupRoot, 'claude-root');
   const installPath = join(hostRoot, 'plugins', 'cache', 'uninstall-fixture-marketplace', 'uninstall-fixture', '1.2.3');
@@ -1791,8 +1759,8 @@ it('never derives legacy host-receipt purge ownership from the current environme
     await installBundle({ ...options, environment: originalEnvironment });
     await cp(fixture.bundleRoot, installPath, { recursive: true });
     const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
-    const { state: _state, stateRoot: _stateRoot, ...legacy } = receipt;
-    await writeFile(receiptPath, JSON.stringify(legacy));
+    const { state: _state, ...withoutState } = receipt;
+    await writeFile(receiptPath, JSON.stringify(withoutState));
     await mkdir(originalStateRoot, { recursive: true });
     await writeFile(join(originalStateRoot, 'state.sqlite'), 'original\n');
     await mkdir(currentStateRoot, { recursive: true });
@@ -1882,7 +1850,7 @@ it('reacquires Claude marketplace ownership after a keep-data remnant reinstall'
   }
 });
 
-it('keeps external Codex state while reporting in-tree state only for purge', async () => {
+it('reports only external Codex state; an in-tree state/ belongs to the host cache and is never a purge path', async () => {
   const fixture = await createFixture('codex');
   const hostRoot = join(fixture.cleanupRoot, 'codex-root');
   let installed = false;
@@ -1922,7 +1890,7 @@ it('keeps external Codex state while reporting in-tree state only for purge', as
     });
     expect((await uninstallBundle({ ...options, confirmPurge: true, plan: true, purgeData: true })).data).toMatchObject({
       outcome: 'purged',
-      paths: [stateRoot, join(installPath, 'state')],
+      paths: [stateRoot],
       policy: 'purge',
     });
     const scoped = await failureOf(uninstallBundle({ ...options, scope: 'project' }));

@@ -401,7 +401,7 @@ it('uninstalls the packed tarball from an isolated Cursor home and leaves it byt
     plan: 'no-op',
     proofLevel: proofLabel,
     purgeData: 'purged',
-    refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+    refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7007', unconfirmedPurge: 'AB7008' },
     registrations: { 'cursor-local-plugin': 'removed' },
     rerun: 'not-installed',
     status: 'passed',

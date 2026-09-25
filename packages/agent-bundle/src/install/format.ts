@@ -1,6 +1,5 @@
 import { formatByteSize } from '../core/strings.ts';
 import type {
-  DoctorDurableStateReport,
   DoctorInstallComparison,
   DoctorLifecycle,
   DoctorReport,
@@ -12,8 +11,6 @@ const shortContentHash = (hash: string): string => hash.slice(0, 12);
 
 const installVerb = (state: InstallResult['state'], mode: InstallResult['mode']): string => {
   switch (state) {
-    case 'adopted':
-      return 'Adopted';
     case 'replaced':
       return 'Replaced';
     case 'already-installed':
@@ -185,12 +182,9 @@ export const formatDoctorReport = (result: DoctorReport): string => {
         out.push(`    ${receipt.plugin}@${receipt.version} (${receipt.mode}, ${receipt.scope}): ${receipt.state}\n`);
       }
     }
-    const reports = [
-      ...host.inventory.findings.flatMap((finding) => finding.durableStates ?? (
-        finding.durableState === undefined ? [] : [finding.durableState]
-      )),
-      host.bundle?.durableState,
-    ].filter((report): report is DoctorDurableStateReport => report !== undefined);
+    const reports = host.inventory.findings.flatMap((finding) => finding.durableStates ?? (
+      finding.durableState === undefined ? [] : [finding.durableState]
+    ));
     const uniqueReports = [...new Map(reports.map((report) => [report.directory, report])).values()];
     for (const report of uniqueReports) {
       out.push(
@@ -201,12 +195,6 @@ export const formatDoctorReport = (result: DoctorReport): string => {
           report.servers.length === 0 ? '' : `, servers: ${report.servers.join(', ')}`
         }\n`,
       );
-    }
-    const legacyReports = host.inventory.findings
-      .map((finding) => finding.legacyDurableState)
-      .filter((report): report is DoctorDurableStateReport => report !== undefined);
-    for (const report of [...new Map(legacyReports.map((entry) => [entry.directory, entry])).values()]) {
-      out.push(`  legacy state: ${report.directory} (exists, ${report.writable ? 'writable' : 'not writable'})\n`);
     }
     if (uniqueReports.length > 0) {
       const stores = uniqueReports.reduce((total, report) => total + report.summary.stores, 0);

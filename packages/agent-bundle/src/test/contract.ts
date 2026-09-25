@@ -34,7 +34,7 @@
  * `ui://` URI in `listResources`, and `sweep` reads that resource. With the
  * default `apps: 'auto'` an app route needs no fixture entry — `coverage`
  * passes with a reason naming the auto-covered sweep. An explicit
- * `{ kind: 'resource' }` (or legacy `{}`) fixture is always accepted;
+ * `{ kind: 'resource' }` fixture is always accepted;
  * `apps: 'explicit'` restores the requirement that every app route be listed.
  *
  * Stateful lifecycle fixtures replay over one open client at every boundary.
@@ -161,8 +161,7 @@ export interface ContractResourceFixture {
 export interface ContractRouteFixture<Input = unknown> {
   /**
    * `'resource'` marks a resource/MCP App fixture (see `ContractResourceFixture`).
-   * Omit it for tool and prompt fixtures; a legacy `{}` still covers a
-   * resource or app route.
+   * Required for resource and app routes; omit it for tool and prompt fixtures.
    */
   readonly kind?: ContractResourceFixture['kind'];
   /** Valid input for the sweep invocation (tools/prompts; resources need none). */
@@ -1575,6 +1574,12 @@ const resolveRouteFixture = (
   if (fixture.kind === 'resource' && descriptor.kind !== 'resource' && descriptor.kind !== 'app') {
     return {
       coverage: failed(`fixture kind "resource" declared for a ${descriptor.kind} route; resource fixtures apply to resource and app routes only`),
+      fixture: undefined,
+    };
+  }
+  if ((descriptor.kind === 'resource' || descriptor.kind === 'app') && fixture.kind !== 'resource') {
+    return {
+      coverage: failed(`resource/app route fixture must be { kind: "resource" }`),
       fixture: undefined,
     };
   }

@@ -41,6 +41,7 @@ const route = (
   id: `${kind}:catalog/${name}`,
   kind,
   provenance: { kind: 'conventional', relativePath: `src/mcp/catalog/${kind}s/${name}.ts` },
+  resultSchemaState: kind === 'event-route' || kind === 'app' ? 'absent' : 'unprojectable',
   serverId: 'mcp:catalog',
   source: `${root}/src/mcp/catalog/${kind}s/${name}.ts`,
 });
@@ -79,12 +80,14 @@ const discovered = (options: {
               id: 'cli:web',
               kind: 'cli',
               provenance: { kind: 'conventional', relativePath: 'src/cli/web.ts' },
+              resultSchemaState: 'unprojectable',
               source: `${root}/src/cli/web.ts`,
             }, {
               config: { aliases: ['web'] },
               id: 'cli:dashboard',
               kind: 'cli',
               provenance: { kind: 'conventional', relativePath: 'src/cli/dashboard.ts' },
+              resultSchemaState: 'unprojectable',
               source: `${root}/src/cli/dashboard.ts`,
             }],
           } as const,

@@ -15,6 +15,7 @@ const graph = Object.freeze({
       id: 'event:compact/after',
       kind: 'event-route',
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/compact/after.tsx' }),
+      resultSchemaState: 'absent' as const,
       source: '/project/src/events/compact/after.tsx',
     },
     {
@@ -23,6 +24,7 @@ const graph = Object.freeze({
       id: 'event:compact/before',
       kind: 'event-route',
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/compact/before.tsx' }),
+      resultSchemaState: 'absent' as const,
       source: '/project/src/events/compact/before.tsx',
     },
     {
@@ -31,6 +33,7 @@ const graph = Object.freeze({
       id: 'event:prompt/submit',
       kind: 'event-route',
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/prompt/submit.tsx' }),
+      resultSchemaState: 'absent' as const,
       source: '/project/src/events/prompt/submit.tsx',
     },
     {
@@ -39,6 +42,7 @@ const graph = Object.freeze({
       id: 'event:session/end',
       kind: 'event-route',
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/session/end.tsx' }),
+      resultSchemaState: 'absent' as const,
       source: '/project/src/events/session/end.tsx',
     },
     {
@@ -47,6 +51,7 @@ const graph = Object.freeze({
       id: 'event:tool/after',
       kind: 'event-route',
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/after.tsx' }),
+      resultSchemaState: 'absent' as const,
       source: '/project/src/events/tool/after.tsx',
     },
     {
@@ -55,6 +60,7 @@ const graph = Object.freeze({
       id: 'event:tool/failure',
       kind: 'event-route',
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/failure.tsx' }),
+      resultSchemaState: 'absent' as const,
       source: '/project/src/events/tool/failure.tsx',
     },
   ]),

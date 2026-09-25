@@ -270,7 +270,7 @@ export const expectPassedPool = async (
   if (exit !== 0) throw new Error(`\`npm run ${script}\` exited ${String(exit)} although its report says pass:\n${stderr}`);
 };
 
-/** Zero diagnostics — including the informational AB473x migration nudges. */
+/** Zero diagnostics — including the informational AB473x convention nudges. */
 export const expectCleanValidate = async (projectRoot: string): Promise<void> => {
   const cli = join(projectRoot, 'node_modules', '.bin', 'agent-bundle');
   const { stdout } = await execFile(cli, ['validate', '--json', '--root', projectRoot], {

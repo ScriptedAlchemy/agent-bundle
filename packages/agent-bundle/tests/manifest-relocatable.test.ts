@@ -163,7 +163,7 @@ beforeAll(async () => {
     writeProjectFile(
       projectRoot,
       'src/mcp/echo.ts',
-      "process.stdin.on('data', (chunk) => process.stdout.write(chunk));\n",
+      'export default () => ({ close() {}, async connect() {} });\n',
     ),
     writeProjectFile(projectRoot, 'payload-config/echo.json', '{ "echo": true }\n'),
     writeProjectFile(projectRoot, 'src/scripts/greet.ts', "console.log('hello');\n"),
