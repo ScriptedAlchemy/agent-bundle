@@ -4,6 +4,7 @@ import {
   fixtureProjectTestFiles,
   integrationTestFiles,
   mcpConformanceTestFiles,
+  moduleMockTestFiles,
   nativeHostTestFiles,
   packedReleaseOnlyTestFiles,
   packedTestFiles,
@@ -30,6 +31,7 @@ export default defineConfig({
     ...fixtureProjectTestFiles,
     ...integrationTestFiles,
     ...mcpConformanceTestFiles,
+    ...moduleMockTestFiles,
     ...nativeHostTestFiles,
     // Packs and installs like packedTestFiles, and is release-boundary-only:
     // `test:packed:release` owns it, not the build-free per-PR pool.

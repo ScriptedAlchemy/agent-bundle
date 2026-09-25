@@ -1,5 +1,6 @@
 import { defineConfig } from '@rstest/core';
 
+import { moduleMockTestFiles } from './rstest.integration-tests.ts';
 import {
   poolTimeouts,
   processPoolMaxWorkers,
@@ -33,7 +34,7 @@ export const hostFilesystemTestFiles = [
 
 export default defineConfig({
   extends: withAgentBundleRslibConfig(),
-  include: [...hostFilesystemTestFiles],
+  include: [...hostFilesystemTestFiles, ...moduleMockTestFiles],
   globalSetup: [...workspaceGlobalSetup],
   pool: { maxWorkers },
   setupFiles: [...workspaceSetupFiles],

@@ -174,6 +174,8 @@ not build the Workbench e2e example payload):
 - `npm-cli-resolution.test.ts` (Windows official + Unix/nvm + PATH + split-prefix/pnpm `npm_execpath`)
 - `packed-install-bin.test.ts` (packaged installer bin from a consumer cwd)
 - `rstest-worker-isolation.test.ts` (canonical TMPDIR; macOS `/tmp` → `/private/tmp`)
+- `rstest-generated-module-win32-rename.test.ts` (transient Windows rename retry;
+  mocks `node:fs/promises`, so it needs this pool's per-file module isolation)
 
 That is the slice that can actually diverge by OS. macOS matters because
 Claude, Codex, and Cursor authors commonly develop there; Windows is in the
