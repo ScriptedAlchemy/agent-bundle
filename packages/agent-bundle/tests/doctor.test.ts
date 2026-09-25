@@ -122,7 +122,7 @@ const createBundle = async (
     ]);
   } else {
     // Every emitted Cursor-compatible bundle carries the install surface; a receipt-less copy of it
-    // is a legacy agent-bundle install rather than a foreign directory.
+    // is still foreign, since only a receipt proves ownership.
     await Promise.all([
       writeJson(join(bundle, '.cursor-plugin/plugin.json'), { name: 'doctor-fixture', version }),
       writeFile(join(bundle, 'INSTALL.md'), '# Install doctor-fixture\n'),
@@ -369,6 +369,7 @@ it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the
     //    contract is checked against the bundle's document, so the absolute paths and §9.1 keys in the copy are no error.
     const bundle = join(fixture.root, 'portable-bundle');
     const installerSource = composeProjections({
+      projectRoot: '/project',
       extensions: {},
       hooks: [],
       mcpServers: [],
@@ -518,7 +519,6 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
   const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'stateful');
   const environment = { XDG_STATE_HOME: join(fixture.root, 'state-home') };
   const stateRoot = userDataStateRoot(pluginRoot, environment, fixture.home);
-  const legacyStateRoot = join(pluginRoot, 'state');
   const store = 'project-tasks-0123456789abcdef.sqlite';
   try {
     await Promise.all([
@@ -527,7 +527,7 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
         { name: 'stateful', version: '1.0.0' },
       ),
       mkdir(stateRoot, { recursive: true }),
-      mkdir(legacyStateRoot, { recursive: true }),
+      mkdir(join(pluginRoot, 'state'), { recursive: true }),
     ]);
     await Promise.all([
       writeFile(join(stateRoot, store), 'database'),
@@ -561,12 +561,9 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
       servers: ['default'],
       writable: true,
     });
-    const legacyDiagnostic = report.diagnostics.find((entry) => entry.code === 'AB7332');
-    expect(legacyDiagnostic).toMatchObject({
-      message: expect.stringContaining(legacyStateRoot),
-      recovery: expect.stringContaining('retains the unrecorded effective root'),
-    });
-    expect(legacyDiagnostic?.recovery).not.toContain('both roots');
+    // An in-tree state/ is an ordinary unowned entry: no durable-state finding and no diagnostic names it.
+    expect(finding?.durableStates).toEqual([finding?.durableState]);
+    expect(report.diagnostics.some((entry) => entry.message.includes(join(pluginRoot, 'state')))).toBe(false);
 
     const human = captureCliTerminal();
     const humanCode = await runCli(['doctor'], human.output, { runDoctor: async () => report });
@@ -588,7 +585,7 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
   }
 });
 
-it('reports a current-environment legacy state root as unrecorded and retained', async () => {
+it('reports the current-environment state root of a receipt without a state block as unrecorded and retained', async () => {
   const fixture = await temporaryDoctor();
   const originalEnvironment = { XDG_STATE_HOME: join(fixture.root, 'original-state-home') };
   const currentEnvironment = { XDG_STATE_HOME: join(fixture.root, 'current-state-home') };
@@ -610,20 +607,8 @@ it('reports a current-environment legacy state root as unrecorded and retained',
     await writeFile(join(currentStateRoot, 'unrelated.txt'), 'unrelated\n');
     const receiptPath = join(destination, installReceiptFile);
     const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
-    const {
-      hostDirectories: _hostDirectories,
-      mode: _mode,
-      registrations: _registrations,
-      scope: _scope,
-      state: _state,
-      stateRoot: _stateRoot,
-      updatedAt: _updatedAt,
-      ...legacy
-    } = receipt;
-    await writeFile(receiptPath, JSON.stringify({
-      ...legacy,
-      format: 'agent-bundle-install-receipt/1',
-    }));
+    const { state: _state, ...withoutState } = receipt;
+    await writeFile(receiptPath, JSON.stringify(withoutState));
 
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
@@ -660,37 +645,7 @@ it('reports a current-environment legacy state root as unrecorded and retained',
       paths: [],
       retained: [{ path: currentStateRoot, reason: 'unproven' }],
     });
-
-    await mkdir(join(destination, 'state'));
-    await writeFile(join(destination, 'state', 'legacy.sqlite'), 'legacy\n');
-    await writeFile(receiptPath, JSON.stringify({
-      ...legacy,
-      format: 'agent-bundle-install-receipt/1',
-      stateRoot: { root: originalStateRoot, source: 'derived' },
-    }));
-    const recordedReport = await runDoctor({
-      endpointDirectory: fixture.endpointDirectory,
-      environment: currentEnvironment,
-      home: fixture.home,
-      hosts: ['cursor'],
-    });
-    const recordedFinding = hostReport(recordedReport, 'cursor').inventory.findings.find(
-      (entry) => entry.entry === 'doctor-fixture',
-    );
-    expect(recordedFinding?.durableStates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        directory: currentStateRoot,
-        ownership: 'unrecorded',
-        purgeable: false,
-      }),
-      expect.objectContaining({
-        directory: originalStateRoot,
-        ownership: 'derived',
-        purgeable: true,
-      }),
-    ]));
-    expect(recordedReport.diagnostics.find((entry) => entry.code === 'AB7332')?.recovery)
-      .toContain('receipt-owned effective roots');
+    expect(await readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).toBe('original\n');
   } finally {
     await fixture.cleanup();
   }
@@ -884,53 +839,6 @@ it('prints a web surface line when the bundle manifest exposes Apps', async () =
   }
 });
 
-it('inventories durable state under a checked --from bundle', async () => {
-  const fixture = await temporaryDoctor();
-  try {
-    const bundle = await createBundle(fixture.root, 'codex');
-    const stateRoot = join(bundle, 'state');
-    await mkdir(stateRoot);
-    await writeFile(join(stateRoot, 'from-bundle-fedcba9876543210.sqlite'), 'state');
-    const report = await runDoctor({
-      commandRunner: versionRunner,
-      endpointDirectory: fixture.endpointDirectory,
-      from: bundle,
-      home: fixture.home,
-      hosts: ['codex'],
-    });
-    expect(hostReport(report, 'codex').bundle?.durableState).toMatchObject({
-      directory: stateRoot,
-      findings: [{ bytes: 5, file: 'from-bundle-fedcba9876543210.sqlite' }],
-      summary: { bytes: 5, stores: 1 },
-    });
-  } finally {
-    await fixture.cleanup();
-  }
-});
-
-it('warns when an installed bundle state directory cannot be read', async () => {
-  const fixture = await temporaryDoctor();
-  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'blocked-state');
-  try {
-    await writeJson(
-      join(pluginRoot, '.cursor-plugin/plugin.json'),
-      { name: 'blocked-state', version: '1.0.0' },
-    );
-    await writeFile(join(pluginRoot, 'state'), 'not a directory');
-    const report = await runDoctor({
-      endpointDirectory: fixture.endpointDirectory,
-      home: fixture.home,
-      hosts: ['cursor'],
-    });
-    expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7316', severity: 'warning' }),
-    ]));
-    expect(report.summary).toMatchObject({ errors: 0, warnings: 1 });
-  } finally {
-    await fixture.cleanup();
-  }
-});
-
 it('reports a Cursor inventory manifest with a non-string version as corrupt', async () => {
   const fixture = await temporaryDoctor();
   const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');
@@ -986,13 +894,43 @@ it('reports corrupt, symlinked, and interrupted Cursor inventory entries', async
   }
 });
 
+it('warns when an installed bundle state root cannot be read', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'blocked-state');
+  const environment = { XDG_STATE_HOME: join(fixture.root, 'state-home') };
+  const stateRoot = userDataStateRoot(pluginRoot, environment, fixture.home);
+  try {
+    await writeJson(
+      join(pluginRoot, '.cursor-plugin/plugin.json'),
+      { name: 'blocked-state', version: '1.0.0' },
+    );
+    await mkdir(dirname(stateRoot), { recursive: true });
+    await writeFile(stateRoot, 'not a directory');
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      environment,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7316',
+        message: `Durable state directory ${JSON.stringify(stateRoot)} could not be read.`,
+        severity: 'warning',
+      }),
+    ]));
+    expect(report.summary).toMatchObject({ errors: 0, warnings: 1 });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('accepts valid installed and --from Cursor bytes without static findings', async () => {
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
-    const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
-    await mkdir(dirname(destination), { recursive: true });
-    await cp(bundle, destination, { recursive: true });
+    await mkdir(join(fixture.home, '.cursor'), { recursive: true });
+    await installBundle({ from: bundle, home: fixture.home, host: 'cursor' });
 
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
@@ -1540,8 +1478,8 @@ it('classifies Cursor bundle state as installed, missing, drifted, or conflicted
     try {
       const bundle = await createBundle(fixture.root, 'cursor');
       const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
-      await mkdir(dirname(destination), { recursive: true });
-      await cp(bundle, destination, { recursive: true });
+      await mkdir(join(fixture.home, '.cursor'), { recursive: true });
+      await installBundle({ from: bundle, home: fixture.home, host: 'cursor' });
       await testCase.mutate(destination);
       const report = await runDoctor({
         endpointDirectory: fixture.endpointDirectory,
@@ -1619,13 +1557,14 @@ it('compares the installed Cursor copy against the artifact: current, stale, for
     expect(staleDiagnostic?.message).toContain(`content ${rebuiltHash.slice(0, 12)}`);
     expect(staleDiagnostic?.recovery).toContain('replaced automatically');
 
-    // Legacy pre-receipt copy with different content: stale, recovery points at --replace.
+    // A copy without a receipt is foreign even when it carries the install surface and names the plugin.
     await removeTree(destination);
     await cp(bundle, destination, { recursive: true });
     await writeFile(join(destination, 'payload.txt'), 'older\n');
-    const legacy = hostReport(await doctor(), 'cursor');
-    expect(legacy.bundle).toMatchObject({ comparison: { ownership: 'legacy', status: 'stale' }, state: 'drifted' });
-    expect(legacy.diagnostics.find((entry) => entry.code === 'AB7308')?.recovery).toContain('--replace');
+    const preReceipt = hostReport(await doctor(), 'cursor');
+    expect(preReceipt.bundle).toMatchObject({ comparison: { ownership: 'foreign', status: 'foreign' }, state: 'conflicted' });
+    expect(preReceipt.bundle).not.toHaveProperty('receipt');
+    expect(preReceipt.diagnostics.find((entry) => entry.code === 'AB7321')?.recovery).toContain('Remove the foreign directory manually');
 
     // Foreign directory under the plugin name: no receipt, no install surface.
     await removeTree(destination);
@@ -1659,8 +1598,8 @@ it('treats a versionless Cursor destination as drifted rather than conflicted', 
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
     const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
-    await mkdir(dirname(destination), { recursive: true });
-    await cp(bundle, destination, { recursive: true });
+    await mkdir(join(fixture.home, '.cursor'), { recursive: true });
+    await installBundle({ from: bundle, home: fixture.home, host: 'cursor' });
     await writeJson(join(destination, '.cursor-plugin/plugin.json'), { name: 'doctor-fixture' });
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
@@ -2325,7 +2264,7 @@ it('surfaces the placed → registered → enabled → active lifecycle per host
   }
 });
 
-it('inventories store receipts, diagnoses orphaned ones (AB7328), and reports pre-lifecycle receipts as migrated (AB7329)', async () => {
+it('inventories store receipts, diagnoses orphaned ones (AB7328), and treats a format/1 receipt as no receipt', async () => {
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'claude');
@@ -2420,28 +2359,28 @@ it('inventories store receipts, diagnoses orphaned ones (AB7328), and reports pr
     expect(unprobed.diagnostics.filter((entry) => entry.code === 'AB7328').some((entry) => entry.message.includes('not a valid install receipt'))).toBe(true);
     await rm(join(claudeConfig, 'agent-bundle', 'receipts', 'broken.user.json'));
 
-    // A Cursor local copy whose receipt predates format/2 is diagnosed as migrated, never rewritten by Doctor.
+    // A Cursor local copy whose receipt is format/1 has no readable receipt: the copy is foreign and Doctor
+    // never rewrites the file.
     const cursorBundle = await createBundle(fixture.root, 'cursor');
     await mkdir(join(fixture.home, '.cursor'), { recursive: true });
     await installBundle({ from: cursorBundle, home: fixture.home, host: 'cursor' });
     const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
     const receiptPath = join(destination, '.agent-bundle-install.json');
     const written = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
-    const { hostDirectories: _h, mode: _m, registrations: _r, scope: _s, updatedAt: _u, ...legacy } = written;
-    await writeFile(receiptPath, JSON.stringify({ ...legacy, format: 'agent-bundle-install-receipt/1' }));
-    const migrated = hostReport(await runDoctor({
+    const { hostDirectories: _h, mode: _m, registrations: _r, scope: _s, updatedAt: _u, ...formatOne } = written;
+    const formatOneText = JSON.stringify({ ...formatOne, format: 'agent-bundle-install-receipt/1' });
+    await writeFile(receiptPath, formatOneText);
+    const foreign = hostReport(await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
       from: cursorBundle,
       home: fixture.home,
       hosts: ['cursor'],
     }), 'cursor');
-    expect(migrated.inventory.findings[0]?.receipt).toMatchObject({ format: 'agent-bundle-install-receipt/1', migratedFrom: 'agent-bundle-install-receipt/1' });
-    expect(migrated.bundle).toMatchObject({ receipt: { migratedFrom: 'agent-bundle-install-receipt/1' }, state: 'installed' });
-    const migration = migrated.diagnostics.filter((entry) => entry.code === 'AB7329');
-    expect(migration).toHaveLength(1);
-    expect(migration[0]).toMatchObject({ severity: 'info', target: 'cursor' });
-    expect(migration[0]?.recovery).toContain('agent-bundle-install-receipt/2');
-    expect(await readFile(receiptPath, 'utf8')).toContain('agent-bundle-install-receipt/1');
+    expect(foreign.inventory.findings[0]).not.toHaveProperty('receipt');
+    expect(foreign.bundle).toMatchObject({ comparison: { ownership: 'foreign', status: 'foreign' }, state: 'conflicted' });
+    expect(foreign.diagnostics.find((entry) => entry.code === 'AB7321')?.message).toContain(`Cursor destination ${destination} is a foreign install`);
+    expect(foreign.diagnostics.some((entry) => entry.code === 'AB7329')).toBe(false);
+    expect(await readFile(receiptPath, 'utf8')).toBe(formatOneText);
   } finally {
     await fixture.cleanup();
   }
@@ -2602,7 +2541,7 @@ it('cross-checks Claude project-scope receipts from their recorded project root,
   }
 });
 
-it('explains a Cursor directory holding only preserved runtime state instead of calling it corrupt or foreign', async () => {
+it('explains a Cursor directory left by uninstall --keep-data through its remnant receipt, and calls a receipt-less one corrupt and foreign', async () => {
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
@@ -2612,14 +2551,18 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
     const doctor = () => runDoctor({ endpointDirectory: fixture.endpointDirectory, from: bundle, home: fixture.home, hosts: ['cursor'] });
 
-    // Without any receipt (a hand-cleaned directory), the state-only shell is still not foreign.
+    // Without any receipt (a hand-cleaned directory), nothing proves the shell is ours: corrupt entry, foreign destination.
     const bare = hostReport(await doctor(), 'cursor');
-    expect(bare.inventory.findings).toEqual([expect.objectContaining({ path: destination, state: 'missing' })]);
-    expect(bare.bundle).toMatchObject({ comparison: { status: 'not-installed' }, state: 'missing' });
-    expect(bare.diagnostics.filter((entry) => entry.severity !== 'info')).toEqual([]);
-    expect(bare.diagnostics.filter((entry) => entry.code === 'AB7307').every((entry) => entry.message.includes('preserved runtime state'))).toBe(true);
+    expect(bare.inventory.findings).toEqual([expect.objectContaining({ path: destination, state: 'corrupt' })]);
+    expect(bare.bundle).toMatchObject({ comparison: { ownership: 'foreign', status: 'foreign' }, state: 'conflicted' });
+    expect(bare.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB7304', message: `Cursor plugin entry ${JSON.stringify(destination)} has no valid loader manifest.`, severity: 'error' }),
+      expect.objectContaining({ code: 'AB7321', severity: 'warning' }),
+    ]));
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
 
-    // With the remnant receipt `uninstall --keep-data` writes, Doctor names the plugin and the receipt too.
+    // With the remnant receipt `uninstall --keep-data` writes, Doctor names the plugin and the receipt too; state/ is
+    // one more unowned entry the uninstall retained, never preserved runtime state.
     await removeTree(destination);
     await installBundle({ from: bundle, home: fixture.home, host: 'cursor' });
     await mkdir(join(destination, 'state'));
@@ -2627,7 +2570,6 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     await uninstallBundle({ from: bundle, home: fixture.home, host: 'cursor' });
     const remnant = hostReport(await doctor(), 'cursor');
     expect(remnant.inventory.findings).toEqual([expect.objectContaining({
-      legacyDurableState: expect.objectContaining({ summary: { bytes: 8, stores: 1 } }),
       name: 'doctor-fixture',
       path: destination,
       receipt: expect.objectContaining({ mode: 'local' }),
@@ -2637,10 +2579,10 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     expect(remnant.diagnostics.filter((entry) => entry.severity !== 'info')).toEqual([]);
     const remnantCodes = remnant.diagnostics.filter((entry) => entry.code === 'AB7307');
     expect(remnantCodes.length).toBeGreaterThan(0);
-    expect(remnantCodes.every((entry) => entry.message.includes('holds only preserved runtime state'))).toBe(true);
+    expect(remnantCodes.every((entry) => entry.message.includes('retained the unowned entry "state"'))).toBe(true);
+    expect(remnantCodes.every((entry) => !entry.message.includes('preserved runtime state'))).toBe(true);
 
-    // A remnant receipt also guarding unowned entries the uninstall retained is not called state-only: Doctor
-    // names the retained entries and points at removing them by hand, since `uninstall` never will. Both the
+    // Doctor names every retained entry and points at removing them by hand, since `uninstall` never will. Both the
     // inventory finding and the exact-bundle (`--from`) finding check the directory contents, not just the receipt.
     await writeFile(join(destination, 'operator-notes.md'), 'mine\n');
     const withExtras = hostReport(await doctor(), 'cursor');
@@ -2649,18 +2591,11 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     const extras = withExtras.diagnostics.filter((entry) => entry.code === 'AB7307');
     expect(extras.length).toBe(remnantCodes.length);
     for (const entry of extras) {
-      expect(entry.message).toContain('retained the unowned entry "operator-notes.md" beside preserved runtime state');
-      expect(entry.message).not.toContain('holds only preserved runtime state');
+      expect(entry.message).toContain('retained the unowned entries "operator-notes.md", "state"');
+      expect(entry.message).not.toContain('preserved runtime state');
       expect(entry.recovery).toContain('never removes unowned entries');
     }
-
-    // Without any state left, a remnant receipt over unowned entries is still not "state-only".
     await removeTree(join(destination, 'state'));
-    const noState = hostReport(await doctor(), 'cursor');
-    for (const entry of noState.diagnostics.filter((item) => item.code === 'AB7307')) {
-      expect(entry.message).toContain('retained the unowned entry "operator-notes.md"');
-      expect(entry.message).not.toContain('beside preserved runtime state');
-    }
 
     // A remnant receipt recording a PLUGIN_DATA expansion names that directory as preserved state only while it is
     // real: this home's `agent-bundle/plugin-data/<plugin>`, reached through real directories, existing and holding
@@ -2694,12 +2629,6 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     }
     await removeTree(pluginData);
     expect((await remnantMessages()).every((message) => !message.includes('PLUGIN_DATA') && !message.includes('state/'))).toBe(true);
-    // An emptied state/ directory left behind is not preserved state either.
-    await mkdir(join(destination, 'state'));
-    expect((await remnantMessages()).every((message) => message.includes('whose preserved runtime state has since been removed'))).toBe(true);
-    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
-    expect((await remnantMessages()).every((message) => message.includes('holds only preserved runtime state (state/)'))).toBe(true);
-    await removeTree(join(destination, 'state'));
     const elsewhere = join(fixture.root, 'other-home', '.cursor', 'agent-bundle', 'plugin-data', 'doctor-fixture');
     await mkdir(elsewhere, { recursive: true });
     await writeFile(join(elsewhere, 'cache.sqlite'), 'foreign\n');
@@ -2748,7 +2677,7 @@ const findDeadPid = (): Promise<number> => new Promise((resolvePromise, reject) 
   child.once('exit', () => { resolvePromise(pid); });
 });
 
-it('reports old live runtime sockets as unsupported without warnings', async () => {
+it('reports a live runtime socket that rejects the status request as a failed probe (AB7318)', async () => {
   const fixture = await temporaryDoctor();
   const endpoint = join(fixture.endpointDirectory, 'event-live.sock');
   const server = await listen(endpoint, {
@@ -2766,12 +2695,17 @@ it('reports old live runtime sockets as unsupported without warnings', async () 
       hosts: [],
     });
     expect(report.endpoints.findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: endpoint, runtime: { status: 'unsupported' }, state: 'live' }),
+      expect.objectContaining({ path: endpoint, runtime: { status: 'failed' }, state: 'live' }),
       expect.objectContaining({ path: `${endpoint}.lock`, state: 'live' }),
     ]));
     expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7317', severity: 'info' }),
+      expect.objectContaining({
+        code: 'AB7318',
+        message: `Runtime socket ${JSON.stringify(endpoint)} status probe failed: Event runtime request does not match the wire schema.`,
+        severity: 'error',
+      }),
     ]));
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7317')).toBe(false);
     expect(report.endpoints.summary).toMatchObject({ live: 1, staleLocks: 0, staleSockets: 0 });
   } finally {
     await close(server);

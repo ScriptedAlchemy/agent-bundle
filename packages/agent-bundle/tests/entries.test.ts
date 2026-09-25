@@ -105,6 +105,7 @@ describe('event-route handler source graph (#595)', () => {
     tools: [],
   };
   const model: NormalizedPlugin = {
+    projectRoot: '/project',
     extensions: {},
     hooks: [hook],
     mcpServers: [],
@@ -152,6 +153,7 @@ describe('event-route handler source graph (#595)', () => {
 
   it('aliases the cheap event runtimes onto the per-host wrapper and applies the operator env layer', () => {
     const surface = planHooksSurface(planned, {
+      projectRoot: '/project',
       artifactEpoch: 'handler-entries@1.0.0',
       outDir: '/tmp/artifact',
       plugin: { name: 'handler-entries', version: '1.0.0' },
@@ -164,7 +166,7 @@ describe('event-route handler source graph (#595)', () => {
       'agent-bundle/event-project': expect.any(String),
     });
     expect(entry.virtualSource).toContain('executeEventHandler');
-    expect(entry.virtualSource).toContain(handler.source);
+    expect(entry.virtualSource).toContain('import gateHandler from "../src/events/tool/before.handler.ts";');
     expect(entry.virtualSource).not.toContain('__AGENT_BUNDLE_EVENT_ARTIFACT_EPOCH__');
     expect(entry.virtualModules).toBeDefined();
     expect(entry.rscManifest).toBeUndefined();
@@ -208,6 +210,7 @@ describe('event-route handler source graph (#595)', () => {
       .flatMap((entry) => entry.workerOutput === undefined ? [] : [entry.workerOutput]))
       .toEqual(workers.map((worker) => `/tmp/artifact/${worker}`));
     const outputs = planHooksSurface(combined, {
+      projectRoot: '/project',
       artifactEpoch: 'handler-entries@1.0.0',
       outDir: '/tmp/artifact',
       plugin: { name: 'handler-entries', version: '1.0.0' },

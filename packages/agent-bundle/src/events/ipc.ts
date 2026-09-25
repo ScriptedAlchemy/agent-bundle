@@ -208,7 +208,7 @@ export type RequestEventRuntimeStatusOptions = Readonly<{
 
 export type EventRuntimeStatusResult =
   | Readonly<EventRuntimeStatus & { readonly status: 'available' }>
-  | Readonly<{ readonly status: 'unavailable' | 'unsupported' }>;
+  | Readonly<{ readonly status: 'unavailable' }>;
 
 export const eventRuntimeEndpoint = (endpointId: string): string => {
   const hash = createHash('sha256').update(endpointId, 'utf8').digest('hex').slice(0, 32);
@@ -1195,7 +1195,9 @@ const statusProgram = (
         'Event runtime status response does not match the wire schema.',
       ));
     }
-    if (response.data.status === 'error') return Object.freeze({ status: 'unsupported' as const });
+    if (response.data.status === 'error') {
+      return yield* Effect.fail(transportError('runtime-failed', response.data.message));
+    }
     return Object.freeze({
       ...response.data.runtime,
       status: 'available' as const,

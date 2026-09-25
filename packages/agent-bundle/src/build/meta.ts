@@ -1,5 +1,5 @@
 import { lstat } from 'node:fs/promises';
-import { join } from 'node:path';
+import nodePath, { join } from 'node:path';
 
 import { isErrno } from '../core/errors.ts';
 
@@ -29,6 +29,26 @@ export const generatedModulesDirname = '.agent-bundle-virtual';
 /** The reserved generated-module namespace of one project. */
 export const generatedModulesRoot = (projectRoot: string): string =>
   join(projectRoot, generatedModulesDirname);
+
+/**
+ * The specifier a generated module imports `source` by. Every generated
+ * module sits one directory below the project root, so a project path becomes
+ * `../<posix path>`: Rspack names each import binding after its request, and
+ * the emitted bytes then match across checkout paths and host platforms.
+ * Bare specifiers and paths outside the project pass through unchanged.
+ */
+export const generatedModuleSpecifier = (
+  projectRoot: string,
+  source: string,
+  path: typeof nodePath = nodePath,
+): string => {
+  if (!path.isAbsolute(source)) return source;
+  const relative = path.relative(projectRoot, source);
+  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return source;
+  }
+  return `../${relative.split(path.sep).join('/')}`;
+};
 
 /**
  * Refuses to compile while anything occupies the reserved namespace on disk.

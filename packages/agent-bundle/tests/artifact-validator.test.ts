@@ -2685,6 +2685,7 @@ it('documents recovery for every stable artifact diagnostic code', async () => {
 });
 
 const installSurfaceModel = (target: string): NormalizedPlugin => ({
+  projectRoot: '/project',
   extensions: {},
   hooks: [],
   mcpServers: [],

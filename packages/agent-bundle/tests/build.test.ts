@@ -213,6 +213,7 @@ const buildFromSource = async (
 };
 
 const modelFor = (project: TestProject): NormalizedPlugin => ({
+  projectRoot: project.root,
   assets: [{
     bytes: Buffer.byteLength('<svg>project logo</svg>\n'),
     id: 'asset:branding/logo.svg',
@@ -647,6 +648,7 @@ it('rejects hook entries stamped for a target other than their selected adapter'
       diagnostics: [],
       entries: [],
       hookEntries: [{
+        projectRoot: project.root,
         event: hook.event,
         hook,
         nativeEvent: 'SessionStart',

@@ -22,6 +22,7 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 import { operatorEnvLayerImport } from '../build/launch-env-shell.ts';
+import { generatedModuleSpecifier } from '../build/meta.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isPortablePathSegment } from '../core/paths.ts';
@@ -169,7 +170,7 @@ const encodeAmpPlaygroundOutput = (
 
 const ampHookWrapperSource = (entry: TargetHookWrapper): string => [
   operatorEnvLayerImport,
-  `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
+  `import * as handlerModule from ${JSON.stringify(generatedModuleSpecifier(entry.projectRoot, entry.hook.source))};`,
   '',
   'const target = "amp";',
   `const canonicalEvent = ${JSON.stringify(entry.event)};`,
