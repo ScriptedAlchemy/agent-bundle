@@ -70,13 +70,13 @@ pair without preinstalling React or bypassing peer checks. Routed scaffolds stil
 known-good React/React DOM pair intentionally: generated projects start reproducibly, and their
 committed lockfiles preserve that pair.
 
-`@agent-bundle/runtime` declares `zod` as a `^4.5.4` peer rather than a dependency for the same
+`@agent-bundle/runtime` declares `zod` as a `^4.6.4` peer rather than a dependency for the same
 reason: route and state definitions hand Zod schemas across the runtime's API, and Zod 4 brands
 schema types by minor version. A nested `zod@4.5.x` therefore rejects a consumer schema from
 `zod@4.6.x` (`Type '6' is not assignable to type '5'`). Two installations of the same minor
 still typecheck; the peer is so the project and the runtime resolve one copy and stay on
-compatible minors. Existing projects still pinned to `zod@4.4.3`, or any version below
-`4.5.4`, must upgrade that direct dependency before installing this runtime, npm otherwise
+compatible minors. Existing projects still pinned to `zod@4.5.x`, or any version below
+`4.6.4`, must upgrade that direct dependency before installing this runtime, npm otherwise
 rejects the required peer with `ERESOLVE`.
 
 ## Pin a Version Packages commit
