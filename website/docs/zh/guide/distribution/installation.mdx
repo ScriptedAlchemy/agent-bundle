@@ -126,11 +126,12 @@ Amp 不属于开发期安装宿主；请使用其有归属回执的 `agent-bundl
 每个输出的安装器，`agent-bundle install <host>` 与独立的 `install.mjs`，共用同一套替换策略。
 内容完全相同的副本是 `already-installed` 空操作。**版本相同但内容哈希不同**的副本会被自动替换，因此不升版本
 地重建不再需要卸载加 `rm -rf`。版本不同则以 `AB7005` 拒绝，除非传入 `--replace`；外来目录
-（不是本插件安装器放置的）无论如何都会被拒绝。独立的 `install.mjs` 对没有回执的目标目录按其中实际存在的文件计算哈希，
-包括回执出现之前的副本和已暂存的 marketplace 插件。存在 `agent-bundle.manifest.json` 时，产物哈希使用该清单的 `files[]`，
+（不是本插件安装器放置的）无论如何都会被拒绝。安装回执出现之前放置的副本没有回执，因此同样是外来目录，
+无论字节是否一致：手动删除后重新安装。独立的 `install.mjs` 对没有回执的目标目录按其中实际存在的文件计算哈希，
+以便拒绝信息能给出内容比对。存在 `agent-bundle.manifest.json` 时，产物哈希使用该清单的 `files[]`，
 清单列出而产物缺失的路径会使安装失败。外来或已暂存的目标目录中缺少的清单路径不进入目标哈希，因此两边哈希不同，安装拒绝该副本，而不是抛出 `ENOENT`。属于本安装器的同版本副本可以修复。Cursor 与 Amp 副本携带安装回执（`.agent-bundle-install.json`：
-插件、版本、宿主、内容哈希、归属文件）；替换就地进行，只触碰归属文件，绝不动旧版或就地的 `state/` 之类的非归属条目，
-`--replace` 会接管回执出现之前的副本。本发行版构建的产物把框架状态放在
+插件、版本、宿主、内容哈希、归属文件）；替换就地进行，只触碰归属文件，绝不动插件旁的 `state/` 目录之类的非归属条目。
+产物构建把框架状态放在
 `~/.agent-bundle/state/<plugin>-<digest>`（`AGENT_BUNDLE_STATE_ROOT` 覆盖该位置）。`uninstall`
 配合 `--purge-data --confirm-purge` 只会删除回执证明归该安装独占的根；预先存在、共享、无标记或其他
 无法证明归属的覆盖根都会保留。Claude 的替换先运行 `claude plugin uninstall --keep-data` 再重新安装，
@@ -196,7 +197,7 @@ RTORRENT_SSH_HOST=nas.local
 # 确切路径，不做改动
 npx agent-bundle uninstall cursor --from artifact --plan
 npx agent-bundle uninstall amp --from artifact --scope user --plan
-# 回执归属的文件；保留旧版或就地的 state/
+# 回执归属的文件；保留非归属条目与回执记录的状态根
 npx agent-bundle uninstall cursor --from artifact
 # claude plugin uninstall --keep-data + marketplace remove
 npx agent-bundle uninstall claude --from artifact
@@ -208,13 +209,12 @@ node artifact/install.mjs --uninstall [--mode marketplace]
 目录、安装器创建的宿主目录、执行过的宿主注册，以及时间戳。Cursor 本地副本与 Amp 项目/系统副本以
 `.agent-bundle-install.json` 携带它；Claude、Codex 与 Cursor 市场模式的安装把回执放在
 `<宿主根目录>/agent-bundle/receipts/` 下。`uninstall` 只删除回执
-归属的内容，只撤销它记录的注册，绝不多删；非归属条目会被列为保留。有效框架状态根、推导出的 web-data、旧版 `state/`，以及 Agent Plugins
+归属的内容，只撤销它记录的注册，绝不多删；非归属条目会被列为保留，插件旁的 `state/` 目录也在其中。回执带归属证据记录的框架状态根、推导出的 web-data，以及 Agent Plugins
 包的 Cursor 副本在回执中记录的 `PLUGIN_DATA` 目录，除非传入 `--purge-data --confirm-purge` 否则保留，且结果如实说明宿主自行决定而 Agent Bundle 无法左右的部分（Claude 把缓存
-副本标为 orphaned 并保留约 14 天；Codex 删除缓存树且没有 keep-data 选项）。缺少回执（`AB7009`）或内容不匹配
-（`AB7007`）会被拒绝，除非 `--force`；属于另一个插件的目录无论如何都被拒绝；再次运行是 `not-installed` 空操作。
-格式 2 之前写入的回执会在补全生命周期字段后读取并给出诊断（`AB7329`），绝不被拒绝。如果这种回执既未记录
-状态位置也未记录归属，从当前环境或 home 解析出的根只会列为无法证明并保留；`--keep-data` 也不能把这次观察变成
-以后 purge 的权限。
+副本标为 orphaned 并保留约 14 天；Codex 删除缓存树且没有 keep-data 选项）。宿主已注册的安装缺少仓库回执（`AB7009`）或内容不匹配
+（`AB7007`）会被拒绝，除非 `--force`；没有回执的 Cursor 目录，或属于另一个插件的目录，是外来目录，无论如何都被拒绝（`AB7007`）；
+再次运行是 `not-installed` 空操作。只读取格式 2 的回执；携带更早回执的副本是外来目录。如果回执未记录状态归属，
+从当前环境或 home 解析出的根只会列为无法证明并保留；`--keep-data` 也不能把这次观察变成以后 purge 的权限。
 
 宿主安装证明会在安装前与卸载后对隔离的 home 做快照：Cursor 本地与可移植 Agent Plugins 包做到字节一致；Claude 与
 Codex 做到零 Agent Bundle 残留，并逐项列出宿主自有的记录文件。
@@ -236,7 +236,7 @@ registered → enabled → active，每一阶段要么从宿主观察得到，�
 Claude Code 列出了该副本却拒绝加载它，它在 `claude plugin list --json` 中的行带有 `errors` 数组，Doctor 会原样报告
 该数组而不是 `current`，因为被拒绝的副本不会为会话提供任何 hook、MCP 服务器或技能。安装器读取同一数组：当刚安装的
 （或字节完全相同的既有）副本带有 `errors` 时，`agent-bundle install claude` 以 `AB7006` 失败，而不是报告 `installed`。
-Doctor 还会清点每个宿主根目录下的回执仓库并与宿主交叉核对（`AB7328`、`AB7329`）。
+Doctor 还会清点每个宿主根目录下的回执仓库并与宿主交叉核对（`AB7328`）。
 
 对 Claude，Doctor 还会读取每一行的 `enabled` 标志并运行 Claude Code 开发者校验器。被列为 `enabled: false`
 的副本（用 `claude plugin disable` 或 `/plugin` 菜单关闭）在清点中报告为 `disabled`，在 `--from` 比对中保留其内容
@@ -250,9 +250,7 @@ Doctor 还会清点每个宿主根目录下的回执仓库并与宿主交叉核�
 | --- | --- | --- |
 | `AB7330` | info | 该捆绑包在此宿主上的生命周期阶段及四项观察；无法观察的阶段（任一宿主的活跃会话加载了哪些插件、Cursor 由服务端分配的启用状态）被类型化为 `unavailable`，绝不猜测。 |
 | `AB7328` | warning | 某份仓库回执记录的注册宿主已不再持有（孤立），或回执仓库无法读取；`agent-bundle uninstall` 会消费孤立的回执。 |
-| `AB7329` | info | 某份回执早于生命周期回执，读取时补全了字段；再运行一次 `install` 即可将其重写为格式 2。 |
-| `AB7316` | warning | 某个已安装捆绑包的有效或旧版状态目录不可写，或该目录及其某个 `*.sqlite`、`-wal`、`-shm` 文件无法通过文件系统元数据操作读取。Doctor 只按目录条目与元数据清点状态；它绝不打开数据库。 |
-| `AB7317` | info | 某个活跃的事件运行时实现的是较旧的严格协议，不暴露运行时身份。 |
+| `AB7316` | warning | 某个已安装捆绑包的有效状态目录不可写，或该目录及其某个 `*.sqlite`、`-wal`、`-shm` 文件无法通过文件系统元数据操作读取。Doctor 只按目录条目与元数据清点状态；它绝不打开数据库。 |
 | `AB7318` | error | 在有界的只读身份探测过程中，某个活跃的事件运行时变为不可用、超时，或返回了无效的状态响应。 |
 | `AB7319` | error | 由 `doctor --from` 解析出的宿主目录树违反了它被固定的文档 schema 或无进程加载器规则；消息中保留原始的构建校验器代码。 |
 | `AB7322` | info / error | 已安装的 Cursor 插件从清单注册了插件级 hook 且每条命令的脚本都存在于插件根之下时为 info；声明的 hooks 文件缺失或格式错误、或被执行的脚本不存在时为 error。 |
