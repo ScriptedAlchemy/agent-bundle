@@ -561,9 +561,8 @@ which never exists on disk: the virtual paths are predictable, so the build
 refuses to compile while anything occupies that directory
 (`assertGeneratedModulesRootAbsent`). That namespace hangs off the project root, the
 bundler `context`, on purpose: Rspack writes module identifiers relative to
-`context` into emitted bundles (the `// NAMESPACE OBJECT: ./…` comments of
-concatenated modules), so a namespace under the staging root would stamp the
-per-build token into the artifact.
+`context` into emitted bundles (the keys of the module map), so a namespace
+under the staging root would stamp the per-build token into the artifact.
 
 `agent-bundle build` writes one composite plugin root that every selected host
 installs from as-is. The root carries one `INSTALL.md` with a section per
