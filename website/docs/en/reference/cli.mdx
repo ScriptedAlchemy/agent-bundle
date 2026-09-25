@@ -161,6 +161,10 @@ Both take the source option group plus:
 Both build package outputs when the project declares `bin` or `lib`. The layout of the root is
 in [Targets and artifacts](./targets-artifacts.mdx).
 
+The artifact bytes do not depend on where the project is checked out: generated wrappers import
+project modules by project-relative specifiers, so one source built from two checkout paths emits
+byte-identical files and an identical manifest.
+
 `build` alone also takes:
 
 | Option | Default | Meaning |
