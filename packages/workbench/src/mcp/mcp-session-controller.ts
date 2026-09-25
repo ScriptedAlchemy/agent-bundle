@@ -294,7 +294,6 @@ const isRuntimeBinding = (value: unknown): value is DevRuntimeMcpAppRunBinding =
 
 const isRuntimeConnection = (value: unknown): value is McpRouteConnection => {
   if (!isRecord(value)) return false;
-  if (value.protocolEra !== undefined && value.protocolEra !== 'legacy' && value.protocolEra !== 'modern') return false;
   if (value.protocolVersion !== undefined && typeof value.protocolVersion !== 'string') return false;
   if (value.server !== undefined && (!isRecord(value.server) || typeof value.server.name !== 'string' || typeof value.server.version !== 'string')) return false;
   return true;

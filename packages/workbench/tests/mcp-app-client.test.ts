@@ -146,7 +146,7 @@ const runtimePreview = Object.freeze({
       definitionDigest: 'definition-a', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
       sessionId: 'runtime-session-a', sessionRevision: 2, target: 'portable', transportDigest: 'transport-a',
     }),
-    connection: Object.freeze({ capabilities: Object.freeze({ tools: Object.freeze({}) }), protocolEra: 'modern', protocolVersion: '2026-01-26', server: Object.freeze({ name: 'weather', version: '1.0.0' }) }),
+    connection: Object.freeze({ capabilities: Object.freeze({ tools: Object.freeze({}) }), protocolVersion: '2026-01-26', server: Object.freeze({ name: 'weather', version: '1.0.0' }) }),
     state: 'ready',
   }),
 });

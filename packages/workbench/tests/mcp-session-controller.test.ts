@@ -15,7 +15,6 @@ import { McpRouteClientError, type McpRouteCatalog } from '../src/mcp/mcp-route-
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' as const });
 const connection = Object.freeze({
   capabilities: { tools: {} },
-  protocolEra: 'modern' as const,
   protocolVersion: '2025-11-25',
   server: { name: 'weather-fixture', version: '1.0.0' },
 });
@@ -27,7 +26,6 @@ const runtimeSession = Object.freeze({
   }),
   connection: Object.freeze({
     capabilities: Object.freeze({ resources: Object.freeze({ listChanged: true }), tools: Object.freeze({ listChanged: true }) }),
-    protocolEra: 'modern' as const,
     protocolVersion: '2026-07-28',
     server: Object.freeze({ name: 'weather-runtime', version: '4.2.0' }),
   }),
@@ -67,7 +65,6 @@ const restartedRuntimeSession = Object.freeze({
   }),
   connection: Object.freeze({
     capabilities: Object.freeze({ resources: Object.freeze({ listChanged: true }), tools: Object.freeze({ listChanged: true }) }),
-    protocolEra: 'modern' as const,
     protocolVersion: '2026-02-09',
     server: Object.freeze({ name: 'weather-runtime-next', version: '5.0.0' }),
   }),
@@ -2071,7 +2068,6 @@ it('preserves binding, trace, and history through restart while refreshing conne
   let catalogCount = 0;
   const restarted = Object.freeze({
     capabilities: { prompts: {} },
-    protocolEra: 'modern' as const,
     protocolVersion: '2026-01-26',
     server: { name: 'weather-fixture', version: '2.0.0' },
   });

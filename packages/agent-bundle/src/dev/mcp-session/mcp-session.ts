@@ -640,7 +640,6 @@ export class McpSession {
           this.#capture = connectState.capture;
           this.#connection = Object.freeze({
             capabilities: client.getServerCapabilities(),
-            protocolEra: client.getProtocolEra?.(),
             protocolVersion: client.getNegotiatedProtocolVersion?.(),
             server: client.getServerVersion(),
           });

@@ -162,7 +162,7 @@ const runtimePreview = Object.freeze({
   result: Object.freeze({ appVisible: Object.freeze({}), isError: false, modelVisible: Object.freeze({}) }),
   session: Object.freeze({
     binding: Object.freeze({ definitionDigest: 'definition-weather', registryRevision: 3, serverDigest: 'server-weather', serverName: 'weather', sessionId: 'runtime-session-weather', sessionRevision: 2, target: 'weather', transportDigest: 'transport-weather' }),
-    connection: Object.freeze({ capabilities: Object.freeze({ resources: Object.freeze({}), tools: Object.freeze({}) }), protocolEra: 'modern' as const, protocolVersion: '2026-01-26', server: Object.freeze({ name: 'weather', version: '1.0.0' }) }),
+    connection: Object.freeze({ capabilities: Object.freeze({ resources: Object.freeze({}), tools: Object.freeze({}) }), protocolVersion: '2026-01-26', server: Object.freeze({ name: 'weather', version: '1.0.0' }) }),
     state: 'ready' as const,
   }),
 }) as unknown as McpAppPreviewAppsSnapshot;

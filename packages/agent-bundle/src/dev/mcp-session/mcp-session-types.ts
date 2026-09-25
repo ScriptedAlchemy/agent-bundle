@@ -52,7 +52,6 @@ export interface McpClient {
   getServerCapabilities(): ServerCapabilities | undefined;
   getServerVersion(): Implementation | undefined;
   getNegotiatedProtocolVersion?(): string | undefined;
-  getProtocolEra?(): 'legacy' | 'modern' | undefined;
   listPrompts(params?: undefined, options?: McpRequestOptions): Promise<{ readonly prompts: readonly Prompt[] }>;
   listResources(params?: undefined, options?: McpRequestOptions): Promise<{ readonly resources: readonly Resource[] }>;
   listResourceTemplates(
@@ -146,7 +145,6 @@ export interface McpSessionResourceOptions extends McpSessionRequestOptions {
 
 export interface McpSessionConnectionState {
   readonly capabilities: ServerCapabilities | undefined;
-  readonly protocolEra: 'legacy' | 'modern' | undefined;
   readonly protocolVersion: string | undefined;
   readonly server: Implementation | undefined;
 }

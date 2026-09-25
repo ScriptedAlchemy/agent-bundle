@@ -63,7 +63,6 @@ const cancellableStream = (): Readonly<{ readonly cancelled: () => boolean; read
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' });
 const connection = Object.freeze({
   capabilities: { tools: {} },
-  protocolEra: 'modern',
   protocolVersion: '2025-11-25',
   server: { name: 'weather-fixture', version: '1.0.0' },
 });
@@ -685,7 +684,7 @@ it('uses only exact runtime MCP routes and preserves the operation vector', asyn
     },
     connection: {
       capabilities: { resources: { listChanged: true }, tools: { listChanged: true } },
-      protocolEra: 'modern', protocolVersion: '2026-02-09', server: { name: 'weather-next', version: '2.0.0' },
+      protocolVersion: '2026-02-09', server: { name: 'weather-next', version: '2.0.0' },
     },
     state: 'ready',
   };

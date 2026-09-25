@@ -22,7 +22,6 @@ export interface McpRouteSessionBinding {
 
 export interface McpRouteConnection {
   readonly capabilities?: unknown;
-  readonly protocolEra?: 'legacy' | 'modern';
   readonly protocolVersion?: string;
   readonly server?: Readonly<{ readonly name: string; readonly version: string }>;
 }
@@ -220,15 +219,13 @@ const routeConnection = (value: unknown): McpRouteConnection => {
     serverSnapshot = Object.freeze({ name: server.name, version: server.version });
   }
   if (
-    !hasOnlyKeys(connection, ['capabilities', 'protocolEra', 'protocolVersion', 'server']) ||
-    (connection.protocolEra !== undefined && connection.protocolEra !== 'legacy' && connection.protocolEra !== 'modern') ||
+    !hasOnlyKeys(connection, ['capabilities', 'protocolVersion', 'server']) ||
     (connection.protocolVersion !== undefined && typeof connection.protocolVersion !== 'string')
   ) {
     throw new McpRouteClientError('AB8019', 'Foreground MCP route returned an invalid connection.');
   }
   return Object.freeze({
     ...(connection.capabilities === undefined ? {} : { capabilities: connection.capabilities }),
-    ...(connection.protocolEra === undefined ? {} : { protocolEra: connection.protocolEra }),
     ...(connection.protocolVersion === undefined ? {} : { protocolVersion: connection.protocolVersion }),
     ...(serverSnapshot === undefined ? {} : { server: serverSnapshot }),
   });

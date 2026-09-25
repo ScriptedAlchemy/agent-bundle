@@ -29,7 +29,7 @@ const startRoutes = async (service: McpSessionRouteService): Promise<StartedRout
 
 class RecordingSession implements McpSessionRouteSession {
   readonly binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' });
-  readonly connection = Object.freeze({ capabilities: { tools: {} }, protocolEra: 'modern' as const, protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } });
+  readonly connection = Object.freeze({ capabilities: { tools: {} }, protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } });
   readonly id = 'session-a';
   readonly timeoutMs = 5_000;
   readonly calls: unknown[] = [];

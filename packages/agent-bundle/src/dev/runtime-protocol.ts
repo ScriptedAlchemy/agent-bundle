@@ -223,7 +223,6 @@ export interface DevRuntimeMcpRegistrySnapshot {
 
 export interface DevRuntimeMcpConnectionState {
   readonly capabilities: JsonObject | undefined;
-  readonly protocolEra: 'legacy' | 'modern' | undefined;
   readonly protocolVersion: string | undefined;
   readonly server: Readonly<{ readonly name: string; readonly version: string }> | undefined;
 }

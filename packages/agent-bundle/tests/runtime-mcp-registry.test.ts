@@ -39,7 +39,6 @@ const deferred = <T = void>(): Readonly<{
 
 const connectionState: DevRuntimeMcpConnectionState = Object.freeze({
   capabilities: Object.freeze({ tools: Object.freeze({}) }),
-  protocolEra: 'modern',
   protocolVersion: '2025-06-18',
   server: Object.freeze({ name: 'fixture', version: '1.0.0' }),
 });

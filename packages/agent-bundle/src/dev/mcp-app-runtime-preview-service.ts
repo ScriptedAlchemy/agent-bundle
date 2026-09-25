@@ -365,7 +365,7 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
       throw new Error('Runtime MCP App stable session has foreign provider/state authority.');
     }
     if (
-      live.connection.protocolEra === undefined || live.connection.protocolVersion === undefined ||
+      live.connection.protocolVersion === undefined ||
       live.connection.capabilities === undefined || live.connection.server === undefined
     ) {
       throw new Error('Runtime MCP App stable session has incomplete negotiation.');

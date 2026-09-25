@@ -39,7 +39,7 @@ const runVector: RuntimeVector = Object.freeze({
 
 const sessionSnapshot = (): DevRuntimeMcpSessionSnapshot => Object.freeze({
   binding: Object.freeze({ ...runBinding, providerSessionId: 'provider-private', stateStoreId: 'state-private' }),
-  connection: Object.freeze({ capabilities: undefined, protocolEra: 'modern', protocolVersion: '2026-01-26', server: undefined }),
+  connection: Object.freeze({ capabilities: undefined, protocolVersion: '2026-01-26', server: undefined }),
   state: 'ready',
 });
 

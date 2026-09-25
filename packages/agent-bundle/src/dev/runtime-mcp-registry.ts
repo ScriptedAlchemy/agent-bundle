@@ -1154,7 +1154,6 @@ const bindingCopy = (binding: DevRuntimeMcpSessionBinding): DevRuntimeMcpInvalid
 
 const finiteConnectionState = (input: DevRuntimeMcpConnectionState): DevRuntimeMcpConnectionState => Object.freeze({
   capabilities: input.capabilities === undefined ? undefined : jsonObject(input.capabilities, 'Runtime MCP connection capabilities'),
-  protocolEra: input.protocolEra,
   protocolVersion: input.protocolVersion,
   server: input.server === undefined ? undefined : Object.freeze({
     name: nonempty(input.server.name, 'Runtime MCP connection server name'),

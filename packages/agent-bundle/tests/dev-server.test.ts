@@ -932,7 +932,7 @@ it('applies the established foreground origin and token guard to MCP session cre
       opens.push(options);
       return {
         binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
-        connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+        connection: { capabilities: {}, protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
         id: 'session-a',
       };
     },
@@ -971,7 +971,7 @@ it('applies the established foreground origin and token guard to MCP session cre
     await expect(accepted.json()).resolves.toEqual({
       session: {
         binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
-        connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+        connection: { capabilities: {}, protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
         id: 'session-a',
       },
     });
@@ -986,7 +986,7 @@ it('accepts headerless browser same-origin fetch provenance with the exact token
   let streamSubscriptions = 0;
   const session = {
     binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
-    connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+    connection: { capabilities: {}, protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
     id: 'session-a',
     subscribeTrace: () => {
       streamSubscriptions += 1;
@@ -1120,7 +1120,7 @@ it('ends active authenticated MCP trace readers before foreground shutdown destr
   let subscriptions = 0;
   const session = {
     binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
-    connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+    connection: { capabilities: {}, protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
     id: 'session-a',
     subscribeTrace: () => {
       subscriptions += 1;

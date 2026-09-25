@@ -1673,7 +1673,6 @@ it('exposes one opaque, epoch-bound session handle with a bounded ordered wire t
           transport.onmessage?.(progressFrame);
         },
         getNegotiatedProtocolVersion: () => '2026-07-28',
-        getProtocolEra: () => 'modern' as const,
         getPrompt: async () => ({ messages: [] }),
         getServerCapabilities: () => ({ logging: {} }),
         getServerVersion: () => ({ name: 'wire-fixture', version: '1.0.0' }),
@@ -1695,7 +1694,6 @@ it('exposes one opaque, epoch-bound session handle with a bounded ordered wire t
     expect(session.binding).toEqual({ epochId: 'epoch-wire', serverName: 'fixture', target: 'portable' });
     expect(Object.isFrozen(session.binding)).toBe(true);
     expect(session.connection).toMatchObject({
-      protocolEra: 'modern',
       protocolVersion: '2026-07-28',
       server: { name: 'wire-fixture', version: '1.0.0' },
     });

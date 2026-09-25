@@ -800,7 +800,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           resources: Object.freeze({}),
           tools: Object.freeze({}),
         }),
-        protocolEra: 'modern',
         protocolVersion: '2025-06-18',
         server: Object.freeze({ name: projectName, version: projectVersion }),
       });

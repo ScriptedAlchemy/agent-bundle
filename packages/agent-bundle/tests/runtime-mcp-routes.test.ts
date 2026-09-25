@@ -25,7 +25,6 @@ it('delegates the fixed manual runtime MCP open route without becoming an App pr
     }),
     connection: Object.freeze({
       capabilities: Object.freeze({}),
-      protocolEra: 'modern' as const,
       protocolVersion: '2026-01-26',
       server: Object.freeze({ name: 'weather', providerSessionId: 'provider-private', stateStoreId: 'state-private', unexpected: 'unexpected-value', version: '1.0.0' }),
     }),
@@ -38,7 +37,6 @@ it('delegates the fixed manual runtime MCP open route without becoming an App pr
     }),
     connection: Object.freeze({
       capabilities: Object.freeze({ tools: Object.freeze({ listChanged: true }) }),
-      protocolEra: 'modern' as const,
       protocolVersion: '2026-02-09',
       server: Object.freeze({ name: 'weather-next', providerSessionId: 'provider-private', stateStoreId: 'state-private', unexpected: 'unexpected-value', version: '2.0.0' }),
     }),
@@ -92,7 +90,7 @@ it('delegates the fixed manual runtime MCP open route without becoming an App pr
     expect(opened).toEqual({ session: { binding: {
       definitionDigest: 'definition-a', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
       sessionId: 'session-a', sessionRevision: 2, target: 'portable', transportDigest: 'transport-a',
-    }, connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2026-01-26', server: { name: 'weather', version: '1.0.0' } }, state: 'ready' } });
+    }, connection: { capabilities: {}, protocolVersion: '2026-01-26', server: { name: 'weather', version: '1.0.0' } }, state: 'ready' } });
     expect(JSON.stringify(opened)).not.toContain('provider-private');
     expect(JSON.stringify(opened)).not.toContain('state-private');
 
@@ -113,7 +111,7 @@ it('delegates the fixed manual runtime MCP open route without becoming an App pr
           definitionDigest: 'definition-b', registryRevision: 4, serverDigest: 'server-b', serverName: 'weather',
           sessionId: 'session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-b',
         },
-        connection: { capabilities: { tools: { listChanged: true } }, protocolEra: 'modern', protocolVersion: '2026-02-09', server: { name: 'weather-next', version: '2.0.0' } },
+        connection: { capabilities: { tools: { listChanged: true } }, protocolVersion: '2026-02-09', server: { name: 'weather-next', version: '2.0.0' } },
         state: 'ready',
       },
     });
@@ -136,7 +134,7 @@ it('claims manual runtime MCP routes before the generic runtime browser API', as
           snapshot: () => Object.freeze({ binding: Object.freeze({
             definitionDigest: 'definition-a', providerSessionId: 'provider-private', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
             sessionId: 'session-a', sessionRevision: 2, stateStoreId: 'state-private', target: 'portable', transportDigest: 'transport-a',
-          }), connection: Object.freeze({ capabilities: Object.freeze({}), protocolEra: 'modern' as const, protocolVersion: '2026-01-26', server: undefined }), state: 'ready' as const }),
+          }), connection: Object.freeze({ capabilities: Object.freeze({}), protocolVersion: '2026-01-26', server: undefined }), state: 'ready' as const }),
           watchClosed: () => Object.freeze({ closed: false, unsubscribe: () => undefined }),
         });
       },

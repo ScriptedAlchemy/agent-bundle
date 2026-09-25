@@ -51,7 +51,6 @@ const snapshot = (): DevRuntimeMcpSessionSnapshot => Object.freeze({
   }),
   connection: Object.freeze({
     capabilities: Object.freeze({ resources: Object.freeze({}), tools: Object.freeze({}) }),
-    protocolEra: 'modern' as const,
     protocolVersion: '2026-01-26',
     server: Object.freeze({ name: 'weather', version: '1.0.0' }),
   }),

@@ -312,11 +312,6 @@ const runtimeStringOrUndefined = (value: unknown, label: string): string | undef
   return runtimeInvalid(`Runtime MCP App route returned an invalid ${label}.`);
 };
 
-const runtimeEra = (value: unknown): 'legacy' | 'modern' | undefined => {
-  if (value === undefined || value === 'legacy' || value === 'modern') return value;
-  return runtimeInvalid('Runtime MCP App route returned an invalid protocol era.');
-};
-
 const runtimeProfileId = (value: unknown): 'portable' | 'chatgpt' | 'claude' => {
   if (value === 'portable' || value === 'chatgpt' || value === 'claude') return value;
   return runtimeInvalid('Runtime MCP App route returned an invalid profile.');
@@ -389,19 +384,16 @@ const runtimeBinding = (value: unknown): McpAppRuntimeBindingSnapshot => {
 
 const runtimeConnection = (value: unknown): Readonly<{
   readonly capabilities: Readonly<Record<string, McpAppJsonValue>> | undefined;
-  readonly protocolEra: 'legacy' | 'modern' | undefined;
   readonly protocolVersion: string | undefined;
   readonly server: Readonly<{ readonly name: string; readonly version: string }> | undefined;
 }> => {
-  const record = runtimeRecord(value, ['capabilities', 'protocolEra', 'protocolVersion', 'server']);
+  const record = runtimeRecord(value, ['capabilities', 'protocolVersion', 'server']);
   if (record.capabilities !== undefined && !isRecord(record.capabilities)) runtimeInvalid('Runtime MCP App route returned invalid server capabilities.');
   const server = record.server === undefined ? undefined : runtimeRecord(record.server, ['name', 'version']);
   const capabilities = record.capabilities === undefined ? undefined : asRecord(record.capabilities);
-  const protocolEra = runtimeEra(record.protocolEra);
   const protocolVersion = runtimeStringOrUndefined(record.protocolVersion, 'protocol version');
   return Object.freeze({
     capabilities,
-    protocolEra,
     protocolVersion,
     server: server === undefined ? undefined : Object.freeze({ name: runtimeText(server.name, 'server name'), version: runtimeText(server.version, 'server version') }),
   });

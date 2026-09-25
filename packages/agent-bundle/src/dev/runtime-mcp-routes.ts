@@ -132,7 +132,6 @@ const publicSessionSnapshot = (snapshot: DevRuntimeMcpSessionSnapshot): PublicRu
     }),
     connection: Object.freeze({
       capabilities: snapshot.connection.capabilities,
-      protocolEra: snapshot.connection.protocolEra,
       protocolVersion: snapshot.connection.protocolVersion,
       server: server === undefined ? undefined : Object.freeze({ name: server.name, version: server.version }),
     }),
