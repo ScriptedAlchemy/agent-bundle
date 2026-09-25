@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { appendFile, link, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -15,7 +15,7 @@ import {
   type PlaygroundServiceOptions,
   type PlaygroundTraceEvent,
 } from '../src/dev/playground/playground-store.ts';
-import { removeTree } from './support/remove-tree.ts';
+import { removeTree, removeTreeSync } from './support/remove-tree.ts';
 
 interface SessionIndex {
   readonly kind: 'agent-bundle-playground-session-index';
@@ -1690,7 +1690,7 @@ it('rolls back a failed pre-publication object without changing an unrelated dir
     const pendingRoot = join(fixture.storageRoot, 'session-index', '.pending');
     const blocked = new PlaygroundService({
       now: () => {
-        rmSync(pendingRoot, { force: true, recursive: true });
+        removeTreeSync(pendingRoot);
         writeFileSync(pendingRoot, 'blocked\n', 'utf8');
         return new Date('2026-08-16T00:00:00.000Z');
       },

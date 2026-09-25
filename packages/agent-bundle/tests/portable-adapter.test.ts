@@ -10,6 +10,7 @@ import type { NormalizedPlugin } from '../src/core/types.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 
 const plugin = (): NormalizedPlugin => ({
+  projectRoot: '/workspace',
   extensions: {},
   hooks: [],
   metadata: {

@@ -24,8 +24,8 @@ import { removeTree } from './support/remove-tree.ts';
 
 const eventHandler: CompiledEventHandler = Object.freeze({
   provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/before.handler.ts' }),
-  source: '/project/src/events/tool/before.handler.ts',
-  view: '/project/src/events/tool/before.view.tsx',
+  source: '/workspace/src/events/tool/before.handler.ts',
+  view: '/workspace/src/events/tool/before.view.tsx',
 });
 
 const metadata = Object.freeze({
@@ -40,6 +40,7 @@ const playgroundCodec = Object.freeze({
 });
 
 const planningModel = (hooks: readonly NormalizedHook[]): NormalizedPlugin => ({
+  projectRoot: '/workspace',
   extensions: {},
   hooks,
   mcpServers: [],
@@ -186,6 +187,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
     tools: ['file.write' as const],
   };
   const model: NormalizedPlugin = {
+    projectRoot: '/project',
     extensions: {},
     hooks: [hook],
     mcpServers: [],
@@ -412,7 +414,7 @@ it('runs event-route handler in the per-host wrapper before shared IPC', () => {
 
   expect(entry.relativePath).toBe('hooks/beforeTool.synthetic.mjs');
   expect(entry.target).toBe('synthetic');
-  expect(source).toContain(`from ${JSON.stringify(eventHandler.source)}`);
+  expect(source).toContain('import gateHandler from "../src/events/tool/before.handler.ts";');
   expect(source).toContain('validateNativeEventEnvelope');
   expect(source).toContain('createCanonicalEventProps');
   expect(source).toContain('executeEventHandler');

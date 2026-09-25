@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
@@ -14,6 +14,7 @@ import {
   userDataStateRoot,
   userStateHome,
 } from '../src/plugin-root.js';
+import { removeTree } from '../../agent-bundle/tests/support/remove-tree.ts';
 
 const digest16 = (path: string): string => createHash('sha256').update(path).digest('hex').slice(0, 16);
 
@@ -197,7 +198,7 @@ describe('resolvePluginRoot (#468)', () => {
     expect(pluginStateSegment(root)).toBe(`plugin-${digest16(resolve(root))}`);
   });
 
-  it('digests real roots canonically and missing roots by their resolved spelling', () => {
+  it('digests real roots canonically and missing roots by their resolved spelling', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'agent-bundle-plugin-root-'));
     try {
       const root = join(directory, 'curator');
@@ -214,7 +215,7 @@ describe('resolvePluginRoot (#468)', () => {
       const resolvedMissing = resolve(missing);
       expect(pluginStateSegment(missing)).toBe(`${basename(resolvedMissing)}-${digest16(resolvedMissing)}`);
     } finally {
-      rmSync(directory, { force: true, recursive: true });
+      await removeTree(directory);
     }
   });
 });

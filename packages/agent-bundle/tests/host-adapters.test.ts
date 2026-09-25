@@ -20,6 +20,7 @@ import { removeTree } from './support/remove-tree.ts';
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
 
 const plugin = Object.freeze({
+  projectRoot: '/workspace',
   extensions: Object.freeze({}),
   hooks: Object.freeze([]),
   marketplace: true as const,

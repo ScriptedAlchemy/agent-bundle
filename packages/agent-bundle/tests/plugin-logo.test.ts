@@ -43,6 +43,7 @@ const loadedProject = async (
 };
 
 const logoModel = (target: 'cursor'): NormalizedPlugin => ({
+  projectRoot: '/workspace',
   extensions: {},
   hooks: [],
   metadata: {

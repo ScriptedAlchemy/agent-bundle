@@ -225,6 +225,7 @@ it('orders manifest hook hosts by tuple without sentinel concatenation', () => {
 
 it('keeps the Claude and Codex native wrapper codecs byte-identical apart from identifiers and the target constant', () => {
   const entry: TargetHookWrapper = {
+    projectRoot: '/project',
     event: 'beforeTool',
     hook: {
       event: 'beforeTool',
@@ -278,6 +279,7 @@ it('wires Compiled event handler into each per-host wrapper and keeps built-in h
     tools: [],
   };
   const model: NormalizedPlugin = {
+    projectRoot: '/project',
     extensions: {},
     hooks: [hook],
     mcpServers: [],
@@ -311,7 +313,7 @@ it('wires Compiled event handler into each per-host wrapper and keeps built-in h
     expect(entry.target).toBe(host);
     expect(entry.virtualSource).toContain(`const target = ${JSON.stringify(host)};`);
     expect(entry.virtualSource).toContain('executeEventHandler');
-    expect(entry.virtualSource).toContain(`from ${JSON.stringify(handler.source)}`);
+    expect(entry.virtualSource).toContain('import gateHandler from "../src/events/tool/before.handler.ts";');
     expect(entry.virtualSource).toContain('projectEventHandlerResult');
     expect(entry.virtualSource).toContain(`./event-route-tool-before.${host}.execute.mjs`);
     expect(entry.executeVirtualSource).toContain('requestEventRuntime');
@@ -1372,6 +1374,7 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
     await compileRslibSurfaces(
       { cwd: buildRoot, meta: projectMeta(model.metadata), outputRoot },
       [planHooksSurface(plan.hookEntries ?? [], {
+        projectRoot: '/project',
         artifactEpoch: 'cursor-workspace-open-test',
         outDir: outputRoot,
         plugin: { name: model.metadata.name, version: model.metadata.version },
@@ -1819,6 +1822,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
 }, 15_000);
 
 const hookModel = (root: string): NormalizedPlugin => ({
+  projectRoot: root,
   extensions: {},
   hooks: [
     {

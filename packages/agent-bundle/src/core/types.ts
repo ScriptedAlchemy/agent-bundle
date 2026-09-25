@@ -804,6 +804,8 @@ export interface NormalizedPlugin {
    * models predating the package build stay valid.
    */
   readonly packageBuild?: NormalizedPackageBuild;
+  /** The absolute project root the model's absolute paths lie under; excluded from model identity. */
+  readonly projectRoot: string;
   /**
    * Declared prebuilt payload directories packaged verbatim. Present only
    * when the config declares a `payload` block; optional so hand-constructed
