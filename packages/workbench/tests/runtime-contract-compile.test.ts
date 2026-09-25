@@ -1,4 +1,3 @@
-import { createElement } from 'react';
 import { expect, it } from '@rstest/core';
 
 import type {
@@ -22,7 +21,7 @@ import type {
   RuntimeVector,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
-import { McpAppPreview, type McpAppPreviewClient, type McpAppPreviewProps } from '../src/mcp/mcp-app-preview.tsx';
+import type { McpAppPreviewClient, McpAppPreviewProps } from '../src/mcp/mcp-app-preview.tsx';
 import type { McpJsonInputProps } from '../src/mcp/mcp-json-input.tsx';
 import { McpProtocolEvidence, type McpProtocolEvidenceProps } from '../src/mcp/mcp-page.tsx';
 import { RuntimeClient, RuntimeClientError, type RuntimeBootstrap } from '../src/runtime-client.ts';
@@ -35,7 +34,6 @@ import {
   type RuntimePendingEffect,
   type RuntimeProfileOption,
 } from '../src/runtime-model.ts';
-import type { RuntimeAppPreviewRenderer } from '../src/runtime-view-contracts.ts';
 
 const vector = {
   artifactEpochId: 'epoch-a',
@@ -188,7 +186,6 @@ const appPreviewFixture = Object.freeze({
   toolName: 'weather',
 }) satisfies McpAppPreviewProps;
 
-const appPreviewRenderer: RuntimeAppPreviewRenderer = () => createElement(McpAppPreview, appPreviewFixture);
 const controlledInput: McpJsonInputProps = {
   id: 'runtime-input', label: 'Runtime input', onChange: () => undefined, onRawDraftChange: () => undefined, onSubmit: () => undefined, rawDraft: '{"city":', value: { city: 'London' },
 };
@@ -233,7 +230,6 @@ it('compiles RuntimeClient against the exact provider wire contract', async () =
   expect({
     asset,
     appPreviewFixture,
-    appPreviewRenderer,
     bootstrap,
     controlledInput,
     error,
