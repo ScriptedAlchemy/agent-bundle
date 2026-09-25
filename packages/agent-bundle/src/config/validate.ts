@@ -616,7 +616,8 @@ const relativePosix = toPosixRelative;
 
 /**
  * AB4730: every local stdio entry is wrapped in the framework stdio lifecycle
- * shell, which imports the entry's default export as its server factory. The
+ * shell, which imports the entry's default export as its server factory (a
+ * CommonJS entry's `module.exports` is that default under bundling). The
  * detection is the same static export scan the build uses to build the wrap,
  * so the diagnostic and the build always agree.
  */

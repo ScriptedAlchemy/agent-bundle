@@ -17,6 +17,23 @@ export interface EntryExportScan {
 const hasModifier = (statement: ts.Statement, kind: ts.SyntaxKind): boolean =>
   ts.canHaveModifiers(statement) && (ts.getModifiers(statement) ?? []).some((modifier) => modifier.kind === kind);
 
+/**
+ * A CommonJS entry's `module.exports = <expr>` is a default export: the
+ * bundler exposes the assigned value as the namespace's `default`, which is
+ * what the generated shells read. Only the top-level whole-object assignment
+ * qualifies; `exports.foo = …` and `module.exports.foo = …` are named.
+ */
+const assignsModuleExports = (statement: ts.Statement): boolean => {
+  if (!ts.isExpressionStatement(statement)) return false;
+  const assignment = statement.expression;
+  return ts.isBinaryExpression(assignment)
+    && assignment.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    && ts.isPropertyAccessExpression(assignment.left)
+    && ts.isIdentifier(assignment.left.expression)
+    && assignment.left.expression.text === 'module'
+    && assignment.left.name.text === 'exports';
+};
+
 const declaresMain = (statement: ts.Statement): boolean => {
   if (ts.isFunctionDeclaration(statement)) return statement.name?.text === 'main';
   if (ts.isVariableStatement(statement)) {
@@ -44,6 +61,10 @@ export const scanEntryExportsSource = (source: string, fileName = 'entry.ts'): E
         hasDefaultExport ||= element.name.text === 'default';
         hasMainExport ||= element.name.text === 'main';
       }
+      continue;
+    }
+    if (assignsModuleExports(statement)) {
+      hasDefaultExport = true;
       continue;
     }
     if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword) || hasModifier(statement, ts.SyntaxKind.DeclareKeyword)) continue;

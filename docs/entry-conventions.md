@@ -713,7 +713,9 @@ real child process's probe (two pipes). A test that wants other values injects
 
 Source validation reports `AB4730` as an **error** when a local stdio MCP
 entry has no default export: the framework lifecycle shell calls that export
-to build the server, so such a module cannot be built. It reports
+to build the server, so such a module cannot be built. A CommonJS entry may
+assign the factory to `module.exports` instead; the bundler exposes that
+value as the module's `default`, and the scan counts it. It reports
 **informational** nudges (never errors) when `src/cli.ts`, `src/index.ts`, or
 `src/mcp/<server-id>.ts` exists but explicit configuration shadows it
 (`AB4731`/`AB4732`/`AB4733`). `bin: false` / `lib: false` opt-outs stay
@@ -1074,7 +1076,10 @@ name).
 
 A module that constructs and connects a transport at top level without a
 default export cannot be built: source validation reports `AB4730` as an
-error. A server the framework should launch as-is instead of compiling is
+error. A CommonJS entry's top-level `module.exports = <factory>` is that
+default export under bundling; `exports.foo = …` and `module.exports.foo = …`
+are named and do not satisfy it. A server the framework should launch as-is
+instead of compiling is
 declared with `command` or `url`, or as a `{ prebuilt: ... }` entry the
 consumer's own build produced. The operator `.env` layer (#469) comes from
 `agent-bundle/launch-env`, which the shell's prelude applies; that module is

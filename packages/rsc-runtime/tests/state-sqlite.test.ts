@@ -189,6 +189,39 @@ describe('sqlite driver storage behavior', () => {
       });
     }));
 
+  it('fails closed with a typed corrupt error when a column that must be NOT NULL is nullable', () =>
+    withRoot(async (root) => {
+      const file = join(root, 'state.sqlite');
+      const store = await createSqliteStateDriver({ file }).open(counterDefinition());
+      await store.dispatch('bumped', { by: 1 }, { idempotencyKey: 'k1' });
+      await store.close();
+      const db = new DatabaseSync(file);
+      // Same column names in the same order, so only the NOT NULL flags tell
+      // this journal apart from the one the current kernel writes.
+      db.exec(`
+        ALTER TABLE agent_state_journal RENAME TO agent_state_journal_old;
+        CREATE TABLE agent_state_journal (
+          revision INTEGER PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('event', 'reset', 'migrate')),
+          name TEXT,
+          payload TEXT,
+          state TEXT,
+          result_state TEXT,
+          to_version INTEGER,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          committed_at TEXT NOT NULL
+        );
+        INSERT INTO agent_state_journal SELECT * FROM agent_state_journal_old;
+        DROP TABLE agent_state_journal_old;
+      `);
+      db.close();
+      await expect(createSqliteStateDriver({ file }).open(counterDefinition())).rejects.toMatchObject({
+        code: 'corrupt',
+        message: expect.stringContaining('table agent_state_journal') as string,
+        name: 'AgentStateError',
+      });
+    }));
+
   it('rejects a pending open when the driver closes before initialization resumes', () =>
     withRoot(async (root) => {
       const driver = createSqliteStateDriver({ root });

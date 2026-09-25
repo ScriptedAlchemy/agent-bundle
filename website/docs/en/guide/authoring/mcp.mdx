@@ -571,6 +571,19 @@ sixty-second activity throttle, labeled with the server name).
 That guard matters because stdout carries JSON-RPC framing: one stray `console.log` from any
 imported module would corrupt the protocol stream.
 
+A CommonJS entry assigns the same factory to `module.exports`, which the bundler exposes as the
+module's default export:
+
+```js
+// src/mcp/curator.cjs
+const { McpServer } = require('@modelcontextprotocol/server');
+
+module.exports = () => new McpServer({ name: 'curator', version: '1.0.0' });
+```
+
+Only the whole-object assignment counts. `exports.curator = …` and `module.exports.curator = …`
+are named exports, and the shell reads neither.
+
 A module that constructs and connects a transport at top level without a default export cannot be
 built: source validation reports `AB4730` as an **error**. Declare a server you do not want
 compiled with `command` or `url`, or as a `{ prebuilt: ... }` entry your own build produced.

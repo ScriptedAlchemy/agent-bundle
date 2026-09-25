@@ -59,6 +59,20 @@ describe('entry export scanning', () => {
     expect(scanEntryExportsSource('export type { main } from "./types.ts";').hasMainExport).toBe(false);
   });
 
+  it('counts a top-level module.exports assignment as the default export, and nothing narrower', () => {
+    expect(scanEntryExportsSource('module.exports = () => server;', '/app/entry.cjs')).toEqual({
+      hasDefaultExport: true,
+      hasMainExport: false,
+    });
+    expect(scanEntryExportsSource('exports.foo = () => server;', '/app/entry.cjs')).toEqual({
+      hasDefaultExport: false,
+      hasMainExport: false,
+    });
+    expect(scanEntryExportsSource('module.exports.foo = 1;', '/app/entry.cjs').hasDefaultExport).toBe(false);
+    expect(scanEntryExportsSource('if (ok) { module.exports = 1; }', '/app/entry.cjs').hasDefaultExport).toBe(false);
+    expect(scanEntryExportsSource('const module = {}; module.exports === 1;', '/app/entry.cjs').hasDefaultExport).toBe(false);
+  });
+
   it('never matches inside comments, strings, or template literals', () => {
     expect(scanEntryExportsSource('// export default nothing\nconst a = 1;').hasDefaultExport).toBe(false);
     expect(scanEntryExportsSource('/* export const main = 1 */ const a = 1;').hasMainExport).toBe(false);

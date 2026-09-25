@@ -361,6 +361,11 @@ export const matrix = async (): Promise<void> => {
 };
 ```
 
+A resource route's fixture, and an MCP App route's fixture under `apps: 'explicit'`, must be
+exactly `{ kind: 'resource' }`. A bare `{}` entry fails that route's `coverage` check with
+`resource/app route fixture must be { kind: "resource" }`; the key alone does not cover the route.
+The same `kind` is refused on a tool, prompt, or CLI route, whose fixtures carry `input` instead.
+
 The packed and installed-host entry points take the same fixture shape plus the session they run
 against: `runPackedContractMatrix` needs the open packed session and the manifest compiled
 *before* source removal, and `runInstalledHostContractMatrix` needs the session
