@@ -185,7 +185,8 @@ export interface UninstallBundleOptions {
   /**
    * Proceed when a host-registered copy has no store receipt, or when owned
    * content no longer matches the receipt. Directories without a receipt
-   * naming this plugin are foreign and refused regardless.
+   * naming this plugin are foreign and refused regardless, and a copy without
+   * a store receipt is never purged: `purgeData` is refused (`AB7009`).
    */
   readonly force?: boolean;
   readonly from: string;
@@ -1274,6 +1275,16 @@ const uninstallPublicCli = async (
             `reports it installed at ${entry.installPath} but no agent-bundle receipt exists at ${receiptPath}, so this ` +
             'install was not made by agent-bundle. ' +
             `Re-run with --force to uninstall through \`${host} plugin ${host === 'claude' ? 'uninstall' : 'remove'}\` anyway.`,
+          host,
+        );
+      }
+      if (policy === 'purge') {
+        throw failure(
+          'AB7009',
+          `Refusing --purge-data for ${id} on ${host}: no agent-bundle receipt exists at ${receiptPath}, so nothing ` +
+            `proves this bundle owns its web-data${host === 'claude' ? ` or ${join(hostRoot, 'plugins', 'data', id)}` : ''}, ` +
+            'and --force does not extend to durable data. Re-run with --force and without --purge-data (the data is ' +
+            'kept), then remove the data by hand if it is yours.',
           host,
         );
       }

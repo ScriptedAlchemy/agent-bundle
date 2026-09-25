@@ -1506,6 +1506,11 @@ directory) is kept by default; `--keep-data` says so explicitly. `--purge-data`
 removes it only with `--confirm-purge`, and only the roots whose recorded
 ownership is currently provable; a root the receipt lists as `unowned`, or a
 receipt with no `state` block at all, retains the observed root as `unproven`.
+A host-registered Claude/Codex copy with no store receipt is never purged:
+`--force --purge-data --confirm-purge` is refused with `AB7009` before any host
+verb runs, since nothing proves the bundle owns its web-data or Claude's
+`plugins/data/<id>/`; `--force` without `--purge-data` still uninstalls it
+through the host verbs and keeps that data.
 The typed `data.outcome` is honest per host: `kept` / `purged` / `absent`
 (Cursor local, Agent Bundle's own doing), `retained-by-host` (Claude 2.1.257
 orphans the cached copy for its ~14-day grace period; a purge additionally
@@ -1540,7 +1545,7 @@ exhausted (`AB7307`) instead of claiming preserved state that is gone.
 | --- | --- | --- | --- |
 | `AB7007` | error | `uninstall` refused a mismatch or a foreign target: the owned files hash differently from the receipt, the cached host copy differs from the receipt in version or content, the staged repository's `HEAD` is not the recorded commit or its working tree is dirty / unverifiable, the receipt names another plugin, the directory is not this plugin's install at all, or a destination entry the receipt owns is a symlink or special file. | `--force` overrides content and `HEAD` mismatches (the receipt-owned set is still the only thing removed); a receipt or manifest naming another plugin, and symlinked entries, are refused regardless, inspect and remove them manually. |
 | `AB7008` | error | `--purge-data` without `--confirm-purge`, `--purge-data` together with `--keep-data`, or (Claude) `--purge-data` while the same plugin is installed at another scope or in another project (a live `plugin list --json` row, an entry in Claude's `plugins/installed_plugins.json` registry, or a stored receipt for the same plugin), the cached copy and `plugins/data/<id>/` are scope-less and still in use, or while `claude plugin list --json` or that registry cannot be read to prove there is no other scope. | Pass `--purge-data --confirm-purge` to delete durable state, or neither flag to keep it; for a shared Claude scope, uninstall without `--purge-data` and purge after the last scope is removed. |
-| `AB7009` | error | `uninstall` found a host-registered install but no store receipt proving Agent Bundle made it: a staged Cursor marketplace repository without its store receipt, or a host-registered Claude/Codex copy without its store receipt. A Cursor local copy without a receipt is foreign (`AB7007`), never `AB7009`. | Re-run with `--force` (the staged repository is removed wholesale; a host-CLI install is removed through the host verbs), or reinstall with `--replace` first to record a receipt. |
+| `AB7009` | error | `uninstall` found a host-registered install but no store receipt proving Agent Bundle made it: a staged Cursor marketplace repository without its store receipt, or a host-registered Claude/Codex copy without its store receipt. With `--force`, the same missing Claude/Codex receipt still refuses `--purge-data`: the uninstall is refused before any host verb runs, because no receipt proves the bundle owns the web-data or `plugins/data/<id>/`. A Cursor local copy without a receipt is foreign (`AB7007`), never `AB7009`. | Re-run with `--force` (the staged repository is removed wholesale; a host-CLI install is removed through the host verbs, and its data is kept), or reinstall with `--replace` first to record a receipt. Without a receipt, drop `--purge-data` and remove the data by hand if it is yours. |
 
 The Cursor and portable host-install proofs (`tests/host-install-proof.test.ts`,
 `tests/packed-host-install-proof.test.ts`) snapshot the isolated home before
