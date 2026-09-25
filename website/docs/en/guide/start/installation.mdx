@@ -7,7 +7,7 @@ description: 'Install agent-bundle from pkg.pr.new and pin compiler, runtime, an
 ## Requirements
 
 - **Node.js 22.19 or later** to run the compiler and the developer Workbench.
-- **A package manager** — npm, pnpm, yarn, and bun all work; the examples below use npm.
+- **A package manager**: npm, pnpm, yarn, and bun all work; the examples below use npm.
 
 Generated executables target Node.js 22.12 or newer by default. `runtime: { node: '24.0' }`
 raises that floor (it can never be lowered), and the selected floor is recorded as `runtime.node`
@@ -22,7 +22,7 @@ CI publishes for every pull request and for the tip of `main`:
 npm i -D https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@<sha-or-pr>
 ```
 
-Use a PR number or the SHA of a commit whose package-preview run succeeded — a `main` commit
+Use a PR number or the SHA of a commit whose package-preview run succeeded, a `main` commit
 overtaken before its run finished has none. Short SHAs work, and a SHA is the right form for lockfiles and reproducible
 setups; a PR number tracks that pull request's most recent build.
 
@@ -39,7 +39,7 @@ Install both from **one** SHA or PR number. `agent-bundle` declares `@agent-bund
 an optional peer (the runtime package declares no `agent-bundle` peer), and the publish
 (`--peerDeps`) rewrites that peer range inside the `agent-bundle` preview tarball to the exact
 preview version of the runtime built from the same commit, so a matched pair installs with
-stock npm. Mixing two different SHAs fails with `ERESOLVE` by design — the range to inspect is
+stock npm. Mixing two different SHAs fails with `ERESOLVE` by design, the range to inspect is
 the one in the installed `agent-bundle` package.
 
 A preview scaffolder derives its compiler/runtime pair from the shared commit SHA. For a runtime
@@ -76,7 +76,7 @@ schema types by minor version. A nested `zod@4.5.x` therefore rejects a consumer
 `zod@4.6.x` (`Type '6' is not assignable to type '5'`). Two installations of the same minor
 still typecheck; the peer is so the project and the runtime resolve one copy and stay on
 compatible minors. Existing projects still pinned to `zod@4.4.3`, or any version below
-`4.5.4`, must upgrade that direct dependency before installing this runtime — npm otherwise
+`4.5.4`, must upgrade that direct dependency before installing this runtime, npm otherwise
 rejects the required peer with `ERESOLVE`.
 
 ## Pin a Version Packages commit
@@ -100,7 +100,7 @@ npx agent-bundle validate --root .
 ```
 
 `validate` checks project source. Once you have built something, `validate --artifact artifact`
-checks the built plugin root instead — the one directory every selected host installs — with no
+checks the built plugin root instead, the one directory every selected host installs, with no
 project sources required.
 
 Next: [Quick start](./quick-start.mdx).

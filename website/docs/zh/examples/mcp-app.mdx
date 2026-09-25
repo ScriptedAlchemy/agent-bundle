@@ -12,8 +12,8 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 - **包名：** `@agent-bundle-example/mcp-app`
 - **公开依赖：** `agent-bundle`（`workspace:*`）、`@agent-bundle/runtime`、`react`、`zod`；浏览器端 App
   测试还用到 `@rstest/browser`、`@rstest/core`、`@rstest/playwright` 与 `playwright`
-- **Target：** `portable`、`codex`、`claude`——每个 target 都带有 `status` 服务器及其 App
-- **凭据：** 不需要——eval 与夹具检查只读取签入的数据
+- **Target：** `portable`、`codex`、`claude`，每个 target 都带有 `status` 服务器及其 App
+- **凭据：** 不需要，eval 与夹具检查只读取签入的数据
 - **源码：** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
 
 ## 它证明什么
@@ -34,7 +34,7 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
   健康记录，而 `payments-api` 故意返回降级的延迟数据。有意思的输出是一项被如实报告的失败检查，而不是
   一张全绿截图。
 - **浏览器表面自成一个证明级别。** `tests/browser-app/status-panel.browser.test.ts` 通过
-  `agent-bundle/test/browser` 把生产编译出的 App HTML 挂载到产品桥接之上——也就是
+  `agent-bundle/test/browser` 把生产编译出的 App HTML 挂载到产品桥接之上，也就是
   [测试](../guide/development/testing.mdx)中的 `browser-app` 级别。
 - **App 是桥接的客户端，而不是自带 transport。** `src/mcp/status/apps/status.ts` 从 `agent-bundle/app`
   创建客户端，通过 `onToolInput` / `onToolResult` 接收打开 App 的 `show-status` 输入与结构化结果，并用
@@ -83,7 +83,7 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
    旁边。**Advanced → Artifact** 显示复合插件根目录，无论选中哪个 target，`mcp-apps/status.html` 都出现在
    这里。
 5. 在存在两次 eval 运行之前，**Advanced → Evals → Compare** 会刻意显示
-   `At least two recorded runs are needed before a comparison can be aligned.`——这是精确的空状态，
+   `At least two recorded runs are needed before a comparison can be aligned.`，这是精确的空状态，
    不是错误。
 6. 打开 **Advanced → Protocol**，选择 portable 与 `status` 服务器，打开会话、列出工具、选择
    `show-status`、选中 `payments-api` 并调用它。调用历史会显示降级摘要，以及标注了 Availability 与

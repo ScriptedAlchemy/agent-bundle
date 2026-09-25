@@ -19,8 +19,8 @@ src/skills/release-review/
 └── references/checklist.md
 ```
 
-That ships with no declaration at all. Everything in the directory other than `SKILL.md` — and
-other than the rendered-skill source files, which are build inputs — becomes a resource of that
+That ships with no declaration at all. Everything in the directory other than `SKILL.md`, and
+other than the rendered-skill source files, which are build inputs, becomes a resource of that
 Skill, copied into the artifact with its relative path preserved.
 
 ## The document
@@ -41,7 +41,7 @@ description: Review a release candidate and issue an evidence-based go/no-go ver
 ```
 
 Frontmatter is required. A document with none reports `AB3001`; invalid YAML reports `AB3002`.
-`name` and `description` are what every host reads — the description is the activation surface,
+`name` and `description` are what every host reads, the description is the activation surface,
 so write it as the condition under which the Skill should be used, not as a title.
 
 Links to sibling files are how a Skill points at its own resources. They stay relative in the
@@ -52,15 +52,15 @@ emitted document, so they resolve inside whichever artifact the host installed.
 Host UIs load every Skill's `name` and `description` into context so the
 model can choose. Long or overlapping descriptions get truncated; vague
 triggers load the wrong Skill. Prefer a short capability plus a
-discriminating **when** — not a broad domain:
+discriminating **when**, not a broad domain:
 
-Avoid — fires on anything database-shaped:
+Avoid, fires on anything database-shaped:
 
 ```md
 description: Create and validate Postgres schema migrations. Use when working with databases, queries, models, or persistence.
 ```
 
-Prefer — fires when the task is actually a migration:
+Prefer, fires when the task is actually a migration:
 
 ```md
 description: Create and validate Postgres schema migrations. Use when adding or changing a migration, or reviewing its rollout.
@@ -75,7 +75,7 @@ procedures from `references/` and say when to read them (progressive
 disclosure). Do not load every reference at entry or create resource folders
 for a short, self-contained Skill. `assets/` holds files used in the output,
 not instructions that must always enter context. Overly specific step-by-step
-itineraries that helped weaker models often over-constrain stronger ones —
+itineraries that helped weaker models often over-constrain stronger ones,
 keep invariants, drop ceremony.
 
 Write the body so the agent matches the user's scope. A plan or review should
@@ -112,9 +112,9 @@ wins over the convention.
 
 ## Host extensions
 
-Portable Skill metadata — `name`, `description`, `license`, `compatibility`, `allowed-tools` (the
+Portable Skill metadata, `name`, `description`, `license`, `compatibility`, `allowed-tools` (the
 Agent Skills spelling; camelCase `allowedTools` is accepted only under `targets.claude`), and a
-free-form `metadata` record — is understood by every target. Host-specific keys live under
+free-form `metadata` record, is understood by every target. Host-specific keys live under
 their host so they reach only that adapter:
 
 | Host | Examples |
@@ -125,13 +125,13 @@ their host so they reach only that adapter:
 | `cursor` | `globs`, `icon`, `color`, `paths`, `disableModelInvocation` |
 
 `targets` in Skill frontmatter is that per-host object and nothing else; a list such as
-`targets: ['claude']` is `AB3006`. A Skill is emitted to every target the project selects — there
+`targets: ['claude']` is `AB3006`. A Skill is emitted to every target the project selects. There
 is no per-Skill artifact restriction.
 
 Claude Code, Codex, Cursor, and portable share `skills/<name>/SKILL.md`; Amp receives its copy
 under `.amp/plugins/<plugin>/skills/<name>/SKILL.md`. A host extension that lowers a shared
 document differently for one selected host than for
-another — `targets: { claude: { effort: high } }` in a `claude` + `codex` build, say — is a
+another, `targets: { claude: { effort: high } }` in a `claude` + `codex` build, say, is a
 fatal `AB4103` collision. Keep the emitted document identical for every selected host, or build
 those hosts into separate artifacts (one `targets` entry per build).
 
@@ -149,7 +149,7 @@ the flat server map beside exactly one bundled skill only when neither native so
 
 ## Path tokens
 
-Host placeholder syntax differs — `${CLAUDE_PLUGIN_ROOT}` is not what Cursor or the portable
+Host placeholder syntax differs, `${CLAUDE_PLUGIN_ROOT}` is not what Cursor or the portable
 standard write. Author the canonical token instead and let build-time lowering substitute the
 host spelling:
 
@@ -167,8 +167,8 @@ cannot express is reported rather than silently emitted as literal text.
 
 ## Rendered Skills
 
-When a Skill document is generated rather than typed — the same checklist repeated per
-environment, a table derived from a contract — put a component at `src/skills/<name>/SKILL.tsx`
+When a Skill document is generated rather than typed, the same checklist repeated per
+environment, a table derived from a contract, put a component at `src/skills/<name>/SKILL.tsx`
 (or `.ts`). It default-exports a component and exports a `frontmatter` record; the build compiles
 the rendered tree into the `SKILL.md` document hosts consume:
 
@@ -198,13 +198,13 @@ A rendered source may import project code, so the document is computed from the 
 plugin ships, and it may import `agent-bundle/meta`: the loader serves the same
 `{ name, packageName, packageVersion, version }` the compiler stamps into every built surface, so a
 skill can print the version it documents. Its JSX compiles against the loader's own element
-factory rather than the project's `react/jsx-runtime` — the renderer walks plain element objects
-and needs no React internals — so the evaluation does not depend on how the process resolves
+factory rather than the project's `react/jsx-runtime`, the renderer walks plain element objects
+and needs no React internals, so the evaluation does not depend on how the process resolves
 `react` (the `react-server` condition of the route-unit pool included), and `inspectWorkbenchSurface`
 inspects a project with rendered skills from any pool.
 
-A hand-authored `SKILL.md` in the same directory always wins — an authored file beats a
-generated one — and the shadowed component reports the informational `AB4735` nudge. A rendered
+A hand-authored `SKILL.md` in the same directory always wins, an authored file beats a
+generated one, and the shadowed component reports the informational `AB4735` nudge. A rendered
 module that fails to load reports `AB3003`; one that does not default-export a component
 function, or does not export a `frontmatter` record, reports `AB3004`.
 
@@ -235,5 +235,5 @@ is a deliberate containment boundary, not a rendering gap.
 
 ## Next
 
-- [Hooks](./hooks.mdx) — react to lifecycle events.
-- [MCP servers and Apps](./mcp.mdx) — expose tools, resources, and prompts.
+- [Hooks](./hooks.mdx): react to lifecycle events.
+- [MCP servers and Apps](./mcp.mdx): expose tools, resources, and prompts.

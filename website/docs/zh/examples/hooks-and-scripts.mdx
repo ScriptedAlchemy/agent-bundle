@@ -11,7 +11,7 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个脚本
 - **包名：** `@agent-bundle-example/hooks-and-scripts`
 - **公开依赖：** `agent-bundle`（`workspace:*`）
 - **Target：** `portable`、`codex`、`claude`
-- **凭据：** 不需要——示例只读取 `release/` 下签入的 JSON
+- **凭据：** 不需要，示例只读取 `release/` 下签入的 JSON
 - **源码：** [`examples/hooks-and-scripts`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/hooks-and-scripts)
 
 ## 它证明什么
@@ -19,14 +19,14 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个脚本
 - **钩子是写成处理函数，而不是宿主文档。** `src/hooks/session-start.ts` 调用应用自有的
   `releaseContext` 函数。构建把这个普通 Node 依赖捆入各宿主包装器，不启动 MCP 服务器或渲染 worker。见
   [钩子](../guide/authoring/hooks.mdx)。
-- **两种脚本声明方式都在。** `verify-release` 按约定发布——`src/scripts/` 下任何未被声明占用的普通脚本
-  都会被发现——而 `detect-risk` 保持显式配置，因为它要把自己的 target 限制为 `portable`。示例故意让两种
+- **两种脚本声明方式都在。** `verify-release` 按约定发布，`src/scripts/` 下任何未被声明占用的普通脚本
+  都会被发现，而 `detect-risk` 保持显式配置，因为它要把自己的 target 限制为 `portable`。示例故意让两种
   方式都有覆盖。
 - **进程外壳属于框架。** 两个脚本都导出 `main` 并返回退出码。argv 处理、等待与退出码采纳都归生成的外壳
   所有，因此一个非零返回值会变成真正的阻断性退出，而不是被吞掉的返回值。见
   [脚本与资源](../guide/authoring/scripts-assets.mdx)。
 - **输出的脚本自行解析自己的资源。** `assets: ['release/*.json']` 把发布清单与风险登记表复制一份到产物
-  根目录的 `assets/` 中，由所有 target 共享，而每个输出脚本都相对自己所在的模块去读取它们——而不是相对
+  根目录的 `assets/` 中，由所有 target 共享，而每个输出脚本都相对自己所在的模块去读取它们，而不是相对
   shell 的工作目录。
 - **失败的重建保留上一个可用产物。** 这就是下面那段可逆演练。
 
@@ -44,8 +44,8 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个脚本
 ## 在 Workbench 中操作
 
 1. 页眉是“当前或已过期”epoch 状态的权威来源。在 **Application → Events / Hooks** 下选中
-   `sessionStart`，选择 Claude 夹具并运行。事件路由工作区会展示规范输入——其中包括
-   `"source": "workbench"`——以及投影后的结果。用它的 **Replay** 标签重跑绑定到该 epoch 的输入。
+   `sessionStart`，选择 Claude 夹具并运行。事件路由工作区会展示规范输入，其中包括
+   `"source": "workbench"`，以及投影后的结果。用它的 **Replay** 标签重跑绑定到该 epoch 的输入。
 2. 在 **Application → Scripts** 下为 Claude target 选中 `verify-release` 并运行。输出的脚本
    读取自己模块旁边打包好的 `release/release-manifest.json`，并报告 2.4.0 版本已可打包。
 3. 把 target 换成 portable 并选择 `detect-risk`。它读取 `release/risk-register.json`，报告高严重级别的
@@ -63,7 +63,7 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个脚本
 Application 继续暴露上一个可用的树与产物。恢复签入的处理函数，
 再按一次 **Rebuild**，等到 **Idle**：一个新的活跃 epoch 会替换过期目录并清除该诊断。
 
-不要把 Building 状态读成修复已完成——新的活跃 epoch 才是证据。
+不要把 Building 状态读成修复已完成，新的活跃 epoch 才是证据。
 
 ## 非交互检查
 
