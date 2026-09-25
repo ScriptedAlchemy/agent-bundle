@@ -183,38 +183,27 @@ const clientsFor = ({
   },
 });
 
-it('derives the Skills Starter features from its validated catalogs', async () => {
+it('derives the Skills Starter counts from its validated catalogs', async () => {
   const capabilities = await loadWorkbenchCapabilities({
     buildId: 'build-a',
     ...clientsFor({ evalSuites: 1, skills: 1, targets: 3 }),
   });
 
-  expect(capabilities.features).toEqual({ evals: true, hooks: false, mcp: false, runtime: false, scripts: false, skills: true });
   expect(capabilities.counts).toEqual({ evalSuites: 1, hooks: 0, mcpServers: 0, scripts: 0, skills: 1, targets: 3 });
   expect(capabilities.routes.state).toBe('current');
   expect(capabilities.routes.manifest?.servers).toEqual([]);
   expect(Object.isFrozen(capabilities)).toBe(true);
   expect(Object.isFrozen(capabilities.counts)).toBe(true);
-  expect(Object.isFrozen(capabilities.features)).toBe(true);
 });
 
-it('detects hooks and scripts from the artifact catalog without advertising unrelated features', async () => {
-  const capabilities = await loadWorkbenchCapabilities({
-    buildId: 'build-a',
-    ...clientsFor({ hooks: 1, scripts: 2, targets: 3 }),
-  });
-
-  expect(capabilities.features).toEqual({ evals: false, hooks: true, mcp: false, runtime: false, scripts: true, skills: false });
-});
-
-it('detects the complete feature set for a full bundle and carries the runtime topology flag', async () => {
+it('carries the runtime topology flag', async () => {
   const capabilities = await loadWorkbenchCapabilities({
     buildId: 'build-a',
     runtime: true,
     ...clientsFor({ evalSuites: 1, hooks: 1, mcpServers: 1, scripts: 1, skills: 1, targets: 3 }),
   });
 
-  expect(capabilities.features).toEqual({ evals: true, hooks: true, mcp: true, runtime: true, scripts: true, skills: true });
+  expect(capabilities.runtime).toBe(true);
   expect(capabilities.inspection.epochId).toBe('build-a');
 });
 
@@ -231,7 +220,6 @@ it('detects hooks, MCP, and scripts from the compiled route graph alone', async 
     ...clientsFor({ cliRoutes: 1, events: 1, routeScripts: 2, routeServers: 2 }),
   });
 
-  expect(capabilities.features).toEqual({ evals: false, hooks: true, mcp: true, runtime: false, scripts: true, skills: false });
   expect(capabilities.counts.hooks).toBe(0);
   expect(capabilities.counts.mcpServers).toBe(0);
   expect(capabilities.routes.manifest?.servers.map((server) => server.name)).toEqual(['server-0', 'server-1']);
@@ -248,7 +236,6 @@ it('reports a manifest compiled from newer source than the published build as st
 
   expect(capabilities.routes.state).toBe('stale');
   expect(capabilities.routes.manifest).toBeDefined();
-  expect(capabilities.features.hooks).toBe(true);
 });
 
 it('keeps every artifact-derived feature when the manifest route is unavailable', async () => {
@@ -258,7 +245,6 @@ it('keeps every artifact-derived feature when the manifest route is unavailable'
     routeManifestClient: { manifest: async () => { throw new Error('Route manifest is not available.'); } },
   });
 
-  expect(capabilities.features).toEqual({ evals: true, hooks: true, mcp: true, runtime: false, scripts: true, skills: true });
   expect(capabilities.routes).toEqual({ message: 'Route manifest is not available.', state: 'unavailable' });
   expect(applicationTreeSourcesFor(capabilities)).toEqual({
     inspection: capabilities.inspection,

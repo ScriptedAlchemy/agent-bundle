@@ -42,12 +42,13 @@ const createProject = async (skillMarkdown: string): Promise<string> => {
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'dev-service-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'dev-service-fixture' },",
         "  targets: ['portable'],",
         '};',
         '',
       ].join('\n'),
     ),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'src', 'skills', 'review', 'SKILL.md'), skillMarkdown),
   ]);
   return root;
@@ -96,12 +97,13 @@ const createRuntimeProject = async (options: Readonly<{
       'export default {',
       "  dev: { runtime: { provider: " + JSON.stringify(options.provider ?? './src/dev/provider.ts') + ' } },',
       "  mcp: { servers: { timeline: { apps: { dashboard: " + appDeclaration + " }, entry: './src/server.ts', targets: ['portable'] } } },",
-      "  plugin: { name: 'dev-runtime-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'dev-runtime-fixture' },",
       "  targets: ['portable'],",
       ...(options.configExtension === undefined ? [] : ["  portable: " + options.configExtension + ',']),
       '};',
       '',
     ].join('\n')),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
   ]);
   return { metadataSentinel, root, sentinel };
 };
@@ -181,6 +183,7 @@ it('surfaces a non-finite registered config extension as the closed AB4500 proje
         severity: 'error',
         sourcePath: join(project.root, 'agent-bundle.config.ts'),
       }],
+      packageVersion: '1.0.0',
       revision: expect.any(String),
       state: 'invalid',
     });
@@ -249,7 +252,7 @@ it('keeps lookalike proxy failures and control-character extension keys redacted
   try {
     await writeFile(keyedProject + '/agent-bundle.config.ts', [
       'const config = {',
-      "  plugin: { name: 'bounded-extension-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'bounded-extension-fixture' },",
       "  targets: ['bounded-extension'],",
       '};',
       `config[${JSON.stringify(longKey)}] = Number.NaN;`,
@@ -294,7 +297,7 @@ it('keeps hostile config-extension accessors redacted behind AB7001', async () =
   try {
     await writeFile(project.root + '/agent-bundle.config.ts', [
       'const config = {',
-      "  plugin: { name: 'hostile-extension-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'hostile-extension-fixture' },",
       "  targets: ['portable'],",
       '};',
       "Object.defineProperty(config, 'portable', { enumerable: true, get: () => { throw new Error('hostile-extension-secret'); } });",
@@ -464,6 +467,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
       'configDigest',
       'configPath',
       'modelDigest',
+      'packageVersion',
       'revision',
       'sourceInputs',
     ]);
@@ -472,6 +476,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
     expect(left.projectContext?.sourceInputs.map((input) => input.path)).toEqual([
       'a-first.txt',
       'agent-bundle.config.ts',
+      'package.json',
       'src/skills/review/SKILL.md',
       'z-last.txt',
     ]);
@@ -747,7 +752,7 @@ it('resolves, excludes, and falls back from configured artifact output paths', a
       writeFile(join(configuredRoot, 'agent-bundle.config.ts'), [
         'export default {',
         "  output: { distPath: 'build/artifact' },",
-        "  plugin: { name: 'configured-output', version: '1.0.0' },",
+        "  plugin: { name: 'configured-output' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -755,7 +760,7 @@ it('resolves, excludes, and falls back from configured artifact output paths', a
       writeFile(join(malformedRoot, 'agent-bundle.config.ts'), [
         'export default {',
         '  output: { distPath: 7 },',
-        "  plugin: { name: 'malformed-output', version: '1.0.0' },",
+        "  plugin: { name: 'malformed-output' },",
         "  targets: ['portable'],",
         '};',
         '',
@@ -803,7 +808,7 @@ it('treats a configured eval run directory as generated output, not project sour
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  evals: { runsDir: 'recorded-evals' },",
-      "  plugin: { name: 'review', version: '1.0.0' },",
+      "  plugin: { name: 'review' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -837,7 +842,7 @@ it('reports external configuration symlinks without exposing the underlying path
   try {
     await writeFile(externalConfig, [
       'export default {',
-      "  plugin: { name: 'external-config', version: '1.0.0' },",
+      "  plugin: { name: 'external-config' },",
       "  targets: ['portable'],",
       '};',
       '',
@@ -878,7 +883,7 @@ it('reports snapshot failures as frozen preparation diagnostics', async () => {
       'export default ({ projectRoot }) => {',
       `  symlinkSync(${JSON.stringify(externalOutput)}, \`${'${projectRoot}'}/snapshot-output\`);`,
       '  return {',
-      "    plugin: { name: 'snapshot-failure', version: '1.0.0' },",
+      "    plugin: { name: 'snapshot-failure' },",
       "    targets: ['portable'],",
       '  };',
       '};',
@@ -1381,7 +1386,7 @@ it.each([
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       `  claude: { ${field}: './payload' },`,
-      "  plugin: { name: 'escaped-payload', version: '1.0.0' },",
+      "  plugin: { name: 'escaped-payload' },",
       "  targets: ['claude'],",
       '};',
       '',
@@ -1475,7 +1480,7 @@ it('changes a payload source revision when an executable bit is lost', async () 
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  claude: { bin: './bin' },",
-      "  plugin: { name: 'executable-payload', version: '1.0.0' },",
+      "  plugin: { name: 'executable-payload' },",
       "  targets: ['claude'],",
       '};',
       '',

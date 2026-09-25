@@ -1,3 +1,4 @@
+import { defineTool } from 'agent-bundle/routes';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { Agent, agent } from '@agent-bundle/runtime';
@@ -11,47 +12,6 @@ const lifecyclePhaseSchema = z.enum([
   'repeated-progress',
   'terminal',
 ]);
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "action": {
-        "enum": [
-          "exceed-budget",
-          "observe",
-          "transition"
-        ],
-        "type": "string"
-      },
-      "emitProgress": {
-        "type": "boolean"
-      },
-      "idempotencyKey": {
-        "type": "string"
-      },
-      "payload": {
-        "type": "string"
-      },
-      "phase": {
-        "enum": [
-          "queued",
-          "running",
-          "first-progress",
-          "repeated-progress",
-          "terminal"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "action"
-    ],
-    "type": "object"
-  },
-  description: 'Replays a deterministic durable lifecycle through mounted state.',
-  title: 'Lifecycle',
-};
 
 export const inputSchema = z.object({
   action: z.enum(['exceed-budget', 'observe', 'transition']),
@@ -79,7 +39,7 @@ interface LifecycleState {
   };
 }
 
-export default async function Lifecycle({ input }: { readonly input: z.infer<typeof inputSchema> }) {
+async function Lifecycle({ input }: { readonly input: z.infer<typeof inputSchema> }) {
   const context = await agent();
   if (context.state === undefined) throw new TypeError('Lifecycle state is unavailable.');
 
@@ -174,3 +134,46 @@ export default async function Lifecycle({ input }: { readonly input: z.infer<typ
     </Agent.Result>
   );
 }
+
+export default defineTool({
+inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "enum": [
+          "exceed-budget",
+          "observe",
+          "transition"
+        ],
+        "type": "string"
+      },
+      "emitProgress": {
+        "type": "boolean"
+      },
+      "idempotencyKey": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "string"
+      },
+      "phase": {
+        "enum": [
+          "queued",
+          "running",
+          "first-progress",
+          "repeated-progress",
+          "terminal"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "type": "object"
+  },
+  description: 'Replays a deterministic durable lifecycle through mounted state.',
+  title: 'Lifecycle',
+  inputSchema,
+  resultSchema,
+}, async (input) => Lifecycle({ input }));

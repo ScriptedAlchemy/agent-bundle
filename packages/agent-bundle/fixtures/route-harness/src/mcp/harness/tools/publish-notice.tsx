@@ -1,35 +1,7 @@
+import { defineTool } from 'agent-bundle/routes';
 import { Agent, agent } from '@agent-bundle/runtime';
 import type { AgentNoticePublishInput } from '@agent-bundle/runtime/notices';
 import { z } from 'zod';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "message": {
-        "type": "string"
-      },
-      "recipientSession": {
-        "type": "string"
-      },
-      "sensitivity": {
-        "enum": [
-          "public",
-          "internal",
-          "secret"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "message",
-      "recipientSession"
-    ],
-    "type": "object"
-  },
-  description: 'Publishes a durable notice for a later session event.',
-  title: 'Publish notice',
-};
 
 export const inputSchema = z.object({
   message: z.string(),
@@ -44,7 +16,7 @@ export const resultSchema = z.object({
   state: z.literal('pending'),
 }).strict();
 
-export default async function PublishNotice({ input }: { readonly input: z.infer<typeof inputSchema> }) {
+async function PublishNotice({ input }: { readonly input: z.infer<typeof inputSchema> }) {
   const context = await agent();
   if (context.notices === undefined) throw new TypeError('Notice publishing is unavailable.');
   // `satisfies` pins the publish API surface: a vocabulary change on
@@ -75,3 +47,34 @@ export default async function PublishNotice({ input }: { readonly input: z.infer
     </Agent.Result>
   );
 }
+
+export default defineTool({
+inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "message": {
+        "type": "string"
+      },
+      "recipientSession": {
+        "type": "string"
+      },
+      "sensitivity": {
+        "enum": [
+          "public",
+          "internal",
+          "secret"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "message",
+      "recipientSession"
+    ],
+    "type": "object"
+  },
+  description: 'Publishes a durable notice for a later session event.',
+  title: 'Publish notice',
+  inputSchema,
+  resultSchema,
+}, async (input) => PublishNotice({ input }));

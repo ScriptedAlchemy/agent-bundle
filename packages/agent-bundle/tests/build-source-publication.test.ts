@@ -58,7 +58,7 @@ const publicationConfig = (includeLibrary: boolean): string => `import { writeFi
 import { join } from 'node:path';
 
 export default ({ projectRoot }) => ({
-  plugin: { name: 'ab7101-publication-fixture', version: '1.0.0' },
+  plugin: { name: 'ab7101-publication-fixture' },
   targets: ['portable'],
   mcp: { servers: { echoer: {} } },
   ${includeLibrary ? "lib: { dts: false, entry: './src/library.ts' }," : ''}

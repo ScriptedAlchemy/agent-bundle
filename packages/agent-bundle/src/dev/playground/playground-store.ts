@@ -1995,4 +1995,3 @@ export class PlaygroundService {
 }
 
 /** Extracted-module name; the durable implementation retains its public service identity. */
-export { PlaygroundService as PlaygroundStore };

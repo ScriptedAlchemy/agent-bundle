@@ -1,19 +1,9 @@
 import { Agent } from '@agent-bundle/runtime';
+import { defineTool } from 'agent-bundle/routes';
 import { createElement } from 'react';
 import { z } from 'zod';
 
 import { banner, identity } from '../../../lib/identity.ts';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {},
-    "type": "object"
-  },
-  annotations: { readOnlyHint: true },
-  description: 'Reports the identity agent-bundle/meta resolved to.',
-  title: 'Identity',
-};
 
 export const inputSchema = z.object({});
 
@@ -25,7 +15,18 @@ export const resultSchema = z.object({
   version: z.string(),
 });
 
-export default async function Identity() {
+export default defineTool({
+  inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  annotations: { readOnlyHint: true },
+  description: 'Reports the identity agent-bundle/meta resolved to.',
+  title: 'Identity',
+  inputSchema,
+  resultSchema,
+}, async () => {
   // The document value is JSON; the optional npm axes are omitted when absent
   // rather than carried as `undefined`.
   const value = {
@@ -36,4 +37,4 @@ export default async function Identity() {
     version: identity.version,
   };
   return createElement(Agent.Result, { value }, createElement(Agent.Text, null, banner));
-}
+});

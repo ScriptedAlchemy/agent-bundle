@@ -1,5 +1,5 @@
 ---
-description: 'Field reference for agent-bundle.config.ts: every top-level key, its accepted shapes, defaults, and validation rules, including the web exposure key (AB4341) and the deprecated plugin.version.'
+description: 'Field reference for agent-bundle.config.ts: every top-level key, its accepted shapes, defaults, and validation rules, including the web exposure key (AB4341).'
 ---
 
 # Configuration
@@ -84,7 +84,6 @@ also compiled for that operation. See
 | `description` | One sentence written into generated manifests. |
 | `logo` | Project-relative image path. Missing, non-file, or outside the project reports `AB4012`; missing from the built artifact or escaping the deploy tree reports `AB6025`. |
 | `metadata` | The shared descriptive layer: `author`, `homepage`, `keywords`, `license`, `repository`. Each field defaults to the same field in `package.json`; a value here overrides it, and `null` shares nothing. A malformed value reports `AB4014`. |
-| `version` | **Deprecated.** |
 
 ### Shared descriptive metadata
 
@@ -124,11 +123,10 @@ Claude Code's `.claude-plugin/plugin.json` carries no descriptive fields, its pi
 admits none, and its `author.name` stays the generated plugin name. The shared values reach
 Claude Code through the marketplace entry.
 
-`package.json` is authoritative for release identity. Declare the release version only there:
-a `plugin.version` that disagrees with `package.json` reports the `AB4008` warning, and a release
-build with no version anywhere is refused with `AB4013` rather than shipping the
-`0.0.0-dev.<short-revision>` development fallback. The field remains only for compatibility and
-will be removed under the normal breaking-change policy.
+`package.json` is authoritative for release identity. Declare the release version there. A
+release build with no valid `package.json` version is refused with `AB4013` rather than shipping
+the `0.0.0-dev.<short-revision>` development fallback. The retired `plugin.version` key is
+rejected with `AB4001` so an un-typechecked config cannot silently ignore it.
 
 ## targets
 

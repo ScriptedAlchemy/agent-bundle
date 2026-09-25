@@ -74,7 +74,7 @@ const writeProject = async (root: string, options: FixtureOptions = {}): Promise
       "  codex: { nativeHooks: './native/codex.json' },",
       "  hooks: { sessionStart: './src/hooks/session-start.ts' },",
       "  mcp: { servers: { fixture: { entry: './src/mcp/fixture.ts' } } },",
-      "  plugin: { description: 'Composite root fixture.', name: 'composite-fixture', version: '1.0.0' },",
+      "  plugin: { description: 'Composite root fixture.', name: 'composite-fixture' },",
       "  scripts: { hello: './src/tools/hello.ts' },",
       targets.trimEnd(),
       '};',
@@ -555,7 +555,7 @@ describe('composite plugin root (#555)', () => {
         writeProjectFile(root, 'package.json', '{"name":"event-projections","type":"module","version":"1.0.0"}\n'),
         writeProjectFile(root, 'agent-bundle.config.ts', [
           'export default {',
-          "  plugin: { name: 'event-projections', version: '1.0.0' },",
+          "  plugin: { name: 'event-projections' },",
           "  targets: ['claude', 'codex', 'cursor', 'portable'],",
           '};',
           '',

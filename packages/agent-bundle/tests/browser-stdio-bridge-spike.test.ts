@@ -231,7 +231,7 @@ it('bridges a browser-bound session to a generated stdio artifact without exposi
     const model = await normalizeProject(
       loadedProject(root, {
         mcp: { servers: { fixture: { entry: './src/server.ts' } } },
-        plugin: { name: 'browser-bridge-fixture', version: '1.0.0' },
+        plugin: { name: 'browser-bridge-fixture' },
         targets: [fixture.binding.target],
       }),
       { skills: [] },

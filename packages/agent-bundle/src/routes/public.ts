@@ -247,7 +247,7 @@ export interface AgentProviderNoticeWithholding {
 /**
  * One notice as a provider reads it from `inbox()` or `published()`: every
  * field of the runtime's `AgentNotice`, spelled structurally. `content` is the
- * persisted Agent Document snapshot (the runtime's `AgentDocumentSnapshot`);
+ * persisted Agent Document (the runtime's `AgentDocument`);
  * it is `unknown` here because the Agent Document types ship with the runtime,
  * so a provider that needs the authored text narrows it with the runtime's
  * types — a route reads the same notice through `(await agent()).notices`.
@@ -501,10 +501,8 @@ export interface AppRouteConfig {
   readonly targets?: readonly string[];
   /**
    * Optional HTML shell for the compiled App. The path resolves relative to
-   * the route module, the way its imports do (`'./dashboard.html'`); the
-   * older project-root-relative form is still accepted while only one of the
-   * two interpretations names an existing file. When both exist and differ,
-   * or neither exists, the build fails with `AB4827` naming both candidates.
+   * the route module, the way its imports do (`'./dashboard.html'`). A missing
+   * file fails the build with `AB4827`.
    */
   readonly template?: string;
 }

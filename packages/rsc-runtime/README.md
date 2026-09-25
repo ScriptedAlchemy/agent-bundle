@@ -24,8 +24,7 @@ the other, shell/replace content stays internal, and the request resolves to
 one final `CallToolResult`. Image, audio, and resource
 blocks are capability-gated, unsupported rich content uses a declared
 fallback or a typed `McpProjectionError`, never a silent drop. The existing
-`lowerMcpResult` / `lowerHookResult` helpers remain synchronous compatibility
-APIs for the operations-model path.
+`documentToCallToolResult` helper projects an already-complete Agent Document.
 
 Task-augmented tool calls (`CreateTaskResult`, `tasks/get`, `tasks/result`,
 `tasks/cancel`, `tasks/list`, the MCP 2025-11-25 Tasks utility) are served by
@@ -35,27 +34,16 @@ what feeds a task's `tasks/get` status as well as `notifications/progress`.
 See
 [MCP conformance evidence](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/mcp-conformance.md#task-augmented-requests-served-2026-09-04).
 
-```tsx
-import { Mcp, lowerMcpResult } from '@agent-bundle/runtime';
-
-const result = lowerMcpResult(
-  <Mcp.Result structuredContent={{ status: 'ready' }}>
-    <Mcp.Text>Ready.</Mcp.Text>
-  </Mcp.Result>,
-);
-```
-
 The package also exports the protocol-oriented `Agent.*` vocabulary and the
 versioned `AgentDocument`/`AgentRenderEvent` contracts. `createAgentDocument`
 detaches and freezes a v1 document, enforcing finite depth, node-count, and
 byte limits. `createAgentRenderEventSequence` assigns monotonic sequence
 numbers to `shell | progress | replace | error | complete`, applies event
 bounds, and rejects post-completion writes with a typed `handoff-required`
-error. These contracts land beside the existing `Hook`/`Mcp` lowerers; those
-synchronous compatibility APIs remain operative.
+error.
 
-The package exports `Hook`, `Mcp`, `Agent`, both lowerers, the request-store
-APIs, the Agent Document contracts, `createAgentRenderDispatcher`,
+The package exports `Agent`, the request-store APIs, the Agent Document
+contracts, `createAgentRenderDispatcher`,
 `projectMcpRenderStream`, `createWarmFlightHost`, `decodeAgentFlightStream`,
 and the `@agent-bundle/runtime/flight/server` render entry. Rich Markdown
 authoring rides `rsc-markdown-stream`, the Markdown renderer published from
@@ -183,7 +171,7 @@ integration.
 ## Notices (optional)
 
 `@agent-bundle/runtime/notices` is the narrow recipient-scoped notice core.
-It stores detached, finite `AgentDocumentSnapshot` content in one ordinary
+It stores detached, finite `AgentDocument` content in one ordinary
 state-kernel definition; host wiring opens that definition with the
 workspace-durable SQLite driver and passes the resulting ledger as
 `runAgentRequest({ noticeLedger })`. Stateless projects import neither
@@ -304,7 +292,7 @@ unavailable outcome when none is supported; it never fabricates a channel.
 
 ### Redaction (#99 acceptance item 7)
 
-A notice's free text lives only in its detached `AgentDocumentSnapshot`,
+A notice's free text lives only in its detached `AgentDocument`,
 `text`, `markdown`, `context`, `progress.message`, `error.message`,
 `resource.name`/`uri`, and every string inside `json.value`, `result.metadata`,
 and the document `value`. Recipient, priority, dedupe key, timestamps, and

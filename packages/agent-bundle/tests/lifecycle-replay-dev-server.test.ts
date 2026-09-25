@@ -14,7 +14,7 @@ it('renders a lifecycle replay through a real default-pool dev server', { timeou
   const project = await createProjectFixture({
     config: [
       'export default {',
-      "  plugin: { name: 'lifecycle-replay-dev-server', version: '1.0.0' },",
+      "  plugin: { name: 'lifecycle-replay-dev-server' },",
       "  targets: ['claude'],",
       '};',
       '',

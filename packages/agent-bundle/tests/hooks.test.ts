@@ -627,7 +627,7 @@ it('normalizes a shorthand session-start hook into a frozen stable record', asyn
   const loaded: LoadedConfig = {
     config: {
       hooks: { sessionStart: './src/hooks/session-start.ts' },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     },
     configPath,
     context: {
@@ -667,7 +667,7 @@ it('filters inherited hook targets through adapter hook capabilities', async () 
   const loaded: LoadedConfig = {
     config: {
       hooks: { sessionStart: './src/hooks/session-start.ts' },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       targets: ['portable', 'codex', 'claude'],
     },
     configPath,
@@ -698,7 +698,7 @@ it('loads and deterministically merges target-native hook documents after genera
       claude: { nativeHooks: './claude-hooks.json' },
       codex: { nativeHooks: './codex-hooks.json' },
       hooks: { sessionStart: './src/hooks/session-start.ts' },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       targets: ['codex', 'claude'],
     },
     configPath,
@@ -772,7 +772,7 @@ it('reports stable target-native hook file diagnostics before merge', async () =
     config: {
       claude: { nativeHooks: './claude-broken.json' },
       codex: { nativeHooks: './missing-codex.json' },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
       targets: ['codex', 'claude'],
     },
     configPath: join(root, 'agent-bundle.config.ts'),
@@ -1940,7 +1940,7 @@ it('normalizes a mixed hook fixture and reports malformed hook declarations', as
         sessionStart: './src/hooks/session-start.ts',
         stop: './src/hooks/stop.ts',
       },
-      plugin: { name: 'review-tools', version: '1.0.0' },
+      plugin: { name: 'review-tools' },
     },
     configPath,
     context: { command: 'build', mode: 'production', projectRoot: root, selectedTargets: [] },

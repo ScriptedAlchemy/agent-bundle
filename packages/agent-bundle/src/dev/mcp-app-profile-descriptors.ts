@@ -6,9 +6,6 @@ export { MCP_APP_PROTOCOL_VERSION };
 
 export type McpAppProfileId = 'chatgpt' | 'claude' | 'portable';
 
-/** @deprecated Use McpAppProfileId. */
-export type McpAppHostProfile = McpAppProfileId;
-
 export interface McpAppProfileDescriptor {
   readonly claimsRealHostParity: false;
   readonly evidence: 'simulated';

@@ -36,16 +36,19 @@ const writeTree = async (root: string, files: Readonly<Record<string, string>>):
   }
 };
 
-const config: AgentBundleConfig = { plugin: { name: 'task-support-fixture', version: '1.0.0' } };
+const config: AgentBundleConfig = { plugin: { name: 'task-support-fixture' } };
 
-const toolModule = (routeConfig?: string): string => [
-  "import { z } from 'zod';",
-  ...(routeConfig === undefined ? [] : [`export const config = ${routeConfig};`]),
-  'export const inputSchema = z.object({});',
-  'export const resultSchema = z.object({ ok: z.boolean() });',
-  'export default async function Tool() { return undefined; }',
-  '',
-].join('\n');
+const toolModule = (routeConfig = '{}'): string => {
+  const fields = routeConfig.slice(1, -1).trim();
+  return [
+    "import { defineTool } from 'agent-bundle/routes';",
+    "import { z } from 'zod';",
+    'export const inputSchema = z.object({});',
+    'export const resultSchema = z.object({ ok: z.boolean() });',
+    `export default defineTool({ ${fields}${fields.length === 0 ? '' : ', '}inputSchema, resultSchema }, async function Tool() { return undefined; });`,
+    '',
+  ].join('\n');
+};
 
 const resourceModule = (routeConfig: string): string => [
   "import { z } from 'zod';",

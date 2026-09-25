@@ -35,42 +35,9 @@ export const e2e = test.extend({
   } satisfies PlaywrightOptions,
 });
 
-/**
- * Deleted hash-page names → PR 1 destinations. Callers that still pass
- * `'logs'` / `'evals'` / `'mcp'` keep compiling; new suites should pass a
- * pathname (`/`, `/advanced/evals`, a `workbenchLeafPath` result).
- */
-const legacyPagePath = Object.freeze({
-  artifacts: '/advanced/artifact',
-  comparisons: '/advanced/evals',
-  discovery: '/advanced/hosts',
-  evals: '/advanced/evals',
-  hooks: '/',
-  hosts: '/advanced/hosts',
-  lifecycles: '/trace',
-  logs: '/advanced/logs',
-  mcp: '/advanced/protocol',
-  overview: '/',
-  playground: '/',
-  routes: '/',
-  runtime: '/',
-  skills: '/',
-} as const);
-
-export type WorkbenchLegacyPage = keyof typeof legacyPagePath;
-
-/** Pathname the shell should show for a primary area or a leftover hash-page name. */
-export const workbenchPathname = (pageOrPath = '/'): string => {
-  if (pageOrPath.startsWith('/')) return pageOrPath;
-  return legacyPagePath[pageOrPath as WorkbenchLegacyPage] ?? `/${pageOrPath}`;
-};
-
-/**
- * Canonical Workbench URL. Pathnames are the URL model (`/routes/…`,
- * `/advanced/evals`). Hash-only `#page` routing is gone.
- */
-export const workbenchUrl = (origin: string, pageOrPath = '/'): string =>
-  new URL(workbenchPathname(pageOrPath), origin.endsWith('/') ? origin : `${origin}/`).href;
+/** Canonical Workbench URL using the pathname route model. */
+export const workbenchUrl = (origin: string, path = '/'): string =>
+  new URL(path, origin.endsWith('/') ? origin : `${origin}/`).href;
 
 const idleTimeout = 15_000 * timeScale;
 const buildSettleTimeout = 60_000 * timeScale;

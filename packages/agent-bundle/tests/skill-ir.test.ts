@@ -78,7 +78,7 @@ const loadedProject = (config: AgentBundleConfig, root: string): LoadedConfig =>
 });
 
 const pluginConfig = (targets: readonly string[]): AgentBundleConfig => ({
-  plugin: { name: 'skill-ir', version: '0.0.0' },
+  plugin: { name: 'skill-ir' },
   targets: [...targets],
 });
 

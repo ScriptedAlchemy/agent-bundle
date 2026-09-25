@@ -5,7 +5,6 @@ export default {
   plugin: {
     description: 'Proves canonical Skill tokens resolving in a real Claude session.',
     name: 'host-install-token-proof',
-    version: '1.0.0',
   },
   skills: ['src/skills/token-probe'],
   targets: ['claude'],

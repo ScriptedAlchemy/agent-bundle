@@ -1010,26 +1010,14 @@ export const compileRouteGraph = async (
           }
           const template = route.config['template'];
           if (typeof template === 'string') {
-            const resolution = resolveAppRouteTemplate(projectRoot, route.source, template);
+            const resolution = resolveAppRouteTemplate(route.source, template);
             switch (resolution.kind) {
               case 'resolved':
                 break;
-              case 'ambiguous':
-                diagnostics.push(routeError(
-                  'AB4827',
-                  `MCP App route ${route.provenance.relativePath} declares config.template ${JSON.stringify(template)}, which names two different existing files: ${resolution.routeRelative} (route-relative) and ${resolution.projectRelative} (project-root-relative).`,
-                  'Templates resolve relative to the route module; rewrite the path so it names the route-relative file only (or remove the project-root-relative duplicate), then inspect again.',
-                  route.source,
-                ));
-                break;
               case 'missing': {
-                // An absolute template has one candidate; name it once.
-                const candidates = resolution.routeRelative === resolution.projectRelative
-                  ? `${resolution.routeRelative} does not exist`
-                  : `neither ${resolution.routeRelative} (route-relative) nor ${resolution.projectRelative} (project-root-relative) exists`;
                 diagnostics.push(routeError(
                   'AB4827',
-                  `MCP App route ${route.provenance.relativePath} declares config.template ${JSON.stringify(template)}, but ${candidates}.`,
+                  `MCP App route ${route.provenance.relativePath} declares config.template ${JSON.stringify(template)}, but ${resolution.routeRelative} does not exist.`,
                   'Templates resolve relative to the route module; point config.template at an existing HTML file beside the route (for example \'./dashboard.html\'), then inspect again.',
                   route.source,
                 ));
@@ -1049,6 +1037,7 @@ export const compileRouteGraph = async (
             moduleText,
             route.provenance.relativePath,
             route.source,
+            route.kind,
           ));
         }
         // The generated server inlines the route, so a compiler-carrying

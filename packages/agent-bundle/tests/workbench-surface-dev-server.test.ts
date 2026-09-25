@@ -9,7 +9,7 @@ import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { inspectWorkbenchSurface, workbenchLeafPath } from '../src/test/index.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
-import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { exampleNodeModules } from './helpers/workspace-paths.ts';
 import { removeTree } from './support/remove-tree.ts';
 
 /**
@@ -22,7 +22,7 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
   const project = await createProjectFixture({
     config: [
       'export default {',
-      "  plugin: { name: 'workbench-surface-dev-server', version: '1.0.0' },",
+      "  plugin: { name: 'workbench-surface-dev-server' },",
       "  targets: ['claude'],",
       '};',
       '',
@@ -53,18 +53,21 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
         '',
       ].join('\n'),
       'src/mcp/status/tools/report.tsx': [
-        "import { Agent } from '@agent-bundle/runtime';",
-        "import { createElement } from 'react';",
-        "import { z } from 'zod';",
-        '',
-        "export const config = { inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"}},\"required\":[\"service\"],\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
-        "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
-        'export const resultSchema = z.object({ service: z.string() }).strict();',
-        '',
-        'export default async function Report({ input }) {',
-        "  return createElement(Agent.Result, { value: { service: input.service } }, createElement(Agent.Text, null, input.service));",
-        '}',
-        '',
+      "import { defineTool } from 'agent-bundle/routes';",
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "",
+      "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
+      "export const resultSchema = z.object({ service: z.string() }).strict();",
+      "",
+      "export default defineTool({",
+      "inputJsonSchema: {\"additionalProperties\":false,\"properties\":{\"service\":{\"type\":\"string\"}},\"required\":[\"service\"],\"type\":\"object\"}, annotations: { readOnlyHint: true }, description: 'Reports one service.',",
+      "  inputSchema,",
+      "  resultSchema,",
+      "}, async (input) => {",
+      "  return createElement(Agent.Result, { value: { service: input.service } }, createElement(Agent.Text, null, input.service));",
+      "});",
       ].join('\n'),
       'src/providers/clock.ts': [
         'export default () => ({ now: 0 });',
@@ -77,7 +80,7 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   await mkdir(assetsRoot, { recursive: true });
   await Promise.all([
-    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    symlink(exampleNodeModules, join(project.root, 'node_modules'), 'dir'),
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Workbench surface</title>'),
   ]);
   try {

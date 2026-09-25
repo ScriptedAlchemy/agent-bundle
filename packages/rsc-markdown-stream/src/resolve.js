@@ -5,10 +5,7 @@
 
 import * as React from 'react';
 
-const ELEMENT_TYPES = new Set([
-  Symbol.for('react.transitional.element'), // React 19
-  Symbol.for('react.element'), // React <= 18
-]);
+const ELEMENT_TYPE = Symbol.for('react.transitional.element');
 
 const FRAGMENT = Symbol.for('react.fragment');
 const STRICT_MODE = Symbol.for('react.strict_mode');
@@ -19,7 +16,6 @@ const LAZY = Symbol.for('react.lazy');
 const MEMO = Symbol.for('react.memo');
 const FORWARD_REF = Symbol.for('react.forward_ref');
 const CONTEXT = Symbol.for('react.context');
-const PROVIDER = Symbol.for('react.provider'); // React <= 18 <Ctx.Provider>
 const CONSUMER = Symbol.for('react.consumer'); // React 19 <Ctx.Consumer>
 const ACTIVITY = Symbol.for('react.activity'); // React 19.2 <Activity>
 const VIEW_TRANSITION = Symbol.for('react.view_transition');
@@ -30,16 +26,15 @@ const DROPPED_TAGS = new Set([
   'script', 'style', 'template', 'noscript', 'head', 'title', 'meta', 'link', 'base',
 ]);
 
-// Which internals key exists depends on the react build: client (React 19),
-// react-server (React 19, e.g. inside an RSC server module graph), or legacy
-// (React <= 18). Located with computed access because a static namespace
+// Which internals key exists depends on the React 19 build: client or
+// react-server (inside an RSC server module graph). Located with computed
+// access because a static namespace
 // property access on a missing export is an ESM linking error under strict
 // bundlers (rspack/webpack) when the react-server condition selects a build
 // without the client export.
 const internalsKey = [
   '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE',
   '__SERVER_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE',
-  '__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED',
 ].find((key) => React[key] !== undefined && React[key] !== null);
 const ReactSharedInternals = internalsKey === undefined ? null : React[internalsKey];
 
@@ -120,15 +115,6 @@ const Dispatcher = {
 
 function installDispatcher() {
   if (ReactSharedInternals === null) return noop;
-  if (ReactSharedInternals.ReactCurrentDispatcher) {
-    // React <= 18
-    const slot = ReactSharedInternals.ReactCurrentDispatcher;
-    const prev = slot.current;
-    slot.current = Dispatcher;
-    return () => {
-      slot.current = prev;
-    };
-  }
   const prev = ReactSharedInternals.H;
   ReactSharedInternals.H = Dispatcher;
   return () => {
@@ -224,7 +210,7 @@ export async function* resolveStream(node, ctx = null, config = null) {
     return;
   }
   if (typeof node === 'object') {
-    if (ELEMENT_TYPES.has(node.$$typeof)) {
+    if (node.$$typeof === ELEMENT_TYPE) {
       yield* resolveElement(node.type, node.props, ctx, config);
       return;
     }
@@ -315,19 +301,7 @@ async function* resolveElement(type, props, ctx, config) {
           config,
         );
         return;
-      case PROVIDER:
-        yield* resolveStream(
-          props.children,
-          { context: type._context, value: props.value, parent: ctx },
-          config,
-        );
-        return;
       case CONTEXT:
-        if (typeof props.children === 'function') {
-          // React <= 18 <Ctx.Consumer> renders the context object directly.
-          yield* resolveStream(props.children(readContextValue(type, ctx)), ctx, config);
-          return;
-        }
         // React 19: the context object itself is the provider.
         yield* resolveStream(
           props.children,

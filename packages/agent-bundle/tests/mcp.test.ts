@@ -58,7 +58,7 @@ it('rejects legacy MCP SSE source declarations with one AB4317 diagnostic', () =
         },
       },
     },
-    plugin: { name: 'legacy-sse', version: '1.0.0' },
+    plugin: { name: 'legacy-sse' },
   } as unknown as AgentBundleConfig;
   const diagnostics = validateSource(loadedProject('/workspace', config), { skills: [] }, registry);
 
@@ -105,7 +105,7 @@ it('normalizes local, prebuilt, and HTTP MCP server declarations', async () => {
     const model = await normalizeProject(
       loadedProject(root, {
         mcp: { servers },
-        plugin: { name: 'mcp-fixture', version: '1.0.0' },
+        plugin: { name: 'mcp-fixture' },
         targets: ['portable', 'codex', 'claude'],
       }),
       { skills: [] },
@@ -182,7 +182,7 @@ it('normalizes deeply frozen local MCP App declarations independently of the pro
         },
       },
     },
-    plugin: { name: 'mcp-app-fixture', version: '1.0.0' },
+    plugin: { name: 'mcp-app-fixture' },
     targets: ['portable', 'claude'],
   } as unknown as AgentBundleConfig;
   try {
@@ -238,7 +238,7 @@ it('keeps local MCP server identities and output aliases independent of the proj
     }
     const config: AgentBundleConfig = {
       mcp: { servers: { 'same server': { entry: './src/server.ts' } } },
-      plugin: { name: 'mcp-fixture', version: '1.0.0' },
+      plugin: { name: 'mcp-fixture' },
     };
     const [leftModel, rightModel] = await Promise.all([left, right].map((root) =>
       normalizeProject(loadedProject(root, config), { skills: [] }, registry)));
@@ -277,7 +277,7 @@ it('reports source and model diagnostics before an MCP server can be compiled', 
           'unknown target': { command: 'server', targets: ['unknown'] },
         },
       },
-      plugin: { name: 'mcp-fixture', version: '1.0.0' },
+      plugin: { name: 'mcp-fixture' },
     } as unknown as AgentBundleConfig;
     const loaded = loadedProject(root, config);
 
@@ -333,7 +333,7 @@ it('rejects a hostile normalized legacy SSE transport before adapters can plan i
             },
           },
         },
-        plugin: { name: 'hostile-model', version: '1.0.0' },
+        plugin: { name: 'hostile-model' },
       }),
       { skills: [] },
       registry,
@@ -406,7 +406,7 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
           },
         },
       },
-      plugin: { name: 'mcp-app-invalid', version: '1.0.0' },
+      plugin: { name: 'mcp-app-invalid' },
     } as unknown as AgentBundleConfig;
 
     expect(validateSource(loadedProject(root, malformed), { skills: [] }, registry).map(({ code }) => code)).toEqual(
@@ -440,7 +440,7 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
             },
           },
         },
-        plugin: { name: 'mcp-app-invalid', version: '1.0.0' },
+        plugin: { name: 'mcp-app-invalid' },
       }),
       { skills: [] },
       registry,
@@ -485,7 +485,7 @@ it('rejects non-JSON MCP App metadata before normalization', async () => {
             },
           },
         },
-        plugin: { name: 'mcp-app-meta', version: '1.0.0' },
+        plugin: { name: 'mcp-app-meta' },
       } as unknown as AgentBundleConfig;
 
       const diagnostics = validateSource(loadedProject(root, config), { skills: [] }, registry);
@@ -528,7 +528,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
             },
           },
         },
-        plugin: { name: 'mcp-fixture', version: '1.0.0' },
+        plugin: { name: 'mcp-fixture' },
         targets: ['portable', 'codex', 'claude'],
       }),
       { skills: [] },
@@ -682,7 +682,7 @@ it('inlines agent-bundle/launch-env into a self-connecting entry so it can apply
     const model = await normalizeProject(
       loadedProject(root, {
         mcp: { servers: { probe: { entry: './src/probe.ts' } } },
-        plugin: { name: 'mcp-self-connecting-env', version: '1.0.0' },
+        plugin: { name: 'mcp-self-connecting-env' },
         targets: ['portable'],
       }),
       { skills: [] },
@@ -761,7 +761,7 @@ it('lets the operator .env beat a manifest env default the host passed through, 
             },
           },
         },
-        plugin: { name: 'mcp-manifest-env', version: '1.0.0' },
+        plugin: { name: 'mcp-manifest-env' },
         targets: ['claude'],
       }),
       { skills: [] },
@@ -869,7 +869,7 @@ it('redirects stdout written at module scope by the server module to stderr befo
     const model = await normalizeProject(
       loadedProject(root, {
         mcp: { servers: { chatty: { entry: './src/server.ts' } } },
-        plugin: { name: 'mcp-module-scope-stdout', version: '1.0.0' },
+        plugin: { name: 'mcp-module-scope-stdout' },
         targets: ['portable'],
       }),
       { skills: [] },
@@ -941,7 +941,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
             },
           },
         },
-        plugin: { name: 'mcp-app-build', version: '1.0.0' },
+        plugin: { name: 'mcp-app-build' },
         targets: ['portable', 'codex', 'claude'],
       }),
       { skills: [] },
@@ -1028,8 +1028,8 @@ it('injects one release identity into both the Node bundle and the browser MCP A
     await mkdir(join(root, 'src'), { recursive: true });
     await mkdir(join(root, 'views'), { recursive: true });
     await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
-    // package.json is the only version source: the config declares no
-    // plugin.version, so every compiled surface must agree on 4.5.6.
+    // package.json is the only version source, so every compiled surface must
+    // agree on 4.5.6.
     await writeFile(
       join(root, 'package.json'),
       `${JSON.stringify({ name: '@scope/meta-fixture', version: '4.5.6' })}\n`,
@@ -1129,7 +1129,7 @@ it('compiles one shared MCP App once and serves it from every identically declar
           public: { apps: { widget: { ...widget } }, entry: './src/public.ts' },
         },
       },
-      plugin: { name: 'mcp-app-shared', version: '1.0.0' },
+      plugin: { name: 'mcp-app-shared' },
       targets: ['portable'],
     };
     // Both fixture entries are deliberately self-connecting registry probes,
@@ -1197,7 +1197,7 @@ it('rejects conflicting same-name MCP App declarations at compilation planning',
             },
           },
         },
-        plugin: { name: 'mcp-app-conflict', version: '1.0.0' },
+        plugin: { name: 'mcp-app-conflict' },
         targets: ['portable'],
       }),
       { skills: [] },
@@ -1302,7 +1302,7 @@ it('uses the selected streamable HTTP manifest with propagated cancellation and 
             },
           },
         },
-        plugin: { name: 'mcp-remote-fixture', version: '1.0.0' },
+        plugin: { name: 'mcp-remote-fixture' },
         targets: ['claude'],
       }),
       { skills: [] },
@@ -1374,7 +1374,7 @@ it('rejects a selected projection without its manifest-declared MCP document', a
             },
           },
         },
-        plugin: { name: 'mcp-projection-document', version: '1.0.0' },
+        plugin: { name: 'mcp-projection-document' },
         targets: ['claude', 'codex'],
       }),
       { skills: [] },
@@ -1440,7 +1440,7 @@ it('creates session state only after setup succeeds and always inherits the stdi
             inherited: { entry: './src/server.ts' },
           },
         },
-        plugin: { name: 'mcp-stdio-options', version: '1.0.0' },
+        plugin: { name: 'mcp-stdio-options' },
         targets: ['portable'],
       }),
       { skills: [] },
@@ -1572,7 +1572,7 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
             },
           },
         },
-        plugin: { name: 'mcp-app-resource', version: '1.0.0' },
+        plugin: { name: 'mcp-app-resource' },
         targets: ['portable'],
       }),
       { skills: [] },
@@ -1703,7 +1703,7 @@ it('lists tools from a validated copied artifact without reading project source'
             },
           },
         },
-        plugin: { name: 'mcp-service-fixture', version: '1.0.0' },
+        plugin: { name: 'mcp-service-fixture' },
         targets: ['portable'],
       }),
       { skills: [] },

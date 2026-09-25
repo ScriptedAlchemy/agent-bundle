@@ -42,7 +42,7 @@ const createProject = async (): Promise<string> => {
       join(root, 'agent-bundle.config.ts'),
       [
         'export default {',
-        "  plugin: { name: 'bundler-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'bundler-fixture' },",
         "  targets: ['portable'],",
         "  scripts: { tool: './src/tool.ts' },",
         '  mcp: {',
@@ -253,7 +253,7 @@ it('wires output.sourceMap into the lowered generated-executable config', async 
     join(root, 'agent-bundle.config.ts'),
     [
       'export default {',
-      "  plugin: { name: 'bundler-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'bundler-fixture' },",
       "  targets: ['portable'],",
       "  scripts: { tool: './src/tool.ts' },",
       '  output: { sourceMap: true },',
@@ -298,7 +298,7 @@ it('reports a tools hatch the lowering refuses as an invalid inspection naming t
     join(root, 'agent-bundle.config.ts'),
     [
       'export default {',
-      "  plugin: { name: 'bundler-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'bundler-fixture' },",
       "  targets: ['portable'],",
       "  scripts: { tool: './src/tool.ts' },",
       // Aliasing a reserved specifier is refused only once the invariant hook

@@ -1,20 +1,6 @@
+import { defineTool } from 'agent-bundle/routes';
 import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "message": {
-        "type": "string"
-      }
-    },
-    "type": "object"
-  },
-  annotations: { readOnlyHint: true },
-  description: 'Echoes one message back with the observed workspace root.',
-  title: 'Echo',
-};
 
 export const inputSchema = z.object({ message: z.string().optional() });
 
@@ -24,7 +10,7 @@ export const resultSchema = z.object({
   workspace: z.string().nullable(),
 });
 
-export default async function Echo({ input }: { readonly input: z.infer<typeof inputSchema> }) {
+async function Echo({ input }: { readonly input: z.infer<typeof inputSchema> }) {
   const context = await agent();
   await context.progress.report({ completed: 1, message: 'echoing', total: 1 });
   const workspace = context.workspace.state === 'available' ? context.workspace.value.root : null;
@@ -36,3 +22,20 @@ export default async function Echo({ input }: { readonly input: z.infer<typeof i
     </Agent.Result>
   );
 }
+
+export default defineTool({
+inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "message": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  annotations: { readOnlyHint: true },
+  description: 'Echoes one message back with the observed workspace root.',
+  title: 'Echo',
+  inputSchema,
+  resultSchema,
+}, async (input) => Echo({ input }));

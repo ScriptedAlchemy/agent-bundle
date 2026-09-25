@@ -52,7 +52,7 @@ import {
 import { McpSessionService } from './mcp-session/mcp-session-service.ts';
 import { NativePlaygroundService } from './playground/native-playground-service.ts';
 import { PlaygroundOrchestrationService } from './playground/playground-orchestration-service.ts';
-import { PlaygroundStore as PlaygroundService } from './playground/playground-store.ts';
+import { PlaygroundService } from './playground/playground-store.ts';
 import { createDevPlatformRuntime } from './platform-run.ts';
 import type { DevPlatformRuntime } from './platform-runtime.ts';
 import { ProjectService, type PreparedProject } from './project-service.ts';

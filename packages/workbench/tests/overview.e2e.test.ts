@@ -33,7 +33,7 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
     symlink(join(workbenchNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
   ]);
   await Promise.all([
-    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
       "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
@@ -61,7 +61,7 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
       '  codex: {},',
       "  mcp: { servers: { fixture: { entry: './src/server.ts', env: { NO_COLOR: '1', SECRET_TOKEN: 'fixture-secret' } } } },",
       "  portable: { fixtureMarker: 'artifact-extension-initial' },",
-      "  plugin: { name: 'workbench-mcp-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'workbench-mcp-fixture' },",
       "  skills: ['src/skills/review'],",
       "  targets: ['portable'],",
       '});',

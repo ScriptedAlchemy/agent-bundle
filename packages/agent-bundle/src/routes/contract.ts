@@ -2,6 +2,7 @@ import ts from 'typescript-5';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readRouteDefinition, type RouteDefinition } from './definition-syntax.ts';
+import type { CompiledRouteKind } from './types.ts';
 
 const modifier = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
   ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((item) => item.kind === kind) ?? false);
@@ -59,13 +60,22 @@ export const validateRouteModuleContract = (
   moduleText: string,
   relativePath: string,
   sourcePath: string,
+  kind: CompiledRouteKind,
 ): readonly Diagnostic[] => {
   const exports = scanRouteModuleExports(moduleText, relativePath);
   const { named, splitExport } = exports;
   const hasDefault = exports.named.has('default');
   const missing = ['inputSchema', 'resultSchema'].filter((name) => !named.has(name));
   const diagnostics: Diagnostic[] = [];
-  if (missing.length > 0 || !hasDefault) {
+  if (kind === 'tool' && exports.definition === undefined) {
+    diagnostics.push(diagnostic(
+      'AB4810',
+      `Tool route module ${relativePath} does not use defineTool.`,
+      sourcePath,
+      'Default-export one direct defineTool({ inputSchema, resultSchema, ... }, handler) call.',
+    ));
+  }
+  if ((kind !== 'tool' || exports.definition !== undefined) && (missing.length > 0 || !hasDefault)) {
     const details = [
       ...(missing.length === 0 ? [] : [`missing named ${missing.join(' and ')}`]),
       ...(hasDefault ? [] : ['missing default export']),

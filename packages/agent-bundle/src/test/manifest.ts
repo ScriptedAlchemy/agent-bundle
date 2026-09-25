@@ -166,8 +166,8 @@ export const FALLBACK_PLUGIN_IDENTITY: TestManifestPluginIdentity = Object.freez
  * True when a manifest's identity is the model-less sentinel. The check is
  * by reference only: `deepFreeze` freezes in place, so the manifest the
  * compiler pass hands the presets still carries the sentinel object itself,
- * while a real project that happens to declare `plugin.name: 'unknown'` and
- * `plugin.version: '0.0.0'` is a distinct model-backed object and keeps its
+ * while a real project whose resolved model identity is
+ * `{ name: 'unknown', version: '0.0.0' }` is a distinct object and keeps its
  * identity. A manifest that crossed a JSON boundary has already been handed
  * to a worker; only the preset, in the runner process, asks this question.
  */

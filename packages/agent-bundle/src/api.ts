@@ -41,7 +41,7 @@ import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts
 import { serveMcpApp } from './serve-app/serve-mcp-app.ts';
 import type { ServedMcpApp, ServeMcpAppPublicOptions } from './serve-app/types.ts';
 import { parseAppSelector } from './web-host/select-app.ts';
-export type { McpAppConsentCapability, ServedMcpApp as ServedApp } from './serve-app/types.ts';
+export type { McpAppConsentCapability, ServedMcpApp } from './serve-app/types.ts';
 export type { OpenBrowser } from './dev/mcp-apps/mcp-app-preview-host.ts';
 export type { McpAppProfileId } from './dev/mcp-app-profile-descriptors.ts';
 import { deepFreeze } from './core/freeze.ts';
