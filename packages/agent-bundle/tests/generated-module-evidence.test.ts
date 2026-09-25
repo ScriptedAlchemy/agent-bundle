@@ -96,7 +96,7 @@ const configHook = (root: string): NormalizedHook => ({
 });
 
 const claudeWrapper = (root: string): TargetHookWrapper => ({
-  projectRoot: '/project',
+  projectRoot: root,
   event: 'sessionStart',
   hook: configHook(root),
   nativeEvent: 'SessionStart',
@@ -125,7 +125,7 @@ const generators: ReadonlyArray<{
         outputRelativePath: 'bin/main.js',
         source,
         virtualSource: generatedExecutableEntrySource({
-          projectRoot: '/project',
+          projectRoot: root,
           entrySource: source,
           exportName: 'main',
           hostSurface: 'cli',
@@ -141,7 +141,7 @@ const generators: ReadonlyArray<{
       outputRelativePath: 'bin/cli.js',
       source: join(root, 'src', 'cli', 'report.ts'),
       virtualSource: generatedCliBinEntrySource({
-        projectRoot: '/project',
+        projectRoot: root,
         commands: [plainCommand],
         plugin,
         routes: [cliRoute(root)],
@@ -161,7 +161,7 @@ const generators: ReadonlyArray<{
         outputRelativePath: 'mcp/curator.mjs',
         source,
         virtualModules: [stdioPreludeVirtualModule()],
-        virtualSource: generatedStdioMcpEntrySource({ projectRoot: '/project', entrySource: source, serverName: 'curator' }),
+        virtualSource: generatedStdioMcpEntrySource({ projectRoot: root, entrySource: source, serverName: 'curator' }),
       });
     },
   },

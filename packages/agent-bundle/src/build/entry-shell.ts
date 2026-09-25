@@ -151,7 +151,7 @@ export const generatedExecutableEntrySource = (options: {
   '',
   `const main = entry[${JSON.stringify(options.exportName)}];`,
   "if (typeof main !== 'function') {",
-  `  throw new TypeError('Executable entry must export a ${options.exportName} function: ' + ${JSON.stringify(generatedModuleSpecifier(options.projectRoot, options.entrySource))});`,
+  `  throw new TypeError('Executable entry must export a ${options.exportName} function: ' + ${JSON.stringify(generatedModuleSpecifier(options.projectRoot, options.entrySource).replace(/^\.\.\//u, ''))});`,
   '}',
   `const code = await main(process.argv.slice(2), Object.freeze({ terminal: detectProcessTerminal(${JSON.stringify(options.hostSurface ?? 'script')}) }));`,
   "if (typeof code === 'number') process.exitCode = code;",

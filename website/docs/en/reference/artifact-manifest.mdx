@@ -227,7 +227,7 @@ object has exactly seven keys, all required: `adapters`, `agentSkills`, `produce
 | --- | --- | --- |
 | `configPath` | yes | The configuration file, relative to the project root. It must appear in `sourceInputs` with a hash equal to `configDigest`. |
 | `configDigest` | yes | SHA-256 of the configuration file. |
-| `modelDigest` | yes | SHA-256 of the normalized model, with project paths hashed relative to the project root, so one source built from two checkout paths yields the same digest. |
+| `modelDigest` | yes | SHA-256 of the normalized model, with project paths hashed relative to the project root, so the digest does not change with the checkout path. |
 | `revision` | yes | The digest over `sourceInputs`; a reader recomputes it and rejects a mismatch. |
 | `sourceInputs[]` | yes | Every project input the build read: `{ path, sha256, executable? }`, sorted by `path`. |
 | `packageName` | no | The validated npm package name; absent for an unpackaged development project. |

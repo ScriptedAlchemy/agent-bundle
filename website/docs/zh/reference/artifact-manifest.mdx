@@ -211,7 +211,7 @@ Amp 的 `index.js` 入口，以及 Claude、Codex、Cursor 与 portable 的插�
 | --- | --- | --- |
 | `configPath` | 是 | 相对项目根目录的配置文件。它必须出现在 `sourceInputs` 中，且哈希等于 `configDigest`。 |
 | `configDigest` | 是 | 配置文件的 SHA-256。 |
-| `modelDigest` | 是 | 规范化模型的 SHA-256；项目路径按相对项目根目录的形式参与哈希，因此同一份源码从两个检出路径构建会得到相同的摘要。 |
+| `modelDigest` | 是 | 规范化模型的 SHA-256；项目路径按相对项目根目录的形式参与哈希，因此摘要不随检出路径变化。 |
 | `revision` | 是 | 对 `sourceInputs` 的摘要；读取方会重新计算并拒绝不匹配。 |
 | `sourceInputs[]` | 是 | 构建读取的每个项目输入：`{ path, sha256, executable? }`，按 `path` 排序。 |
 | `packageName` | 否 | 经校验的 npm 包名；未打包的开发项目中不存在。 |

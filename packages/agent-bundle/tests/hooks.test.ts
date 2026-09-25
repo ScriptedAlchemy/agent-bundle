@@ -1822,7 +1822,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
 }, 15_000);
 
 const hookModel = (root: string): NormalizedPlugin => ({
-  projectRoot: '/project',
+  projectRoot: root,
   extensions: {},
   hooks: [
     {

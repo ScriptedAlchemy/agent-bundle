@@ -57,7 +57,7 @@ const padScript = [
 ].join('\n');
 
 const modelFor = (root: string, scripts: Readonly<Record<string, string>>): NormalizedPlugin => ({
-  projectRoot: '/project',
+  projectRoot: root,
   assets: [],
   extensions: {},
   hooks: [],
