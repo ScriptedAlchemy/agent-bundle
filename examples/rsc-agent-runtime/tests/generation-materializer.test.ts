@@ -33,40 +33,9 @@ import { writeCompilerCohort } from './support/compiler-cohort.ts';
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 const preparedRuntime = Object.freeze({
-  apps: Object.freeze([]),
   provider: './src/dev/provider.ts',
   servers: Object.freeze([]),
   sourceRevision: 'prepared-r1',
-});
-
-const preparedRuntimeWithApp = (
-  app: Partial<DevRuntimePreparedProject['apps'][number]> = {},
-  runtime: Partial<Omit<DevRuntimePreparedProject, 'apps'>> = {},
-): DevRuntimePreparedProject => Object.freeze({
-  apps: Object.freeze([Object.freeze({
-    _meta: Object.freeze({ presentation: Object.freeze({ accent: 'indigo', version: 1 }) }),
-    id: 'timeline-app',
-    name: 'Timeline',
-    resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
-    serverId: 'timeline-server',
-    serverName: 'Timeline MCP',
-    source: '/workspace/plugin/agent-bundle.config.ts',
-    targets: Object.freeze(['claude', 'codex']),
-    template: '/workspace/plugin/src/app/edit-timeline.html',
-    ...app,
-  })]),
-  provider: './src/dev/provider.ts',
-  servers: Object.freeze([Object.freeze({
-    command: 'node',
-    cwd: '/workspace/plugin',
-    id: 'timeline-server',
-    name: 'Timeline MCP',
-    source: '/workspace/plugin/agent-bundle.config.ts',
-    targets: Object.freeze(['claude', 'codex']),
-    transport: 'stdio' as const,
-  })]),
-  sourceRevision: 'prepared-r1',
-  ...runtime,
 });
 
 const createStore = (storageRoot: string): DevRuntimeGenerationStore<RscRuntimeGenerationMetadata> =>
@@ -99,7 +68,6 @@ const createCheckpointStore = (root: string): RscEnvironmentCheckpointStore =>
   });
 
 const cohortHashesFor = (suffix: string): RscEnvironmentCohortHashes => Object.freeze({
-  app: `app-${suffix}`,
   rsc: `rsc-${suffix}`,
   widget: `widget-${suffix}`,
 });
@@ -254,7 +222,7 @@ test('resolves the coherent development compiler configuration through Rsbuild',
     }>>>;
     expect(configuredEnvironments.rsc?.tools?.rspack?.name).toBe('rsc');
     expect(configuredEnvironments.widget?.tools?.rspack?.name).toBe('widget');
-    expect(configuredEnvironments.app?.tools?.rspack?.name).toBe('app');
+    expect(configuredEnvironments.app).toBeUndefined();
     const rsbuild = await createRsbuild({
       config: developmentConfig,
       cwd: process.cwd(),
@@ -264,14 +232,12 @@ test('resolves the coherent development compiler configuration through Rsbuild',
     const bundlers = inspection.origin.bundlerConfigs;
     const rscBundler = bundlers.find((config) => config.name === 'rsc');
     const widgetBundler = bundlers.find((config) => config.name === 'widget');
-    const appBundler = bundlers.find((config) => config.name === 'app');
 
-    expect(Object.keys(environments).sort()).toEqual(['app', 'rsc', 'widget']);
+    expect(Object.keys(environments).sort()).toEqual(['rsc', 'widget']);
     expect(environments.rsc?.output.target).toBe('node');
     expect(environments.widget?.output.target).toBe('web');
     expect(environments.rsc?.output.distPath.root).toBe(join(compilerRoot, 'rsc'));
     expect(environments.widget?.output.distPath.root).toBe(join(compilerRoot, 'widget'));
-    expect(environments.app?.output.distPath.root).toBe(join(compilerRoot, 'app'));
     expect(developmentConfig.mode).toBe('production');
     expect(inspection.origin.rsbuildConfig.mode).toBe('production');
     expect(inspection.origin.rsbuildConfig.dev.writeToDisk).toBe(true);
@@ -280,11 +246,8 @@ test('resolves the coherent development compiler configuration through Rsbuild',
     expect(rscBundler?.output?.chunkFilename).toBe('chunks/[name].js');
     expect(rscBundler?.output?.path).toBe(join(compilerRoot, 'rsc'));
     expect(widgetBundler?.output?.path).toBe(join(compilerRoot, 'widget'));
-    expect(appBundler?.output?.path).toBe(join(compilerRoot, 'app'));
     expect(rscBundler?.module?.rules?.some((rule) =>
       typeof rule === 'object' && rule !== null && 'test' in rule && String(rule.test).includes('request-render'))).toBe(true);
-    expect(appBundler?.target).toEqual(expect.arrayContaining(['web']));
-    expect(appBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
     expect(widgetBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
 
     const production = await createRsbuild({
@@ -338,231 +301,7 @@ test('captures immutable paired compiler outputs and records every digested asse
       'widget/static/js/rsc/index.js',
     ]));
     expect(Object.keys(prepared.generation.manifest.metadata).sort())
-      .toEqual(['appDefinitions', 'entries', 'stateStoreId', 'surfaceAssets']);
-  } finally {
-    await store.close().catch(() => undefined);
-    await rm(storageRoot, { force: true, recursive: true });
-  }
-});
-
-test('captures canonical, ordered, frozen App definitions', async () => {
-  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-app-definitions-'));
-  const compilerRoot = join(storageRoot, 'compiler');
-  const store = createStore(storageRoot);
-  try {
-    await writeCompilerCohort(compilerRoot);
-    const metadataFor = async (id: string, prepared: DevRuntimePreparedProject) => {
-      const candidate = await store.begin({ id, sourceRevision: 'captured-r1' });
-      const snapshot = await captureCompilerCohort({
-        attemptId: `attempt-${id}`,
-        candidate,
-        compilerRoot,
-        preparedRuntime: prepared,
-        rscCohortRevision: 1,
-        sourceRevision: 'captured-r1',
-      });
-      return (await materializeRuntimeGeneration({ snapshot, store })).generation.manifest.metadata;
-    };
-
-    const baselinePrepared = preparedRuntimeWithApp();
-    const [timelineApp] = baselinePrepared.apps;
-    if (timelineApp === undefined) throw new Error('Baseline prepared App was not declared.');
-    const activityApp = Object.freeze({
-      ...timelineApp,
-      id: 'activity-app',
-      name: 'Activity',
-      resourceUri: 'ui://rsc-agent-runtime/activity-v1.html',
-    });
-    const orderedForward = await metadataFor('ordered-forward', Object.freeze({
-      ...baselinePrepared,
-      apps: Object.freeze([timelineApp, activityApp]),
-    }));
-    const orderedReverse = await metadataFor('ordered-reverse', Object.freeze({
-      ...baselinePrepared,
-      apps: Object.freeze([activityApp, timelineApp]),
-    }));
-    expect(orderedForward.appDefinitions).toEqual([
-      { id: 'activity-app', name: 'Activity', resourceUri: 'ui://rsc-agent-runtime/activity-v1.html' },
-      { id: 'timeline-app', name: 'Timeline', resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' },
-    ]);
-    expect(orderedReverse.appDefinitions).toEqual(orderedForward.appDefinitions);
-    const [firstAppDefinition] = orderedForward.appDefinitions;
-    if (firstAppDefinition === undefined) throw new Error('Ordered App definition was malformed.');
-    expect(Object.isFrozen(orderedForward.appDefinitions)).toBe(true);
-    expect(Object.isFrozen(firstAppDefinition)).toBe(true);
-  } finally {
-    await store.close().catch(() => undefined);
-    await rm(storageRoot, { force: true, recursive: true });
-  }
-});
-
-test('captures the canonical generated HTML asset for each prepared App surface', async () => {
-  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-app-html-'));
-  const compilerRoot = join(storageRoot, 'compiler');
-  const store = createStore(storageRoot);
-  const html = '<!doctype html><main>Timeline</main>';
-  try {
-    await writeCompilerCohort(compilerRoot, { appFiles: { 'edit-timeline-v1.html': html } });
-    const candidate = await store.begin({ id: 'app-html', sourceRevision: 'source-app-html' });
-    const snapshot = await captureCompilerCohort({
-      attemptId: 'attempt-app-html',
-      candidate,
-      compilerRoot,
-      preparedRuntime: preparedRuntimeWithApp(),
-      rscCohortRevision: 1,
-      sourceRevision: 'source-app-html',
-    });
-    const prepared = await materializeRuntimeGeneration({ snapshot, store });
-
-    expect(prepared.generation.manifest.metadata.surfaceAssets['mcp.Timeline']).toEqual(expect.arrayContaining([{
-      bytes: Buffer.byteLength(html),
-      contentType: 'text/html',
-      generationPath: 'app/edit-timeline-v1.html',
-      requestPath: '/edit-timeline-v1.html',
-      sha256: sha256(html),
-    }]));
-  } finally {
-    await store.close().catch(() => undefined);
-    await rm(storageRoot, { force: true, recursive: true });
-  }
-});
-
-test('rejects a traversal-normalized App URI even when a matching generated HTML file exists', async () => {
-  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-app-html-traversal-'));
-  const compilerRoot = join(storageRoot, 'compiler');
-  const store = createStore(storageRoot);
-  try {
-    await writeCompilerCohort(compilerRoot, { appFiles: { 'escaped.html': '<!doctype html><main>Escaped</main>' } });
-    const candidate = await store.begin({ id: 'app-html-traversal', sourceRevision: 'source-app-html-traversal' });
-    const snapshot = await captureCompilerCohort({
-      attemptId: 'attempt-app-html-traversal',
-      candidate,
-      compilerRoot,
-      preparedRuntime: preparedRuntimeWithApp({ resourceUri: 'ui://rsc-agent-runtime/../escaped.html' }),
-      rscCohortRevision: 1,
-      sourceRevision: 'source-app-html-traversal',
-    });
-    await expect(materializeRuntimeGeneration({ snapshot, store })).rejects.toThrow('resource URI is invalid');
-  } finally {
-    await store.close().catch(() => undefined);
-    await rm(storageRoot, { force: true, recursive: true });
-  }
-});
-
-test('rejects missing, duplicate, and symbolic-link App HTML capture inputs', async () => {
-  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-app-html-invalid-'));
-  const compilerRoot = join(storageRoot, 'compiler');
-  const store = createStore(storageRoot);
-  try {
-    await writeCompilerCohort(compilerRoot, { appFiles: {} });
-    const missingCandidate = await store.begin({ id: 'app-html-missing', sourceRevision: 'source-app-html-missing' });
-    const missingSnapshot = await captureCompilerCohort({
-      attemptId: 'attempt-app-html-missing', candidate: missingCandidate, compilerRoot, preparedRuntime: preparedRuntimeWithApp(), rscCohortRevision: 1, sourceRevision: 'source-app-html-missing',
-    });
-    await expect(materializeRuntimeGeneration({ snapshot: missingSnapshot, store })).rejects.toThrow('no unique captured HTML asset');
-
-    await writeCompilerCohort(compilerRoot);
-    const [timelineApp] = preparedRuntimeWithApp().apps;
-    if (timelineApp === undefined) throw new Error('Timeline App fixture was unavailable.');
-    const duplicateCandidate = await store.begin({ id: 'app-html-duplicate', sourceRevision: 'source-app-html-duplicate' });
-    const duplicateSnapshot = await captureCompilerCohort({
-      attemptId: 'attempt-app-html-duplicate',
-      candidate: duplicateCandidate,
-      compilerRoot,
-      preparedRuntime: Object.freeze({
-        ...preparedRuntimeWithApp(),
-        apps: Object.freeze([timelineApp, Object.freeze({ ...timelineApp, id: 'timeline-app-duplicate' })]),
-      }),
-      rscCohortRevision: 2,
-      sourceRevision: 'source-app-html-duplicate',
-    });
-    await expect(materializeRuntimeGeneration({ snapshot: duplicateSnapshot, store })).rejects.toThrow('duplicate App surface');
-
-    await symlink(join(compilerRoot, 'app', 'edit-timeline-v1.html'), join(compilerRoot, 'app', 'linked.html'));
-    const linkedCandidate = await store.begin({ id: 'app-html-link', sourceRevision: 'source-app-html-link' });
-    await expect(captureCompilerCohort({
-      attemptId: 'attempt-app-html-link', candidate: linkedCandidate, compilerRoot, preparedRuntime: preparedRuntimeWithApp(), rscCohortRevision: 3, sourceRevision: 'source-app-html-link',
-    })).rejects.toThrow('symbolic links');
-  } finally {
-    await store.close().catch(() => undefined);
-    await rm(storageRoot, { force: true, recursive: true });
-  }
-});
-
-test('rejects a rewritten prepared App definition manifest on post-rename reload', async () => {
-  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-persisted-app-definition-'));
-  const compilerRoot = join(storageRoot, 'compiler');
-  const store = createStore(storageRoot);
-  try {
-    await writeCompilerCohort(compilerRoot);
-    const candidate = await store.begin({ id: 'persisted-app', sourceRevision: 'source-persisted-app' });
-    const snapshot = await captureCompilerCohort({
-      attemptId: 'attempt-persisted-app',
-      candidate,
-      compilerRoot,
-      preparedRuntime: preparedRuntimeWithApp(),
-      rscCohortRevision: 1,
-      sourceRevision: 'source-persisted-app',
-    });
-    let waits = 0;
-    await expect(materializeRuntimeGeneration({
-      guard: {
-        check: () => true,
-        wait: async () => {
-          waits += 1;
-          if (waits !== 1) return;
-          await rewriteGenerationManifest(snapshot.candidate.root, (metadata) => ({
-            ...metadata,
-            appDefinitions: [{
-              ...(metadata.appDefinitions as readonly Readonly<Record<string, unknown>>[])[0],
-              name: 'Tampered timeline',
-            }],
-          }));
-        },
-      },
-      snapshot,
-      store,
-    })).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_INVALID' });
-    expect(waits).toBe(1);
-  } finally {
-    await store.close().catch(() => undefined);
-    await rm(storageRoot, { force: true, recursive: true });
-  }
-});
-
-test('rejects a persisted App surface manifest without its declared canonical HTML asset', async () => {
-  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-persisted-app-surface-'));
-  const compilerRoot = join(storageRoot, 'compiler');
-  const store = createStore(storageRoot);
-  try {
-    await writeCompilerCohort(compilerRoot);
-    const candidate = await store.begin({ id: 'persisted-app-surface', sourceRevision: 'source-persisted-app-surface' });
-    const snapshot = await captureCompilerCohort({
-      attemptId: 'attempt-persisted-app-surface',
-      candidate,
-      compilerRoot,
-      preparedRuntime: preparedRuntimeWithApp(),
-      rscCohortRevision: 1,
-      sourceRevision: 'source-persisted-app-surface',
-    });
-    let waits = 0;
-    await expect(materializeRuntimeGeneration({
-      guard: {
-        check: () => true,
-        wait: async () => {
-          waits += 1;
-          if (waits !== 1) return;
-          await rewriteGenerationManifest(snapshot.candidate.root, (metadata) => ({
-            ...metadata,
-            surfaceAssets: Object.fromEntries(Object.entries(metadata.surfaceAssets as Readonly<Record<string, readonly Readonly<Record<string, unknown>>[]>>)
-              .map(([surfaceId, assets]) => [surfaceId, assets.filter((asset) => asset.contentType !== 'text/html')])),
-          }));
-        },
-      },
-      snapshot,
-      store,
-    })).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_INVALID' });
-    expect(waits).toBe(1);
+      .toEqual(['entries', 'stateStoreId']);
   } finally {
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
@@ -589,12 +328,6 @@ test('rejects a removed or replaced paired compiler asset after capture', async 
     await writeFile(join(replacedCandidate.root, 'widget', 'static', 'js', 'rsc', 'index.js'), 'replaced-client-reference', 'utf8');
     await expect(materializeRuntimeGeneration({ snapshot: replacedSnapshot, store })).rejects.toThrow('captured cohort');
 
-    const appCandidate = await store.begin({ id: 'app-replaced', sourceRevision: 'source-app-replaced' });
-    const appSnapshot = await captureCompilerCohort({
-      attemptId: 'attempt-app-replaced', candidate: appCandidate, compilerRoot, preparedRuntime: preparedRuntimeWithApp(), rscCohortRevision: 3, sourceRevision: 'source-app-replaced',
-    });
-    await writeFile(join(appCandidate.root, 'app', 'edit-timeline-v1.html'), 'replaced-App-HTML', 'utf8');
-    await expect(materializeRuntimeGeneration({ snapshot: appSnapshot, store })).rejects.toThrow('captured cohort');
   } finally {
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
@@ -653,13 +386,12 @@ test('waits for grace-to-SIGKILL termination of a SIGTERM-ignoring definition ch
   }
 }, 10_000);
 
-test('fails compile attempts unless stats contain one nonempty RSC, widget, and App hash', async () => {
+test('fails compile attempts unless stats contain one nonempty RSC and widget hash', async () => {
   for (const children of [
     [{ name: 'rsc', hash: 'rsc-hash' }],
-    [{ name: 'rsc', hash: 'rsc-hash' }, { name: 'widget', hash: 'widget-hash' }],
-    [{ name: 'rsc', hash: 'rsc-hash' }, { name: 'rsc', hash: 'second-rsc-hash' }, { name: 'widget', hash: 'widget-hash' }, { name: 'app', hash: 'app-hash' }],
-    [{ name: 'rsc', hash: 'rsc-hash' }, { name: 'widget' }, { name: 'app', hash: 'app-hash' }],
-    [{ name: 'rsc', hash: 'rsc-hash' }, { name: 'widget', hash: 'widget-hash' }, { name: 'app', hash: '' }],
+    [{ name: 'rsc', hash: 'rsc-hash' }, { name: 'rsc', hash: 'second-rsc-hash' }, { name: 'widget', hash: 'widget-hash' }],
+    [{ name: 'rsc', hash: 'rsc-hash' }, { name: 'widget' }],
+    [{ name: 'rsc', hash: 'rsc-hash' }, { name: 'widget', hash: '' }],
   ]) {
     const capture: Array<Readonly<Record<string, unknown>>> = [];
     const enqueued: string[] = [];
@@ -683,10 +415,8 @@ test('passes exact per-environment hashes to capture alongside the rsc and widge
   expect(capture).toHaveLength(1);
   expect(capture[0]).toMatchObject({
     cohortChanged: true,
-    environmentHashes: { app: 'app-one', rsc: 'rsc-one', widget: 'widget-one' },
+    environmentHashes: { rsc: 'rsc-one', widget: 'widget-one' },
   });
-  // The App environment ships through its own dev-server surface, so only
-  // rsc and widget hashes define the source revision.
   expect(capture[0]?.sourceRevision).toBe(sha256(JSON.stringify([['rsc', 'rsc-one'], ['widget', 'widget-one']])));
 });
 
@@ -703,7 +433,6 @@ test('stages a checkpoint for every successful environment compilation and skips
 
   await observer.completeEnvironment({ distPath: '/compiler/rsc', hash: 'rsc-one', name: 'rsc' });
   await observer.completeEnvironment({ distPath: '/compiler/widget', hash: 'widget-one', name: 'widget' });
-  await observer.completeEnvironment({ distPath: '/compiler/app', hash: 'app-one', name: 'app' });
   // Failed compilations, unexpected environments, and missing hashes stage
   // nothing; the global after-compile hook is the loud failure path.
   await observer.completeEnvironment({ distPath: '/compiler/rsc', hash: 'rsc-two', hasErrors: true, name: 'rsc' });
@@ -713,7 +442,6 @@ test('stages a checkpoint for every successful environment compilation and skips
   expect(staged).toEqual([
     { distPath: '/compiler/rsc', environmentName: 'rsc', statsHash: 'rsc-one' },
     { distPath: '/compiler/widget', environmentName: 'widget', statsHash: 'widget-one' },
-    { distPath: '/compiler/app', environmentName: 'app', statsHash: 'app-one' },
   ]);
 });
 

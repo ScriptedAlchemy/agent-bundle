@@ -13,7 +13,6 @@ import {
 } from './runtime-provider.ts';
 import type {
   DevRuntimeAsset,
-  DevRuntimeAssetRequest,
   DevRuntimeDescriptor,
   DevRuntimeDiagnostic,
   DevRuntimeInvocationRequest,
@@ -49,7 +48,6 @@ const statusFor = (
 ): DevRuntimeStatus => Object.freeze({
   descriptor,
   diagnostics: Object.freeze([...diagnostics]),
-  hmrReady: false,
   state,
 });
 
@@ -192,10 +190,6 @@ const diagnosticPhases = new Set<DevRuntimeDiagnostic['phase']>([
   'rsc-render',
   'flight-decode',
   'lowering-contract',
-  'mcp-protocol',
-  'resource-selection',
-  'sandbox/csp',
-  'app-bridge',
   'provider-lifecycle',
 ]);
 
@@ -220,10 +214,9 @@ const states = new Set<DevRuntimeStatus['state']>([
 ]);
 
 const snapshotStatus = (value: unknown): DevRuntimeStatus => {
-  const status = exactRecord(value, ['descriptor', 'diagnostics', 'hmrReady', 'state'], ['activeVector', 'lastGoodVector']);
+  const status = exactRecord(value, ['descriptor', 'diagnostics', 'state'], ['activeVector', 'lastGoodVector']);
   const state = ownDataValue(status, 'state');
-  const hmrReady = ownDataValue(status, 'hmrReady');
-  if (typeof state !== 'string' || !states.has(state as DevRuntimeStatus['state']) || typeof hmrReady !== 'boolean') return snapshotInvalid();
+  if (typeof state !== 'string' || !states.has(state as DevRuntimeStatus['state'])) return snapshotInvalid();
   const activeVector = Object.hasOwn(status, 'activeVector')
     ? snapshotVector(ownDataValue(status, 'activeVector'))
     : undefined;
@@ -234,13 +227,12 @@ const snapshotStatus = (value: unknown): DevRuntimeStatus => {
     ...(activeVector === undefined ? {} : { activeVector }),
     descriptor: snapshotDescriptor(ownDataValue(status, 'descriptor')),
     diagnostics: Object.freeze(snapshotArray(ownDataValue(status, 'diagnostics')).map(snapshotDiagnostic)),
-    hmrReady,
     ...(lastGoodVector === undefined ? {} : { lastGoodVector }),
     state: state as DevRuntimeStatus['state'],
   });
 };
 
-const surfaceKinds = new Set<DevRuntimeSurface['kind']>(['hook', 'mcp-tool', 'mcp-resource', 'mcp-app']);
+const surfaceKinds = new Set<DevRuntimeSurface['kind']>(['hook', 'mcp-tool', 'mcp-resource']);
 
 const snapshotFixture = (value: unknown): DevRuntimeSurface['fixtures'][number] => {
   const fixture = exactRecord(value, ['id', 'label'], ['seed']);
@@ -366,9 +358,6 @@ export class DevRuntimeController implements DevRuntimeSession {
     return this.#activeSession().invoke(request);
   }
 
-  readAsset(request: DevRuntimeAssetRequest): Promise<DevRuntimeAsset | undefined> {
-    return this.#activeSession().readAsset(request);
-  }
 
   readRunFlight(runId: string): Promise<DevRuntimeAsset | undefined> {
     return this.#activeSession().readRunFlight(runId);
@@ -638,7 +627,6 @@ export class DevRuntimeController implements DevRuntimeSession {
       diagnostics: Object.freeze([lifecycleDiagnostic(restartRequired
         ? 'Development runtime declaration changed; restart required.'
         : undefined)]),
-      hmrReady: prior.hmrReady,
       ...(prior.lastGoodVector === undefined ? {} : { lastGoodVector: prior.lastGoodVector }),
       state,
     });

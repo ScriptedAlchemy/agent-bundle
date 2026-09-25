@@ -165,23 +165,7 @@ export interface SerializedRuntimeDefinition {
   resources: RuntimeResourceDefinition[];
 }
 
-export interface RscRuntimeSurfaceAsset {
-  readonly bytes: number;
-  readonly contentType: 'application/javascript' | 'application/json' | 'text/css' | 'text/html';
-  readonly generationPath: string;
-  readonly requestPath: string;
-  readonly sha256: string;
-}
-
-export interface RscRuntimeAppDefinition {
-  readonly id: string;
-  readonly name: string;
-  readonly resourceUri: string;
-}
-
 export interface RscRuntimeGenerationMetadata {
-  readonly appDefinitions: readonly RscRuntimeAppDefinition[];
   readonly entries: Readonly<Record<string, string>>;
   readonly stateStoreId: string;
-  readonly surfaceAssets: Readonly<Record<string, readonly RscRuntimeSurfaceAsset[]>>;
 }

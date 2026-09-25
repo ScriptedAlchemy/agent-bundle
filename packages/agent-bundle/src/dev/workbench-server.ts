@@ -487,7 +487,6 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   let runtime: DevRuntimeController | undefined;
   if (initialPreparedProject.devRuntime !== undefined || initialPreparedProject.devRuntimeDiagnostic !== undefined) {
     const preparedRuntime = initialPreparedProject.devRuntime ?? Object.freeze({
-      apps: Object.freeze([]),
       provider: '',
       servers: Object.freeze([]),
       sourceRevision: initialPreparedProject.source.revision ?? 'unknown',

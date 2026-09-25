@@ -93,7 +93,6 @@ const fixture = () => {
       activeVector: vector,
       descriptor: Object.freeze({ environmentVariables: Object.freeze([]), id: 'rsc', label: 'RSC', schemaVersion: 1 as const }),
       diagnostics: Object.freeze([]),
-      hmrReady: true,
       state: 'active' as const,
     }),
     surfaces: Object.freeze([surface]),

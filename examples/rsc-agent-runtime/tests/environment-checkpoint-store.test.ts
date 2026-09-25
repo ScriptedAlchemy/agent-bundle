@@ -22,14 +22,12 @@ import { createRuntimeGenerationStore } from 'agent-bundle/api';
 import { writeCompilerCohort } from './support/compiler-cohort.ts';
 
 const preparedRuntime = Object.freeze({
-  apps: Object.freeze([]),
   provider: './src/dev/provider.ts',
   servers: Object.freeze([]),
   sourceRevision: 'prepared-r1',
 });
 
 const cohortHashesFor = (suffix: string): RscEnvironmentCohortHashes => Object.freeze({
-  app: `app-${suffix}`,
   rsc: `rsc-${suffix}`,
   widget: `widget-${suffix}`,
 });
@@ -82,7 +80,6 @@ test('assembles a cohort only once every environment checkpoint has landed (skew
     // The global after-compile hook can fire before a slower environment's
     // own after-environment hook finishes staging; acquisition must wait for
     // the exact hash instead of reading anything mutable.
-    await store.stage({ environment: 'app', hash: hashes.app, sourceRoot: join(compilerRoot, 'app') });
     await store.stage({ environment: 'rsc', hash: hashes.rsc, sourceRoot: join(compilerRoot, 'rsc') });
     let acquired = false;
     const pending = store.acquireCohort(hashes).then((cohort) => {
@@ -110,7 +107,6 @@ test('fails a waiting cohort fast once a newer compilation supersedes the awaite
   const store = createCheckpointStore(join(storageRoot, 'environment-checkpoints'));
   try {
     await writeCompilerCohort(compilerRoot);
-    await store.stage({ environment: 'app', hash: 'app-one', sourceRoot: join(compilerRoot, 'app') });
     await store.stage({ environment: 'rsc', hash: 'rsc-one', sourceRoot: join(compilerRoot, 'rsc') });
     const waiting = store.acquireCohort(cohortHashesFor('one'));
     const observed = waiting.catch((error: unknown) => error);
@@ -123,7 +119,7 @@ test('fails a waiting cohort fast once a newer compilation supersedes the awaite
 
     // A cohort naming an already-superseded hash rejects immediately.
     await store.stage({ environment: 'widget', hash: 'widget-three', sourceRoot: join(compilerRoot, 'widget') });
-    await expect(store.acquireCohort({ app: 'app-one', rsc: 'rsc-one', widget: 'widget-two' }))
+    await expect(store.acquireCohort({ rsc: 'rsc-one', widget: 'widget-two' }))
       .rejects.toThrow('superseded by a newer compilation');
   } finally {
     await store.close().catch(() => undefined);
@@ -137,7 +133,6 @@ test('rejects cohorts whose environment checkpoint failed to stage', async () =>
   const store = createCheckpointStore(join(storageRoot, 'environment-checkpoints'));
   try {
     await writeCompilerCohort(compilerRoot, { rscFiles: { 'undeclared.js': 'foreign-write' } });
-    await store.stage({ environment: 'app', hash: 'app-one', sourceRoot: join(compilerRoot, 'app') });
     await store.stage({ environment: 'widget', hash: 'widget-one', sourceRoot: join(compilerRoot, 'widget') });
     await expect(store.stage({ environment: 'rsc', hash: 'rsc-one', sourceRoot: join(compilerRoot, 'rsc') }))
       .rejects.toThrow('undeclared');
@@ -145,7 +140,7 @@ test('rejects cohorts whose environment checkpoint failed to stage', async () =>
 
     // Failures recorded before staging could run reject waiters the same way.
     store.recordStagingFailure({ environment: 'rsc', error: new Error('emitted outside its session root'), hash: 'rsc-two' });
-    await expect(store.acquireCohort({ app: 'app-one', rsc: 'rsc-two', widget: 'widget-one' }))
+    await expect(store.acquireCohort({ rsc: 'rsc-two', widget: 'widget-one' }))
       .rejects.toThrow('failed to stage');
   } finally {
     await store.close().catch(() => undefined);

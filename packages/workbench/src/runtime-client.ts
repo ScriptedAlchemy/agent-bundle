@@ -1,5 +1,4 @@
 import type {
-  DevRuntimeAssetRequest,
   DevRuntimeDiagnostic,
   DevRuntimeInspectionEnvelope,
   DevRuntimeInvocationRequest,
@@ -37,7 +36,6 @@ export type RuntimeBootstrap =
     }>;
 
 const runtimeAssetLimit = 4 * 1024 * 1024;
-const runtimeAssetContentTypes = new Set(['application/javascript', 'application/json', 'text/css', 'text/html']);
 const runtimeErrorCode = 'AB8206';
 type RuntimeJsonValue = DevRuntimeInvocationRequest['input'];
 type RuntimeJsonObject = NonNullable<DevRuntimeSurface['inputSchema']>;
@@ -48,10 +46,6 @@ const diagnosticPhases = new Set([
   'rsc-render',
   'flight-decode',
   'lowering-contract',
-  'mcp-protocol',
-  'resource-selection',
-  'sandbox/csp',
-  'app-bridge',
   'provider-lifecycle',
 ]);
 
@@ -154,11 +148,11 @@ const diagnostic = (value: unknown): DevRuntimeDiagnostic => {
 
 const status = (value: unknown): DevRuntimeStatus => {
   const response = record(value);
-  if (!hasOnly(response, ['activeVector', 'descriptor', 'diagnostics', 'hmrReady', 'lastGoodVector', 'state']) ||
+  if (!hasOnly(response, ['activeVector', 'descriptor', 'diagnostics', 'lastGoodVector', 'state']) ||
     !isRecord(response.descriptor) || !hasOnly(response.descriptor, ['environmentVariables', 'id', 'label', 'schemaVersion']) ||
     !Array.isArray(response.descriptor.environmentVariables) || response.descriptor.environmentVariables.some((entry) => !nonemptyString(entry)) ||
     !nonemptyString(response.descriptor.id) || !nonemptyString(response.descriptor.label) || response.descriptor.schemaVersion !== 1 ||
-    typeof response.hmrReady !== 'boolean' || !Array.isArray(response.diagnostics) ||
+    !Array.isArray(response.diagnostics) ||
     !['starting', 'compiling', 'active', 'degraded', 'failed', 'closed'].includes(response.state as string)) {
     throw invalid('Runtime route returned an invalid status.');
   }
@@ -171,7 +165,6 @@ const status = (value: unknown): DevRuntimeStatus => {
       schemaVersion: 1,
     }),
     diagnostics: Object.freeze(response.diagnostics.map(diagnostic)),
-    hmrReady: response.hmrReady,
     ...(response.lastGoodVector === undefined ? {} : { lastGoodVector: vector(response.lastGoodVector) }),
     state: response.state as DevRuntimeStatus['state'],
   });
@@ -181,7 +174,7 @@ const surface = (value: unknown): DevRuntimeSurface => {
   const response = record(value);
   if (!hasOnly(response, ['defaultTarget', 'fixtures', 'id', 'inputSchema', 'kind', 'label', 'readOnly', 'targets']) ||
     (response.defaultTarget !== undefined && !nonemptyString(response.defaultTarget)) || !Array.isArray(response.fixtures) ||
-    !nonemptyString(response.id) || !['hook', 'mcp-tool', 'mcp-resource', 'mcp-app'].includes(response.kind as string) ||
+    !nonemptyString(response.id) || !['hook', 'mcp-tool', 'mcp-resource'].includes(response.kind as string) ||
     !nonemptyString(response.label) || typeof response.readOnly !== 'boolean' || !Array.isArray(response.targets)) {
     throw invalid('Runtime route returned an invalid surface.');
   }
@@ -474,22 +467,6 @@ export class RuntimeClient {
     this.#requireProvider();
     try {
       return await this.#agentDocuments.events(runId, signal);
-    } catch (error) {
-      throw runtimeError(error);
-    }
-  }
-
-  async readAsset(request: DevRuntimeAssetRequest): Promise<Blob> {
-    this.#requireProvider();
-    if (request.path.length === 0) throw invalid('Runtime asset path is not valid.');
-    try {
-      const path = request.path.map((segment) => opaqueSegment(segment, 'Runtime asset path segment')).join('/');
-      return await this.#readBoundedBlob(
-        `/api/runtime/assets/${opaqueSegment(request.surfaceId, 'Runtime surface ID')}/${path}?generation=${opaqueSegment(request.runtimeGenerationId, 'Runtime generation ID')}`,
-        (contentType) => runtimeAssetContentTypes.has(contentType),
-        'Runtime asset response is not valid.',
-        'Runtime asset exceeds the allowed size.',
-      );
     } catch (error) {
       throw runtimeError(error);
     }

@@ -36,7 +36,6 @@ const status = Object.freeze({
     schemaVersion: 1 as const,
   }),
   diagnostics: Object.freeze([]),
-  hmrReady: true,
   lastGoodVector: vector,
   state: 'active' as const,
 }) satisfies DevRuntimeStatus;

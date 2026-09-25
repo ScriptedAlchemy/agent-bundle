@@ -40,7 +40,6 @@ const status = (overrides: Partial<DevRuntimeStatus> = {}): DevRuntimeStatus => 
   activeVector: vector(),
   descriptor: { environmentVariables: [], id: 'rsc', label: 'RSC Runtime', schemaVersion: 1 },
   diagnostics: [],
-  hmrReady: true,
   lastGoodVector: vector(),
   state: 'active',
   ...overrides,
@@ -54,7 +53,7 @@ const surface = (overrides: Partial<DevRuntimeSurface> = {}): DevRuntimeSurface 
   ],
   id: 'weather',
   inputSchema: { type: 'object' },
-  kind: 'mcp-app',
+  kind: 'mcp-tool',
   label: 'Weather',
   readOnly: false,
   targets: ['portable', 'chatgpt'],
@@ -525,7 +524,7 @@ it('parses running and failed provider runs, optional runtime metadata, reset id
   await expect(foreign.readRun('foreign')).rejects.toMatchObject({ code: 'AB8206' });
 });
 
-it('rejects invalid wrapper, opaque path, and asset headers through the public RuntimeClient boundary', async () => {
+it('rejects invalid wrappers and opaque paths through the public RuntimeClient boundary', async () => {
   await expect(clientFor({ '/api/runtime/status': { nope: true } }).bootstrap()).rejects.toMatchObject({ code: 'AB8206' });
   const bootstrappedRoutes = {
     '/api/runtime/runs?limit=50': { providerSessionId: 'provider-a', runs: [run('initial')] },
@@ -535,15 +534,6 @@ it('rejects invalid wrapper, opaque path, and asset headers through the public R
   const opaqueClient = clientFor({ ...bootstrappedRoutes, '/api/runtime/runs/..': { run: run('x') } });
   await opaqueClient.bootstrap();
   await expect(opaqueClient.readRun('..')).rejects.toMatchObject({ code: 'AB8206' });
-  const assetClient = clientFor({
-    ...bootstrappedRoutes,
-    '/api/runtime/assets/weather/assets/main.js?generation=generation-a': new Response(new Uint8Array([1]), {
-      headers: { 'content-length': '-1', 'content-type': 'application/javascript' },
-    }),
-  });
-  await assetClient.bootstrap();
-  await expect(assetClient.readAsset({ path: ['assets', 'main.js'], runtimeGenerationId: 'generation-a', surfaceId: 'weather' })).rejects.toMatchObject({ code: 'AB8206' });
-  await expect(assetClient.readAsset({ path: [], runtimeGenerationId: 'generation-a', surfaceId: 'weather' })).rejects.toMatchObject({ code: 'AB8206' });
 });
 
 it('covers runtime reducer invalid controls, ordered read effects, and settled lifecycle branches', () => {

@@ -82,16 +82,16 @@ production RSC/runtime artifacts are built by its explicit Rsbuild production
 command (`pnpm --filter @agent-bundle/rsc-agent-runtime-demo build`); its provider
 uses a separate long-lived Rsbuild development session only when an
 `agent-bundle dev` project opts into `dev.runtime.provider`. That session
-compiles each change into a runtime generation, publishes its hook, MCP tool,
-resource, and App surfaces to the Workbench runtime routes, and serves
-generation assets through them; no browser connects to its loopback Rsbuild
-server. The session uses development entries and output roots while compiling every
-environment in production mode: production decoders cannot read development
-Flight payloads, and Rsbuild only inlines the App's scripts and styles in
-production mode. `@rsbuild/plugin-react` is configured as
-`pluginReact({ fastRefresh: false })` and the App environment sets
-`hmr: false`: the self-contained App document never receives a browser HMR
-credential or connection. The `widget` and `app` web environments set
+compiles the `rsc` and `widget` environments into a runtime generation and
+publishes its hook, MCP tool, and resource surfaces to the Workbench runtime
+routes; no browser connects to its loopback Rsbuild server. The `app`
+environment is compiled only by the production build. The session uses
+development entries and output roots while compiling every
+environment in production mode, because
+production decoders cannot read development
+Flight payloads. `@rsbuild/plugin-react` is configured as
+`pluginReact({ fastRefresh: false })`, so no refresh runtime is injected into
+the self-contained App document. The `widget` and `app` web environments set
 `overrideBrowserslist: ['chrome >= 144']` for the Chromium MCP App hosts
 (Cursor 3.18.25 still ships Chromium 144; Claude Desktop Electron 42 and
 Cursor 3.19.7 ship Chromium 148; ChatGPT/Codex Desktop reports Chromium 151).

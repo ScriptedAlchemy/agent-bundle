@@ -21,10 +21,6 @@ export type DevRuntimeDiagnosticPhase =
   | 'rsc-render'
   | 'flight-decode'
   | 'lowering-contract'
-  | 'mcp-protocol'
-  | 'resource-selection'
-  | 'sandbox/csp'
-  | 'app-bridge'
   | 'provider-lifecycle';
 
 export interface DevRuntimeDiagnostic {
@@ -52,7 +48,7 @@ export interface DevRuntimeSurface {
   readonly fixtures: readonly DevRuntimeFixture[];
   readonly id: string;
   readonly inputSchema?: JsonObject;
-  readonly kind: 'hook' | 'mcp-tool' | 'mcp-resource' | 'mcp-app';
+  readonly kind: 'hook' | 'mcp-tool' | 'mcp-resource';
   readonly label: string;
   readonly readOnly: boolean;
   readonly targets: readonly string[];
@@ -130,7 +126,6 @@ export type DevRuntimeStatus = Readonly<{
   readonly descriptor: DevRuntimeDescriptor;
   readonly diagnostics: readonly DevRuntimeDiagnostic[];
   /** The compiler endpoint can accept an HMR client; not proof that a browser is connected. */
-  readonly hmrReady: boolean;
   readonly lastGoodVector?: RuntimeVector;
   readonly state: 'starting' | 'compiling' | 'active' | 'degraded' | 'failed' | 'closed';
 }>;
@@ -153,12 +148,6 @@ export interface DevRuntimeStateResetRequest {
   readonly expectedGenerationId?: string;
   readonly seed?: JsonValue;
   readonly stateStoreId: string;
-}
-
-export interface DevRuntimeAssetRequest {
-  readonly path: readonly string[];
-  readonly runtimeGenerationId: string;
-  readonly surfaceId: string;
 }
 
 export interface DevRuntimeAsset {

@@ -24,10 +24,10 @@ import { copyTree, digestBytes, writeFileDurably } from './durable-tree.js';
  * hash.
  */
 
-export type RscRuntimeEnvironmentName = 'app' | 'rsc' | 'widget';
+export type RscRuntimeEnvironmentName = 'rsc' | 'widget';
 
 export const rscRuntimeEnvironmentNames: readonly RscRuntimeEnvironmentName[] =
-  Object.freeze(['app', 'rsc', 'widget'] as const);
+  Object.freeze(['rsc', 'widget'] as const);
 
 export type RscEnvironmentCohortHashes = Readonly<Record<RscRuntimeEnvironmentName, string>>;
 

@@ -357,7 +357,6 @@ export {
 export type {
   CreateDevRuntimeProvider,
   DevRuntimeEventInput,
-  DevRuntimePreparedMcpApp,
   DevRuntimePreparedMcpServer,
   DevRuntimePreparedProject,
   DevRuntimeProvider,
@@ -366,7 +365,6 @@ export type {
 } from './dev/runtime-provider.ts';
 export type {
   DevRuntimeAsset,
-  DevRuntimeAssetRequest,
   DevRuntimeDescriptor,
   DevRuntimeDiagnostic,
   DevRuntimeDiagnosticPhase,
