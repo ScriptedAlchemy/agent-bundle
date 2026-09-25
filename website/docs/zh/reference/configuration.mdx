@@ -154,6 +154,10 @@ profile 会把打包器的 `output.sourceMap` 设为内联 JS map，让 map 留�
 文件不属于计划中的产物文件集合。非布尔值是 `AB4707`。MCP App 视图仍保持自身的默认值（关闭），并继续
 通过 `tools.rsbuild.output.sourceMap` 选择加入。
 
+生成式可执行文件保持代码可读。编译器 profile 只用 SWC 压缩器移除注释，压缩、混淆和空白压缩均关闭，
+因此被打包依赖的文档注释不会随产物发布。法律注释（例如 `/*! … */` 许可证头）以内联方式保留。将
+`tools.rsbuild.output.minify` 设为 `false` 可保留全部注释。
+
 `runtime.node` 是 `major.minor[.patch]` 形式的最低 Node.js 版本。它只能抬高生成式可执行文件的默认下限，
 绝不能降低，且所选下限会作为 `runtime.node` 记录在产物清单中。这个下限本身在
 [配置模型](../guide/authoring/index.mdx)中介绍。

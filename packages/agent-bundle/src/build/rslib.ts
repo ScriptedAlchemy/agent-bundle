@@ -44,7 +44,6 @@ export const generatedExecutableSyntax = ((): 'es2022' => {
   }
   return 'es2022';
 })();
-export const generatedExecutableLegalComments = 'inline' as const;
 
 export interface RslibVirtualModule {
   readonly name: string;
@@ -664,8 +663,15 @@ export const composeEntryLibConfig = (
       distPath: { root: options.outputRoot },
       filename: { js: entry.outputRelativePath },
       filenameHash: false,
-      legalComments: generatedExecutableLegalComments,
-      minify: false,
+      legalComments: 'inline',
+      // SWC runs only to drop comments, which in bundled dependencies
+      // outweigh the code. `minify: false` keeps its output formatted, and
+      // `legalComments: 'inline'` keeps license headers.
+      minify: {
+        css: false,
+        js: true,
+        jsOptions: { minimizerOptions: { compress: false, mangle: false, minify: false } },
+      },
       sourceMap: options.sourceMap === true ? { js: 'inline-source-map' } : false,
       target: 'node',
     },

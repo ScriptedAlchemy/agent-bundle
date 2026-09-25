@@ -2,10 +2,12 @@ import { createRsbuild } from '@rsbuild/core';
 import { createRslib } from '@rslib/core';
 import { expect, it } from '@rstest/core';
 import { init, parse } from 'es-module-lexer/minimal';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { composeMcpAppsRsbuildConfig } from '../src/build/mcp-apps.ts';
 import { buildWithRslib } from '../src/build/compiler.ts';
@@ -14,7 +16,6 @@ import {
   compilerHostNodeFloor,
   composeEntryLibConfig,
   entryLibId,
-  generatedExecutableLegalComments,
   generatedExecutableSyntax,
   type RslibEntry,
 } from '../src/build/rslib.ts';
@@ -55,10 +56,17 @@ const selfContainedProject = async (): Promise<{ readonly entry: RslibEntry; rea
   await mkdir(join(root, 'views'), { recursive: true });
   await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
   await symlink(agentBundleNodeModules, join(root, 'node_modules'), 'dir');
+  await writeFile(join(root, 'src', 'licensed.js'), [
+    '/*! licensed-probe v1.0.0 | MIT License */',
+    '/** Probe documentation that must not reach the artifact. */',
+    "export const licensed = () => 'licensed-probe';",
+    '',
+  ].join('\n'));
   await writeFile(join(root, 'src', 'entry.ts'), [
     "import { basename } from 'node:path';",
     "import { parse } from 'yaml';",
-    "console.log(basename('/probe/config.yaml'), parse('probe: true'));",
+    "import { licensed } from './licensed.js';",
+    "console.log(JSON.stringify([basename('/probe/config.yaml'), parse('probe: true'), licensed()]));",
     '',
   ].join('\n'));
   await writeFile(join(root, 'views', 'dashboard.ts'), "document.title = 'dashboard';\n");
@@ -117,15 +125,6 @@ it('derives generated-executable syntax from the compiler host floor matching en
   expect(lib.syntax).toBe(generatedExecutableSyntax);
 });
 
-it('reserves inline legal comments for future minification without adding a license asset today', () => {
-  expect(generatedExecutableLegalComments).toBe('inline');
-  const root = join(tmpdir(), 'agent-bundle-legal-comments-profile');
-  const lib = composeEntryLibConfig(probeEntry(root), { cwd: root, meta: testMeta, outputRoot: join(root, 'dist') });
-  expect(lib.output?.legalComments).toBe(generatedExecutableLegalComments);
-  expect(lib.output?.minify).toBe(false);
-  expect(lib.output?.sourceMap).toBe(false);
-});
-
 it('opts generated-executable source maps in through output.sourceMap', () => {
   const root = join(tmpdir(), 'agent-bundle-source-map-profile');
   const entry = probeEntry(root);
@@ -140,7 +139,8 @@ it('opts generated-executable source maps in through output.sourceMap', () => {
 });
 
 it('lowers a generated executable with only Node builtins external and inlines its dependencies', async () => {
-  const { entry, root } = await selfContainedProject();
+  const { entry: probe, root } = await selfContainedProject();
+  const entry: RslibEntry = { ...probe, banner: '#!/usr/bin/env node' };
   const inspections: RslibInspection[] = [];
   try {
     await buildWithRslib({ cwd: root, entries: [entry], meta: testMeta, outputRoot: join(root, 'dist') }, {
@@ -189,6 +189,13 @@ it('lowers a generated executable with only Node builtins external and inlines i
     expect(specifiers.filter((specifier) => specifier === undefined || !isBuiltin(specifier))).toEqual([]);
     expect(bundle).toContain('YAMLParseError');
     expect(bundle).toMatch(/createRequire\(import\.meta\.url\)/u);
+    expect(bundle.startsWith('#!/usr/bin/env node\n')).toBe(true);
+    expect(bundle).toContain('\nvar __webpack_modules__ = {\n');
+    expect(bundle).toContain('/*! licensed-probe v1.0.0 | MIT License */');
+    expect(bundle).not.toContain('Probe documentation that must not reach the artifact.');
+    expect(bundle).not.toContain('Parse the input as a stream of YAML documents.');
+    const { stdout } = await promisify(execFile)(process.execPath, [join(root, 'dist', 'scripts', 'probe.mjs')]);
+    expect(JSON.parse(stdout)).toEqual(['config.yaml', { probe: true }, 'licensed-probe']);
     await expect(readdir(join(root, 'dist'))).resolves.toEqual(['scripts']);
     await expect(readdir(join(root, 'dist', 'scripts'))).resolves.toEqual(['probe.mjs']);
   } finally {

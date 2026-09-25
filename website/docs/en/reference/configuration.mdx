@@ -177,6 +177,11 @@ map so the map stays inside the executable, sibling `.map` files are not part of
 artifact file set. A non-boolean value is `AB4707`. MCP App views keep their own default (off)
 and still opt in through `tools.rsbuild.output.sourceMap`.
 
+Generated executables keep readable code. The compiler profile runs the SWC minimizer only to
+remove comments, with compression, mangling, and whitespace minification off, so bundled
+dependency documentation does not ship. Legal comments, such as `/*! … */` license headers, stay
+inline. Set `tools.rsbuild.output.minify` to `false` to keep every comment.
+
 `runtime.node` is a minimum Node.js version in `major.minor[.patch]` form. It can only raise the
 default floor for generated executables, never lower it, and the selected floor is recorded as
 `runtime.node` in the artifact manifest. The floor itself is described in
