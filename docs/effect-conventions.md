@@ -767,7 +767,10 @@ Adding the `effect` dependency changed no generated artifact, no runtime
 entry (`index.js`, `state.js`, `state/sqlite.js`, `plugin.js`) imports it
 until Stage 1+. Machine-readable copy:
 [effect-cold-start-baseline.json](effect-cold-start-baseline.json). Stage 2
-must not regress it: `pnpm bench:hook-cold-start -- --check`.
+must not regress it: `pnpm bench:hook-cold-start -- --check`. The rc.117
+re-pin measured a 46.4–47.3 ms median (2026-09-25, Node v24.15.0 against
+the baseline's v22.23.1), inside the check's budget; the baseline file was
+not rewritten.
 
 ## Re-pin chore
 

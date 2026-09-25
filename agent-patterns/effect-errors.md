@@ -65,7 +65,7 @@ export class DevCoordinatorCloseError extends YieldableFrameworkError {
 The bases keep the `Error` / `CodedError` constructor shapes, so migrating
 an existing class is the `extends` clause plus the import. They also keep
 the plain-`Error` observable shape, `JSON.stringify`, `stableJson`,
-`{ ...error }`, `util.inspect`, non-enumerable `cause`, which rc.112
+`{ ...error }`, `util.inspect`, non-enumerable `cause`, which rc.117
 `Data.Error` alone would change (its prototype `toJSON` spreads the
 constructor fields; its `[nodejs.util.inspect.custom]` prints that instead
 of the stack). Never extend `Data.Error` directly.
