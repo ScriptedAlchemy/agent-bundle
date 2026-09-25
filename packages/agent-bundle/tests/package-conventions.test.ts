@@ -511,9 +511,9 @@ describe('artifact output validation', () => {
   });
 });
 
-describe('migration nudges (AB473x)', () => {
+describe('entry conventions (AB473x)', () => {
   const factoryEntry = 'export default () => ({ close() {}, async connect() {} });\n';
-  const selfConnectingEntry = [
+  const factorylessEntry = [
     "import { connect } from './transport.js';",
     'await connect();',
     '',
@@ -533,28 +533,29 @@ describe('migration nudges (AB473x)', () => {
     };
   };
 
-  it('nudges AB4730 for a self-connecting explicit stdio entry', async () => {
+  it('errors with AB4730 for an explicit stdio entry without a default export', async () => {
     const { diagnostics, root } = await validated(
       { mcp: { servers: { curator: { entry: './src/server.ts' } } } },
-      { 'src/server.ts': selfConnectingEntry },
+      { 'src/server.ts': factorylessEntry },
     );
     expect(diagnostics).toEqual([{
       code: 'AB4730',
-      message: expect.stringContaining('self-connecting'),
-      recovery: expect.stringContaining('Optional'),
-      severity: 'info',
+      message: 'MCP server "curator" stdio entry must default-export a server factory.',
+      recovery:
+        'Default-export the server factory from the entry module, or declare a prebuilt server with command or url.',
+      severity: 'error',
       sourcePath: `${root}/src/server.ts`,
     }]);
   });
 
-  it('nudges AB4730 for a self-connecting conventional stdio entry', async () => {
+  it('errors with AB4730 for a conventional stdio entry without a default export', async () => {
     const { diagnostics, root } = await validated(
       { mcp: { servers: { curator: {} } } },
-      { 'src/mcp/curator.ts': selfConnectingEntry },
+      { 'src/mcp/curator.ts': factorylessEntry },
     );
     expect(diagnostics).toEqual([expect.objectContaining({
       code: 'AB4730',
-      severity: 'info',
+      severity: 'error',
       sourcePath: `${root}/src/mcp/curator.ts`,
     })]);
   });
@@ -688,55 +689,34 @@ describe('migration nudges (AB473x)', () => {
     return { diagnostics: validateSource(loaded, discovered, registry), root };
   };
 
-  it('errors with AB4736 for a skill in the removed top-level conventional location', async () => {
-    const { diagnostics, root } = await discoveredAndValidated(
-      {},
-      { 'skills/legacy/SKILL.md': skillMarkdown('legacy') },
-    );
+  it('ignores top-level skill, command, and rule documents', async () => {
+    const root = await projectRoot({
+      'commands/legacy.md': '# Legacy command\n',
+      'rules/legacy.mdc': '---\ndescription: Legacy rule\n---\nAlways verify.\n',
+      'skills/legacy/SKILL.md': skillMarkdown('legacy'),
+    });
+    const loaded = loadedProject({ plugin: { name: 'review-tools' } }, root);
+    const discovered = await discoverProject(root, loaded.config);
 
-    expect(diagnostics).toEqual([{
-      code: 'AB4736',
-      message: expect.stringContaining('skills/legacy/SKILL.md'),
-      recovery: expect.stringContaining('src/skills/legacy/SKILL.md'),
-      severity: 'error',
-      sourcePath: `${root}/skills/legacy/SKILL.md`,
-    }]);
+    expect(discovered.skills).toEqual([]);
+    expect(discovered.commands).toBeUndefined();
+    expect(discovered.rules).toBeUndefined();
+    expect(validateSource(loaded, discovered, registry)).toEqual([]);
   });
 
-  it('does not report AB4736 when explicit skills config claims a top-level skill', async () => {
-    const { diagnostics } = await discoveredAndValidated(
+  it('discovers a top-level skill directory named by explicit skills configuration', async () => {
+    const { diagnostics, root } = await discoveredAndValidated(
       { skills: ['skills/legacy'] },
       { 'skills/legacy/SKILL.md': skillMarkdown('legacy') },
     );
 
-    expect(diagnostics.filter(({ code }) => code === 'AB4736')).toEqual([]);
-  });
-
-  it('errors with AB4736 for top-level command and rule documents', async () => {
-    const { diagnostics, root } = await discoveredAndValidated(
-      {},
-      {
-        'commands/legacy.md': '# Legacy command\n',
-        'rules/legacy.mdc': '---\ndescription: Legacy rule\n---\nAlways verify.\n',
-      },
-    );
-
-    expect(diagnostics).toEqual([
-      {
-        code: 'AB4736',
-        message: expect.stringContaining('commands/legacy.md'),
-        recovery: expect.stringContaining('src/commands/legacy.md'),
-        severity: 'error',
-        sourcePath: `${root}/commands/legacy.md`,
-      },
-      {
-        code: 'AB4736',
-        message: expect.stringContaining('rules/legacy.mdc'),
-        recovery: expect.stringContaining('src/rules/legacy.mdc'),
-        severity: 'error',
-        sourcePath: `${root}/rules/legacy.mdc`,
-      },
-    ]);
+    expect(diagnostics).toEqual([]);
+    expect(
+      (await discoverProject(root, { plugin: { name: 'review-tools' }, skills: ['skills/legacy'] })).skills,
+    ).toMatchObject([{
+      dir: `${root}/skills/legacy`,
+      source: `${root}/skills/legacy/SKILL.md`,
+    }]);
   });
 
   it('discovers skills from the src convention', async () => {
@@ -801,11 +781,11 @@ describe('migration nudges (AB473x)', () => {
         'src/index.ts': 'export const a = 1;\n',
         'src/mcp/curator.ts': factoryEntry,
         'src/other.ts': 'export const main = async () => 0;\n',
-        'src/server.ts': selfConnectingEntry,
+        'src/server.ts': factoryEntry,
       },
     );
     expect(diagnostics.map((diagnostic) => diagnostic.code).sort()).toEqual([
-      'AB4730', 'AB4731', 'AB4732', 'AB4733',
+      'AB4731', 'AB4732', 'AB4733',
     ]);
     expect(diagnostics.every((diagnostic) => diagnostic.severity === 'info')).toBe(true);
   });
