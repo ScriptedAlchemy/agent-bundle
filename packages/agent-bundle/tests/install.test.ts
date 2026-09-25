@@ -36,6 +36,7 @@ import { runCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 import { removeTree } from './support/remove-tree.ts';
+import { diffTreeSnapshots, snapshotTree } from './support/tree-snapshot.ts';
 
 interface CommandCall {
   readonly args: readonly string[];
@@ -1432,7 +1433,7 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
   }
 });
 
-it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it', async () => {
+it('refuses a pre-receipt Cursor copy as foreign, byte-identical or not, with or without --replace', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
@@ -1442,48 +1443,38 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
     await writeFile(join(fixture.bundleRoot, 'install.mjs'), '// installer\n');
     await refreshCursorBundle(fixture);
     await cp(fixture.bundleRoot, destination, { recursive: true });
-
-    // Byte-identical legacy copy: a plain rerun is a no-op; --replace adopts it by writing the receipt.
-    const identical = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
-    expect(identical).toMatchObject({ state: 'already-installed' });
-    expect(await readInstallReceipt(destination)).toBeUndefined();
-    const adopted = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' });
-    expect(adopted).toMatchObject({ contentHash: (await treeInventory(fixture.bundleRoot)).hash, state: 'adopted' });
-    // Adoption created no directories, so the legacy copy's directories are never pruned.
-    expect(await readInstallReceipt(destination)).toMatchObject({ directories: [], plugin: 'install-fixture', version: '1.2.3' });
-    await rm(join(destination, installReceiptFile));
-
-    await writeFile(join(destination, 'payload.txt'), 'stale\n');
-    // Operator content and a file the rebuild dropped: a legacy copy has no inventory, so both stay.
-    await writeFile(join(destination, 'operator-note.txt'), 'keep me\n');
-    await writeFile(join(destination, 'dropped-by-rebuild.txt'), 'old artifact file\n');
-    const legacyHash = (await treeInventory(destination)).hash;
     const artifact = await treeInventory(fixture.bundleRoot);
 
-    const refused = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
-      .catch((failure: unknown) => failure);
-    expect(refused).toBeInstanceOf(DiagnosticError);
-    const message = (refused as DiagnosticError).diagnostics[0]?.message ?? '';
-    expect((refused as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7005', target: 'cursor' });
-    expect(message).toContain('Refusing content collision');
-    expect(message).toContain(`content ${legacyHash.slice(0, 12)}`);
-    expect(message).toContain(`content ${artifact.hash.slice(0, 12)}`);
-    expect(message).toContain('same version, different content');
-    expect(message).toContain('--replace');
+    const expectForeign = async (replace: boolean, installedHash: string, verdict: string): Promise<void> => {
+      const refused = await installBundle({ from: fixture.from, home, host: 'cursor', replace, scope: 'user' })
+        .catch((failure: unknown) => failure);
+      expect(refused).toBeInstanceOf(DiagnosticError);
+      const message = (refused as DiagnosticError).diagnostics[0]?.message ?? '';
+      expect((refused as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7005', target: 'cursor' });
+      expect(message).toContain(`Refusing foreign install at ${destination}`);
+      expect(message).toContain(`content ${installedHash.slice(0, 12)}`);
+      expect(message).toContain(`content ${artifact.hash.slice(0, 12)}`);
+      expect(message).toContain(verdict);
+      expect(message).toContain('--replace does not apply');
+    };
 
-    const replaced = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' });
-    expect(replaced).toMatchObject({ contentHash: artifact.hash, previousContentHash: legacyHash, state: 'replaced' });
-    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
-    expect(await readFile(join(destination, 'operator-note.txt'), 'utf8')).toBe('keep me\n');
-    expect(await readFile(join(destination, 'dropped-by-rebuild.txt'), 'utf8')).toBe('old artifact file\n');
-    const receipt = await readInstallReceipt(destination);
-    expect(receipt).toMatchObject({ contentHash: artifact.hash, directories: [], plugin: 'install-fixture' });
-    expect(receipt?.files).toEqual(artifact.files);
-    // From now on the leftovers are unowned: a later same-version replace leaves them alone.
-    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
-    await refreshCursorBundle(fixture);
-    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
-    expect(await readFile(join(destination, 'dropped-by-rebuild.txt'), 'utf8')).toBe('old artifact file\n');
+    // Byte-identical copy without a receipt: still foreign, never "already installed", never adopted.
+    await expectForeign(false, artifact.hash, 'same content');
+    await expectForeign(true, artifact.hash, 'same content');
+    expect(await readInstallReceipt(destination)).toBeUndefined();
+
+    await writeFile(join(destination, 'payload.txt'), 'stale\n');
+    await writeFile(join(destination, 'operator-note.txt'), 'keep me\n');
+    const before = await snapshotTree(destination);
+    const driftedHash = (await treeInventory(destination)).hash;
+    await expectForeign(false, driftedHash, 'same version, different content');
+    await expectForeign(true, driftedHash, 'same version, different content');
+    expect(diffTreeSnapshots(before, await snapshotTree(destination))).toEqual({ added: [], changed: [], removed: [] });
+
+    // Removing the copy by hand and reinstalling is the only path back to a receipt-managed install.
+    await removeTree(destination);
+    expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })).toMatchObject({ state: 'installed' });
+    expect(await readInstallReceipt(destination)).toMatchObject({ contentHash: artifact.hash, plugin: 'install-fixture' });
   } finally {
     await Promise.all([
       removeTree(fixture.cleanupRoot),
@@ -1845,23 +1836,8 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
       expect(await readInstallReceipt(root), missing).toBeUndefined();
     }
     await writeJson(join(root, installReceiptFile), complete);
-    // A format/1 receipt (#420) reads with its lifecycle fields synthesized and the downgrade recorded (#101).
-    expect(await readInstallReceipt(root)).toEqual({
-      contentHash: 'abc',
-      directories: ['skills', 'skills/probe'],
-      files: ['skills/probe/SKILL.md', 'plugin.json'],
-      format: installReceiptFormat,
-      host: 'cursor',
-      hostDirectories: [],
-      installedAt: '2026-09-03T00:00:00.000Z',
-      migratedFrom: 'agent-bundle-install-receipt/1',
-      mode: 'local',
-      plugin: 'install-fixture',
-      registrations: [{ kind: 'cursor-local-plugin' }],
-      scope: 'user',
-      updatedAt: '2026-09-03T00:00:00.000Z',
-      version: '1.2.3',
-    });
+    // A format/1 receipt is not read: only the current format proves ownership.
+    expect(await readInstallReceipt(root)).toBeUndefined();
     // A current-format receipt must carry every lifecycle field with a valid shape, or it reads as absent.
     const current = {
       ...complete,
@@ -1934,13 +1910,12 @@ posixPermissionIt('tree inventory refuses paths that could not round-trip throug
   }
 });
 
-it('never lets a receipt claim runtime state: a receipt owning state/ reads as legacy and the store survives', async () => {
+it('never lets a receipt claim runtime state: a receipt owning state/ reads as absent and the copy is foreign', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
   const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
   try {
-    // Emitted bundles carry the install surface; without a trusted receipt that is what marks a copy as legacy.
     await writeFile(join(fixture.bundleRoot, 'INSTALL.md'), '# install\n');
     await writeFile(join(fixture.bundleRoot, 'install.mjs'), '// installer\n');
     await refreshCursorBundle(fixture);
@@ -1948,28 +1923,23 @@ it('never lets a receipt claim runtime state: a receipt owning state/ reads as l
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
 
-    // A corrupted (or pre-policy) receipt that lists the durable store as an owned file.
+    // A corrupted receipt that lists the durable store as an owned file does not read at all.
     const receipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as { files: string[] };
     await writeJson(join(destination, installReceiptFile), { ...receipt, files: [...receipt.files, 'state/plugin.sqlite'] });
     expect(await readInstallReceipt(destination)).toBeUndefined();
 
-    // Same-version drift is no longer automatic: the copy is treated as legacy, nothing is touched.
+    // Without a readable receipt the copy is foreign: refused with and without --replace, nothing is touched.
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
     await refreshCursorBundle(fixture);
-    const refused = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
-      .catch((failure: unknown) => failure);
-    expect(refused).toBeInstanceOf(DiagnosticError);
-    expect((refused as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7005', target: 'cursor' });
-    expect((refused as DiagnosticError).diagnostics[0]?.message).toContain('predates install receipts');
+    for (const replace of [false, true]) {
+      const refused = await installBundle({ from: fixture.from, home, host: 'cursor', replace, scope: 'user' })
+        .catch((failure: unknown) => failure);
+      expect(refused).toBeInstanceOf(DiagnosticError);
+      expect((refused as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7005', target: 'cursor' });
+      expect((refused as DiagnosticError).diagnostics[0]?.message).toContain(`Refusing foreign install at ${destination}`);
+    }
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
-
-    // Explicit adoption rewrites the artifact's files and leaves the store alone and unowned.
-    expect(await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' }))
-      .toMatchObject({ state: 'replaced' });
-    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
-    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
-    expect((await readInstallReceipt(destination))?.files.some((file) => file.startsWith('state/'))).toBe(false);
   } finally {
     await Promise.all([
       removeTree(fixture.cleanupRoot),

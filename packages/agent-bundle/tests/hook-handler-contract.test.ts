@@ -47,6 +47,7 @@ const agentEventFor: Readonly<Record<HookHandlerEventName, CanonicalAgentEvent>>
 };
 
 const wrapperEntry = (host: Host, event: HookHandlerEventName, nativeEvent: string): TargetHookWrapper => ({
+  projectRoot: '/project',
   event,
   hook: {
     event,

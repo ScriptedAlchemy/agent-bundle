@@ -22,7 +22,7 @@ import { isErrno } from '../core/errors.ts';
 import { packageBinEntries } from '../core/package-dependencies.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { matchesManifestFile } from '../build/artifact-layout.ts';
-import { exists, installReceiptFile, isInstallReceiptEntry, isPortablePathSegment, isPreservedRuntimeRoot } from '../core/paths.ts';
+import { installReceiptFile, isInstallReceiptEntry, isPortablePathSegment, isPreservedRuntimeRoot } from '../core/paths.ts';
 import { stateOwnershipMarkerFile } from '../core/types.ts';
 import { artifactManifestName, type ArtifactManifest } from '../build/manifest.ts';
 import { OPERATOR_ENV_FILE_NAMES } from '../launch-env.ts';
@@ -32,23 +32,20 @@ import { OPERATOR_ENV_FILE_NAMES } from '../launch-env.ts';
  * `agent-bundle doctor`, and the emitted standalone `install.mjs`: every copy
  * an agent-bundle installer places at a plugin root carries a receipt naming
  * the plugin, its version, the artifact content hash, and the exact files the
- * installer owns. Replacement removes or rewrites owned files only, so runtime
- * state that lands beside the plugin (`state/`) survives a same-version rebuild.
+ * installer owns. Replacement removes or rewrites owned files only, so
+ * unowned entries beside the plugin survive a same-version rebuild.
  */
 
 /** Sidecar written at an installed plugin root by every agent-bundle installer. */
 export { installReceiptFile };
 
 /**
- * Current receipt format. Format 2 (#101) adds the lifecycle fields —
- * `mode`, `scope`, `registrations`, `hostDirectories`, `updatedAt` — that
- * `agent-bundle uninstall` consumes; format 1 receipts (#420) are read with
- * those fields synthesized (`migratedFrom` names the downgrade) and are
- * rewritten as format 2 by the next replacement.
+ * The only receipt format read or written. Format 2 (#101) carries the
+ * lifecycle fields — `mode`, `scope`, `registrations`, `hostDirectories`,
+ * `updatedAt` — that `agent-bundle uninstall` consumes; any other format
+ * reads as absent, so the tree it sits in is foreign.
  */
 export const installReceiptFormat = 'agent-bundle-install-receipt/2';
-
-export const legacyInstallReceiptFormat = 'agent-bundle-install-receipt/1';
 
 /**
  * How the install was delivered: `local` copies into a host-loaded directory
@@ -97,13 +94,6 @@ export interface InstallRegistration {
   readonly scope?: InstallReceiptScope;
 }
 
-
-/**
- * Root files every emitted Cursor-compatible bundle carries. A receipt-less
- * copy with these files and a matching manifest name is a legacy agent-bundle
- * install (placed before receipts existed); anything else is foreign.
- */
-export const installSurfaceMarkerFiles: readonly string[] = Object.freeze(['INSTALL.md', 'install.mjs']);
 
 /**
  * Recorded by the emitted `install.mjs` when it installs an Agent Plugins
@@ -167,12 +157,6 @@ export interface InstallReceipt {
    */
   readonly hostDirectories: readonly string[];
   readonly installedAt: string;
-  /**
-   * Present only on a receipt read from disk that predates the current
-   * format: names the format it was read as, and every lifecycle field was
-   * synthesized (best-effort defaults). Never written.
-   */
-  readonly migratedFrom?: string;
   readonly mode: InstallReceiptMode;
   readonly plugin: string;
   /**
@@ -187,11 +171,6 @@ export interface InstallReceipt {
   readonly scope: InstallReceiptScope;
   /** Per-server runtime locations and the independent evidence authorizing deletion. */
   readonly state?: InstallReceiptState;
-  /** Effective framework state root retained by a Cursor `--keep-data` uninstall. */
-  readonly stateRoot?: {
-    readonly root: string;
-    readonly source: 'derived' | 'native';
-  };
   /** When this receipt was last written (install or replacement); `installedAt` is the first install. */
   readonly updatedAt: string;
   readonly version: string;
@@ -220,7 +199,7 @@ export interface TreeInventory {
   readonly hash: string;
 }
 
-export type InstalledTreeOwnership = 'foreign' | 'legacy' | 'receipt';
+export type InstalledTreeOwnership = 'foreign' | 'receipt';
 
 export type InstalledTreeStatus = 'current' | 'foreign' | 'stale' | 'version-mismatch';
 
@@ -680,18 +659,13 @@ const readRegistration = (value: unknown): InstallRegistration | undefined => {
 };
 
 /**
- * Validates a parsed receipt document. Format 1 receipts (written by #420
- * for Cursor local copies) are upgraded in memory: `mode: 'local'`,
- * `scope: 'user'`, a single `cursor-local-plugin` registration, no host
- * directories, and `updatedAt = installedAt`; `migratedFrom` records the
- * downgrade so Doctor can diagnose it. Any other format, or a current-format
- * receipt missing a field, reads as absent.
+ * Validates a parsed receipt document. Any format other than the current
+ * one, or a receipt missing a field, reads as absent.
  */
 const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  const format = record['format'];
-  if (format !== installReceiptFormat && format !== legacyInstallReceiptFormat) return undefined;
+  if (record['format'] !== installReceiptFormat) return undefined;
   if (
     typeof record['plugin'] !== 'string' ||
     typeof record['version'] !== 'string' ||
@@ -706,43 +680,6 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
   const cursorExpansion = readCursorExpansion(record['cursorExpansion']);
   const state = readReceiptState(record['state']);
   if (record['state'] !== undefined && state === undefined) return undefined;
-  const stateRootRecord = record['stateRoot'];
-  const stateRoot = stateRootRecord !== undefined &&
-    stateRootRecord !== null &&
-    typeof stateRootRecord === 'object' &&
-    !Array.isArray(stateRootRecord) &&
-    typeof (stateRootRecord as Record<string, unknown>)['root'] === 'string' &&
-    ((stateRootRecord as Record<string, unknown>)['source'] === 'derived' ||
-      (stateRootRecord as Record<string, unknown>)['source'] === 'native')
-    ? Object.freeze({
-        root: (stateRootRecord as Record<string, unknown>)['root'] as string,
-        source: (stateRootRecord as Record<string, unknown>)['source'] as 'derived' | 'native',
-      })
-    : undefined;
-  const base = {
-    contentHash: record['contentHash'],
-    ...(cursorExpansion === undefined ? {} : { cursorExpansion }),
-    directories: Object.freeze([...record['directories']]),
-    files: Object.freeze([...record['files']]),
-    format: installReceiptFormat,
-    host: record['host'],
-    installedAt: record['installedAt'],
-    plugin: record['plugin'],
-    ...(stateRoot === undefined ? {} : { stateRoot }),
-    version: record['version'],
-    ...(typeof record['webDataRoot'] === 'string' ? { webDataRoot: record['webDataRoot'] } : {}),
-  } as const;
-  if (format === legacyInstallReceiptFormat) {
-    return Object.freeze({
-      ...base,
-      hostDirectories: Object.freeze([]),
-      migratedFrom: legacyInstallReceiptFormat,
-      mode: 'local',
-      registrations: Object.freeze([Object.freeze({ kind: 'cursor-local-plugin' as const })]),
-      scope: 'user',
-      updatedAt: record['installedAt'],
-    });
-  }
   if (
     !isReceiptMode(record['mode']) ||
     !isReceiptScope(record['scope']) ||
@@ -767,14 +704,23 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     ? state
     : undefined;
   return Object.freeze({
-    ...base,
+    contentHash: record['contentHash'],
+    ...(cursorExpansion === undefined ? {} : { cursorExpansion }),
+    directories: Object.freeze([...record['directories']]),
+    files: Object.freeze([...record['files']]),
+    format: installReceiptFormat,
+    host: record['host'],
     hostDirectories: Object.freeze([...record['hostDirectories']]),
+    installedAt: record['installedAt'],
     mode: record['mode'],
+    plugin: record['plugin'],
     ...(typeof record['projectRoot'] === 'string' ? { projectRoot: record['projectRoot'] } : {}),
     registrations: Object.freeze(registrations),
     scope: record['scope'],
     ...(ownedState === undefined ? {} : { state: ownedState }),
     updatedAt: record['updatedAt'],
+    version: record['version'],
+    ...(typeof record['webDataRoot'] === 'string' ? { webDataRoot: record['webDataRoot'] } : {}),
   });
 };
 
@@ -803,15 +749,14 @@ export const readInstallReceipt = (destination: string): Promise<InstallReceipt 
 /**
  * Builds a receipt for an inventory. `directories` defaults to every ancestor
  * of the inventoried files — right for a fresh install, where the installer
- * created all of them; callers that adopt or replace an existing tree pass
- * exactly the directories they created.
+ * created all of them; callers that replace an existing tree pass exactly
+ * the directories they created.
  */
 export const createInstallReceipt = (options: InstallReceiptIdentity & {
   readonly cursorExpansion?: InstallReceiptCursorExpansion;
   readonly directories?: readonly string[];
   readonly inventory: TreeInventory;
   readonly state?: InstallReceiptState;
-  readonly stateRoot?: InstallReceipt['stateRoot'];
   readonly webDataRoot?: string;
 }): InstallReceipt => {
   const installedAt = options.installedAt ?? new Date().toISOString();
@@ -841,18 +786,13 @@ export const createInstallReceipt = (options: InstallReceiptIdentity & {
             }))),
           }),
         }),
-    ...(options.stateRoot === undefined ? {} : { stateRoot: Object.freeze({ ...options.stateRoot }) }),
     updatedAt: options.updatedAt ?? installedAt,
     version: options.version,
     ...(options.webDataRoot === undefined ? {} : { webDataRoot: options.webDataRoot }),
   });
 };
 
-/** The on-disk document: `migratedFrom` is a read-time annotation and is never persisted. */
-const receiptDocument = (receipt: InstallReceipt): string => {
-  const { migratedFrom: _migratedFrom, ...persisted } = receipt;
-  return `${stableJson({ ...persisted, format: installReceiptFormat })}\n`;
-};
+const receiptDocument = (receipt: InstallReceipt): string => `${stableJson(receipt)}\n`;
 
 /**
  * Writes a receipt document atomically at `path`: an exclusively created,
@@ -1021,17 +961,6 @@ export const simulateRemoveStoredInstallReceipt = async (path: string, hostRoot:
 export const pruneEmptyDirectory = rmdirIfEmpty;
 
 /**
- * A destination that holds nothing but runtime roots (`state/`) — and at most
- * a remnant receipt — is what `uninstall --keep-data` leaves behind: not a
- * foreign directory, but an empty shell around preserved durable state that a
- * reinstall fills back in.
- */
-export const isRuntimeStateRemnant = async (destination: string): Promise<boolean> => {
-  const entries = (await readdir(destination)).filter((name) => name !== installReceiptFile);
-  return entries.length > 0 && entries.every(isPreservedRuntimeRoot);
-};
-
-/**
  * A remnant receipt owns no files and records no registrations: `uninstall`
  * writes it when the plugin root survives (retained runtime state or unowned
  * entries) so the host directories the install created stay receipt-owned for
@@ -1044,18 +973,11 @@ export const isRemnantReceipt = (receipt: InstallReceipt): boolean =>
 /** `sha256` of an empty owned set: what `hashOwnedFiles(root, [])` yields, and what a remnant receipt records. */
 export const emptyContentHash = createHash('sha256').digest('hex');
 
-export const hasInstallSurfaceMarkers = async (destination: string): Promise<boolean> => {
-  for (const marker of installSurfaceMarkerFiles) {
-    if (!await exists(join(destination, marker))) return false;
-  }
-  return true;
-};
-
 /**
  * Decides whether an existing plugin root is this plugin's agent-bundle
- * install (receipt or legacy layout) or a foreign directory, and whether its
- * content matches the artifact. Symlinks anywhere in the installed tree are
- * refused, exactly like the copy paths.
+ * install (a receipt naming this plugin) or a foreign directory, and whether
+ * its content matches the artifact. Symlinks anywhere in the installed tree
+ * are refused, exactly like the copy paths.
  */
 export const compareInstalledTree = async (options: {
   readonly artifact: TreeInventory;
@@ -1075,9 +997,7 @@ export const compareInstalledTree = async (options: {
     installedContentHash = await hashOwnedFiles(options.destination, receipt.files);
   } else {
     installedContentHash = (await treeInventory(options.destination)).hash;
-    ownership = receipt === undefined && manifest?.name === options.plugin && await hasInstallSurfaceMarkers(options.destination)
-      ? 'legacy'
-      : 'foreign';
+    ownership = 'foreign';
   }
   const installedVersion = manifest?.version ?? (ownership === 'receipt' ? receipt?.version : undefined);
   const installedName = manifest?.name ?? (ownership === 'receipt' ? receipt?.plugin : undefined);
@@ -1248,27 +1168,6 @@ const ensureAncestors = async (
 };
 
 /**
- * What the previous installer owned. A receipt says so exactly. A legacy copy
- * has no inventory, so only the files the new artifact also ships count as
- * owned: they are rewritten, everything else (operator files, stale artifact
- * files, `state/`) is left in place and stays unowned under the new receipt.
- */
-const previouslyOwnedFiles = async (
-  destination: string,
-  comparison: InstalledTreeComparison,
-  incoming: ReadonlySet<string>,
-): Promise<readonly string[]> => {
-  if (comparison.ownership === 'receipt' && comparison.receipt !== undefined) return comparison.receipt.files;
-  const inventory = await treeInventory(destination);
-  const owned: string[] = [];
-  for (const file of inventory.files) {
-    // Exact match, or a case alias of an incoming path on case-insensitive filesystems.
-    if (await isOwnedEntry(destination, incoming, file)) owned.push(file);
-  }
-  return owned;
-};
-
-/**
  * True when a directory is entirely previous-installer territory: the
  * directory and every directory beneath it were created by the installer, it
  * holds at least one file, every file is owned, and no directory anywhere
@@ -1303,13 +1202,6 @@ const isWhollyOwnedDirectory = async (
 };
 
 /**
- * Directories the previous installer created. A receipt says so exactly; a
- * legacy copy has no inventory, so none of its directories are ours.
- */
-const previouslyOwnedDirectories = (comparison: InstalledTreeComparison): readonly string[] =>
-  comparison.ownership === 'receipt' && comparison.receipt !== undefined ? comparison.receipt.directories : [];
-
-/**
  * Replaces an agent-bundle-owned install in place: stale owned files leave
  * first (their now-empty installer-created directories are pruned), every
  * staged file then moves over its predecessor with an atomic rename, and the
@@ -1325,13 +1217,14 @@ export const replaceInstalledTree = async (options: {
   readonly receipt: InstallReceiptIdentity;
   readonly staged: StagedArtifact;
 }): Promise<void> => {
-  if (options.comparison.ownership === 'foreign') {
+  const previous = options.comparison.receipt;
+  if (options.comparison.ownership === 'foreign' || previous === undefined) {
     throw new Error(`Refusing to replace foreign install at ${options.destination}.`);
   }
   const incoming = new Set(options.staged.inventory.files);
-  const previouslyOwned = await previouslyOwnedFiles(options.destination, options.comparison, incoming);
+  const previouslyOwned = previous.files;
   const owned = new Set(previouslyOwned);
-  const ownedDirectories = new Set(previouslyOwnedDirectories(options.comparison));
+  const ownedDirectories = new Set(previous.directories);
   await assertRealAncestors(options.destination, previouslyOwned);
   await assertRealAncestors(options.destination, options.staged.inventory.files, owned);
   // An existing entry at an incoming path is fine when it is the owned file itself (exact name, or
@@ -1378,15 +1271,14 @@ export const replaceInstalledTree = async (options: {
     ...[...ownedDirectories].filter((directory) => !pruned.has(directory)),
     ...created,
   ])]);
-  const previous = options.comparison.receipt;
   const now = new Date().toISOString();
   await writeFile(
     join(options.staged.root, installReceiptFile),
     receiptDocument(createInstallReceipt({
       ...options.receipt,
       directories,
-      hostDirectories: options.receipt.hostDirectories ?? previous?.hostDirectories ?? [],
-      installedAt: options.receipt.installedAt ?? previous?.installedAt ?? now,
+      hostDirectories: options.receipt.hostDirectories ?? previous.hostDirectories,
+      installedAt: options.receipt.installedAt ?? previous.installedAt,
       inventory: options.staged.inventory,
       updatedAt: options.receipt.updatedAt ?? now,
     })),

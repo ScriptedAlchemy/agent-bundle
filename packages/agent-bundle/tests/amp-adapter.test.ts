@@ -22,6 +22,7 @@ const configPath = '/workspace/agent-bundle.config.ts';
 const skillSource = '/workspace/src/skills/review/SKILL.md';
 
 const plugin = (): NormalizedPlugin => ({
+  projectRoot: '/workspace',
   extensions: {},
   hooks: [],
   mcpServers: [

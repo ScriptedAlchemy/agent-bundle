@@ -64,7 +64,7 @@ export type DiscoveryRuntimeStatus =
     readonly startedAt?: string;
     readonly status: 'available';
   }>
-  | Readonly<{ readonly status: 'failed' | 'unavailable' | 'unsupported' }>;
+  | Readonly<{ readonly status: 'failed' | 'unavailable' }>;
 
 export interface DiscoveryMcpServer {
   readonly name: string;

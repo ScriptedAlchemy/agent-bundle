@@ -131,7 +131,7 @@ const runtimeStatusSchema = z.discriminatedUnion('status', [
     status: z.literal('available'),
   }),
   z.strictObject({
-    status: z.enum(['failed', 'unavailable', 'unsupported']),
+    status: z.enum(['failed', 'unavailable']),
   }),
 ]);
 const findingShape = {
