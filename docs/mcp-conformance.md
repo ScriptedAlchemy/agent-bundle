@@ -7,7 +7,7 @@ pnpm test:mcp-conformance
 ```
 
 CI runs the same command as the `MCP conformance` job of the `Nightly`
-workflow (`.github/workflows/nightly.yml`) — on the daily schedule and on
+workflow (`.github/workflows/nightly.yml`), on the daily schedule and on
 manual dispatch from any ref. The lane uses one Node version and one existing
 fixture, and uploads the official runner's `checks.json` artifacts from
 `artifacts/mcp-conformance`. It is not part of pull request, push, or default
@@ -59,8 +59,8 @@ What the audit found on `@modelcontextprotocol/server@2.0.0` /
 `@modelcontextprotocol/client@2.0.0` (unchanged since the deferral):
 
 - The task methods are outside the SDK's typed spec-method surface, but the
-  SDK's documented custom-method form — `setRequestHandler(method, { params },
-  handler)` on the server and `request(request, resultSchema)` on the client —
+  SDK's documented custom-method form, `setRequestHandler(method, { params },
+  handler)` on the server and `request(request, resultSchema)` on the client,
   routes them, and the SDK exports their result schemas publicly as
   `specTypeSchemas.CreateTaskResult`, `GetTaskResult`, `CancelTaskResult`,
   `ListTasksResult` (the deferral note's "not exported publicly" was wrong; they
@@ -70,8 +70,8 @@ What the audit found on `@modelcontextprotocol/server@2.0.0` /
   `capabilities.tasks`, so a modern-revision client keeps the ordinary contract.
 - The SDK's `tools/call` result validation admits `CallToolResult` only and
   refuses a `task` body. The lifecycle therefore lives in a `Server` subclass
-  (`packages/agent-bundle/src/mcp-tasks.ts`) whose `_wrapHandler` — the SDK's
-  documented protected seam for role-specific request handling — answers a
+  (`packages/agent-bundle/src/mcp-tasks.ts`) whose `_wrapHandler`, the SDK's
+  documented protected seam for role-specific request handling, answers a
   task-augmented request with a `CreateTaskResult` and runs the SDK-validated
   handler behind the task. Nothing reaches past the SDK's public or protected
   surface.
@@ -168,7 +168,7 @@ level):
   negotiated one, so no client is invited into a lifecycle the server cannot
   serve.
 - A `tools/call` carrying task augmentation is processed as an ordinary request
-  and returns one final `CallToolResult` with no task handle — the behaviour
+  and returns one final `CallToolResult` with no task handle, the behaviour
   the `2025-11-25` Tasks utility requires of a receiver that declared no task
   capability for that request type. `tasks/get`, `tasks/result`, `tasks/list`,
   and `tasks/cancel` answer with JSON-RPC `-32601`.
@@ -177,9 +177,9 @@ level):
 
 Unblock condition: a published `@modelcontextprotocol/server` /
 `@modelcontextprotocol/client` release that routes task operations through its
-typed surface — a server-side task store or `registerTool` task handler, a
+typed surface, a server-side task store or `registerTool` task handler, a
 typed client path for `CreateTaskResult` and task polling, and a `tasks`
-capability the SDK itself gates — for whichever revision the conformance lane
+capability the SDK itself gates, for whichever revision the conformance lane
 then records. `packages/rsc-runtime/tests/mcp-tasks-deferral.test.ts` pins the
 audited SDK version and asserts each fact above against the installed
 packages; when one stops holding, that test (or `pnpm typecheck`, through its

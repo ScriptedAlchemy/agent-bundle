@@ -14,8 +14,8 @@ to see how the surfaces fit together instead of studying one of them alone.
 - **Public dependencies:** `agent-bundle` (`workspace:*`), `@agent-bundle/runtime`, `react`,
   `zod`; `@rstest/browser`, `@rstest/core`, `@rstest/playwright`, and `playwright` for the
   browser-app test
-- **Targets:** `portable`, `codex`, `claude` — every target ships the `status` server and its App
-- **Credentials:** none — the eval and the fixture check read only checked-in data
+- **Targets:** `portable`, `codex`, `claude`: every target ships the `status` server and its App
+- **Credentials:** none: the eval and the fixture check read only checked-in data
 - **Source:** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
 
 ## What it proves
@@ -41,7 +41,7 @@ to see how the surfaces fit together instead of studying one of them alone.
   green screenshot.
 - **A browser surface is its own proof level.** `tests/browser-app/status-panel.browser.test.ts`
   mounts the production-compiled App HTML over the product bridge through
-  `agent-bundle/test/browser` — the `browser-app` level in
+  `agent-bundle/test/browser`, the `browser-app` level in
   [Testing](../guide/development/testing.mdx).
 - **The App is a client of the bridge, not a transport of its own.** `src/mcp/status/apps/status.ts`
   creates its client with `createAppClient` from `agent-bundle/app`, receives the opening
@@ -97,7 +97,7 @@ to see how the surfaces fit together instead of studying one of them alone.
    shows the composite plugin root, where `mcp-apps/status.html` appears whichever target is
    selected.
 5. Before two eval runs exist, **Advanced → Evals → Compare** deliberately shows
-   `At least two recorded runs are needed before a comparison can be aligned.` — the precise
+   `At least two recorded runs are needed before a comparison can be aligned.`, the precise
    empty state, not an error.
 6. Open **Advanced → Protocol**, choose portable and the `status` server, open the session, list tools,
    select `show-status`, choose `payments-api`, and invoke it. Invocation history shows the
@@ -139,7 +139,7 @@ temporary artifact first; pass `--artifact artifact` to reuse the `pnpm build` o
 Closing stdin exits 0 and Ctrl-C exits 130, and per-server state persists under
 `.agent-bundle/mcp-run/portable/status`.
 
-The command loads the project-root `.env` set — including the selected `--mode` variants — by
+The command loads the project-root `.env` set, including the selected `--mode` variants, by
 default. Launch environment precedence is manifest env, then `.env` files, then exported operator
 variables. Repeatable `--env-file <path>` replaces the conventional files, `--no-env` skips them,
 and `--plugin-root <path>` is only for a copied-artifact rehearsal. The full contract is in

@@ -4,11 +4,11 @@ description: 'Install a built agent-bundle into Claude Code, Codex, Cursor, or e
 
 # Host installation
 
-The composite plugin root `build` emits contains one generated `INSTALL.md` — a section per
-selected host — with commands that use the bundle's real plugin and marketplace names. Every
+The composite plugin root `build` emits contains one generated `INSTALL.md`, a section per
+selected host, with commands that use the bundle's real plugin and marketplace names. Every
 command in it is a host command (`claude plugin …`, `codex plugin …`) or the bundled
-`install.mjs`, so a consumer who receives the built root — from npm, a marketplace checkout, or
-a zip — never needs the `agent-bundle` CLI to install, reinstall, or uninstall it; `INSTALL.md`
+`install.mjs`, so a consumer who receives the built root, from npm, a marketplace checkout, or
+a zip, never needs the `agent-bundle` CLI to install, reinstall, or uninstall it; `INSTALL.md`
 says so and marks the CLI optional wherever it is mentioned. The framework CLI performs those
 same operations for developers who have it, and every host installs from the same directory:
 
@@ -20,7 +20,7 @@ npx agent-bundle install amp --from artifact --scope user
 ```
 
 `--from` names the **composite root**: the directory that holds `agent-bundle.manifest.json`. The
-installer reads that one file and nothing else to learn what it is installing — the plugin name
+installer reads that one file and nothing else to learn what it is installing, the plugin name
 and version come from `application`, the marketplace name from `projections[host].marketplace`,
 and the file the host is pointed at from `projections[host].documents.plugin` (or
 `documents.entry` for Amp; see the
@@ -38,7 +38,7 @@ plugin name for `cursor`.
 | Amp (experimental) | Copies only `.amp/plugins/<name>/` into the project root or `$XDG_CONFIG_HOME/amp/plugins/<name>` (falling back to `~/.config/amp/plugins/<name>`). It does not edit settings, trust, disabled state, personal/workspace repositories, or any other plugin. `amp plugins list` inspects the copy when an Amp account is available; reloading a running session remains the interactive Ctrl+O → `plugins: reload` action. Live activation is contract-verified, runtime-unverified. | `project`, `user` (system root) |
 | Claude Code | Delegates to `claude plugin marketplace add` and `claude plugin install`. Claude Code loads `hooks/hooks.json` and `.mcp.json` from the plugin root on its own, so `.claude-plugin/plugin.json` carries no `hooks` pointer (Claude Code reports one at that file as a duplicate hooks file); the Codex and Cursor documents beside their own manifests in the same root are never read by Claude Code. For a `directory` marketplace, Claude Code resolves `${CLAUDE_PLUGIN_ROOT}` to that directory itself, not to its plugin cache, so rebuilding it changes the hooks a running session executes. | `user`, `project`, `local` |
 | Codex | Delegates to `codex plugin marketplace add` and `codex plugin add`. `.codex-plugin/plugin.json` points at its own `.codex-plugin/hooks.json` and `.codex-plugin/mcp.json`, so Codex never falls back to discovering another host's documents in the root. | `user` |
-| Cursor | Copies the root into `~/.cursor/plugins/local/<name>` (`--mode local`, the default), because Cursor publishes no non-interactive install verb; `--mode marketplace` instead stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step. Either way Cursor loads the hook and MCP documents `.cursor-plugin/plugin.json` names — `.cursor-plugin/hooks.json` and `.cursor-plugin/mcp.json`, beside the manifest — so plugin hooks run with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json` entry. | `user` |
+| Cursor | Copies the root into `~/.cursor/plugins/local/<name>` (`--mode local`, the default), because Cursor publishes no non-interactive install verb; `--mode marketplace` instead stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step. Either way Cursor loads the hook and MCP documents `.cursor-plugin/plugin.json` names, `.cursor-plugin/hooks.json` and `.cursor-plugin/mcp.json`, beside the manifest, so plugin hooks run with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json` entry. | `user` |
 
 Because the Claude and Codex projections always ship local marketplace manifests, their public
 CLIs can install the root directly. The installer fails with a typed diagnostic when the
@@ -68,8 +68,8 @@ never invokes `sudo` and never changes `PATH`. When `agent-bundle.manifest.json`
 installer reads the selected projection's plugin and MCP pointers from it; conventional
 `.cursor-plugin/*` and root Agent Plugins paths are fallback discovery for manifest-less packs only.
 
-For a root Cursor loads as an Agent Plugins 1.0.0 pack — `portable` selected without `cursor`,
-so the root `plugin.json` is the only manifest Cursor finds — the installer also expands the
+For a root Cursor loads as an Agent Plugins 1.0.0 pack, `portable` selected without `cursor`,
+so the root `plugin.json` is the only manifest Cursor finds, the installer also expands the
 standard's placeholders in the Cursor copy of `mcp.json`, because Cursor 3.18.25 does not: it leaves
 `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` unexpanded in `args`, `env` values, and `cwd`, provides no
 `PLUGIN_ROOT` / `PLUGIN_DATA` variables (spec §9.1), defaults an omitted `cwd` to the home
@@ -80,8 +80,8 @@ plugin-root `cwd`, resolved `./` commands, and `PLUGIN_ROOT` / `PLUGIN_DATA` in 
 server's environment. The bundle itself is untouched and stays spec-conformant for other Agent
 Plugins clients; the pre-expansion document is kept in the install receipt (`cursorExpansion`),
 and `agent-bundle doctor --host cursor` proves the expansion with `AB7326`. Nothing here is
-Cursor behaviour: the provenance is `derived`, and a root that carries `.cursor-plugin/plugin.json`
-— `cursor` selected — is copied unchanged, because Cursor loads that manifest instead.
+Cursor behaviour: the provenance is `derived`, and a root that carries `.cursor-plugin/plugin.json`,
+`cursor` selected, is copied unchanged, because Cursor loads that manifest instead.
 
 Artifact validation rejects a root whose required install surface is missing, so a bundle cannot
 ship without the installer it promises.
@@ -94,7 +94,7 @@ artifact; `install --from` is manifest-aware and accepts either root. For a gene
 `package.json` points its `bin` at the same `bin/<name>.mjs` executable the artifact exposes,
 without a second compilation or wrapper. Its complete command surface, including `web`, therefore
 works from `node_modules` exactly as it does from a copied artifact. **No npm lifecycle performs a
-host installation** — installing a package never mutates a host's plugin state.
+host installation**, installing a package never mutates a host's plugin state.
 
 Repository `AGENTS.md` instructions are copied as authored package metadata. They are never
 replaced by generated projection instructions; a path collision fails the package build.
@@ -126,8 +126,8 @@ export const main = (argv: readonly string[]): Promise<number> =>
 ```
 
 `runInstallCli` is the `agent-bundle` CLI's own `install <host>`, `uninstall <host>`, and
-`doctor` commands — the same flags, receipts, replacement rules, `--plan`, data policy, `--json`
-output, and exit codes — with the bundle root pinned to `from`, so the bin exposes no `--from` and never searches for another artifact
+`doctor` commands, the same flags, receipts, replacement rules, `--plan`, data policy, `--json`
+output, and exit codes, with the bundle root pinned to `from`, so the bin exposes no `--from` and never searches for another artifact
 root. The package build inlines the lifecycle into the executable; the installed package needs no
 `agent-bundle` at run time. The entry also exports `installBundle`, `uninstallBundle`, `runDoctor`,
 and the `format*` helpers for a bin that composes its own command surface. The read-only status
@@ -135,7 +135,7 @@ check is `doctor --host <host>`: it reports the installed copy as current, stale
 version-mismatched, foreign, or absent.
 
 Exit codes follow the `agent-bundle` CLI. 0 is success. `doctor` always writes its report (human
-or `--json`) to stdout and exits 1 when that report carries an error diagnostic — read the report,
+or `--json`) to stdout and exits 1 when that report carries an error diagnostic, read the report,
 not stderr. An `install` or `uninstall` that fails, or any command that throws, writes its
 diagnostics as one JSON line to stderr and exits 1. A usage error exits 2.
 
@@ -149,12 +149,12 @@ covered in [Developer Workbench](../development/workbench.mdx) and is not the sa
 
 ## Reinstalling after a rebuild
 
-Every emitted installer — `agent-bundle install <host>` and the standalone `install.mjs` —
+Every emitted installer, `agent-bundle install <host>` and the standalone `install.mjs`,
 shares one replace policy. An identical copy is an `already-installed`
 no-op. A copy of the **same version whose content hash differs** is replaced automatically, so
 rebuilding without a version bump no longer needs an uninstall and `rm -rf`. A different version is
-refused with `AB7005` unless you pass `--replace` (alias `--force`), and a foreign directory — one
-this plugin's installer did not place — is refused either way. The standalone `install.mjs` hashes a
+refused with `AB7005` unless you pass `--replace` (alias `--force`), and a foreign directory, one
+this plugin's installer did not place, is refused either way. The standalone `install.mjs` hashes a
 receipt-less destination from the files present there. That includes a legacy copy and a staged
 marketplace plugin. When `agent-bundle.manifest.json` is present, the artifact hash uses that
 manifest's `files[]`, and a listed path missing from the artifact fails the run. A listed path
@@ -184,7 +184,7 @@ copied and hashed; an unlisted stray file is ignored. A missing or changed liste
 
 ## Operator configuration: the installed pack's `.env`
 
-A plugin configured through environment variables — session cookies, API tokens, a host name — is
+A plugin configured through environment variables, session cookies, API tokens, a host name, is
 configured at the install, not in the artifact: manifest `env` is compiled, content-addressed, and
 re-emitted on every build, which is the wrong place for a secret. Instead, put a `.env` file at the
 plugin root of the installed copy (the directory that holds `.claude-plugin/`, `.codex-plugin/`,
@@ -197,10 +197,10 @@ IPT_SESSION=…
 RTORRENT_SSH_HOST=nas.local
 ```
 
-Every shell the pack emits reads that file when it starts — the stdio MCP server entries (factory
+Every shell the pack emits reads that file when it starts, the stdio MCP server entries (factory
 exports; a [self-connecting entry](../authoring/mcp.mdx#handwritten-stdio-entries) has no shell and
 reads none unless it calls `applyOperatorEnv` itself), the hook wrappers that run plugin code, and
-the artifact CLI `bin/<name>.mjs` — under one rule:
+the artifact CLI `bin/<name>.mjs`, under one rule:
 
 | Precedence | Layer | Contents |
 | --- | --- | --- |
@@ -209,7 +209,7 @@ the artifact CLI `bin/<name>.mjs` — under one rule:
 | 2 | `.env` | Fills gaps only. |
 | 1 (lowest) | Manifest `env` | What the server's manifest `env` block declared, as the host merged it into the process environment. |
 
-The same order `agent-bundle mcp run` composes — manifest `env` under the files under the
+The same order `agent-bundle mcp run` composes, manifest `env` under the files under the
 operator's exports. A host hands a stdio server its manifest `env` and its own exports as one
 environment, so the generated entry carries the server's declared `env` block as build-time
 literals and treats a variable that still holds its manifest default as unset: the file may
@@ -221,7 +221,7 @@ is expanded by the host before launch, so it never equals its literal default an
 Hook wrappers and the artifact CLI have no manifest `env`, so for them the host environment is
 simply what the host exported.
 
-The location is the plugin root the pack resolved — `AGENT_BUNDLE_PLUGIN_ROOT` when the host set
+The location is the plugin root the pack resolved, `AGENT_BUNDLE_PLUGIN_ROOT` when the host set
 it, otherwise the directory above the shell's own (`mcp/`, `hooks/`, `bin/`). `AGENT_BUNDLE_ENV_FILE`
 names one or more files (platform path delimiter) to read instead, and `AGENT_BUNDLE_ENV_FILE=none`
 disables the layer. The grammar is dotenv's: `KEY=value`, `export KEY=value`, `#` comments, single-,
@@ -238,7 +238,7 @@ composes the same layers itself and hands `--env-file` / `--no-env` down as
 `AGENT_BUNDLE_ENV_FILE`, so a rehearsal and an installed pack read the same files.
 
 `agent-bundle doctor` reports whether an installed copy carries `.env` or `.env.local` and how many
-variables each declares (`AB7331`, informational) — never a name or a value.
+variables each declares (`AB7331`, informational), never a name or a value.
 
 ## Uninstalling by receipt
 
@@ -260,7 +260,7 @@ created, the host registrations it performed, and timestamps. Cursor local copie
 `.agent-bundle-install.json`; Amp project/system copies carry the same sidecar inside their generated
 directory; Claude, Codex, and Cursor marketplace-mode installs keep theirs under
 `<host root>/agent-bundle/receipts/`. `uninstall` removes exactly what the receipt owns and
-reverses exactly the registrations it recorded — never anything else; unowned entries are listed
+reverses exactly the registrations it recorded, never anything else; unowned entries are listed
 as retained. The effective framework state root, derived web-data, legacy `state/`, and for a
 Cursor copy of an Agent Plugins pack the `PLUGIN_DATA` directory the receipt records are kept unless
 you pass `--purge-data --confirm-purge`, and the result states honestly what the host itself decided where
@@ -292,9 +292,9 @@ supplied bundle, checks registration proof, samples runtime endpoint health and 
 inventories durable state and the operator `.env` layer (`AB7331`), and re-runs the pinned process-free document and loader validators over
 installed bytes. It never repairs anything. With `--from`, it reports the installed copy per host as
 `current`, `stale` (`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), `load-failed`
-(`AB7325`), or `not-installed` (`AB7307`), and its lifecycle stage — placed → registered → enabled → active — with
+(`AB7325`), or `not-installed` (`AB7307`), and its lifecycle stage, placed → registered → enabled → active, with
 every stage either observed from the host or typed `unavailable` with the reason (`AB7330`). `load-failed` means
-Claude Code lists the copy but refused to load it — its `claude plugin list --json` row carries an `errors` array,
+Claude Code lists the copy but refused to load it, its `claude plugin list --json` row carries an `errors` array,
 which Doctor reports verbatim in place of `current`, because a refused copy contributes no hooks, MCP servers, or
 skills to a session. The installer reads the same array: `agent-bundle install claude` fails with `AB7006` when the
 freshly installed (or byte-identical existing) copy carries `errors`, instead of reporting `installed`. Doctor also
@@ -303,7 +303,7 @@ inventories the receipt store under each host root and cross-checks it against t
 For Claude, Doctor also reads each row's `enabled` flag and runs the Claude Code developer
 validator. A copy listed with `enabled: false` (switched off with `claude plugin disable` or the
 `/plugin` menu) is reported as `disabled` in the inventory, keeps its content verdict in the
-`--from` comparison, and adds an `AB7327` warning with the `claude plugin enable` command — a
+`--from` comparison, and adds an `AB7327` warning with the `claude plugin enable` command, a
 disabled plugin loads nothing, and reinstalling does not enable it. The validator
 (`claude plugin validate --strict` against `plugin.json`, then `marketplace.json`, the same runs
 `build` and `validate --artifact` perform) covers the `--from` bundle and every installed copy, and
@@ -325,9 +325,9 @@ registration proof and the rows' `errors` already hold that verdict.
 | `AB7324` | info / warning / error | A marketplace staged by `install cursor --mode marketplace` is imported (`registered`), still awaiting the Customize import step (`unregistered`), or incomplete (`corrupt`). |
 | `AB7326` | info / warning / error | An Agent Plugins install under `~/.cursor/plugins/local` had its `mcp.json` placeholders expanded by the emitted `install.mjs` and every expanded path still resolves (`expanded`); still carries the spec forms Cursor 3.18.25 does not resolve, so its stdio servers cannot spawn (`unexpanded`); or was moved, duplicated, or edited after the expansion was recorded (`drifted`, entry `corrupt`). Reinstall with the bundle's `install.mjs` at the current location. |
 | `AB7327` | warning | `doctor --from` compared an installed Claude copy whose `claude plugin list --json` row reports `enabled: false`; the recovery is `claude plugin enable <name>@<marketplace> [--scope <scope>]`. |
-| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules (the hooks document checked is the one the manifest `hooks` field names — `.cursor-plugin/hooks.json` — so Claude Code's `hooks/hooks.json` in the same root is not a finding), or when a local plugin contains a symlink escaping `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract, and the loader-recognized entry stays `installed`. |
+| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules (the hooks document checked is the one the manifest `hooks` field names, `.cursor-plugin/hooks.json`, so Claude Code's `hooks/hooks.json` in the same root is not a finding), or when a local plugin contains a symlink escaping `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract, and the loader-recognized entry stays `installed`. |
 
 ## Next
 
-- [Preview packages](./preview-packages.mdx) — where installable tarballs come from today.
-- [Artifact validation](./validation.mdx) — the checks that gate a bundle before it is installed.
+- [Preview packages](./preview-packages.mdx): where installable tarballs come from today.
+- [Artifact validation](./validation.mdx): the checks that gate a bundle before it is installed.
