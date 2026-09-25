@@ -388,6 +388,7 @@ describe('MCP tool CLI surface projections', () => {
       id: 'tool:demo/submit',
       kind: 'tool',
       provenance: { kind: 'conventional', relativePath: toolPath },
+      resultSchemaState: 'unprojectable' as const,
       serverId: 'mcp:demo',
       source: '/project/src/mcp/demo/tools/submit.tsx',
     };

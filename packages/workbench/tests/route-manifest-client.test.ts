@@ -29,6 +29,7 @@ const manifest = {
       id: 'cli:library/audit',
       kind: 'cli',
       provenance: { kind: 'conventional' },
+      resultSchemaState: 'unprojectable',
       source: 'src/cli/library/audit.ts',
     }],
   },
@@ -56,6 +57,7 @@ const manifest = {
     id: 'event:tool/after',
     kind: 'event-route',
     provenance: { kind: 'conventional' },
+    resultSchemaState: 'absent',
     source: 'src/events/tool/after.ts',
   }],
   providers: [{ id: 'provider:library', name: 'library', source: 'src/providers/library.ts' }],
@@ -64,6 +66,7 @@ const manifest = {
     id: 'script:convert',
     kind: 'script',
     provenance: { kind: 'conventional' },
+    resultSchemaState: 'unprojectable',
     source: 'src/scripts/convert.ts',
   }],
   servers: [{

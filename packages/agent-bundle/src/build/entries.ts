@@ -228,6 +228,7 @@ export const planScriptsSurface = async (
                 id: rendered.routeId,
                 kind: 'script',
                 provenance: { kind: 'conventional', relativePath: `scripts/${name}` },
+                resultSchemaState: 'unknown',
                 source,
               }],
               ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),

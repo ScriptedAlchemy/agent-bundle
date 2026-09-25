@@ -27,7 +27,6 @@ export const createWorkbenchConfig = (
     overrideBrowserslist: ['chrome >= 120'],
     copy: [
       { from: resolve(import.meta.dirname, 'THIRD_PARTY_NOTICES'), to: 'THIRD_PARTY_NOTICES', toType: 'file' },
-      { from: resolve(sourceRoot, 'mcp', 'APP-RENDERER-LICENSE'), to: 'src/mcp/APP-RENDERER-LICENSE', toType: 'file' },
     ],
     distPath: {
       root: 'dist',

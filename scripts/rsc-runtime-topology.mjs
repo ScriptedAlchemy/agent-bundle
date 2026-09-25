@@ -91,7 +91,6 @@ const workbenchSource = new Set([
   'packages/workbench/src/runtime-playground.tsx',
   'packages/workbench/src/runtime-stage.tsx',
   'packages/workbench/src/mcp/mcp-app-client.ts',
-  'packages/workbench/src/mcp/mcp-app-frame.tsx',
   'packages/workbench/src/mcp/mcp-app-preview.tsx',
   'packages/workbench/src/mcp/mcp-page.tsx',
   'packages/workbench/src/mcp/mcp-session-controller.ts',
@@ -99,7 +98,6 @@ const workbenchSource = new Set([
   'packages/workbench/src/mcp/runtime-consent-dialog.tsx',
   'packages/workbench/src/mcp/runtime-consent-queue.ts',
   'packages/workbench/src/mcp/runtime-mcp-handoff.ts',
-  'packages/workbench/src/mcp/runtime-app-bridge.ts',
 ]);
 
 const workbenchTests = /^(?:packages\/workbench\/tests\/(?:helpers\/runtime-playground-fixture\.ts|(?:mcp-app|mcp-page|mcp-session|runtime-|project-client|rsbuild-workbench|runtime-playground).+\.(?:test|e2e\.test|browser\.test)\.(?:ts|tsx))|packages\/workbench\/scripts\/capture-runtime-playground\.mjs)$/u;

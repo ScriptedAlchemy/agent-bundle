@@ -83,6 +83,7 @@ export const cliLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/cli/audible/search',
   label: 'audible search',
   ref: Object.freeze({ kind: 'cli' as const, path: Object.freeze(['audible', 'search']) }),
+  resultSchemaState: 'unprojectable',
   routeId: 'cli:audible/search',
   source: 'src/cli/audible/search.tsx',
 });
@@ -94,6 +95,7 @@ export const eventLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/events/tool/before',
   label: 'tool/before',
   ref: Object.freeze({ event: 'tool/before', kind: 'event' as const }),
+  resultSchemaState: 'absent',
   routeId: 'event:tool/before',
   source: 'src/events/tool/before.tsx',
 });
@@ -104,6 +106,7 @@ export const appLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/mcp/curator/app/library',
   label: 'library',
   ref: Object.freeze({ kind: 'app' as const, name: 'library', server: 'curator' }),
+  resultSchemaState: 'absent',
   routeId: 'app:curator/library',
   source: 'src/mcp/curator/apps/library.tsx',
 });
@@ -114,6 +117,7 @@ export const skillLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/skills/skill%3Areview',
   label: 'review',
   ref: Object.freeze({ id: 'skill:review', kind: 'skill' as const }),
+  resultSchemaState: 'absent',
   source: 'skills/review/SKILL.md',
 });
 
@@ -123,6 +127,7 @@ export const ruleLeaf: ApplicationLeaf = Object.freeze({
   key: '/routes/rules/style',
   label: 'style',
   ref: Object.freeze({ id: 'style', kind: 'rule' as const }),
+  resultSchemaState: 'absent',
   source: 'rules/style.md',
 });
 

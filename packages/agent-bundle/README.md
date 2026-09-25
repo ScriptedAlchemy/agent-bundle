@@ -912,7 +912,7 @@ registers app resources, `packed-stdio`, `packed-deleted-source`,
 compiled `ui://` URI in `listResources` and `sweep` reads that resource. With
 the default `apps: 'auto'` an app route needs no fixture entry: `coverage`
 passes with a reason naming the auto-covered sweep. An explicit
-`{ kind: 'resource' }` (or legacy `{}`) entry is always accepted, and
+`{ kind: 'resource' }` entry is always accepted, and
 `apps: 'explicit'` makes a missing app entry a `coverage` failure again. At
 `mcp-in-memory` apps are never registered, so `apps` has no effect there.
 
@@ -1139,8 +1139,7 @@ harness.
   and Codex selections are refused when it is configured.
 - Raw HTML, JSX/MDX, and Mermaid in Skill Markdown are inert in the workbench renderer.
 
-Third-party notices, including the MIT license and provenance of the MCP App renderer derived from
-the MCP Inspector's `AppRenderer`, ship in the published package.
+Third-party notices for material bundled into the workbench ship in the published package.
 
 ## License
 

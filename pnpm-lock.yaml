@@ -103,8 +103,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       zod:
-        specifier: 4.5.4
-        version: 4.5.4
+        specifier: 4.6.4
+        version: 4.6.4
 
   examples/hooks-and-scripts:
     devDependencies:
@@ -133,8 +133,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       zod:
-        specifier: 4.5.4
-        version: 4.5.4
+        specifier: 4.6.4
+        version: 4.6.4
 
   examples/mcp-app:
     devDependencies:
@@ -163,8 +163,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       zod:
-        specifier: 4.5.4
-        version: 4.5.4
+        specifier: 4.6.4
+        version: 4.6.4
 
   examples/rsc-agent-runtime:
     dependencies:
@@ -179,7 +179,7 @@ importers:
         version: 2.0.0
       '@modelcontextprotocol/ext-apps':
         specifier: 2.0.0
-        version: 2.0.0(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/core@2.0.0)(@modelcontextprotocol/server@2.0.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.5.4)
+        version: 2.0.0(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/core@2.0.0)(@modelcontextprotocol/server@2.0.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.4)
       '@modelcontextprotocol/node':
         specifier: 2.0.0
         version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.3)
@@ -196,8 +196,8 @@ importers:
         specifier: 0.1.0
         version: 0.1.0(@rspack/core@2.2.3(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       zod:
-        specifier: 4.5.4
-        version: 4.5.4
+        specifier: 4.6.4
+        version: 4.6.4
     devDependencies:
       '@rsbuild/core':
         specifier: 2.2.5
@@ -248,8 +248,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       zod:
-        specifier: 4.5.4
-        version: 4.5.4
+        specifier: 4.6.4
+        version: 4.6.4
 
   packages/agent-bundle:
     dependencies:
@@ -345,8 +345,8 @@ importers:
         specifier: npm:typescript@5.9.3
         version: typescript@5.9.3
       zod:
-        specifier: 4.5.4
-        version: 4.5.4
+        specifier: 4.6.4
+        version: 4.6.4
 
   packages/create-agent-bundle:
     dependencies:
@@ -443,8 +443,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0(react@19.3.0)
       zod:
-        specifier: 4.5.4
-        version: 4.5.4
+        specifier: 4.6.4
+        version: 4.6.4
 
   packages/workbench:
     dependencies:
@@ -454,9 +454,6 @@ importers:
       '@modelcontextprotocol/client':
         specifier: 2.0.0
         version: 2.0.0
-      '@modelcontextprotocol/ext-apps':
-        specifier: 2.0.0
-        version: 2.0.0(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/core@2.0.0)(@modelcontextprotocol/server@2.0.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.5.4)
       '@xterm/addon-fit':
         specifier: 0.11.0
         version: 0.11.0
@@ -482,8 +479,8 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
       zod:
-        specifier: 4.5.4
-        version: 4.5.4
+        specifier: 4.6.4
+        version: 4.6.4
     devDependencies:
       '@rsbuild/core':
         specifier: 2.2.5
@@ -546,8 +543,8 @@ importers:
         specifier: npm:typescript@6.0.3
         version: typescript@6.0.3
       zod:
-        specifier: 4.5.4
-        version: 4.5.4
+        specifier: 4.6.4
+        version: 4.6.4
 
 packages:
 
@@ -3285,8 +3282,8 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
-  zod@4.5.4:
-    resolution: {integrity: sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==}
+  zod@4.6.4:
+    resolution: {integrity: sha512-AXSD6hvGdvRjajG/l1cC+d6IrhH+sjmPKtYeQdJIK8MFJl3LyClzS+o/YsVC+zQZPupAaeH5skwwm8YqYH7BqA==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
@@ -3677,11 +3674,11 @@ snapshots:
       eventsource-parser: 3.1.1
       jose: 6.2.10
       pkce-challenge: 5.0.1
-      zod: 4.5.4
+      zod: 4.6.4
 
   '@modelcontextprotocol/conformance@0.1.16(supports-color@7.2.0)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.30.0(supports-color@7.2.0)(zod@4.5.4)
+      '@modelcontextprotocol/sdk': 1.30.0(supports-color@7.2.0)(zod@4.6.4)
       '@octokit/rest': 22.0.1
       commander: 14.0.3
       eventsource-parser: 3.1.1
@@ -3689,21 +3686,21 @@ snapshots:
       jose: 6.2.10
       undici: 7.29.0
       yaml: 2.9.1
-      zod: 4.5.4
+      zod: 4.6.4
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color
 
   '@modelcontextprotocol/core@2.0.0':
     dependencies:
-      zod: 4.5.4
+      zod: 4.6.4
 
-  '@modelcontextprotocol/ext-apps@2.0.0(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/core@2.0.0)(@modelcontextprotocol/server@2.0.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.5.4)':
+  '@modelcontextprotocol/ext-apps@2.0.0(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/core@2.0.0)(@modelcontextprotocol/server@2.0.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.4)':
     dependencies:
       '@modelcontextprotocol/client': 2.0.0
       '@modelcontextprotocol/core': 2.0.0
       '@standard-schema/spec': 1.1.0
-      zod: 4.5.4
+      zod: 4.6.4
     optionalDependencies:
       '@modelcontextprotocol/server': 2.0.0
       react: 19.3.0
@@ -3716,7 +3713,7 @@ snapshots:
     optionalDependencies:
       hono: 4.13.3
 
-  '@modelcontextprotocol/sdk@1.30.0(supports-color@7.2.0)(zod@4.5.4)':
+  '@modelcontextprotocol/sdk@1.30.0(supports-color@7.2.0)(zod@4.6.4)':
     dependencies:
       '@hono/node-server': 2.1.1(hono@4.13.3)
       ajv: 8.20.0
@@ -3733,15 +3730,15 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.5.4
-      zod-to-json-schema: 3.25.2(zod@4.5.4)
+      zod: 4.6.4
+      zod-to-json-schema: 3.25.2(zod@4.6.4)
     transitivePeerDependencies:
       - supports-color
 
   '@modelcontextprotocol/server@2.0.0':
     dependencies:
       '@modelcontextprotocol/core': 2.0.0
-      zod: 4.5.4
+      zod: 4.6.4
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     optional: true
@@ -6429,10 +6426,10 @@ snapshots:
 
   yoctocolors@2.2.0: {}
 
-  zod-to-json-schema@3.25.2(zod@4.5.4):
+  zod-to-json-schema@3.25.2(zod@4.6.4):
     dependencies:
-      zod: 4.5.4
+      zod: 4.6.4
 
-  zod@4.5.4: {}
+  zod@4.6.4: {}
 
   zwitch@2.0.4: {}
