@@ -1597,6 +1597,7 @@ it('parses emitted bundles in full when a tools hatch could have rewritten them'
   // Rspack parsed the source and can rewrite the emitted asset — here a raw
   // banner that leaves the lexer satisfied but Node unable to start the module
   // — so the record says `coverage.rewritable` and the walk keeps the full parse.
+  // The banner lands after minification, which would otherwise reject it first.
   const project = await createProject();
   try {
     await expect(build({
@@ -1606,7 +1607,11 @@ it('parses emitted bundles in full when a tools hatch could have rewritten them'
       registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
       tools: {
         rspack: (config, { rspack }) => {
-          config.plugins = [...(config.plugins ?? []), new rspack.BannerPlugin({ banner: 'export const broken = ;', raw: true })];
+          config.plugins = [...(config.plugins ?? []), new rspack.BannerPlugin({
+            banner: 'export const broken = ;',
+            raw: true,
+            stage: rspack.Compilation.PROCESS_ASSETS_STAGE_REPORT,
+          })];
         },
       },
     })).rejects.toThrow(
