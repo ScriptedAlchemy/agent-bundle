@@ -288,9 +288,9 @@ alias a custom runner must add; it never reports a fabricated identity.
 `src/skills/<name>/SKILL.md` ships with no declaration. Config wins,
 conventions fill: declaring `skills:` replaces the directory convention
 entirely, and validation reports `AB4734` for any conventional skill directory
-the explicit list leaves uncovered. Skills at the removed top-level
-`skills/<name>/` location are an `AB4736` error unless explicit `skills`
-config claims them.
+the explicit list leaves uncovered. Discovery reads `src/skills/` only, so a
+directory at the removed top-level `skills/<name>/` location is ignored
+unless an explicit `skills` path names it.
 
 A skill whose document is generated (power tier, never required) puts
 `SKILL.tsx` (or `SKILL.ts`) in the skill directory instead of `SKILL.md`. The

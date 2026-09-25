@@ -111,6 +111,7 @@ const route = (id: string, kind: RouteManifest['events'][number]['kind'], relati
   id,
   kind,
   provenance: { kind: 'conventional' as const },
+  resultSchemaState: kind === 'event-route' || kind === 'app' ? 'absent' as const : 'unprojectable' as const,
   source: relativePath,
 });
 

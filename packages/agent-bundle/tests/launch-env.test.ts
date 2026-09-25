@@ -161,7 +161,7 @@ describe('the operator .env layer of an installed pack (#469)', () => {
       TOKENIZED: '/installs/curator/data',
     });
 
-    // Without the defaults every present variable is reserved (the self-connecting entry's position).
+    // Without the defaults every present variable is reserved.
     const blind: NodeJS.ProcessEnv = { MANIFEST_ONLY: 'manifest-default' };
     expect(applyOperatorEnv({ env: blind, pluginRoot: root }).applied).toEqual(['ABSENT_EVERYWHERE', 'HOST_EXPORTED', 'HOST_ONLY']);
     expect(blind.MANIFEST_ONLY).toBe('manifest-default');

@@ -28,6 +28,7 @@ const graph = Object.freeze({
       id: 'event:prompt/submit',
       kind: 'event-route',
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/prompt/submit.tsx' }),
+      resultSchemaState: 'absent' as const,
       source: '/project/src/events/prompt/submit.tsx',
     },
     {
@@ -36,6 +37,7 @@ const graph = Object.freeze({
       id: 'event:tool/after',
       kind: 'event-route',
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/after.tsx' }),
+      resultSchemaState: 'absent' as const,
       source: '/project/src/events/tool/after.tsx',
     },
     {
@@ -44,6 +46,7 @@ const graph = Object.freeze({
       id: 'event:tool/failure',
       kind: 'event-route',
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/failure.tsx' }),
+      resultSchemaState: 'absent' as const,
       source: '/project/src/events/tool/failure.tsx',
     },
   ]),

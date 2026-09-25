@@ -125,7 +125,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       '',
     ].join('\n'),
     files: {
-      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.6.4"},"type":"module"}\n',
       'src/aliased.ts': "export const ALIAS_VALUE = 'aliased';\n",
       'src/cli/greet.tsx': [
         "import { Agent } from '@agent-bundle/runtime';",
@@ -1604,7 +1604,7 @@ it('enforces compiled handler, MCP schemas, and operator env across production s
   const project = await createProjectFixture({
     config: "export default { plugin: { name: 'route-parity' }, targets: ['claude'] };\n",
     files: {
-      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.6.4"},"type":"module"}\n',
       'src/events/tool/before.ts': "export default () => ({ outcome: 'deny', reason: 'blocked' });\n",
       'src/events/tool/before.view.tsx': [
         "export default async function BeforeTool() { throw new Error('handler handler ran'); }",
@@ -1747,7 +1747,7 @@ it('publishes invocation routes only after a successful initial or recovered bui
       '',
     ].join('\n'),
     files: {
-      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.6.4"},"type":"module"}\n',
       'src/mcp/status/tools/report.tsx': [
       "import { defineTool } from 'agent-bundle/routes';",
       "import { Agent } from '@agent-bundle/runtime';",
@@ -1915,7 +1915,7 @@ it('bounds the render history a compiled child produces by count and bytes acros
       '',
     ].join('\n'),
     files: {
-      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.6.4"},"type":"module"}\n',
       // One Suspense boundary per cell settles per macrotask, so the stream
       // grows one `replace` snapshot at a time; `gate` names a file the last
       // boundary waits for, or `none`.

@@ -32,7 +32,7 @@ export interface ApplicationLeaf {
   readonly label: string;
   readonly handler?: string;
   readonly ref: ApplicationNodeRef;
-  readonly resultSchemaState?: RouteManifestResultSchemaState;
+  readonly resultSchemaState: RouteManifestResultSchemaState;
   readonly routeId?: string;
   readonly source?: string;
 }
@@ -179,7 +179,7 @@ const leafForRoute = (
     label: routeLabel(ref),
     ...(route.execution?.handler === undefined ? {} : { handler: route.execution.handler }),
     ref,
-    ...(route.resultSchemaState === undefined ? {} : { resultSchemaState: route.resultSchemaState }),
+    resultSchemaState: route.resultSchemaState,
     routeId: route.id,
     source: route.source,
   });
@@ -269,6 +269,7 @@ const configuredHookLeaves = (
       key,
       label: hook.event,
       ref,
+      resultSchemaState: 'absent',
       source: hook.path,
     }));
   }
@@ -291,6 +292,7 @@ const configuredScriptLeaves = (
       key,
       label: script.name,
       ref,
+      resultSchemaState: 'absent',
       ...(script.file === undefined ? {} : { source: script.file.path }),
     }));
   }
@@ -306,6 +308,7 @@ const skillLeaves = (skills: readonly ApplicationTreeSkill[]): readonly Applicat
       key: applicationNodeKey(ref),
       label: skill.label,
       ref,
+      resultSchemaState: 'absent' as const,
       ...(skill.source === undefined ? {} : { source: skill.source }),
     });
   }));
@@ -321,6 +324,7 @@ const staticDocumentLeaves = (
     key: applicationNodeKey(ref),
     label: document.name,
     ref,
+    resultSchemaState: 'absent' as const,
     source: document.provenance.sourcePath,
   });
 }));

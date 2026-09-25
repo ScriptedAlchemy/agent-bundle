@@ -31,7 +31,7 @@ import {
 
 const noop = (): void => undefined;
 
-const schemaLeaf = (resultSchemaState: NonNullable<ApplicationLeaf['resultSchemaState']>): ApplicationLeaf =>
+const schemaLeaf = (resultSchemaState: ApplicationLeaf['resultSchemaState']): ApplicationLeaf =>
   ({ ...toolLeaf, resultSchemaState });
 
 const renderSchemaInspector = (leaf: ApplicationLeaf, envelope?: RouteInvocation): string =>

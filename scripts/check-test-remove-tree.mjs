@@ -9,7 +9,7 @@
  * only real node:fs(/promises) ImportDeclaration bindings count, only Node-bound
  * call expressions are considered, and `recursive` / `maxRetries` are read from
  * the second argument's object-literal properties (including quoted keys,
- * shorthand `maxRetries`, and Parenthesized / As / Satisfies wrappers). Nested
+ * shorthand `maxRetries`, and Parenthesized / As / Satisfies / `<T>` / `!` / instantiation wrappers). Nested
  * objects in the path argument, member calls, comments, strings, regexes, and
  * template substitutions are handled by the AST rather than text masking.
  * Named `promises` rebinds from `fs` / `node:fs` count as `.rm` carriers.
@@ -125,6 +125,8 @@ const unwrapExpression = (node) => {
       || ts.isAsExpression(current)
       || ts.isSatisfiesExpression(current)
       || ts.isTypeAssertionExpression(current)
+      || ts.isNonNullExpression(current)
+      || ts.isExpressionWithTypeArguments(current)
     )
   ) {
     current = current.expression;
@@ -154,7 +156,10 @@ const statementDeclares = (statement, name) => {
   return false;
 };
 
-/** `from` is the child the walk came up through; names, computed keys, and decorators sit outside the function scope. */
+/**
+ * `from` is the child the walk came up through; names, computed keys, and decorators
+ * (including parameter decorators) sit outside the function scope.
+ */
 const functionLikeDeclares = (node, from, name) => {
   if (
     !(
@@ -189,6 +194,11 @@ const identifierIsLocallyShadowed = (identifier) => {
   let from = identifier;
   let current = identifier.parent;
   while (current !== undefined) {
+    if (ts.isDecorator(current) && ts.isParameter(current.parent)) {
+      from = current.parent.parent;
+      current = from.parent;
+      continue;
+    }
     if (
       ts.isSourceFile(current)
       || ts.isBlock(current)

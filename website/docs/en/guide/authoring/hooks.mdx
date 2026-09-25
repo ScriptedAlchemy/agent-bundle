@@ -133,14 +133,6 @@ disposer restores the previous sink. The trace types and helpers are exported fr
 
 Rendered events default to `standalone`; opt into `runtime: 'shared'` to reuse a generated MCP server. Lightweight `.ts` handlers always run in the hook wrapper.
 
-### Migrating existing events
-
-Move the old preflight function to the default export of the `.ts` event file, move JSX to
-its `.view.tsx` sibling, and replace `execute` results with `ctx.render('./name.view.js', data)`.
-Remove the `preflight` re-export. Inline `before()` and legacy `preflight` exports now fail
-with `AB4840`. `continue` and `deny` retain their meanings. Remove `config.providers` and use
-`context.provider(key)`. Native config hooks remain an advanced compatibility surface.
-
 ### Request providers
 
 Call `await context.provider('writePolicy')` in a function event, or

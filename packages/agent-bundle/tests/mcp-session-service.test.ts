@@ -120,28 +120,29 @@ const publishFixtureEpoch = async (
   await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
   await writeFile(join(root, 'src', 'server.ts'), [
     "import { McpServer } from '@modelcontextprotocol/server';",
-    "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
     '',
-    "const server = new McpServer({ name: 'persistent-fixture', version: '1.0.0' });",
-    "server.registerTool('inspect', { description: 'Inspect persistent session state.' }, async () => {",
-    "  process.stderr.write('fixture stderr\\n');",
-    '  return {',
-    "    _meta: { ui: { resourceUri: 'ui://fixture/result.html' }, opaque: { nested: ['exact', 42] } },",
-    '    content: [',
-    "      { type: 'text', text: JSON.stringify({ cwd: process.cwd(), data: process.env.FIXTURE_DATA, inherited: process.env.AGENT_BUNDLE_PERSISTENT_INHERITED, pid: process.pid, root: process.env.FIXTURE_ROOT, stateRoot: process.env.AGENT_BUNDLE_STATE_ROOT, workspace: process.env.FIXTURE_WORKSPACE }) },",
-    "      { type: 'resource_link', name: 'fixture', uri: 'ui://fixture/resource.txt' },",
-    '    ],',
-    "    structuredContent: { answer: 42, opaque: { exact: true } },",
-    '  };',
-    '});',
-    "server.registerTool('hang', { description: 'Wait for cancellation.' }, async () => new Promise(() => {}));",
-    "server.registerResource('fixture', 'ui://fixture/resource.txt', { mimeType: 'text/plain' }, async (uri) => ({",
-    "  contents: [{ mimeType: 'text/plain', text: 'fixture resource', uri: uri.href }],",
-    '}));',
-    "server.registerPrompt('fixture', { description: 'Fixture prompt.' }, async () => ({",
-    "  messages: [{ role: 'user', content: { type: 'text', text: 'fixture prompt' } }],",
-    '}));',
-    'await server.connect(new StdioServerTransport());',
+    'export default () => {',
+    "  const server = new McpServer({ name: 'persistent-fixture', version: '1.0.0' });",
+    "  server.registerTool('inspect', { description: 'Inspect persistent session state.' }, async () => {",
+    "    process.stderr.write('fixture stderr\\n');",
+    '    return {',
+    "      _meta: { ui: { resourceUri: 'ui://fixture/result.html' }, opaque: { nested: ['exact', 42] } },",
+    '      content: [',
+    "        { type: 'text', text: JSON.stringify({ cwd: process.cwd(), data: process.env.FIXTURE_DATA, inherited: process.env.AGENT_BUNDLE_PERSISTENT_INHERITED, pid: process.pid, root: process.env.FIXTURE_ROOT, stateRoot: process.env.AGENT_BUNDLE_STATE_ROOT, workspace: process.env.FIXTURE_WORKSPACE }) },",
+    "        { type: 'resource_link', name: 'fixture', uri: 'ui://fixture/resource.txt' },",
+    '      ],',
+    "      structuredContent: { answer: 42, opaque: { exact: true } },",
+    '    };',
+    '  });',
+    "  server.registerTool('hang', { description: 'Wait for cancellation.' }, async () => new Promise(() => {}));",
+    "  server.registerResource('fixture', 'ui://fixture/resource.txt', { mimeType: 'text/plain' }, async (uri) => ({",
+    "    contents: [{ mimeType: 'text/plain', text: 'fixture resource', uri: uri.href }],",
+    '  }));',
+    "  server.registerPrompt('fixture', { description: 'Fixture prompt.' }, async () => ({",
+    "    messages: [{ role: 'user', content: { type: 'text', text: 'fixture prompt' } }],",
+    '  }));',
+    '  return server;',
+    '};',
     '',
   ].join('\n'));
 
@@ -397,12 +398,13 @@ it('lowers every session trace entry onto the unified trace with request/respons
       method: 'tools/call',
     });
 
-    expect(ofKind('mcp.stderr')).toMatchObject([{
+    // The lifecycle shell's activity heartbeat is the first stderr line.
+    expect(ofKind('mcp.stderr').at(-1)).toMatchObject({
       correlation: { epochId: 'epoch-1', host: 'portable', mcpSessionId: session.id },
       details: { bytes: Buffer.byteLength('fixture stderr\n') },
       href: href('/advanced/protocol'),
       summary: 'stderr: fixture stderr',
-    }]);
+    });
     expect(JSON.stringify(published)).not.toContain(root);
 
     await session.close();

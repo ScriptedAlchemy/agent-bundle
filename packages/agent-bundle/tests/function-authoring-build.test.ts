@@ -13,7 +13,7 @@ it('runs compiled function events, explicit JSX views, and CLI metadata and JSON
   try {
     await symlink(join(process.cwd(), 'examples/audiobook-curator/node_modules'), join(root, 'node_modules'), 'dir');
     const files = {
-      'package.json': JSON.stringify({ name: 'function-authoring', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', react: '19.2.8', zod: '4.5.4' } }),
+      'package.json': JSON.stringify({ name: 'function-authoring', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', react: '19.2.8', zod: '4.6.4' } }),
       'agent-bundle.config.ts': `import { defineConfig } from 'agent-bundle/config'; export default defineConfig({ plugin: { name: 'function-authoring' }, targets: ['claude'] });`,
       'src/providers/unused.ts': `throw new Error('unused provider evaluated'); export default () => 'unused';`,
       'src/providers/policy.ts': `export default () => 'Writes disabled';`,
@@ -157,7 +157,7 @@ it('mounts identities, state, notices, and provider observations in a compiled l
   try {
     await symlink(join(process.cwd(), 'examples/audiobook-curator/node_modules'), join(root, 'node_modules'), 'dir');
     const files = {
-      'package.json': JSON.stringify({ name: 'event-context', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', zod: '4.5.4' } }),
+      'package.json': JSON.stringify({ name: 'event-context', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', zod: '4.6.4' } }),
       'agent-bundle.config.ts': `import { defineConfig } from 'agent-bundle/config'; export default defineConfig({ plugin: { name: 'event-context' }, targets: ['claude'] });`,
       'src/state.ts': `import { defineState } from '@agent-bundle/runtime/state'; import { z } from 'zod';
 export default defineState({ id: 'event-context/state', lifetime: 'workspace-durable', initial: { count: 7 }, schema: z.object({ count: z.number() }), events: { tick: z.object({}) }, reduce: (state) => state });`,
