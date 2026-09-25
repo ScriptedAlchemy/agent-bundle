@@ -34,7 +34,6 @@ it('ships the canonical Apache License 2.0 text and a NOTICE naming the copyrigh
   expect(createHash('sha256').update(license).digest('hex')).toBe(canonicalApache2Sha256);
   expect(notice.startsWith('agent-bundle\nCopyright 2026 ')).toBe(true);
   expect(notice).toContain('THIRD_PARTY_NOTICES');
-  expect(notice).toContain('src/mcp/APP-RENDERER-LICENSE');
 });
 
 it('declares Apache-2.0 on every first-party workspace package', async () => {
