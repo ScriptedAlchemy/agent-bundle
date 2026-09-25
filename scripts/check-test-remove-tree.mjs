@@ -8,9 +8,12 @@
  * Call, option, and import-binding detection is parser-backed (typescript-5):
  * only real node:fs(/promises) ImportDeclaration bindings count, only Node-bound
  * call expressions are considered, and `recursive` / `maxRetries` are read from
- * the second argument's object-literal properties (including quoted keys). Nested
+ * the second argument's object-literal properties (including quoted keys,
+ * shorthand `maxRetries`, and Parenthesized / As / Satisfies wrappers). Nested
  * objects in the path argument, member calls, comments, strings, regexes, and
  * template substitutions are handled by the AST rather than text masking.
+ * Named `promises` rebinds from `fs` / `node:fs` count as `.rm` carriers.
+ * A later local binding that shadows an import is not treated as Node-bound.
  */
 import { createRequire } from 'node:module';
 import { readdir, readFile } from 'node:fs/promises';
@@ -49,7 +52,7 @@ const walk = async (directory, files) => {
 };
 
 /**
- * Named/aliased rm bindings and namespace/default bindings that expose .rm.
+ * Named/aliased rm bindings and namespace/default/`promises` bindings that expose .rm.
  * Import bindings are collected from the TypeScript AST so comments and local
  * identifiers cannot forge Node fs.rm bindings.
  */
@@ -87,15 +90,20 @@ export const removalBindings = (text, fileName = 'bindings.ts') => {
     }
 
     if (!ts.isNamedImports(bindings)) continue;
+    const isFsRoot = /^(?:node:)?fs$/u.test(statement.moduleSpecifier.text);
     for (const element of bindings.elements) {
       if (element.isTypeOnly) continue;
-      if (element.propertyName !== undefined) {
-        if (element.propertyName.text !== 'rm') continue;
-        bareNames.add(element.name.text);
+      const importedName = element.propertyName === undefined
+        ? element.name.text
+        : element.propertyName.text;
+      const localName = element.name.text;
+      if (importedName === 'rm') {
+        bareNames.add(localName);
         continue;
       }
-      if (element.name.text !== 'rm') continue;
-      bareNames.add('rm');
+      if (importedName === 'promises' && isFsRoot) {
+        namespaceNames.add(localName);
+      }
     }
   }
 
@@ -108,14 +116,127 @@ const propertyName = (name) => {
   return undefined;
 };
 
+const unwrapExpression = (node) => {
+  let current = node;
+  while (
+    current !== undefined
+    && (
+      ts.isParenthesizedExpression(current)
+      || ts.isAsExpression(current)
+      || ts.isSatisfiesExpression(current)
+      || ts.isTypeAssertionExpression(current)
+    )
+  ) {
+    current = current.expression;
+  }
+  return current;
+};
+
+const declarationNameIs = (nameNode, name) => {
+  if (ts.isIdentifier(nameNode)) return nameNode.text === name;
+  if (ts.isObjectBindingPattern(nameNode) || ts.isArrayBindingPattern(nameNode)) {
+    return nameNode.elements.some((element) =>
+      ts.isBindingElement(element) && declarationNameIs(element.name, name));
+  }
+  return false;
+};
+
+const declarationListDeclares = (list, name) =>
+  list.declarations.some((decl) => declarationNameIs(decl.name, name));
+
+const statementDeclares = (statement, name) => {
+  if (ts.isVariableStatement(statement)) {
+    return declarationListDeclares(statement.declarationList, name);
+  }
+  if (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) {
+    return statement.name !== undefined && statement.name.text === name;
+  }
+  return false;
+};
+
+/** `from` is the child the walk came up through; names, computed keys, and decorators sit outside the function scope. */
+const functionLikeDeclares = (node, from, name) => {
+  if (
+    !(
+      ts.isFunctionDeclaration(node)
+      || ts.isFunctionExpression(node)
+      || ts.isArrowFunction(node)
+      || ts.isMethodDeclaration(node)
+      || ts.isConstructorDeclaration(node)
+    )
+  ) {
+    return false;
+  }
+  if (from !== node.body && !node.parameters.includes(from)) return false;
+  if (
+    (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node))
+    && node.name !== undefined
+    && node.name.text === name
+  ) {
+    return true;
+  }
+  return node.parameters.some((parameter) => declarationNameIs(parameter.name, name));
+};
+
+/**
+ * True when a later/inner local binding hides the Node fs import of `name`.
+ * ponytail: `var` is treated as block-scoped, so a `var` hoisted out of a nested
+ * block is missed and its call still fails the gate (false positive, never a
+ * false negative). Track function-scoped `var` if that ever bites.
+ */
+const identifierIsLocallyShadowed = (identifier) => {
+  const name = identifier.text;
+  let from = identifier;
+  let current = identifier.parent;
+  while (current !== undefined) {
+    if (
+      ts.isSourceFile(current)
+      || ts.isBlock(current)
+      || ts.isModuleBlock(current)
+      || ts.isCaseClause(current)
+      || ts.isDefaultClause(current)
+    ) {
+      const shadowed = current.statements.some((statement) => {
+        if (ts.isSourceFile(current) && ts.isImportDeclaration(statement)) return false;
+        return statementDeclares(statement, name);
+      });
+      if (shadowed) return true;
+    }
+    if (
+      (ts.isForStatement(current) || ts.isForOfStatement(current) || ts.isForInStatement(current))
+      && current.initializer !== undefined
+      && ts.isVariableDeclarationList(current.initializer)
+      && declarationListDeclares(current.initializer, name)
+    ) {
+      return true;
+    }
+    if (functionLikeDeclares(current, from, name)) return true;
+    if (
+      ts.isCatchClause(current)
+      && current.variableDeclaration !== undefined
+      && declarationNameIs(current.variableDeclaration.name, name)
+    ) {
+      return true;
+    }
+    from = current;
+    current = current.parent;
+  }
+  return false;
+};
+
 /** Options flags from a call's second-argument object literal only. */
 const optionsFlags = (optionsArg) => {
-  if (optionsArg === undefined || !ts.isObjectLiteralExpression(optionsArg)) {
+  const unwrapped = unwrapExpression(optionsArg);
+  if (unwrapped === undefined || !ts.isObjectLiteralExpression(unwrapped)) {
     return { recursive: false, hasRetries: false };
   }
   let recursive = false;
   let hasRetries = false;
-  for (const property of optionsArg.properties) {
+  for (const property of unwrapped.properties) {
+    if (ts.isShorthandPropertyAssignment(property)) {
+      if (property.name.text === 'maxRetries') hasRetries = true;
+      continue;
+    }
     if (!ts.isPropertyAssignment(property)) continue;
     const key = propertyName(property.name);
     if (key === 'recursive' && property.initializer.kind === ts.SyntaxKind.TrueKeyword) {
@@ -127,14 +248,17 @@ const optionsFlags = (optionsArg) => {
 };
 
 const isNodeBoundRmCall = (expression, bareNames, namespaceNames) => {
-  if (ts.isIdentifier(expression)) return bareNames.has(expression.text);
+  if (ts.isIdentifier(expression)) {
+    return bareNames.has(expression.text) && !identifierIsLocallyShadowed(expression);
+  }
   if (
     ts.isPropertyAccessExpression(expression)
     && !expression.questionDotToken
     && expression.name.text === 'rm'
     && ts.isIdentifier(expression.expression)
   ) {
-    return namespaceNames.has(expression.expression.text);
+    return namespaceNames.has(expression.expression.text)
+      && !identifierIsLocallyShadowed(expression.expression);
   }
   return false;
 };
@@ -147,7 +271,7 @@ const scriptKindFor = (fileName) => {
 };
 
 export const recursiveRmCalls = (text, fileName = 'check.ts') => {
-  const { bareNames, namespaceNames } = removalBindings(text);
+  const { bareNames, namespaceNames } = removalBindings(text, fileName);
   const sourceFile = ts.createSourceFile(
     fileName,
     text,
