@@ -2,8 +2,10 @@
  * Test teardown that deletes a tree calls `removeTree`. A bare `rm` with
  * `recursive: true` and no `maxRetries` races a late writer and flakes with ENOTEMPTY.
  *
- * Catches bare `rm(`, aliased `import { rm as remove }` calls, and `ns.rm(` when
- * `ns` is a namespace/default import from node:fs, fs, or their /promises forms.
+ * Catches bare `rm(`, aliased `import { rm as remove }` calls, and `ns.rm(` or
+ * `ns.promises.rm(` when `ns` is a namespace/default import from node:fs, fs, or
+ * their /promises forms. The same wrappers as the options argument are unwrapped
+ * around the callee and its object, and `?.` member access still counts.
  *
  * Call, option, and import-binding detection is parser-backed (typescript-5):
  * only real node:fs(/promises) ImportDeclaration bindings count, only Node-bound
@@ -257,20 +259,20 @@ const optionsFlags = (optionsArg) => {
   return { recursive, hasRetries };
 };
 
-const isNodeBoundRmCall = (expression, bareNames, namespaceNames) => {
+/** `fs.promises.rm` counts for any fs namespace; on a /promises namespace it is only an extra flag. */
+const isNodeBoundRmCall = (callee, bareNames, namespaceNames) => {
+  const expression = unwrapExpression(callee);
   if (ts.isIdentifier(expression)) {
     return bareNames.has(expression.text) && !identifierIsLocallyShadowed(expression);
   }
-  if (
-    ts.isPropertyAccessExpression(expression)
-    && !expression.questionDotToken
-    && expression.name.text === 'rm'
-    && ts.isIdentifier(expression.expression)
-  ) {
-    return namespaceNames.has(expression.expression.text)
-      && !identifierIsLocallyShadowed(expression.expression);
+  if (!ts.isPropertyAccessExpression(expression) || expression.name.text !== 'rm') return false;
+  let object = unwrapExpression(expression.expression);
+  if (ts.isPropertyAccessExpression(object) && object.name.text === 'promises') {
+    object = unwrapExpression(object.expression);
   }
-  return false;
+  return ts.isIdentifier(object)
+    && namespaceNames.has(object.text)
+    && !identifierIsLocallyShadowed(object);
 };
 
 const scriptKindFor = (fileName) => {
