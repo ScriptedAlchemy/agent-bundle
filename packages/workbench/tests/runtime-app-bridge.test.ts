@@ -245,7 +245,7 @@ it('passes the official AppBridge request signal to consent and forwarded tools/
         },
         setNotificationHandler: () => undefined,
       }),
-    }), {
+    }) as never, {
       installedHandlers: Object.freeze({ openExternalLink: async () => undefined }),
       requestConsent: async (_challenge, signal?: AbortSignal) => {
         consentSignals.push(signal);
