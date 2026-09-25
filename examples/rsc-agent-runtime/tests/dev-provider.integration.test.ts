@@ -271,117 +271,6 @@ const introduceWorkerSyntaxError = async (projectRoot: string): Promise<number> 
   return line;
 };
 
-test('requires the App environment through the public Rsbuild compiler hook', async () => {
-  const config = createRscRuntimeRsbuildConfig({
-    compilerRoot: join(tmpdir(), 'rsc-provider-app-environment'),
-    mode: 'development',
-    onAppReload: () => undefined,
-  });
-  const plugin = (config.plugins as readonly unknown[]).find((candidate): candidate is Readonly<{
-    readonly name: string;
-    setup(api: unknown): void;
-  }> => typeof candidate === 'object' && candidate !== null &&
-    (candidate as { readonly name?: unknown }).name === 'agent-bundle:rsc-runtime-app-reload');
-  if (plugin === undefined) throw new Error('RSC App reload plugin is unavailable.');
-  let afterCreate: ((input: unknown) => void) | undefined;
-  plugin.setup({
-    onAfterCreateCompiler: (callback: unknown) => { afterCreate = callback as (input: unknown) => void; },
-    onAfterEnvironmentCompile: () => undefined,
-    onBeforeStartDevServer: () => undefined,
-    onCloseDevServer: () => undefined,
-  });
-  expect(() => afterCreate?.({ environments: {} })).toThrow('App environment');
-  expect(() => afterCreate?.({ environments: { app: {} } })).not.toThrow();
-});
-
-test('emits one owned App reload for changed output and none for an unchanged-output recompile', async () => {
-  const reloads: number[] = [];
-  const config = createRscRuntimeRsbuildConfig({
-    compilerRoot: join(tmpdir(), 'rsc-provider-app-reload'),
-    mode: 'development',
-    onAppReload: () => { reloads.push(reloads.length + 1); },
-  });
-  const plugin = (config.plugins as readonly unknown[]).find((candidate): candidate is Readonly<{
-    readonly name: string;
-    setup(api: unknown): void;
-  }> => typeof candidate === 'object' && candidate !== null &&
-    (candidate as { readonly name?: unknown }).name === 'agent-bundle:rsc-runtime-app-reload');
-  if (plugin === undefined) throw new Error('RSC App reload plugin is unavailable.');
-
-  let afterCompiler: ((input: unknown) => void) | undefined;
-  let afterEnvironmentCompile: ((input: unknown) => void) | undefined;
-  let beforeStartDevServer: ((input: unknown) => unknown) | undefined;
-  let closeDevServer: (() => unknown) | undefined;
-  plugin.setup({
-    onAfterCreateCompiler: (callback: unknown) => { afterCompiler = callback as (input: unknown) => void; },
-    onAfterEnvironmentCompile: (callback: unknown) => { afterEnvironmentCompile = callback as (input: unknown) => void; },
-    onBeforeStartDevServer: (callback: unknown) => { beforeStartDevServer = callback as (input: unknown) => unknown; },
-    onCloseDevServer: (callback: unknown) => { closeDevServer = callback as () => unknown; },
-  });
-
-  const appUpdate = (statsHash: string, outputContent: string, isFirstCompile = false) => Object.freeze({
-    environment: Object.freeze({ name: 'app' }),
-    isFirstCompile,
-    stats: Object.freeze({
-      compilation: Object.freeze({
-        getAssets: () => Object.freeze([
-          Object.freeze({
-            name: 'edit-timeline-v1.html',
-            source: Object.freeze({ buffer: () => Buffer.from(outputContent) }),
-          }),
-        ]),
-      }),
-      hasErrors: () => false,
-      hash: statsHash,
-    }),
-  });
-  const firstAppUpdate = appUpdate('app-change-a', 'app-output-a', true);
-  const duplicateFirstAppUpdate = appUpdate('split-app-change-a', 'app-output-a');
-  const appBUpdate = appUpdate('app-change-b', 'app-output-b');
-  const duplicateAppBUpdate = appUpdate('split-app-change-b', 'app-output-b');
-  const appAUpdate = appUpdate('returned-app-change-a', 'app-output-a');
-  const repeatedAppBUpdate = appUpdate('returned-app-change-b', 'app-output-b');
-  const failedAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => true } });
-  const unidentifiableAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'unreadable-output' } });
-  const hashlessAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false } });
-  const nonAppUpdate = Object.freeze({ environment: { name: 'widget' }, isFirstCompile: false, stats: { hasErrors: () => false } });
-
-  afterCompiler?.({ environments: { app: {}, widget: {} } });
-  afterEnvironmentCompile?.(appBUpdate);
-  expect(reloads).toEqual([]);
-  beforeStartDevServer?.({ server: { environments: { app: {}, widget: {} } } });
-  afterEnvironmentCompile?.(firstAppUpdate);
-  afterEnvironmentCompile?.(nonAppUpdate);
-  afterEnvironmentCompile?.(failedAppUpdate);
-  afterEnvironmentCompile?.(duplicateFirstAppUpdate);
-  expect(reloads).toEqual([]);
-
-  afterEnvironmentCompile?.(appBUpdate);
-  expect(reloads).toEqual([1]);
-  afterEnvironmentCompile?.(duplicateAppBUpdate);
-  expect(reloads).toEqual([1]);
-  afterEnvironmentCompile?.(appAUpdate);
-  expect(reloads).toEqual([1, 2]);
-  afterEnvironmentCompile?.(repeatedAppBUpdate);
-  expect(reloads).toEqual([1, 2, 3]);
-  // An unreadable asset set is unidentifiable even when stats has a hash. It
-  // reloads at least once without clobbering the retained output identity, so
-  // the later readable completion remains deduped.
-  afterEnvironmentCompile?.(unidentifiableAppUpdate);
-  afterEnvironmentCompile?.(hashlessAppUpdate);
-  expect(reloads).toEqual([1, 2, 3, 4, 5]);
-  afterEnvironmentCompile?.(repeatedAppBUpdate);
-  expect(reloads).toEqual([1, 2, 3, 4, 5]);
-
-  await closeDevServer?.();
-  afterEnvironmentCompile?.(appAUpdate);
-  expect(reloads).toEqual([1, 2, 3, 4, 5]);
-
-  beforeStartDevServer?.({ server: { environments: { app: {}, widget: {} } } });
-  afterEnvironmentCompile?.(appBUpdate);
-  expect(reloads).toEqual([1, 2, 3, 4, 5, 6]);
-});
-
 test('keeps compiler-App HMR out of the opaque browser child', () => {
   const config = createRscRuntimeRsbuildConfig({
     compilerRoot: join(tmpdir(), 'rsc-provider-outer-hmr'),
@@ -444,41 +333,27 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
     try {
       await waitFor(() => session.status().state === 'active');
       expect(session.status()).toMatchObject({ hmrReady: true, state: 'active' });
-      expect(session.clientSurface('mcp.edit-timeline')).toMatchObject({
-        entryPath: '/edit-timeline-v1.html',
-        httpOrigin: expect.stringMatching(/^http:\/\/127\.0\.0\.1:[1-9]\d*$/u),
-        httpPathPrefixes: ['/'],
-        subscribeReload: expect.any(Function),
-        surfaceId: 'mcp.edit-timeline',
-      });
-      expect(session.status()).not.toHaveProperty('clientSurface');
       expect(session.surfaces()).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: 'hook' }),
         expect.objectContaining({ id: 'mcp.render_edit_timeline', kind: 'mcp-tool' }),
         expect.objectContaining({ id: 'mcp.edit-timeline', kind: 'mcp-resource' }),
         expect.objectContaining({ id: 'mcp.timeline', kind: 'mcp-app' }),
       ]));
-      const registry = session.mcpRegistry.snapshot();
-      expect(registry).toMatchObject({ runtimeGenerationId: expect.any(String) });
-      expect([...new Set([
-        registry!.definitionDigest,
-        registry!.servers[0]!.serverDigest,
-        registry!.transportDigest,
-      ])]).toHaveLength(3);
+      const runtimeGenerationId = session.status().activeVector!.runtimeGenerationId;
 
       await expect(session.readAsset({
         path: ['rsc', 'index.html'],
-        runtimeGenerationId: registry!.runtimeGenerationId,
+        runtimeGenerationId,
         surfaceId: 'mcp.timeline',
       })).resolves.toMatchObject({ contentType: 'text/html' });
       await expect(session.readAsset({
         path: ['..'],
-        runtimeGenerationId: registry!.runtimeGenerationId,
+        runtimeGenerationId,
         surfaceId: 'mcp.timeline',
       })).resolves.toBeUndefined();
       await expect(session.readAsset({
         path: ['rsc', 'index.html'],
-        runtimeGenerationId: registry!.runtimeGenerationId,
+        runtimeGenerationId,
         surfaceId: 'mcp.unknown',
       })).resolves.toBeUndefined();
       for (const path of [
@@ -491,7 +366,7 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       ]) {
         await expect(session.readAsset({
           path,
-          runtimeGenerationId: registry!.runtimeGenerationId,
+          runtimeGenerationId,
           surfaceId: 'mcp.timeline',
         })).resolves.toBeUndefined();
       }
@@ -509,7 +384,7 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
         runtimeStorageRoot,
         'generation-store',
         'generations',
-        registry!.runtimeGenerationId,
+        runtimeGenerationId,
         'widget',
         'rsc',
         'index.html',
@@ -517,7 +392,7 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       const originalAsset = await readFile(assetPath);
       const readTimelineAsset = () => session.readAsset({
         path: ['rsc', 'index.html'],
-        runtimeGenerationId: registry!.runtimeGenerationId,
+        runtimeGenerationId,
         surfaceId: 'mcp.timeline',
       });
       const digestTampered = Buffer.from(originalAsset);
@@ -537,16 +412,6 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       await rm(assetPath, { recursive: true });
       await writeFile(assetPath, originalAsset);
 
-      const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
-      const initialCapabilities = mcp.snapshot().connection.capabilities;
-      if (initialCapabilities === undefined) throw new Error('Expected runtime MCP capabilities.');
-      expect(initialCapabilities).toEqual({ resources: {}, tools: {} });
-      expect(Object.isFrozen(initialCapabilities)).toBe(true);
-      expect(Object.isFrozen(initialCapabilities.resources)).toBe(true);
-      expect(Object.isFrozen(initialCapabilities.tools)).toBe(true);
-      const list = await mcp.execute({ expectedSessionRevision: mcp.snapshot().binding.sessionRevision, kind: 'list-tools' });
-      expect(list.value).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'render_edit_timeline' })]));
-      const originalBinding = mcp.snapshot().binding;
       await session.reconcilePreparedRuntime({
         ...prepared.devRuntime!,
         apps: prepared.devRuntime!.apps.map((app) => ({
@@ -555,39 +420,37 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
         })),
         sourceRevision: `${prepared.devRuntime!.sourceRevision}-app-metadata`,
       });
-      const reconciledRegistry = session.mcpRegistry.snapshot();
-      expect(reconciledRegistry!.definitionDigest).not.toBe(registry!.definitionDigest);
-      expect(reconciledRegistry).toMatchObject({
-        registryRevision: originalBinding.registryRevision + 1,
-        runtimeGenerationId: registry!.runtimeGenerationId,
-      });
-      expect(mcp.snapshot().binding.sessionRevision).toBe(originalBinding.sessionRevision + 1);
-      await expect(mcp.execute({ expectedSessionRevision: originalBinding.sessionRevision, kind: 'list-tools' })).rejects.toThrow();
-      await expect(mcp.execute({ expectedSessionRevision: mcp.snapshot().binding.sessionRevision, kind: 'list-tools' })).resolves.toMatchObject({
-        vector: { runtimeGenerationId: registry!.runtimeGenerationId },
-      });
-      expect(mcp.snapshot().connection.capabilities).toEqual({ resources: {}, tools: {} });
+      expect(session.surfaces()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'mcp.render_edit_timeline', targets: prepared.devRuntime!.servers[0]!.targets }),
+        expect.objectContaining({ id: 'mcp.timeline', kind: 'mcp-app' }),
+      ]));
+      await expect(readTimelineAsset()).resolves.toMatchObject({ contentType: 'text/html' });
+
       await session.reconcilePreparedRuntime({
         ...prepared.devRuntime!,
-        sourceRevision: `${prepared.devRuntime!.sourceRevision}-p1-revert`,
+        servers: prepared.devRuntime!.servers.map((server) => ({ ...server, targets: ['portable'] })),
+        sourceRevision: `${prepared.devRuntime!.sourceRevision}-portable-only`,
       });
-      const revertedRegistry = session.mcpRegistry.snapshot();
-      expect(revertedRegistry).toMatchObject({
-        definitionDigest: registry!.definitionDigest,
-        registryRevision: originalBinding.registryRevision + 2,
-        runtimeGenerationId: registry!.runtimeGenerationId,
+      expect(session.surfaces()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'mcp.render_edit_timeline', targets: ['portable'] }),
+        expect.objectContaining({ id: 'mcp.edit-timeline', targets: ['portable'] }),
+      ]));
+      const timeline = await session.invoke({
+        expectedGenerationId: runtimeGenerationId,
+        input: {},
+        surfaceId: 'mcp.render_edit_timeline',
+        target: 'portable',
       });
-      const revertedRevision = mcp.snapshot().binding.sessionRevision;
-      await session.reconcilePreparedRuntime({
-        ...prepared.devRuntime!,
-        sourceRevision: `${prepared.devRuntime!.sourceRevision}-p3-repeat`,
-      });
-      expect(session.mcpRegistry.snapshot()).toMatchObject({
-        definitionDigest: registry!.definitionDigest,
-        registryRevision: revertedRegistry!.registryRevision,
-      });
-      expect(mcp.snapshot().binding.sessionRevision).toBe(revertedRevision);
-      await mcp.close();
+      expect(timeline).toMatchObject({ status: 'succeeded', vector: { runtimeGenerationId } });
+      if (timeline.status !== 'succeeded') throw new Error('Timeline invocation did not succeed.');
+      expect(timeline.result).not.toHaveProperty('app');
+      await expect(session.invoke({
+        expectedGenerationId: runtimeGenerationId,
+        input: {},
+        surfaceId: 'mcp.render_edit_timeline',
+        target: 'claude',
+      })).rejects.toThrow('does not support target');
+
       const closing = session.close();
       await expect(session.reconcilePreparedRuntime({
         ...prepared.devRuntime!,
@@ -595,7 +458,6 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       })).rejects.toThrow('RSC runtime session is closed.');
       await closing;
       expect(session.status()).toMatchObject({ hmrReady: false, state: 'closed' });
-      expect(session.clientSurface('mcp.edit-timeline')).toBeUndefined();
     } finally {
       await session.close();
     }
@@ -1064,7 +926,7 @@ test('binds renamed and added App surfaces to the active generation assets witho
     }));
     try {
       await waitFor(() => session.status().state === 'active');
-      const runtimeGenerationId = session.mcpRegistry.snapshot()!.runtimeGenerationId;
+      const runtimeGenerationId = session.status().activeVector!.runtimeGenerationId;
       const original = prepared.devRuntime!.apps[0]!;
       await session.reconcilePreparedRuntime({
         ...prepared.devRuntime!,
@@ -1132,7 +994,7 @@ test('rebinds current App surfaces across retained generations after a later con
     }));
     try {
       await waitFor(() => session.status().state === 'active');
-      const firstGenerationId = session.mcpRegistry.snapshot()!.runtimeGenerationId;
+      const firstGenerationId = session.status().activeVector!.runtimeGenerationId;
       await changeWorkerImplementation(copied.projectRoot, 'reconciled-retained-app-assets-generation-two');
       await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGenerationId);
       const secondGenerationId = session.status().activeVector!.runtimeGenerationId;
@@ -1171,50 +1033,7 @@ test('rebinds current App surfaces across retained generations after a later con
   }
 }, 30_000 * timeScale);
 
-test('keeps the same MCP session and revision across an implementation-only generation', async () => {
-  const copied = await copyProviderExample();
-  try {
-    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
-    const session = await RsbuildRuntimeSession.start(startContext({
-      projectRoot: copied.projectRoot,
-      preparedRuntime: prepared.devRuntime!,
-      providerSessionId: 'provider-implementation-only',
-      signal: new AbortController().signal,
-      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-implementation-only'),
-    }));
-    try {
-      await waitFor(() => session.status().state === 'active');
-      const beforeGeneration = session.mcpRegistry.snapshot()!.runtimeGenerationId;
-      const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
-      try {
-        const before = mcp.snapshot();
-        await changeWorkerImplementation(copied.projectRoot, 'implementation-only');
-        await waitFor(() => session.status().activeVector?.runtimeGenerationId !== beforeGeneration);
-        const after = mcp.snapshot();
-        expect(after.binding).toMatchObject({
-          sessionId: before.binding.sessionId,
-          sessionRevision: before.binding.sessionRevision,
-        });
-        await expect(mcp.execute({
-          expectedSessionRevision: after.binding.sessionRevision,
-          kind: 'list-tools',
-        })).resolves.toMatchObject({
-          sessionId: before.binding.sessionId,
-          sessionRevision: before.binding.sessionRevision,
-          vector: { runtimeGenerationId: session.status().activeVector!.runtimeGenerationId },
-        });
-      } finally {
-        await mcp.close();
-      }
-    } finally {
-      await session.close();
-    }
-  } finally {
-    await rm(copied.workspaceRoot, { force: true, recursive: true });
-  }
-}, 30_000 * timeScale);
-
-test('restarts and relists an open MCP session after a warm-cache definition change', async () => {
+test('activates a warm-cache definition change and republishes the changed tool description as its surface label', async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
@@ -1225,25 +1044,21 @@ test('restarts and relists an open MCP session after a warm-cache definition cha
       signal: new AbortController().signal,
       storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-definition-change'),
     }));
+    const statusLabel = () => session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')?.label;
     try {
       await waitFor(() => session.status().state === 'active');
-      const beforeRegistry = session.mcpRegistry.snapshot()!;
-      const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
-      try {
-        const before = mcp.snapshot().binding;
-        await changeDefinition(copied.projectRoot, 'Read the freshly rebuilt shared runtime state.');
-        await waitFor(() => session.mcpRegistry.snapshot()!.definitionDigest !== beforeRegistry.definitionDigest);
-        const afterRegistry = session.mcpRegistry.snapshot()!;
-        const after = mcp.snapshot();
-        expect(afterRegistry.runtimeGenerationId).not.toBe(beforeRegistry.runtimeGenerationId);
-        expect(after.binding.sessionRevision).toBe(before.sessionRevision + 1);
-        await expect(mcp.execute({
-          expectedSessionRevision: after.binding.sessionRevision,
-          kind: 'list-tools',
-        })).resolves.toMatchObject({ vector: { runtimeGenerationId: afterRegistry.runtimeGenerationId } });
-      } finally {
-        await mcp.close();
-      }
+      const beforeGeneration = session.status().activeVector!.runtimeGenerationId;
+      expect(statusLabel()).toBe('Read the current shared runtime state.');
+      await changeDefinition(copied.projectRoot, 'Read the freshly rebuilt shared runtime state.');
+      await waitFor(() => statusLabel() === 'Read the freshly rebuilt shared runtime state.');
+      const afterGeneration = session.status().activeVector!.runtimeGenerationId;
+      expect(afterGeneration).not.toBe(beforeGeneration);
+      await expect(session.invoke({
+        expectedGenerationId: afterGeneration,
+        input: {},
+        surfaceId: 'mcp.runtime_status',
+        target: 'portable',
+      })).resolves.toMatchObject({ status: 'succeeded', vector: { runtimeGenerationId: afterGeneration } });
     } finally {
       await session.close();
     }
@@ -1252,275 +1067,66 @@ test('restarts and relists an open MCP session after a warm-cache definition cha
   }
 }, 30_000 * timeScale);
 
-test('uses the live registry authority after a transport-only runtime MCP reconciliation', async () => {
+test('aborts a stale activation transaction at its private preparation boundary', async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
-    const session = await RsbuildRuntimeSession.start(startContext({
-      projectRoot: copied.projectRoot,
-      preparedRuntime: prepared.devRuntime!,
-      providerSessionId: 'provider-live-transport-authority',
-      signal: new AbortController().signal,
-      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-live-transport-authority'),
-    }));
-    try {
-      await waitFor(() => session.status().state === 'active');
-      const initialRegistry = session.mcpRegistry.snapshot()!;
-      const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
-      try {
-        const initialBinding = mcp.snapshot().binding;
-        const definitionPrepared = Object.freeze({
-          ...prepared.devRuntime!,
-          apps: prepared.devRuntime!.apps.map((app) => Object.freeze({
-            ...app,
-            _meta: Object.freeze({ ...app._meta, 'openai/widgetDescription': 'Live definition authority.' }),
-          })),
-          sourceRevision: `${prepared.devRuntime!.sourceRevision}-definition-v2`,
-        });
-        await session.reconcilePreparedRuntime(definitionPrepared);
-        const definitionRegistry = session.mcpRegistry.snapshot()!;
-        const definitionBinding = mcp.snapshot().binding;
-        expect(definitionRegistry).toMatchObject({
-          registryRevision: initialRegistry.registryRevision + 1,
-          runtimeGenerationId: initialRegistry.runtimeGenerationId,
-          transportDigest: initialRegistry.transportDigest,
-        });
-        expect(definitionRegistry.definitionDigest).not.toBe(initialRegistry.definitionDigest);
-        expect(definitionBinding).toMatchObject({
-          definitionDigest: definitionRegistry.definitionDigest,
-          registryRevision: definitionRegistry.registryRevision,
-          sessionId: initialBinding.sessionId,
-          sessionRevision: initialBinding.sessionRevision + 1,
-        });
-        await expect(mcp.execute({ expectedSessionRevision: initialBinding.sessionRevision, kind: 'list-tools' })).rejects.toThrow();
-        const definitionRun = await session.invoke({
-          expectedGenerationId: definitionRegistry.runtimeGenerationId,
-          input: {},
-          surfaceId: 'mcp.render_edit_timeline',
-          target: 'portable',
-        });
-        expect(definitionRun).toMatchObject({
-          status: 'succeeded', vector: { runtimeGenerationId: definitionRegistry.runtimeGenerationId },
-        });
-        if (definitionRun.status !== 'succeeded' || definitionRun.result.app === undefined) throw new Error('Definition reconciliation run omitted its Runtime App binding.');
-        const definitionAppBinding = definitionRun.result.app.mcpBinding;
-        expect(definitionAppBinding).toMatchObject({
-          definitionDigest: definitionRegistry.definitionDigest,
-          registryRevision: definitionRegistry.registryRevision,
-          sessionId: expect.any(String),
-          sessionRevision: expect.any(Number),
-          transportDigest: definitionRegistry.transportDigest,
-        });
-
-        await session.reconcilePreparedRuntime({
-          ...definitionPrepared,
-          servers: definitionPrepared.servers.map((server) => Object.freeze({
-            ...server,
-            env: Object.freeze({ ...(server.env ?? {}), TIMELINE_TRANSPORT_SENTINEL: 'transport-v2' }),
-          })),
-          sourceRevision: `${prepared.devRuntime!.sourceRevision}-transport-v2`,
-        });
-        const registry = session.mcpRegistry.snapshot()!;
-        const currentBinding = mcp.snapshot().binding;
-        expect(registry).toMatchObject({
-          definitionDigest: definitionRegistry.definitionDigest,
-          registryRevision: definitionRegistry.registryRevision + 1,
-          runtimeGenerationId: definitionRegistry.runtimeGenerationId,
-        });
-        expect(registry.transportDigest).not.toBe(definitionRegistry.transportDigest);
-        expect(currentBinding).toMatchObject({
-          registryRevision: registry.registryRevision,
-          sessionId: definitionBinding.sessionId,
-          sessionRevision: definitionBinding.sessionRevision + 1,
-          transportDigest: registry.transportDigest,
-        });
-        await expect(mcp.execute({ expectedSessionRevision: definitionBinding.sessionRevision, kind: 'list-tools' })).rejects.toThrow();
-
-        const appRun = await session.invoke({
-          expectedGenerationId: registry.runtimeGenerationId,
-          input: {},
-          surfaceId: 'mcp.render_edit_timeline',
-          target: 'portable',
-        });
-        expect(appRun).toMatchObject({
-          status: 'succeeded', vector: { runtimeGenerationId: registry.runtimeGenerationId },
-        });
-        if (appRun.status !== 'succeeded' || appRun.result.app === undefined) throw new Error('Transport reconciliation run omitted its Runtime App binding.');
-        expect(appRun.result.app.mcpBinding).toMatchObject({
-          definitionDigest: registry.definitionDigest,
-          registryRevision: registry.registryRevision,
-          sessionId: definitionAppBinding.sessionId,
-          sessionRevision: definitionAppBinding.sessionRevision + 1,
-          transportDigest: registry.transportDigest,
-        });
-        await expect(mcp.execute({
-          expectedSessionRevision: currentBinding.sessionRevision,
-          kind: 'read-resource',
-          uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
-        })).resolves.toMatchObject({
-          sessionId: currentBinding.sessionId,
-          sessionRevision: currentBinding.sessionRevision,
-          vector: { runtimeGenerationId: registry.runtimeGenerationId },
-        });
-        await expect(mcp.execute({
-          arguments: { limit: 1 },
-          expectedSessionRevision: currentBinding.sessionRevision,
-          kind: 'call-tool',
-          name: 'render_edit_timeline',
-        })).resolves.toMatchObject({
-          sessionId: currentBinding.sessionId,
-          sessionRevision: currentBinding.sessionRevision,
-          vector: { runtimeGenerationId: registry.runtimeGenerationId },
-        });
-      } finally {
-        await mcp.close();
-      }
-    } finally {
-      await session.close();
-    }
-  } finally {
-    await rm(copied.workspaceRoot, { force: true, recursive: true });
-  }
-}, 30_000 * timeScale);
-
-test('rejects MCP admission until a deferred public prepared-config restart has relisted', async () => {
-  const copied = await copyProviderExample();
-  try {
-    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
-    const relistReached = deferred<void>();
-    const allowRelist = deferred<void>();
-    let deferRelist = false;
-    const session = await RsbuildRuntimeSession.start(startContext({
-      projectRoot: copied.projectRoot,
-      preparedRuntime: prepared.devRuntime!,
-      providerSessionId: 'provider-deferred-restart',
-      signal: new AbortController().signal,
-      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-deferred-restart'),
-    }), {
-      beforeMcpRelist: async () => {
-        if (!deferRelist) return;
-        relistReached.resolve();
-        await allowRelist.promise;
+    const reached = deferred<void>();
+    const allow = deferred<void>();
+    const events: Array<{ readonly runtimeGenerationId?: string; readonly type: string }> = [];
+    let armBarrier = false;
+    let held = false;
+    const session = await RsbuildRuntimeSession.start({
+      ...startContext({
+        projectRoot: copied.projectRoot,
+        preparedRuntime: prepared.devRuntime!,
+        providerSessionId: 'provider-store-prepare',
+        signal: new AbortController().signal,
+        storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-store-prepare'),
+      }),
+      emit: (event) => { events.push(event); },
+    }, {
+      afterActivationPrepare: async () => {
+        if (!armBarrier || held) return;
+        held = true;
+        reached.resolve();
+        await allow.promise;
       },
     });
     try {
       await waitFor(() => session.status().state === 'active');
-      const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
-      try {
-        expect(mcp.snapshot().connection.capabilities).toEqual({ resources: {}, tools: {} });
-        const before = mcp.snapshot().binding;
-        deferRelist = true;
-        const reconciling = session.reconcilePreparedRuntime({
-          ...prepared.devRuntime!,
-          apps: prepared.devRuntime!.apps.map((app) => ({
-            ...app,
-            _meta: { ...app._meta, 'openai/widgetDescription': 'Restart after deferred relist.' },
-          })),
-          sourceRevision: `${prepared.devRuntime!.sourceRevision}-deferred-public-restart`,
-        });
-        await relistReached.promise;
-        const restarting = mcp.snapshot();
-        expect(restarting).toMatchObject({ state: 'restarting' });
-        await expect(mcp.execute({
-          expectedSessionRevision: restarting.binding.sessionRevision,
-          kind: 'list-tools',
-        })).rejects.toThrow('Runtime MCP session is restarting.');
-        allowRelist.resolve();
-        await reconciling;
-        expect(mcp.snapshot()).toMatchObject({
-          binding: { sessionRevision: before.sessionRevision + 1 },
-          state: 'ready',
-        });
-        const restartedCapabilities = mcp.snapshot().connection.capabilities;
-        if (restartedCapabilities === undefined) throw new Error('Expected restarted runtime MCP capabilities.');
-        expect(restartedCapabilities).toEqual({ resources: {}, tools: {} });
-        expect(Object.isFrozen(restartedCapabilities)).toBe(true);
-        expect(Object.isFrozen(restartedCapabilities.resources)).toBe(true);
-        expect(Object.isFrozen(restartedCapabilities.tools)).toBe(true);
-      } finally {
-        await mcp.close();
-      }
+      const firstGeneration = session.status().activeVector!.runtimeGenerationId;
+      armBarrier = true;
+      await changeDefinition(copied.projectRoot, 'Read state after store preparation.');
+      await reached.promise;
+      expect(session.status().activeVector?.runtimeGenerationId).toBe(firstGeneration);
+      const reconciled = session.reconcilePreparedRuntime({
+        ...prepared.devRuntime!,
+        apps: prepared.devRuntime!.apps.map((app) => ({
+          ...app,
+          source: './src/widget/App.tsx',
+        })),
+        sourceRevision: `${prepared.devRuntime!.sourceRevision}-store-superseding-prepared`,
+      });
+      allow.resolve();
+      await reconciled;
+      await new Promise<void>((resolve) => { setTimeout(resolve, 50); });
+      await expect(session.readAsset({
+        path: ['rsc', 'index.html'],
+        runtimeGenerationId: 'generation-2',
+        surfaceId: 'mcp.timeline',
+      })).resolves.toBeUndefined();
+      expect(session.status().activeVector?.runtimeGenerationId).toBe(firstGeneration);
+      expect(events.filter((event) => event.type === 'runtime.generation.activated' && event.runtimeGenerationId === 'generation-2')).toHaveLength(0);
+      armBarrier = false;
+      await changeWorkerImplementation(copied.projectRoot, 'store-current-generation');
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration);
+      expect(session.status().activeVector?.runtimeGenerationId).not.toBe('generation-2');
     } finally {
       await session.close();
     }
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
-  }
-}, 30_000 * timeScale);
-
-test('aborts stale activation transactions at both private preparation boundaries', async () => {
-  for (const phase of ['store', 'registry'] as const) {
-    const copied = await copyProviderExample();
-    try {
-      const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
-      const reached = deferred<void>();
-      const allow = deferred<void>();
-      const events: Array<{ readonly runtimeGenerationId?: string; readonly type: string }> = [];
-      let armBarrier = false;
-      let held = false;
-      const session = await RsbuildRuntimeSession.start({
-        ...startContext({
-          projectRoot: copied.projectRoot,
-          preparedRuntime: prepared.devRuntime!,
-          providerSessionId: `provider-${phase}-prepare`,
-          signal: new AbortController().signal,
-          storageRoot: join(copied.projectRoot, '.agent-bundle', `runtime-${phase}-prepare`),
-        }),
-        emit: (event) => { events.push(event); },
-      }, {
-        afterActivationPrepare: async (input) => {
-          if (!armBarrier || held || input.phase !== phase) return;
-          held = true;
-          reached.resolve();
-          await allow.promise;
-        },
-      });
-      try {
-        await waitFor(() => session.status().state === 'active');
-        const firstGeneration = session.mcpRegistry.snapshot()!.runtimeGenerationId;
-        const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
-        try {
-          const firstBinding = mcp.snapshot().binding;
-          armBarrier = true;
-          await changeDefinition(copied.projectRoot, `Read state after ${phase} preparation.`);
-          await reached.promise;
-          expect(session.mcpRegistry.snapshot()).toMatchObject({ runtimeGenerationId: firstGeneration });
-          const reconciled = session.reconcilePreparedRuntime({
-            ...prepared.devRuntime!,
-            apps: prepared.devRuntime!.apps.map((app) => ({
-              ...app,
-              source: './src/widget/App.tsx',
-            })),
-            sourceRevision: `${prepared.devRuntime!.sourceRevision}-${phase}-superseding-prepared`,
-          });
-          allow.resolve();
-          await reconciled;
-          await new Promise<void>((resolve) => { setTimeout(resolve, 50); });
-          await expect(session.readAsset({
-            path: ['rsc', 'index.html'],
-            runtimeGenerationId: 'generation-2',
-            surfaceId: 'mcp.timeline',
-          })).resolves.toBeUndefined();
-          expect(session.mcpRegistry.snapshot()).toMatchObject({ runtimeGenerationId: firstGeneration });
-          expect(mcp.snapshot().binding).toMatchObject({
-            sessionId: firstBinding.sessionId,
-            sessionRevision: firstBinding.sessionRevision,
-          });
-          expect(events.filter((event) => event.type === 'runtime.generation.activated' && event.runtimeGenerationId === 'generation-2')).toHaveLength(0);
-          armBarrier = false;
-          await changeWorkerImplementation(copied.projectRoot, `${phase}-current-generation`);
-          await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration);
-          expect(session.status().activeVector?.runtimeGenerationId).not.toBe('generation-2');
-          expect(mcp.snapshot().binding.sessionRevision).toBe(firstBinding.sessionRevision + 1);
-        } finally {
-          await mcp.close();
-        }
-      } finally {
-        await session.close();
-      }
-    } finally {
-      await rm(copied.workspaceRoot, { force: true, recursive: true });
-    }
   }
 }, 60_000 * timeScale);
 
@@ -1539,8 +1145,8 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
       signal: new AbortController().signal,
       storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-equivalent-prepared-revision'),
     }), {
-      afterActivationPrepare: async (input) => {
-        if (!armBarrier || held || input.phase !== 'store') return;
+      afterActivationPrepare: async () => {
+        if (!armBarrier || held) return;
         held = true;
         reached.resolve();
         await allow.promise;
@@ -1548,7 +1154,7 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
     });
     try {
       await waitFor(() => session.status().state === 'active');
-      const firstGeneration = session.mcpRegistry.snapshot()!.runtimeGenerationId;
+      const firstGeneration = session.status().activeVector!.runtimeGenerationId;
       armBarrier = true;
       await changeDefinition(copied.projectRoot, 'Read state after equivalent prepared revision.');
       await reached.promise;
@@ -1570,7 +1176,6 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
       const committedGeneration = session.status().activeVector?.runtimeGenerationId;
       expect(committedGeneration).toEqual(expect.any(String));
       expect(committedGeneration).not.toBe(firstGeneration);
-      expect(session.mcpRegistry.snapshot()).toMatchObject({ runtimeGenerationId: committedGeneration });
       expect(session.status()).toMatchObject({
         activeVector: { runtimeGenerationId: committedGeneration },
         diagnostics: [],
@@ -1769,8 +1374,8 @@ test('collapses an in-flight activation into a compile observed during its guard
       }),
       emit: (event) => { events.push(event); },
     }, {
-      afterActivationPrepare: async (input) => {
-        if (!armPrepareBarrier || input.phase !== 'registry') return;
+      afterActivationPrepare: async () => {
+        if (!armPrepareBarrier) return;
         armPrepareBarrier = false;
         prepareReached.resolve();
         await allowPrepare.promise;
@@ -1834,8 +1439,8 @@ test('commits after the observation grace when an observed compile never complet
       emit: (event) => { events.push(event); },
     }, {
       activationPhaseBudgetMs: 4_000 * timeScale,
-      afterActivationPrepare: async (input) => {
-        if (!armPrepareBarrier || input.phase !== 'registry') return;
+      afterActivationPrepare: async () => {
+        if (!armPrepareBarrier) return;
         armPrepareBarrier = false;
         prepareReached.resolve();
         await allowPrepare.promise;
@@ -1868,7 +1473,7 @@ test('commits after the observation grace when an observed compile never complet
   }
 });
 
-test('fails a wedged activation reconcile within the budget and releases its late reservation', { timeout: 120_000 * timeScale }, async () => {
+test('fails a wedged activation store step within the budget and releases its late reservation', { timeout: 120_000 * timeScale }, async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
@@ -1888,7 +1493,7 @@ test('fails a wedged activation reconcile within the budget and releases its lat
       emit: (event) => { events.push(event); },
     }, {
       activationPhaseBudgetMs: activationBudgetMs * timeScale,
-      beforeMcpRelist: async () => {
+      afterActivationPrepare: async () => {
         if (!armWedge) return;
         wedgeReached.resolve();
         await releaseWedge.promise;
@@ -1897,34 +1502,29 @@ test('fails a wedged activation reconcile within the budget and releases its lat
     try {
       await waitFor(() => session.status().state === 'active');
       const firstGeneration = session.status().activeVector!.runtimeGenerationId;
-      const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
-      try {
-        armWedge = true;
-        await changeDefinition(copied.projectRoot, 'Read state after a wedged activation reconcile.');
-        await wedgeReached.promise;
-        // A wedged MCP reconcile must become a loud, phase-attributed failure
-        // within the scaled budget instead of the silent permanent hang from
-        // #38; the page recovers through its failed-event bootstrap path.
-        await waitForWithin(
-          () => session.status().diagnostics.some((diagnostic) => diagnostic.message.includes('mcp-registry activation step exceeded')),
-          activationBudgetMs + 15_000,
-        );
-        expect(events.some((event) => event.type === 'runtime.generation.failed')).toBe(true);
-        expect(session.status().activeVector?.runtimeGenerationId).toBe(firstGeneration);
-        // Releasing the wedge lets the abandoned preparation settle late; its
-        // registry reservation must be released, or every later activation
-        // would wedge behind it.
-        armWedge = false;
-        releaseWedge.resolve();
-        await changeWorkerImplementation(copied.projectRoot, 'post-wedge-activation');
-        await waitForWithin(
-          () => session.status().activeVector?.runtimeGenerationId !== firstGeneration,
-          activationBudgetMs + 15_000,
-        );
-        expect(session.status().activeVector?.runtimeGenerationId).not.toBe(firstGeneration);
-      } finally {
-        await mcp.close();
-      }
+      armWedge = true;
+      await changeDefinition(copied.projectRoot, 'Read state after a wedged activation store step.');
+      await wedgeReached.promise;
+      // A wedged store step must become a loud, phase-attributed failure
+      // within the scaled budget instead of the silent permanent hang from
+      // #38; the page recovers through its failed-event bootstrap path.
+      await waitForWithin(
+        () => session.status().diagnostics.some((diagnostic) => diagnostic.message.includes('generation-store activation step exceeded')),
+        activationBudgetMs + 15_000,
+      );
+      expect(events.some((event) => event.type === 'runtime.generation.failed')).toBe(true);
+      expect(session.status().activeVector?.runtimeGenerationId).toBe(firstGeneration);
+      // Releasing the wedge lets the abandoned preparation settle late; its
+      // store reservation must be released, or every later activation would
+      // wedge behind it.
+      armWedge = false;
+      releaseWedge.resolve();
+      await changeWorkerImplementation(copied.projectRoot, 'post-wedge-activation');
+      await waitForWithin(
+        () => session.status().activeVector?.runtimeGenerationId !== firstGeneration,
+        activationBudgetMs + 15_000,
+      );
+      expect(session.status().activeVector?.runtimeGenerationId).not.toBe(firstGeneration);
     } finally {
       await session.close();
     }
@@ -1956,7 +1556,7 @@ test('retains a leased inactive generation through pruning and prunes it after t
     });
     try {
       await waitFor(() => session.status().state === 'active');
-      const firstGeneration = session.mcpRegistry.snapshot()!.runtimeGenerationId;
+      const firstGeneration = session.status().activeVector!.runtimeGenerationId;
       const heldRead = session.readAsset({
         path: ['rsc', 'index.html'],
         runtimeGenerationId: firstGeneration,
@@ -2038,8 +1638,7 @@ test('returns a compiling session without treating provider activation work as a
       signal: new AbortController().signal,
       storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-compiling-startup'),
     }), {
-      afterActivationPrepare: async (input) => {
-        if (input.phase !== 'store') return;
+      afterActivationPrepare: async () => {
         activationReached.resolve();
         await releaseActivation.promise;
       },
@@ -2073,58 +1672,6 @@ test('returns a compiling session without treating provider activation work as a
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
 }, 60_000);
-
-test('uses the bound Rsbuild dev-server context instead of a stale port-zero start result', async () => {
-  const copied = await copyProviderExample();
-  try {
-    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
-    let closeCalls = 0;
-    const create = async (input: Readonly<{ readonly config: unknown }>) => {
-      const plugin = ((input.config as Readonly<{ readonly plugins?: readonly unknown[] }>).plugins ?? []).find((candidate): candidate is Readonly<{
-        readonly name: string;
-        setup(api: unknown): void;
-      }> => typeof candidate === 'object' && candidate !== null &&
-        (candidate as { readonly name?: unknown }).name === 'agent-bundle:rsc-runtime-app-reload');
-      if (plugin === undefined) throw new Error('RSC App reload plugin is unavailable.');
-      let afterCreate: ((input: unknown) => void) | undefined;
-      plugin.setup({
-        onAfterCreateCompiler: (callback: unknown) => { afterCreate = callback as (input: unknown) => void; },
-        onAfterEnvironmentCompile: () => undefined,
-        onBeforeStartDevServer: () => undefined,
-        onCloseDevServer: () => undefined,
-      });
-      afterCreate?.({ environments: { app: {} } });
-      return Object.freeze({
-        context: Object.freeze({
-          devServer: Object.freeze({ hostname: '127.0.0.1', https: false, port: 41_103 }),
-        }),
-        startDevServer: async () => Object.freeze({
-          port: 0,
-          server: Object.freeze({ close: async () => { closeCalls += 1; } }),
-          urls: Object.freeze(['http://127.0.0.1:0']),
-        }) as unknown as StartDevServerResult,
-      }) as unknown as Awaited<ReturnType<typeof createRsbuild>>;
-    };
-    const session = await RsbuildRuntimeSession.start(startContext({
-      projectRoot: copied.projectRoot,
-      preparedRuntime: prepared.devRuntime!,
-      providerSessionId: 'provider-bound-dev-server-context',
-      signal: new AbortController().signal,
-      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-bound-dev-server-context'),
-    }), { createRsbuild: create as typeof createRsbuild });
-    try {
-      expect(session.clientSurface('mcp.edit-timeline')).toMatchObject({
-        httpOrigin: 'http://127.0.0.1:41103',
-        subscribeReload: expect.any(Function),
-      });
-    } finally {
-      await session.close();
-    }
-    expect(closeCalls).toBe(1);
-  } finally {
-    await rm(copied.workspaceRoot, { force: true, recursive: true });
-  }
-});
 
 test('waits for a late Rsbuild server closer after aborting startup', async () => {
   const copied = await copyProviderExample();
@@ -2375,7 +1922,6 @@ test('drains every live-session cleanup group once when independent closers reje
       'owned-runs-root',
       'rsbuild-dev-server',
       'run-artifact',
-      'runtime-mcp-registry',
     ]));
     expect(new Set(attempted).size).toBe(attempted.length);
     expect(session.close()).toBe(closing);

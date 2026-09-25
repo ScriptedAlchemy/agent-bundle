@@ -78,12 +78,6 @@ export interface DevRuntimeTraceSpan {
 
 export interface DevRuntimeInspectionEnvelope {
   readonly agentVisible?: JsonValue;
-  readonly app?: Readonly<{
-    readonly mcpBinding: DevRuntimeMcpAppRunBinding;
-    readonly resourceUri: string;
-    /** Server-only client/HMR endpoint locator; it may differ from the invoked run surface. */
-    readonly surfaceId: string;
-  }>;
   readonly flight?: Readonly<{
     readonly bytes: number;
     readonly downloadPath?: string;
@@ -170,120 +164,6 @@ export interface DevRuntimeAssetRequest {
 export interface DevRuntimeAsset {
   readonly body: Uint8Array;
   readonly contentType: string;
-}
-
-/** Server-only compiler endpoint. It is never returned by status/surfaces JSON. */
-export interface DevRuntimeMcpSessionRequest {
-  readonly expectedRegistryRevision?: number;
-  readonly serverName: string;
-  readonly target: string;
-}
-
-export interface DevRuntimeMcpSessionControlRequest {
-  readonly expectedSessionRevision: number;
-  readonly sessionId: string;
-}
-
-export interface DevRuntimeMcpSessionBinding {
-  readonly definitionDigest: string;
-  readonly providerSessionId: string;
-  readonly registryRevision: number;
-  readonly serverDigest: string;
-  readonly serverName: string;
-  readonly sessionId: string;
-  readonly sessionRevision: number;
-  readonly stateStoreId: string;
-  readonly target: string;
-  readonly transportDigest: string;
-}
-
-export type DevRuntimeMcpAppRunBinding = Omit<
-  DevRuntimeMcpSessionBinding,
-  'providerSessionId' | 'stateStoreId'
->;
-
-export interface DevRuntimeMcpServerDescriptor {
-  readonly definitionDigest: string;
-  readonly name: string;
-  readonly resources: readonly JsonObject[];
-  readonly serverDigest: string;
-  readonly target: string;
-  readonly tools: readonly JsonObject[];
-  readonly transportDigest: string;
-}
-
-export interface DevRuntimeMcpRegistrySnapshot {
-  readonly definitionDigest: string;
-  readonly providerSessionId: string;
-  readonly registryRevision: number;
-  readonly runtimeGenerationId: string;
-  readonly servers: readonly DevRuntimeMcpServerDescriptor[];
-  readonly transportDigest: string;
-}
-
-export interface DevRuntimeMcpConnectionState {
-  readonly capabilities: JsonObject | undefined;
-  readonly protocolEra: 'legacy' | 'modern' | undefined;
-  readonly protocolVersion: string | undefined;
-  readonly server: Readonly<{ readonly name: string; readonly version: string }> | undefined;
-}
-
-interface DevRuntimeMcpOperationBase {
-  readonly expectedSessionRevision: number;
-}
-
-export type DevRuntimeMcpOperationRequest = DevRuntimeMcpOperationBase & (
-  | Readonly<{ readonly kind: 'list-tools' }>
-  | Readonly<{
-      readonly arguments: JsonObject;
-      readonly kind: 'call-tool';
-      readonly name: string;
-      readonly requestId?: string;
-    }>
-  | Readonly<{ readonly kind: 'list-resources' }>
-  | Readonly<{ readonly kind: 'read-resource'; readonly uri: string }>
-);
-
-export interface DevRuntimeMcpOperationResult {
-  readonly operationId: string;
-  readonly sessionId: string;
-  readonly sessionRevision: number;
-  readonly value: JsonValue;
-  readonly vector: RuntimeVector;
-}
-
-export interface DevRuntimeMcpSessionSnapshot {
-  readonly binding: DevRuntimeMcpSessionBinding;
-  readonly connection: DevRuntimeMcpConnectionState;
-  readonly state: 'connecting' | 'ready' | 'restarting' | 'failed' | 'closed';
-}
-
-export interface DevRuntimeMcpRegistryReconcileInput {
-  readonly definitionDigest: string;
-  readonly runtimeGenerationId: string;
-  readonly servers: readonly DevRuntimeMcpServerDescriptor[];
-  readonly transportDigest: string;
-}
-
-export interface DevRuntimeMcpInvalidatedBinding {
-  readonly sessionId: string;
-  readonly sessionRevision: number;
-}
-
-export interface DevRuntimeMcpRegistryReconcileResult {
-  readonly action: 'implementation-updated' | 'sessions-restarted' | 'restart-failed';
-  readonly invalidatedBindings: readonly DevRuntimeMcpInvalidatedBinding[];
-  readonly registryRevision: number;
-  readonly restartedSessionIds: readonly string[];
-  readonly runtimeGenerationId: string;
-  readonly sequence: number;
-}
-
-export interface DevRuntimeMcpRegistryReplayGap {
-  readonly earliestAvailableSequence: number;
-  readonly latestDroppedSequence: number;
-  readonly requestedAfterSequence: number;
-  readonly type: 'replay.gap';
 }
 
 export interface DevRuntimeStatusResponse {

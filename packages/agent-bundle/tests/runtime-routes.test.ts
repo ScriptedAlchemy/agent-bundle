@@ -73,7 +73,6 @@ const runtimeStatus = Object.freeze({
 } satisfies DevRuntimeStatus);
 
 class MemoryRuntime implements DevRuntimeSession {
-  readonly mcpRegistry = {} as DevRuntimeSession['mcpRegistry'];
   readonly invocations: unknown[] = [];
   readonly providerSessionId: string = 'provider-a';
   readonly #flight: Uint8Array;
@@ -83,7 +82,6 @@ class MemoryRuntime implements DevRuntimeSession {
     this.#flight = flight;
   }
 
-  clientSurface(): undefined { return undefined; }
   async close(): Promise<void> {}
   async invoke(request: Parameters<DevRuntimeSession['invoke']>[0]): Promise<DevRuntimeRun> {
     this.invocations.push(request);

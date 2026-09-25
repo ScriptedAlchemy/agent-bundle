@@ -66,8 +66,7 @@ Internals keep the existing classes.
 
 Framework-process error classes, the ones raised inside Effect programs in
 the dev seam and the eval service whose declarations no package export
-reaches (today: `DevCoordinatorCloseError`, `RuntimeMcpRegistryError` /
-`RuntimeMcpRegistryCloseError`, `RuntimeGenerationStoreError` /
+reaches (today: `DevCoordinatorCloseError`, `RuntimeGenerationStoreError` /
 `RuntimeGenerationStoreCloseError`, `DevRuntimeProviderLoadError`,
 `ScriptPlaygroundFailure` / `ScriptPlaygroundAbortError`,
 `LifecycleReplayRequestError`, `ArtifactInspectionServiceError`,

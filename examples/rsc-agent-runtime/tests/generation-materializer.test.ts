@@ -20,7 +20,6 @@ import {
   captureRuntimeGenerationSnapshot,
   materializeRuntimeGeneration,
   rscRuntimeGenerationMetadataCodec,
-  runtimeDefinitionDigest,
   validateRscRuntimeGenerationMetadata,
   validateStagedRscEnvironmentCheckpoint,
   type RscRuntimeCapturedGenerationSnapshot,
@@ -338,89 +337,36 @@ test('captures immutable paired compiler outputs and records every digested asse
       'widget/rsc/index.html',
       'widget/static/js/rsc/index.js',
     ]));
-    expect(prepared.generation.manifest.metadata.definitionDigest)
-      .toBe(sha256('{"apps":[],"definition":{"nativeHooks":[],"resources":[],"tools":[]}}'));
-    expect(prepared.generation.manifest.metadata.environmentHashes).toEqual(expect.objectContaining({
-      rsc: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      widget: expect.stringMatching(/^[a-f0-9]{64}$/u),
-    }));
+    expect(Object.keys(prepared.generation.manifest.metadata).sort())
+      .toEqual(['appDefinitions', 'entries', 'stateStoreId', 'surfaceAssets']);
   } finally {
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
 });
 
-test('includes prepared App definitions in the captured runtime definition digest', async () => {
-  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-definition-digest-'));
+test('captures canonical, ordered, frozen App definitions', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-app-definitions-'));
   const compilerRoot = join(storageRoot, 'compiler');
   const store = createStore(storageRoot);
   try {
     await writeCompilerCohort(compilerRoot);
-    const metadataFor = async (
-      id: string,
-      prepared: DevRuntimePreparedProject,
-      sourceRevision = 'captured-r1',
-    ) => {
-      const candidate = await store.begin({ id, sourceRevision });
+    const metadataFor = async (id: string, prepared: DevRuntimePreparedProject) => {
+      const candidate = await store.begin({ id, sourceRevision: 'captured-r1' });
       const snapshot = await captureCompilerCohort({
         attemptId: `attempt-${id}`,
         candidate,
         compilerRoot,
         preparedRuntime: prepared,
         rscCohortRevision: 1,
-        sourceRevision,
+        sourceRevision: 'captured-r1',
       });
-      const generation = await materializeRuntimeGeneration({ snapshot, store });
-      return Object.freeze({ generation: generation.generation, metadata: generation.generation.manifest.metadata, snapshot });
+      return (await materializeRuntimeGeneration({ snapshot, store })).generation.manifest.metadata;
     };
 
-    const baseline = await metadataFor('baseline', preparedRuntimeWithApp());
-    const appDefinitionVariants: readonly Readonly<{ readonly id: string; readonly prepared: DevRuntimePreparedProject }>[] = [
-      { id: 'meta', prepared: preparedRuntimeWithApp({ _meta: Object.freeze({ presentation: Object.freeze({ accent: 'teal', version: 2 }) }) }) },
-      { id: 'id', prepared: preparedRuntimeWithApp({ id: 'timeline-app-v2' }) },
-      { id: 'name', prepared: preparedRuntimeWithApp({ name: 'Timeline v2' }) },
-      { id: 'server-id', prepared: preparedRuntimeWithApp({ serverId: 'timeline-server-v2' }) },
-      { id: 'server-name', prepared: preparedRuntimeWithApp({ serverName: 'Timeline MCP v2' }) },
-      { id: 'resource-uri', prepared: preparedRuntimeWithApp({ resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v2.html' }) },
-      { id: 'targets', prepared: preparedRuntimeWithApp({ targets: Object.freeze(['codex']) }) },
-    ];
-
-    for (const variant of appDefinitionVariants) {
-      const captured = await metadataFor(variant.id, variant.prepared);
-      expect(captured.metadata.definitionDigest).not.toBe(baseline.metadata.definitionDigest);
-      expect(captured.metadata.servers.map((server) => server.definitionDigest)).toEqual([
-        captured.metadata.definitionDigest,
-        captured.metadata.definitionDigest,
-      ]);
-    }
-
-    const sourceAndTransportNoise = await metadataFor('noise', preparedRuntimeWithApp({
-      source: '/other-machine/plugin/agent-bundle.config.ts',
-      template: '/other-machine/plugin/src/app/edit-timeline.html',
-    }, {
-      provider: '/other-machine/plugin/src/dev/provider.ts',
-      servers: Object.freeze([Object.freeze({
-        args: Object.freeze(['--serve', '--token=top-secret']),
-        command: '/other-machine/bin/timeline-server',
-        cwd: '/other-machine/plugin',
-        env: Object.freeze({ API_TOKEN: 'top-secret' }),
-        headers: Object.freeze({ Authorization: 'Bearer top-secret' }),
-        id: 'timeline-server',
-        name: 'Timeline MCP',
-        source: '/other-machine/plugin/agent-bundle.config.ts',
-        targets: Object.freeze(['claude', 'codex']),
-        transport: 'streamable-http' as const,
-        url: 'https://other-machine.invalid/mcp',
-      })]),
-      sourceRevision: 'prepared-r2',
-    }), 'captured-r2');
-    expect(sourceAndTransportNoise.metadata.definitionDigest).toBe(baseline.metadata.definitionDigest);
-
-    expect(runtimeDefinitionDigest(baseline.snapshot.definition, baseline.snapshot.preparedRuntime))
-      .toBe(baseline.metadata.definitionDigest);
-
-    const [timelineApp] = baseline.snapshot.preparedRuntime.apps;
-    if (timelineApp === undefined) throw new Error('Baseline prepared App was not captured.');
+    const baselinePrepared = preparedRuntimeWithApp();
+    const [timelineApp] = baselinePrepared.apps;
+    if (timelineApp === undefined) throw new Error('Baseline prepared App was not declared.');
     const activityApp = Object.freeze({
       ...timelineApp,
       id: 'activity-app',
@@ -428,23 +374,22 @@ test('includes prepared App definitions in the captured runtime definition diges
       resourceUri: 'ui://rsc-agent-runtime/activity-v1.html',
     });
     const orderedForward = await metadataFor('ordered-forward', Object.freeze({
-      ...baseline.snapshot.preparedRuntime,
+      ...baselinePrepared,
       apps: Object.freeze([timelineApp, activityApp]),
     }));
     const orderedReverse = await metadataFor('ordered-reverse', Object.freeze({
-      ...baseline.snapshot.preparedRuntime,
+      ...baselinePrepared,
       apps: Object.freeze([activityApp, timelineApp]),
     }));
-    expect(orderedReverse.metadata.definitionDigest).toBe(orderedForward.metadata.definitionDigest);
-    expect(orderedForward.metadata.appDefinitions.map((app) => app.id)).toEqual(['activity-app', 'timeline-app']);
-    expect(orderedForward.metadata.appDefinitions.every((app) => !('template' in app))).toBe(true);
-    const [firstAppDefinition] = orderedForward.metadata.appDefinitions;
-    if (firstAppDefinition === undefined || firstAppDefinition._meta === undefined) throw new Error('Ordered App definition was malformed.');
-    expect(Object.isFrozen(orderedForward.metadata.appDefinitions)).toBe(true);
+    expect(orderedForward.appDefinitions).toEqual([
+      { id: 'activity-app', name: 'Activity', resourceUri: 'ui://rsc-agent-runtime/activity-v1.html' },
+      { id: 'timeline-app', name: 'Timeline', resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' },
+    ]);
+    expect(orderedReverse.appDefinitions).toEqual(orderedForward.appDefinitions);
+    const [firstAppDefinition] = orderedForward.appDefinitions;
+    if (firstAppDefinition === undefined) throw new Error('Ordered App definition was malformed.');
+    expect(Object.isFrozen(orderedForward.appDefinitions)).toBe(true);
     expect(Object.isFrozen(firstAppDefinition)).toBe(true);
-    expect(Object.isFrozen(firstAppDefinition.targets)).toBe(true);
-    expect(Object.isFrozen(firstAppDefinition._meta)).toBe(true);
-    expect(Object.isFrozen(firstAppDefinition._meta.presentation)).toBe(true);
   } finally {
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });

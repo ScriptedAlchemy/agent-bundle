@@ -6,13 +6,7 @@ import { isRecord } from '../core/strict-json.ts';
 import type { ArtifactStatus, JsonObject, JsonValue, RuntimeEvent } from './types.ts';
 import {
   DevRuntimeUnavailableError,
-  type DevRuntimeClientSurfaceEndpoint,
   type DevRuntimeEventInput,
-  type DevRuntimeMcpRegistry,
-  type DevRuntimeMcpRegistryListener,
-  type DevRuntimeMcpRegistrySubscription,
-  type DevRuntimeMcpSession,
-  type DevRuntimeMcpSessionView,
   type DevRuntimePreparedProject,
   type DevRuntimeProvider,
   type DevRuntimeSession,
@@ -23,11 +17,6 @@ import type {
   DevRuntimeDescriptor,
   DevRuntimeDiagnostic,
   DevRuntimeInvocationRequest,
-  DevRuntimeMcpRegistryReconcileInput,
-  DevRuntimeMcpRegistryReconcileResult,
-  DevRuntimeMcpOperationRequest,
-  DevRuntimeMcpSessionControlRequest,
-  DevRuntimeMcpSessionRequest,
   DevRuntimeReplayRequest,
   DevRuntimeRun,
   DevRuntimeStateIdentity,
@@ -295,12 +284,6 @@ const snapshotSurface = (value: unknown): DevRuntimeSurface => {
 const snapshotSurfaces = (value: unknown): readonly DevRuntimeSurface[] =>
   Object.freeze(snapshotArray(value).map(snapshotSurface));
 
-const call = <TResult>(owner: object, key: PropertyKey, args: readonly unknown[] = []): TResult => {
-  const candidate = (owner as Record<PropertyKey, unknown>)[key];
-  if (typeof candidate !== 'function') throw new DevRuntimeUnavailableError();
-  return Reflect.apply(candidate, owner, args) as TResult;
-};
-
 export interface DevRuntimeControllerOptions {
   readonly artifactStatus: () => ArtifactStatus;
   readonly emit: (event: RuntimeEvent) => void;
@@ -324,7 +307,6 @@ export class DevRuntimeController implements DevRuntimeSession {
   readonly #emit: (event: RuntimeEvent) => void;
   readonly #environment: Readonly<Record<string, string | undefined>>;
   readonly #initialProviderPath: string;
-  readonly #mcpRegistry: DevRuntimeMcpRegistry;
   readonly #projectRoot: string;
   readonly #provider: DevRuntimeProvider | undefined;
   readonly #providerSessionId: string;
@@ -364,11 +346,6 @@ export class DevRuntimeController implements DevRuntimeSession {
     this.#status = options.provider === undefined
       ? statusFor(unavailableDescriptor, 'failed', [lifecycleDiagnostic()])
       : statusFor(options.provider.descriptor, 'starting');
-    this.#mcpRegistry = this.#createMcpRegistry();
-  }
-
-  get mcpRegistry(): DevRuntimeMcpRegistry {
-    return this.#mcpRegistry;
   }
 
   get providerSessionId(): string {
@@ -378,10 +355,6 @@ export class DevRuntimeController implements DevRuntimeSession {
   start(): Promise<void> {
     this.#startPromise ??= this.#start();
     return this.#startPromise;
-  }
-
-  clientSurface(surfaceId: string): DevRuntimeClientSurfaceEndpoint | undefined {
-    return this.#activeSession().clientSurface(surfaceId);
   }
 
   close(): Promise<void> {
@@ -456,73 +429,6 @@ export class DevRuntimeController implements DevRuntimeSession {
       throw new DevRuntimeUnavailableError();
     }
     return this.#session;
-  }
-
-  #rawRegistry(): DevRuntimeMcpRegistry {
-    const registry = this.#activeSession().mcpRegistry;
-    if (!isRecord(registry)) throw new DevRuntimeUnavailableError();
-    for (const name of ['close', 'closeSession', 'open', 'reconcile', 'restart', 'session', 'snapshot', 'subscribe'] as const) {
-      if (typeof registry[name] !== 'function') throw new DevRuntimeUnavailableError();
-    }
-    return registry as unknown as DevRuntimeMcpRegistry;
-  }
-
-  #createMcpView(resolveView: () => DevRuntimeMcpSessionView | undefined): DevRuntimeMcpSessionView {
-    const current = (): DevRuntimeMcpSessionView => {
-      this.#rawRegistry();
-      const view = resolveView();
-      if (view === undefined) throw new DevRuntimeUnavailableError();
-      return view;
-    };
-    return Object.freeze({
-      execute: async (request: DevRuntimeMcpOperationRequest) =>
-        call<Promise<Awaited<ReturnType<DevRuntimeMcpSessionView['execute']>>>>(current(), 'execute', [request]),
-      snapshot: () => call<ReturnType<DevRuntimeMcpSessionView['snapshot']>>(current(), 'snapshot'),
-      watchClosed: (listener: (reason?: unknown) => Promise<void> | void) =>
-        call<ReturnType<DevRuntimeMcpSessionView['watchClosed']>>(current(), 'watchClosed', [listener]),
-    });
-  }
-
-  #createMcpSession(resolveSession: () => DevRuntimeMcpSession | undefined): DevRuntimeMcpSession {
-    const view = this.#createMcpView(resolveSession);
-    return Object.freeze({
-      ...view,
-      close: async () => {
-        this.#rawRegistry();
-        return call<Promise<void>>(resolveSession() ?? this.#activeSession(), 'close');
-      },
-    });
-  }
-
-  #createMcpRegistry(): DevRuntimeMcpRegistry {
-    return Object.freeze({
-      close: async () => call<Promise<void>>(this.#rawRegistry(), 'close'),
-      closeSession: async (request: DevRuntimeMcpSessionControlRequest) =>
-        call<Promise<void>>(this.#rawRegistry(), 'closeSession', [request]),
-      open: async (request: DevRuntimeMcpSessionRequest) => {
-        const opened = await call<Promise<DevRuntimeMcpSession>>(this.#rawRegistry(), 'open', [request]);
-        return this.#createMcpSession(() => opened);
-      },
-      reconcile: async (input: DevRuntimeMcpRegistryReconcileInput): Promise<DevRuntimeMcpRegistryReconcileResult> =>
-        call<Promise<DevRuntimeMcpRegistryReconcileResult>>(this.#rawRegistry(), 'reconcile', [input]),
-      restart: async (request: DevRuntimeMcpSessionControlRequest): Promise<DevRuntimeMcpRegistryReconcileResult> =>
-        call<Promise<DevRuntimeMcpRegistryReconcileResult>>(this.#rawRegistry(), 'restart', [request]),
-      session: (sessionId: string): DevRuntimeMcpSessionView | undefined => {
-        const existing = call<DevRuntimeMcpSessionView | undefined>(this.#rawRegistry(), 'session', [sessionId]);
-        return existing === undefined
-          ? undefined
-          : this.#createMcpView(() => call<DevRuntimeMcpSessionView | undefined>(this.#rawRegistry(), 'session', [sessionId]));
-      },
-      snapshot: () => call<ReturnType<DevRuntimeMcpRegistry['snapshot']>>(this.#rawRegistry(), 'snapshot'),
-      subscribe: (
-        options: Readonly<{ readonly afterSequence?: number }>,
-        listener: DevRuntimeMcpRegistryListener,
-      ): DevRuntimeMcpRegistrySubscription => call<DevRuntimeMcpRegistrySubscription>(
-        this.#rawRegistry(),
-        'subscribe',
-        [options, listener],
-      ),
-    });
   }
 
   #captureStatus(session: DevRuntimeSession): DevRuntimeStatus {

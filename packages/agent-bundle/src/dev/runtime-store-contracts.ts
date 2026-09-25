@@ -1,24 +1,12 @@
-import type {
-  DevRuntimeEventInput,
-  DevRuntimeMcpRegistry,
-} from './runtime-provider.ts';
-import type {
-  DevRuntimeMcpConnectionState,
-  DevRuntimeMcpOperationRequest,
-  DevRuntimeMcpRegistryReconcileInput,
-  DevRuntimeMcpRegistryReconcileResult,
-  DevRuntimeMcpServerDescriptor,
-} from './runtime-protocol.ts';
 import type { JsonValue } from './types.ts';
 
 /**
- * The generation store and MCP registry contracts a `dev.runtime.provider`
- * drives, spelled without their implementations (#485). The classes in
- * `runtime-generation-store.ts` and `runtime-mcp-registry.ts` implement these
- * interfaces and throw `YieldableFrameworkError`s, which reach `effect`; a
- * public `.d.ts` graph must not (`docs/effect-conventions.md`, boundary
- * modules), so `agent-bundle/api` exports this module and the factories in
- * `runtime-store-factories.ts`, never the classes.
+ * The generation store contract a `dev.runtime.provider` drives, spelled
+ * without its implementation (#485). The class in `runtime-generation-store.ts`
+ * implements these interfaces and throws `YieldableFrameworkError`s, which
+ * reach `effect`; a public `.d.ts` graph must not (`docs/effect-conventions.md`,
+ * boundary modules), so `agent-bundle/api` exports this module and the factory
+ * in `runtime-store-factories.ts`, never the class.
  */
 
 export interface RuntimeGenerationAsset {
@@ -133,79 +121,4 @@ export interface DevRuntimeGenerationStore<TMetadata = unknown> {
     input: RuntimeGenerationManifestInput<TMetadata>,
     options?: RuntimeGenerationPrepareOptions<TMetadata>,
   ): Promise<RuntimeGenerationPreparedActivation<TMetadata>>;
-}
-
-export interface RuntimeMcpConnection {
-  readonly state: DevRuntimeMcpConnectionState;
-  close(): Promise<void>;
-  relist(): Promise<DevRuntimeMcpConnectionState>;
-}
-
-export interface RuntimeMcpConnector {
-  connect(input: Readonly<{
-    readonly descriptor: DevRuntimeMcpServerDescriptor;
-    readonly sessionId: string;
-    readonly signal: AbortSignal;
-  }>): Promise<RuntimeMcpConnection>;
-}
-
-export interface RuntimeMcpExecutionContext {
-  readonly descriptor: DevRuntimeMcpServerDescriptor;
-  readonly generation: RuntimeGeneration;
-  readonly request: DevRuntimeMcpOperationRequest;
-  readonly sessionId: string;
-  readonly signal: AbortSignal;
-}
-
-export interface RuntimeMcpExecutionValue {
-  readonly stateVersion: number;
-  readonly value: JsonValue;
-}
-
-export interface RuntimeMcpRegistryOptions {
-  readonly artifactEpochId: () => string | undefined;
-  readonly connector: RuntimeMcpConnector;
-  readonly createOperationId?: () => string;
-  readonly createSessionId?: () => string;
-  readonly emit: (event: DevRuntimeEventInput) => void;
-  readonly executor: (context: RuntimeMcpExecutionContext) => Promise<RuntimeMcpExecutionValue>;
-  readonly generationStore: DevRuntimeGenerationStore;
-  readonly initialRegistry?: DevRuntimeMcpRegistryReconcileInput;
-  readonly providerSessionId: string;
-  readonly stateStoreId: string;
-}
-
-export interface RuntimeMcpPreparedActivationReconcile {
-  readonly input: DevRuntimeMcpRegistryReconcileInput;
-  readonly reservationRevision: number;
-}
-
-export interface RuntimeMcpCommittedActivationReconcile {
-  readonly result: DevRuntimeMcpRegistryReconcileResult;
-  finalize(): Promise<void>;
-  publish(): void;
-}
-
-export interface RuntimeMcpRegistryCloseFailure {
-  readonly error: unknown;
-  readonly resource: string;
-}
-
-/** The `code` of an error the MCP registry throws (`name: 'RuntimeMcpRegistryError'`). */
-export type RuntimeMcpRegistryErrorCode =
-  | 'RUNTIME_MCP_REGISTRY_CLOSED'
-  | 'RUNTIME_MCP_REGISTRY_CONFLICT'
-  | 'RUNTIME_MCP_REGISTRY_INVALID'
-  | 'RUNTIME_MCP_REGISTRY_NOT_FOUND';
-
-/**
- * The MCP registry as the provider that owns it sees it: the session-facing
- * {@link DevRuntimeMcpRegistry} plus the activation reconcile the provider
- * drives while it activates a generation. Created with
- * `createRuntimeMcpRegistry` from `agent-bundle/api`.
- */
-export interface DevRuntimeProviderMcpRegistry extends DevRuntimeMcpRegistry {
-  abortActivationReconcile(prepared: RuntimeMcpPreparedActivationReconcile): Promise<void>;
-  commitActivationReconcile(prepared: RuntimeMcpPreparedActivationReconcile): RuntimeMcpCommittedActivationReconcile;
-  prepareActivationReconcile(input: DevRuntimeMcpRegistryReconcileInput): Promise<RuntimeMcpPreparedActivationReconcile>;
 }

@@ -69,7 +69,6 @@ const agentBundleDev = new Set([
   'packages/agent-bundle/src/dev/runtime-app-message-limits.ts',
   'packages/agent-bundle/src/dev/runtime-controller.ts',
   'packages/agent-bundle/src/dev/runtime-generation-store.ts',
-  'packages/agent-bundle/src/dev/runtime-mcp-registry.ts',
   'packages/agent-bundle/src/dev/runtime-provider-loader.ts',
   'packages/agent-bundle/src/dev/runtime-provider.ts',
   'packages/agent-bundle/src/dev/runtime-routes.ts',

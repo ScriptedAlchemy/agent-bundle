@@ -1,9 +1,5 @@
 import type { ZodType } from 'zod';
-import type { JsonObject } from 'agent-bundle';
-import type {
-  DevRuntimeInspectionEnvelope,
-  DevRuntimeMcpServerDescriptor,
-} from 'agent-bundle/api';
+import type { DevRuntimeInspectionEnvelope } from 'agent-bundle/api';
 
 export interface EditEvent {
   eventId: string;
@@ -89,14 +85,14 @@ export interface DevRuntimeHookInspectionRequest {
   readonly type: 'hook/after-file-edit';
 }
 
-export interface DevRuntimeMcpTimelineInspectionRequest {
+export interface DevRuntimeTimelineInspectionRequest {
   readonly snapshot: RuntimeSnapshot;
   readonly stateFile: string;
   readonly stateStoreId: string;
   readonly type: 'mcp/render-timeline';
 }
 
-export interface DevRuntimeMcpStatusInspectionRequest {
+export interface DevRuntimeStatusInspectionRequest {
   readonly stateFile: string;
   readonly stateStoreId: string;
   readonly type: 'mcp/runtime-status';
@@ -104,8 +100,8 @@ export interface DevRuntimeMcpStatusInspectionRequest {
 
 export type DevRuntimeInspectionRequest =
   | DevRuntimeHookInspectionRequest
-  | DevRuntimeMcpTimelineInspectionRequest
-  | DevRuntimeMcpStatusInspectionRequest;
+  | DevRuntimeTimelineInspectionRequest
+  | DevRuntimeStatusInspectionRequest;
 
 export interface DevRuntimeInspectionResponse {
   /** Raw Flight bytes are sent over the provider-owned fd 3 side channel. */
@@ -178,24 +174,14 @@ export interface RscRuntimeSurfaceAsset {
 }
 
 export interface RscRuntimeAppDefinition {
-  readonly _meta?: JsonObject;
   readonly id: string;
   readonly name: string;
   readonly resourceUri: string;
-  readonly serverId: string;
-  readonly serverName: string;
-  readonly targets: readonly string[];
 }
 
 export interface RscRuntimeGenerationMetadata {
   readonly appDefinitions: readonly RscRuntimeAppDefinition[];
-  readonly definitionDigest: string;
   readonly entries: Readonly<Record<string, string>>;
-  readonly environmentHashes: Readonly<Record<'rsc' | 'widget', string>>;
-  readonly preparedRevision: string;
-  readonly serverDigest: string;
-  readonly servers: readonly DevRuntimeMcpServerDescriptor[];
   readonly stateStoreId: string;
   readonly surfaceAssets: Readonly<Record<string, readonly RscRuntimeSurfaceAsset[]>>;
-  readonly transportDigest: string;
 }

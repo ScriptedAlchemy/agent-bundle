@@ -888,20 +888,6 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
     });
     expect(timeline).toMatchObject({
       result: {
-        app: {
-          mcpBinding: {
-            definitionDigest: expect.any(String),
-            registryRevision: expect.any(Number),
-            serverDigest: expect.any(String),
-            serverName: 'timeline',
-            sessionId: expect.any(String),
-            sessionRevision: expect.any(Number),
-            target: timelineTarget,
-            transportDigest: expect.any(String),
-          },
-          resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
-          surfaceId: 'mcp.edit-timeline',
-        },
         protocol: {
           structuredContent: {
             edits: [expect.objectContaining({ path: '/tmp/fixture-claude-post-tool-use.txt' })],
@@ -911,90 +897,23 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
       },
       status: 'succeeded',
     });
-    if (timeline.status !== 'succeeded' || timeline.result.protocol === null || typeof timeline.result.protocol !== 'object' || Array.isArray(timeline.result.protocol) || timeline.result.app === undefined) {
+    if (timeline.status !== 'succeeded' || timeline.result.protocol === null || typeof timeline.result.protocol !== 'object' || Array.isArray(timeline.result.protocol)) {
       throw new Error('Timeline protocol was unavailable.');
     }
     expect(timeline.surfaceId).toBe('mcp.render_edit_timeline');
-    expect(timeline.result.app.surfaceId).toBe('mcp.edit-timeline');
-    expect(Object.keys(timeline.result.app.mcpBinding).sort()).toEqual([
-      'definitionDigest', 'registryRevision', 'serverDigest', 'serverName', 'sessionId', 'sessionRevision', 'target', 'transportDigest',
-    ]);
-    expect(Object.isFrozen(timeline.result.app)).toBe(true);
-    expect(Object.isFrozen(timeline.result.app.mcpBinding)).toBe(true);
-    expect(session.mcpRegistry.session(timeline.result.app.mcpBinding.sessionId)?.snapshot()).toMatchObject({
-      binding: timeline.result.app.mcpBinding,
-      state: 'ready',
-    });
-    const broker = session.mcpRegistry.session(timeline.result.app.mcpBinding.sessionId);
-    if (broker === undefined) throw new Error('Timeline App broker was unavailable.');
-    const listedTools = await broker.execute({
-      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
-      kind: 'list-tools',
-    });
-    const listedResources = await broker.execute({
-      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
-      kind: 'list-resources',
-    });
-    expect(listedTools.value).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'render_edit_timeline' })]));
-    expect(listedResources.value).toEqual(expect.arrayContaining([expect.objectContaining({
-      mimeType: 'text/html;profile=mcp-app', uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
-    })]));
-    await expect(broker.execute({
-      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
-      kind: 'read-resource',
-      uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
-    })).resolves.toEqual(expect.objectContaining({
-      value: {
-        contents: [{
-          _meta: {
-            'openai/widgetDescription': 'Interactive timeline of file edits recorded by agent hooks.',
-            'ui.csp': { connectDomains: [], resourceDomains: [] },
-            'ui.prefersBorder': true,
-          },
-          mimeType: 'text/html;profile=mcp-app',
-          text: expect.stringMatching(/^<!doctype html>/iu),
-          uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
-        }],
+    expect(timeline.result).not.toHaveProperty('app');
+    expect((timeline.result.protocol as Record<string, unknown>).structuredContent).not.toHaveProperty('seed');
+    await expect(session.replay({ mode: 'exact', runId: timeline.id })).resolves.toMatchObject({
+      result: {
+        protocol: {
+          structuredContent: { edits: [expect.objectContaining({ path: '/tmp/fixture-claude-post-tool-use.txt' })], stateVersion: 2 },
+        },
       },
-    }));
-    await expect(broker.execute({
-      arguments: { limit: 1 },
-      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
-      kind: 'call-tool',
-      name: 'render_edit_timeline',
-    })).resolves.toMatchObject({
-      sessionId: timeline.result.app.mcpBinding.sessionId,
-      sessionRevision: timeline.result.app.mcpBinding.sessionRevision,
-      value: {
-        content: [{ text: 'Showing 1 recorded edits.', type: 'text' }],
-        structuredContent: { edits: [expect.objectContaining({ path: '/tmp/fixture-claude-post-tool-use.txt' })], stateVersion: 2 },
-      },
+      status: 'succeeded',
+      surfaceId: 'mcp.render_edit_timeline',
+      target: timelineTarget,
       vector: { runtimeGenerationId: generationId, stateVersion: 2 },
     });
-    await expect(broker.execute({
-      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
-      kind: 'read-resource',
-      uri: 'ui://rsc-agent-runtime/foreign.html',
-    })).rejects.toThrow('not declared');
-    await expect(broker.execute({
-      arguments: {},
-      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
-      kind: 'call-tool',
-      name: 'foreign_tool',
-    })).rejects.toThrow('not declared');
-    await expect(broker.execute({
-      arguments: { limit: 0 },
-      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
-      kind: 'call-tool',
-      name: 'render_edit_timeline',
-    })).rejects.toThrow('arguments');
-    await expect(broker.execute({
-      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision + 1,
-      kind: 'read-resource',
-      uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
-    })).rejects.toThrow('revision');
-    expect(session.clientSurface(timeline.result.app.surfaceId)).toMatchObject({ surfaceId: 'mcp.edit-timeline' });
-    expect((timeline.result.protocol as Record<string, unknown>).structuredContent).not.toHaveProperty('seed');
 
     const timelineRequest = Object.freeze({
       expectedGenerationId: generationId,
@@ -1007,28 +926,8 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
       session.invoke(timelineRequest),
     ]);
     for (const candidate of [repeatedTimeline, concurrentTimeline]) {
-      expect(candidate).toMatchObject({ status: 'succeeded' });
-      if (candidate.status !== 'succeeded' || candidate.result.app === undefined) throw new Error('Repeated timeline App result was unavailable.');
-      expect(candidate.result.app.mcpBinding).toEqual(timeline.result.app.mcpBinding);
+      expect(candidate).toMatchObject({ status: 'succeeded', vector: { stateVersion: timeline.vector.stateVersion } });
     }
-
-    await session.mcpRegistry.closeSession({
-      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
-      sessionId: timeline.result.app.mcpBinding.sessionId,
-    });
-    expect(session.mcpRegistry.session(timeline.result.app.mcpBinding.sessionId)).toBeUndefined();
-    const reopenedTimeline = await session.invoke(timelineRequest);
-    expect(reopenedTimeline).toMatchObject({ status: 'succeeded' });
-    if (reopenedTimeline.status !== 'succeeded' || reopenedTimeline.result.app === undefined) throw new Error('Reopened timeline App result was unavailable.');
-    expect(reopenedTimeline.result.app.mcpBinding).toMatchObject({
-      definitionDigest: timeline.result.app.mcpBinding.definitionDigest,
-      registryRevision: timeline.result.app.mcpBinding.registryRevision,
-      serverDigest: timeline.result.app.mcpBinding.serverDigest,
-      serverName: timeline.result.app.mcpBinding.serverName,
-      target: timeline.result.app.mcpBinding.target,
-      transportDigest: timeline.result.app.mcpBinding.transportDigest,
-    });
-    expect(reopenedTimeline.result.app.mcpBinding.sessionId).not.toBe(timeline.result.app.mcpBinding.sessionId);
 
     await expect(session.resetState({
       expectedGenerationId: generationId,
@@ -2053,7 +1952,7 @@ process.stdout.end(${JSON.stringify(`${JSON.stringify({ flightBytes: 1, inspecti
     await malformed({ ...validInspection, trace: [{ id: '', phase: 'render', startedAt: 'not-a-date', status: 'unknown' }] });
     await malformed({ ...validInspection, trace: [{ details: null, id: 'trace', phase: 'render', startedAt: '2026-08-15T00:00:00.000Z', status: 'succeeded' }] });
     await malformed({ ...validInspection, trace: [{ details: [], id: 'trace', phase: 'render', startedAt: '2026-08-15T00:00:00.000Z', status: 'succeeded' }] });
-    await malformed({ ...validInspection, app: { mcpBinding: {}, resourceUri: 'ui://unsafe', surfaceId: 'mcp.timeline' } });
+    await malformed({ ...validInspection, app: { resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html', surfaceId: 'mcp.edit-timeline' } });
     expect(await readdir(join(storageRoot, 'runs'))).toEqual(['.agent-bundle-runtime-owner']);
   } finally {
     await session.close().catch(() => undefined);

@@ -17,7 +17,6 @@ import { expect, it } from '@rstest/core';
 import { digest, stableJson } from '../src/core/digest.ts';
 import {
   RuntimeGenerationStore,
-  type DevRuntimeMcpServerDescriptor,
   type JsonObject,
   type JsonValue,
   type RuntimeGenerationActivationGuard,
@@ -179,7 +178,7 @@ const validateCapturedMetadata = (
 };
 
 const nestedDescriptorCodec: RuntimeGenerationMetadataCodec<Readonly<{
-  readonly servers: readonly DevRuntimeMcpServerDescriptor[];
+  readonly servers: readonly Readonly<{ readonly name: string }>[];
 }>> = {
   decode: () => Object.freeze({ servers: Object.freeze([]) }),
   encode: () => Object.freeze({ servers: Object.freeze([]) }),

@@ -13,7 +13,6 @@ import {
   type RscRuntimeCompileFailureKind,
   type RscRuntimeCompileSnapshot,
 } from '../../rsbuild.config.js';
-import { projectName, projectVersion } from '../project-identity.js';
 import { describeRspackCompileErrors } from './compile-diagnostics.js';
 import {
   createRscEnvironmentCheckpointStore,
@@ -25,7 +24,6 @@ import {
   captureRuntimeGenerationSnapshot,
   materializeRuntimeGeneration,
   rscRuntimeGenerationMetadataCodec,
-  runtimeDefinitionDigest,
   validateRscRuntimeGenerationMetadata,
   validateStagedRscEnvironmentCheckpoint,
   type RscRuntimeCapturedGenerationSnapshot,
@@ -47,10 +45,8 @@ import {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
   createRuntimeGenerationStore,
-  createRuntimeMcpRegistry,
   type DevRuntimeAsset,
   type DevRuntimeAssetRequest,
-  type DevRuntimeClientSurfaceEndpoint,
   type DevRuntimeDescriptor,
   type DevRuntimeDiagnostic,
   type DevRuntimeEventInput,
@@ -58,13 +54,7 @@ import {
   type DevRuntimeGenerationStore,
   type DevRuntimeInspectionEnvelope,
   type DevRuntimeInvocationRequest,
-  type DevRuntimeMcpConnectionState,
-  type DevRuntimeMcpRegistryReconcileInput,
-  type DevRuntimeMcpSession,
-  type DevRuntimeMcpSessionBinding,
-  type DevRuntimeMcpSessionCloseObservation,
   type DevRuntimePreparedProject,
-  type DevRuntimeProviderMcpRegistry,
   type DevRuntimeReplayRequest,
   type DevRuntimeRun,
   type DevRuntimeSession,
@@ -77,10 +67,6 @@ import {
   type RuntimeGenerationActivationGuard,
   type RuntimeGenerationCandidate,
   type RuntimeGenerationPreparedActivation,
-  type RuntimeMcpConnection,
-  type RuntimeMcpConnector,
-  type RuntimeMcpExecutionContext,
-  type RuntimeMcpPreparedActivationReconcile,
   type RuntimeVector,
 } from 'agent-bundle/api';
 
@@ -90,8 +76,6 @@ const descriptor: DevRuntimeDescriptor = Object.freeze({
   label: 'RSC agent runtime',
   schemaVersion: 1,
 });
-const clientSurfaceId = 'mcp.edit-timeline';
-const clientSurfaceEntry = '/edit-timeline-v1.html';
 const maximumAssetBytes = 8 * 1024 * 1024;
 const stateStoreId = 'playground';
 const maximumInvocationWorkers = 4;
@@ -125,7 +109,7 @@ const fixturesForHook = (host: 'claude' | 'codex'): readonly DevRuntimeFixture[]
  * share two cores between Chrome, dev servers, and compiles, so fixed budgets
  * tuned on many-core machines starve there. Scaling costs nothing on green
  * runs - the activation resolves long before the deadline - while a wedged
- * materialization or MCP reconcile becomes a loud `runtime.generation.failed`
+ * materialization becomes a loud `runtime.generation.failed`
  * (with the phase in its diagnostic) instead of a silent permanent hang that
  * also blocks `close()` behind the provider tail (#38).
  */
@@ -135,7 +119,7 @@ const runtimeTimeScale = process.env['CI'] !== undefined
   : Number.isSafeInteger(localTimeScale) && localTimeScale >= 1 ? localTimeScale : 1;
 const defaultActivationPhaseBudgetMs = 30_000 * runtimeTimeScale;
 
-type ActivationPhase = 'activation-guard' | 'generation-store' | 'mcp-registry' | 'prepared-runtime-reconcile';
+type ActivationPhase = 'activation-guard' | 'generation-store';
 
 const withinDeadline = <T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> =>
   new Promise<T>((resolve, reject) => {
@@ -221,19 +205,6 @@ interface InvocationWorker {
   terminate(reason: Error): void;
 }
 
-interface RuntimeAppBroker {
-  closedObservation: DevRuntimeMcpSessionCloseObservation | undefined;
-  opening: Promise<DevRuntimeMcpSession> | undefined;
-  session: DevRuntimeMcpSession | undefined;
-}
-
-interface RuntimeAppLink {
-  readonly descriptor: DevRuntimeMcpRegistryReconcileInput['servers'][number];
-  readonly key: string;
-  readonly resourceUri: string;
-  readonly surfaceId: string;
-}
-
 interface WindowsJobOwner {
   readonly closed: Promise<void>;
   readonly done: Promise<void>;
@@ -267,8 +238,7 @@ type LiveSessionCleanupResource =
   | 'generation-store'
   | 'owned-runs-root'
   | 'rsbuild-dev-server'
-  | 'run-artifact'
-  | 'runtime-mcp-registry';
+  | 'run-artifact';
 
 interface LabeledCleanupFailure {
   readonly error: unknown;
@@ -489,71 +459,14 @@ const validateTree = (value: unknown): void => {
   }
 };
 
-const validateAppBinding = (value: unknown): void => {
-  const app = plainRecord(value, 'RSC invocation worker App binding is invalid.');
-  assertExactKeys(app, ['mcpBinding', 'resourceUri', 'surfaceId'], 'RSC invocation worker App binding is invalid.');
-  if (typeof app.resourceUri !== 'string' || app.resourceUri.length === 0 || typeof app.surfaceId !== 'string' || app.surfaceId.length === 0) {
-    throw new Error('RSC invocation worker App binding is invalid.');
-  }
-  const binding = plainRecord(app.mcpBinding, 'RSC invocation worker App binding is invalid.');
-  assertExactKeys(binding, ['definitionDigest', 'registryRevision', 'serverDigest', 'serverName', 'sessionId', 'sessionRevision', 'target', 'transportDigest'], 'RSC invocation worker App binding is invalid.');
-  if (typeof binding.definitionDigest !== 'string' || typeof binding.serverDigest !== 'string' || typeof binding.serverName !== 'string' ||
-    typeof binding.sessionId !== 'string' || typeof binding.target !== 'string' || typeof binding.transportDigest !== 'string' ||
-    !Number.isSafeInteger(binding.registryRevision) || !Number.isSafeInteger(binding.sessionRevision)) {
-    throw new Error('RSC invocation worker App binding is invalid.');
-  }
-};
-
 const clonePrepared = (prepared: DevRuntimePreparedProject): DevRuntimePreparedProject =>
   deepFreeze(structuredClone(prepared));
-
-const transportDigest = (prepared: DevRuntimePreparedProject): string => digestValue({
-  provider: prepared.provider,
-  servers: prepared.servers.map((server) => ({
-    args: server.args === undefined ? undefined : [...server.args],
-    command: server.command,
-    cwd: server.cwd,
-    env: server.env === undefined ? undefined : Object.fromEntries(Object.entries(server.env)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, value]) => [key, digestValue(value)])),
-    headers: server.headers === undefined ? undefined : Object.fromEntries(Object.entries(server.headers)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, value]) => [key, digestValue(value)])),
-    id: server.id,
-    name: server.name,
-    source: server.source,
-    targets: [...server.targets],
-    transport: server.transport,
-    url: server.url,
-  })),
-});
 
 const preparedRuntimeAuthorityDigest = (prepared: DevRuntimePreparedProject): string => digestValue({
   apps: prepared.apps,
   provider: prepared.provider,
   servers: prepared.servers,
 });
-
-const asJsonObject = (value: unknown): JsonObject => value as JsonObject;
-
-const descriptorsFor = (
-  prepared: DevRuntimePreparedProject,
-  metadata: RscRuntimeGenerationMetadata,
-  definitionDigest: string,
-  nextTransportDigest: string,
-) => {
-  const template = metadata.servers[0];
-  if (template === undefined) throw new Error('The active runtime generation has no MCP server descriptor.');
-  return Object.freeze(prepared.servers.flatMap((server) => server.targets.map((target) => Object.freeze({
-    definitionDigest,
-    name: server.name,
-    resources: Object.freeze(template.resources.map(asJsonObject)),
-    serverDigest: metadata.serverDigest,
-    target,
-    tools: Object.freeze(template.tools.map(asJsonObject)),
-    transportDigest: nextTransportDigest,
-  }))));
-};
 
 const lifecycleDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.freeze({
   code: 'AB8200',
@@ -588,10 +501,7 @@ export interface RsbuildRuntimeSessionStartTesting {
   readonly beforeOwnedRunsRootCleanup?: () => Promise<void> | void;
   readonly onStartupCleanupClosed?: () => void;
   readonly beforeGenerationCapture?: () => Promise<void> | void;
-  readonly afterActivationPrepare?: (input: Readonly<{
-    readonly phase: 'store' | 'registry';
-    readonly session: RsbuildRuntimeSession;
-  }>) => Promise<void> | void;
+  readonly afterActivationPrepare?: (input: Readonly<{ readonly session: RsbuildRuntimeSession }>) => Promise<void> | void;
   /**
    * Test-only barrier between the final activation-guard wait and the commit
    * check, so supersession races (a newer attempt registering or failing
@@ -602,7 +512,6 @@ export interface RsbuildRuntimeSessionStartTesting {
     readonly request: DevRuntimeAssetRequest;
     readonly runtimeGenerationId: string;
   }>) => Promise<void> | void;
-  readonly beforeMcpRelist?: () => Promise<void> | void;
   readonly afterInvocationWorkerResponse?: (input: Readonly<{
     readonly runId: string;
     readonly surfaceId: string;
@@ -631,17 +540,13 @@ export interface RsbuildRuntimeSessionStartTesting {
   readonly activationPhaseBudgetMs?: number;
 }
 
-/**
- * One provider-owned compiler, generation store, and runtime MCP registry.
- * The private compiler URL is exposed only through `clientSurface`.
- */
+/** One provider-owned compiler and generation store. */
 export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #checkpointStore: RscEnvironmentCheckpointStore;
   readonly #candidatesByAttempt = new Map<string, RuntimeGenerationCandidate>();
   readonly #captureTasks = new Set<Promise<void>>();
   readonly #context: DevRuntimeStartContext;
   readonly #generationStore: DevRuntimeGenerationStore<RscRuntimeGenerationMetadata>;
-  readonly #mcpRegistry: DevRuntimeProviderMcpRegistry;
   readonly #preparedRevisions = new Set<string>();
   readonly #invocations = new Set<Promise<DevRuntimeRun>>();
   readonly #invocationAbort = new AbortController();
@@ -654,7 +559,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #stateFile: string;
   readonly #stateKernel: ReturnType<typeof createFileRuntimeKernel>;
   readonly #activeRuns = new Map<string, DevRuntimeRun>();
-  readonly #appBrokers = new Map<string, RuntimeAppBroker>();
   readonly #terminalRuns = new Map<string, DevRuntimeRun>();
   readonly #surfaceAssetApps = new Map<string, DevRuntimePreparedProject['apps'][number]>();
   readonly #surfaces = new Map<string, DevRuntimeSurface>();
@@ -664,12 +568,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #workers = new Map<string, InvocationWorker>();
   readonly #failedAttempts = new Set<string>();
   #active: RuntimeGeneration<RscRuntimeGenerationMetadata> | undefined;
-  /**
-   * Wrapper objects, not raw listeners, so one relay subscribing the same
-   * function twice still owns two independently detachable subscriptions.
-   */
-  readonly #appReloadSubscriptions = new Set<Readonly<{ readonly listener: () => void }>>();
-  #clientSurface: DevRuntimeClientSurfaceEndpoint | undefined;
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #completedCohortSequence = 0;
@@ -699,7 +597,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     readonly checkpointStore: RscEnvironmentCheckpointStore;
     readonly context: DevRuntimeStartContext;
     readonly generationStore: DevRuntimeGenerationStore<RscRuntimeGenerationMetadata>;
-    readonly mcpRegistry: DevRuntimeProviderMcpRegistry;
     readonly ownedRunsRoot: OwnedRunsRoot;
     readonly preparedRuntime: DevRuntimePreparedProject;
     readonly testing: RsbuildRuntimeSessionStartTesting;
@@ -707,7 +604,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#context = input.context;
     this.#checkpointStore = input.checkpointStore;
     this.#generationStore = input.generationStore;
-    this.#mcpRegistry = input.mcpRegistry;
     this.#latestPreparedRuntime = input.preparedRuntime;
     this.#testing = input.testing;
     this.#maximumRunHistory = input.testing.maximumRunHistory ?? defaultMaximumRunHistory;
@@ -795,59 +691,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       }
       context.signal.throwIfAborted();
 
-      const connectionState: DevRuntimeMcpConnectionState = Object.freeze({
-        capabilities: Object.freeze({
-          resources: Object.freeze({}),
-          tools: Object.freeze({}),
-        }),
-        protocolEra: 'modern',
-        protocolVersion: '2025-06-18',
-        server: Object.freeze({ name: projectName, version: projectVersion }),
-      });
-      const sessionReference: { current: RsbuildRuntimeSession | undefined } = { current: undefined };
-      const connector: RuntimeMcpConnector = Object.freeze({
-        connect: async ({ signal }: Parameters<RuntimeMcpConnector['connect']>[0]) => {
-          signal.throwIfAborted();
-          const connection: RuntimeMcpConnection = Object.freeze({
-            close: async () => undefined,
-            relist: async () => {
-              signal.throwIfAborted();
-              await testing.beforeMcpRelist?.();
-              signal.throwIfAborted();
-              return connectionState;
-            },
-            state: connectionState,
-          });
-          return connection;
-        },
-      });
-      const mcpRegistry = createRuntimeMcpRegistry({
-        artifactEpochId: () => undefined,
-        connector,
-        emit: (event) => {
-          const session = sessionReference.current;
-          if (session !== undefined) session.#emit(event);
-        },
-        executor: async (execution) => {
-          const session = sessionReference.current;
-          if (session === undefined) throw new Error('RSC runtime session is unavailable.');
-          return session.#executeMcp(execution);
-        },
-        generationStore: generationStore as DevRuntimeGenerationStore,
-        providerSessionId: context.providerSessionId,
-        stateStoreId,
-      });
-      ledger.add(() => mcpRegistry.close(), 'runtime-mcp-registry');
       const session = new RsbuildRuntimeSession({
         checkpointStore,
         context,
         generationStore,
-        mcpRegistry,
         ownedRunsRoot,
         preparedRuntime,
         testing,
       });
-      sessionReference.current = session;
       context.signal.throwIfAborted();
 
       const rsbuild = await (testing.createRsbuild ?? createRsbuild)({
@@ -855,7 +706,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         config: createRscRuntimeRsbuildConfig({
           compilerRoot: join(storageRoot, 'compiler'),
           mode: 'development',
-          onAppReload: () => { session.#emitAppReload(); },
           onCompile: session.#compileObserver(),
         }),
         cwd: context.projectRoot,
@@ -864,7 +714,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       const started = await rsbuild.startDevServer({ getPortSilently: true });
       await ledger.add(() => started.server.close(), 'rsbuild-dev-server');
       context.signal.throwIfAborted();
-      session.#attachServer(started, rsbuild.context.devServer);
+      session.#attachServer(started.server);
       // startDevServer does not guarantee that the initial compile or async
       // onAfterDevCompile work has finished. In 2.2.1 that work often starts
       // before this return, but providerTail is not a documented readiness
@@ -887,16 +737,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
   }
 
-  get mcpRegistry(): DevRuntimeProviderMcpRegistry {
-    return this.#mcpRegistry;
-  }
-
   get providerSessionId(): string {
     return this.#context.providerSessionId;
-  }
-
-  clientSurface(surfaceId: string): DevRuntimeClientSurfaceEndpoint | undefined {
-    return !this.#closed && surfaceId === clientSurfaceId ? this.#clientSurface : undefined;
   }
 
   close(): Promise<void> {
@@ -1032,7 +874,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         }
         let surface: DevRuntimeSurface;
         try {
-          surface = await this.#historicalSurface(retained.generation, historical.surfaceId);
+          surface = await this.#historicalSurface(retained.generation, historical);
         } catch {
           throw new DevRuntimeGenerationConflictError(historicalGenerationId, this.#active?.id);
         }
@@ -1173,9 +1015,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         const stateAfter = await this.#stateKernel.readSnapshot({ stateVersion: inspectedStateVersion });
         if (stateAfter.stateVersion !== inspectedStateVersion) throw new Error('RSC invocation inspection state version is not durable.');
         this.#assertInvocationOpen();
-        const app = await this.#runtimeAppResult(generationLease.generation, invocation);
-        this.#assertInvocationOpen();
-        const result = this.#inspectionResult(response.inspection, flight, stateAfter, runId, app);
+        const result = this.#inspectionResult(response.inspection, flight, stateAfter, runId);
         if (artifact === undefined) throw new Error('RSC runtime Flight artifact is unavailable.');
         await this.#writeRunFlight(artifact, flight);
         const completed = Object.freeze({
@@ -1339,8 +1179,9 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   async #historicalSurface(
     generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    surfaceId: string,
+    historical: DevRuntimeRun,
   ): Promise<DevRuntimeSurface> {
+    const surfaceId = historical.surfaceId;
     const definitionPath = join(generation.root, 'rsc', 'runtime-definition.json');
     const asset = generation.manifest.assets.find((candidate) => candidate.path === 'rsc/runtime-definition.json');
     if (asset === undefined || !isInside(generation.root, definitionPath)) throw new Error('Historical runtime generation has no definition asset.');
@@ -1349,7 +1190,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const bytes = await readFile(definitionPath);
     if (createHash('sha256').update(bytes).digest('hex') !== asset.sha256) throw new Error('Historical runtime definition changed.');
     const definition = JSON.parse(bytes.toString('utf8')) as Partial<SerializedRuntimeDefinition>;
-    const targets = Object.freeze([...new Set(generation.manifest.metadata.servers.map((server) => server.target))]);
+    const targets = Object.freeze([historical.target]);
     if (surfaceId.startsWith('hook.')) {
       const host = surfaceId.slice('hook.'.length);
       if ((host !== 'claude' && host !== 'codex') || !definition.nativeHooks?.some((hook) => hook.host === host)) {
@@ -1363,10 +1204,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     if (definition.resources?.some((resource) => resource.name === name)) {
       return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-resource', label: name, readOnly: true, targets });
-    }
-    const app = generation.manifest.metadata.appDefinitions.find((candidate) => candidate.name === name);
-    if (app !== undefined) {
-      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-app', label: name, readOnly: true, targets: app.targets });
     }
     throw new Error(`Historical runtime surface ${JSON.stringify(surfaceId)} does not exist.`);
   }
@@ -1482,12 +1319,9 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     flight: Buffer,
     snapshot: RuntimeSnapshot,
     runId: string,
-    app: DevRuntimeInspectionEnvelope['app'],
   ): DevRuntimeInspectionEnvelope {
-    const { app: _workerApp, ...workerInspection } = inspection;
     return Object.freeze({
-      ...workerInspection,
-      ...(app === undefined ? {} : { app }),
+      ...inspection,
       flight: Object.freeze({
         bytes: flight.byteLength,
         downloadPath: `/api/runtime/runs/${encodeURIComponent(runId)}/flight`,
@@ -1502,156 +1336,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     });
   }
 
-  #runtimeAppLink(
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    invocation: ValidatedInvocation,
-  ): RuntimeAppLink | undefined {
-    if (invocation.surface.id !== 'mcp.render_edit_timeline') return undefined;
-    const registry = this.#mcpRegistry.snapshot();
-    const metadata = generation.manifest.metadata;
-    if (
-      this.#active?.id !== generation.id || registry?.runtimeGenerationId !== generation.id
-    ) {
-      throw new DevRuntimeGenerationConflictError(generation.id, this.#active?.id);
-    }
-    const toolName = invocation.surface.id.slice('mcp.'.length);
-    const matches = registry.servers.flatMap((descriptor) => {
-      if (
-        descriptor.target !== invocation.request.target || descriptor.definitionDigest !== registry.definitionDigest ||
-        descriptor.transportDigest !== registry.transportDigest || descriptor.serverDigest !== metadata.serverDigest
-      ) return [];
-      const tool = descriptor.tools.find((candidate) => candidate.name === toolName);
-      const toolMeta = tool?._meta;
-      const outputTemplate = toolMeta === null || typeof toolMeta !== 'object' || Array.isArray(toolMeta)
-        ? undefined
-        : Object.getOwnPropertyDescriptor(toolMeta, 'openai/outputTemplate')?.value;
-      const resourceUri = typeof outputTemplate === 'string' ? outputTemplate : undefined;
-      if (resourceUri === undefined) return [];
-      return metadata.appDefinitions
-        .filter((app) => app.serverName === descriptor.name && app.resourceUri === resourceUri && app.targets.includes(invocation.request.target) && metadata.surfaceAssets[`mcp.${app.name}`] !== undefined)
-        .map((app) => Object.freeze({ app, descriptor, resourceUri }));
-    });
-    if (matches.length !== 1) throw new Error('Runtime App invocation has no unambiguous current-generation App definition.');
-    const match = matches[0]!;
-    return Object.freeze({
-      descriptor: match.descriptor,
-      key: `${match.descriptor.name}\u0000${invocation.request.target}`,
-      resourceUri: match.resourceUri,
-      surfaceId: clientSurfaceId,
-    });
-  }
-
-  #assertRuntimeAppAuthority(
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    link: RuntimeAppLink,
-  ): NonNullable<ReturnType<DevRuntimeProviderMcpRegistry['snapshot']>> {
-    this.#assertInvocationOpen();
-    const registry = this.#mcpRegistry.snapshot();
-    if (
-      registry === undefined || this.#active?.id !== generation.id || registry.runtimeGenerationId !== generation.id ||
-      link.descriptor.definitionDigest !== registry.definitionDigest || link.descriptor.transportDigest !== registry.transportDigest ||
-      !registry.servers.some((descriptor) => descriptor.name === link.descriptor.name && descriptor.target === link.descriptor.target &&
-        descriptor.definitionDigest === link.descriptor.definitionDigest && descriptor.serverDigest === link.descriptor.serverDigest &&
-        descriptor.transportDigest === link.descriptor.transportDigest && descriptor.serverDigest === generation.manifest.metadata.serverDigest)
-    ) {
-      throw new DevRuntimeGenerationConflictError(generation.id, this.#active?.id);
-    }
-    return registry;
-  }
-
-  #matchesRuntimeAppBinding(
-    binding: DevRuntimeMcpSessionBinding,
-    link: RuntimeAppLink,
-    registry: NonNullable<ReturnType<DevRuntimeProviderMcpRegistry['snapshot']>>,
-  ): boolean {
-    return binding.definitionDigest === registry.definitionDigest && binding.registryRevision === registry.registryRevision &&
-      binding.serverDigest === link.descriptor.serverDigest && binding.serverName === link.descriptor.name &&
-      binding.target === link.descriptor.target && binding.transportDigest === registry.transportDigest;
-  }
-
-  async #runtimeAppSession(
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    link: RuntimeAppLink,
-  ): Promise<DevRuntimeMcpSession> {
-    const registry = this.#assertRuntimeAppAuthority(generation, link);
-    const existing = this.#appBrokers.get(link.key);
-    const broker = existing ?? { closedObservation: undefined, opening: undefined, session: undefined };
-    if (existing === undefined) this.#appBrokers.set(link.key, broker);
-    const current = broker.session;
-    if (current !== undefined) {
-      const snapshot = current.snapshot();
-      if (snapshot.state === 'ready' && this.#matchesRuntimeAppBinding(snapshot.binding, link, registry)) return current;
-      broker.closedObservation?.unsubscribe();
-      broker.closedObservation = undefined;
-      broker.session = undefined;
-      if (this.#appBrokers.get(link.key) === broker) this.#appBrokers.delete(link.key);
-      return this.#runtimeAppSession(generation, link);
-    }
-    if (broker.opening !== undefined) return broker.opening;
-    const opening = (async (): Promise<DevRuntimeMcpSession> => {
-      let session: DevRuntimeMcpSession | undefined;
-      try {
-        session = await this.#mcpRegistry.open(Object.freeze({
-          expectedRegistryRevision: registry.registryRevision,
-          serverName: link.descriptor.name,
-          target: link.descriptor.target,
-        }));
-        const currentRegistry = this.#assertRuntimeAppAuthority(generation, link);
-        const snapshot = session.snapshot();
-        if (snapshot.state !== 'ready' || !this.#matchesRuntimeAppBinding(snapshot.binding, link, currentRegistry)) {
-          throw new Error('Runtime App broker session did not negotiate the current generation authority.');
-        }
-        broker.session = session;
-        broker.closedObservation = session.watchClosed(() => {
-          if (this.#appBrokers.get(link.key) !== broker) return;
-          broker.closedObservation?.unsubscribe();
-          broker.closedObservation = undefined;
-          broker.session = undefined;
-          this.#appBrokers.delete(link.key);
-        });
-        return session;
-      } catch (error) {
-        if (session !== undefined) await session.close().catch(() => undefined);
-        if (this.#appBrokers.get(link.key) === broker && broker.session === undefined) this.#appBrokers.delete(link.key);
-        throw error;
-      }
-    })();
-    broker.opening = opening;
-    void opening.finally(() => {
-      if (broker.opening === opening) broker.opening = undefined;
-    }).catch(() => undefined);
-    return opening;
-  }
-
-  async #runtimeAppResult(
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    invocation: ValidatedInvocation,
-  ): Promise<DevRuntimeInspectionEnvelope['app']> {
-    const link = this.#runtimeAppLink(generation, invocation);
-    if (link === undefined) return undefined;
-    const session = await this.#runtimeAppSession(generation, link);
-    const registry = this.#assertRuntimeAppAuthority(generation, link);
-    const snapshot = session.snapshot();
-    if (snapshot.state !== 'ready' || !this.#matchesRuntimeAppBinding(snapshot.binding, link, registry)) {
-      throw new Error('Runtime App broker session became stale before invocation completion.');
-    }
-    const binding = snapshot.binding;
-    return Object.freeze({
-      mcpBinding: Object.freeze({
-        definitionDigest: binding.definitionDigest,
-        registryRevision: binding.registryRevision,
-        serverDigest: binding.serverDigest,
-        serverName: binding.serverName,
-        sessionId: binding.sessionId,
-        sessionRevision: binding.sessionRevision,
-        target: binding.target,
-        transportDigest: binding.transportDigest,
-      }),
-      resourceUri: link.resourceUri,
-      surfaceId: link.surfaceId,
-    });
-  }
-
   #validateWorkerResponse(value: unknown, flightBytes: number, surfaceId: string): DevRuntimeInspectionEnvelope {
     const response = plainRecord(value, 'RSC invocation worker emitted an invalid response.');
     assertExactKeys(response, ['flightBytes', 'inspection'], 'RSC invocation worker response has unsupported fields.');
@@ -1663,7 +1347,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     const inspection = plainRecord(response.inspection, 'RSC invocation worker inspection is invalid.');
     const hook = surfaceId === 'hook.claude' || surfaceId === 'hook.codex';
-    if ('app' in inspection) validateAppBinding(inspection.app);
     optionalExactKeys(
       inspection,
       hook ? ['agentVisible', 'flight', 'native', 'state', 'trace', 'tree'] : ['flight', 'modelVisible', 'protocol', 'state', 'trace', 'tree'],
@@ -2151,47 +1834,11 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     return response;
   }
 
-  #attachServer(
-    started: StartDevServerResult,
-    devServer: Readonly<{ readonly hostname: string; readonly https: boolean; readonly port: number }> | undefined,
-  ): void {
+  #attachServer(server: StartDevServerResult['server']): void {
     if (this.#closed) return;
-    if (
-      devServer === undefined || devServer.hostname !== '127.0.0.1' || devServer.https ||
-      !Number.isSafeInteger(devServer.port) || devServer.port < 1 || devServer.port > 65_535
-    ) throw new Error('RSC runtime dev server did not expose a valid loopback HTTP origin.');
-    const origin = new URL(`http://${devServer.hostname}:${String(devServer.port)}`).origin;
-    this.#server = started.server;
-    this.#clientSurface = Object.freeze({
-      entryPath: clientSurfaceEntry,
-      httpOrigin: origin,
-      httpPathPrefixes: Object.freeze(['/']),
-      subscribeReload: (listener: () => void) => this.#subscribeAppReload(listener),
-      surfaceId: clientSurfaceId,
-    });
+    this.#server = server;
     this.#hmrReady = true;
     this.#setStatus(this.#active === undefined ? 'compiling' : 'active');
-  }
-
-  #subscribeAppReload(listener: () => void): () => void {
-    if (typeof listener !== 'function') {
-      throw new TypeError('RSC runtime App reload subscription requires a listener function.');
-    }
-    if (this.#closed) return () => undefined;
-    const subscription = Object.freeze({ listener });
-    this.#appReloadSubscriptions.add(subscription);
-    return () => { this.#appReloadSubscriptions.delete(subscription); };
-  }
-
-  #emitAppReload(): void {
-    if (this.#closed) return;
-    for (const subscription of [...this.#appReloadSubscriptions]) {
-      try {
-        subscription.listener();
-      } catch {
-        // One relay's failure must not starve the remaining subscribers.
-      }
-    }
   }
 
   #compileObserver(): NonNullable<Parameters<typeof createRscRuntimeRsbuildConfig>[0]['onCompile']> {
@@ -2465,7 +2112,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
    * its budget fails the attempt loudly (the page recovers through its
    * `runtime.generation.failed` bootstrap path) instead of silently wedging
    * the provider tail; if the abandoned step settles later, its resources are
-   * released so a stray success cannot leak store or registry reservations.
+   * released so a stray success cannot leak store reservations.
    */
   async #boundedActivationPhase<T>(
     phase: ActivationPhase,
@@ -2484,63 +2131,37 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   async #activate(snapshot: RscRuntimeCapturedGenerationSnapshot): Promise<'activated' | 'failed'> {
     const guard = this.#activationGuard(snapshot);
     let preparedGeneration: RuntimeGenerationPreparedActivation<RscRuntimeGenerationMetadata> | undefined;
-    let preparedRegistry: RuntimeMcpPreparedActivationReconcile | undefined;
     try {
-      preparedGeneration = await this.#boundedActivationPhase(
+      const prepared = await this.#boundedActivationPhase(
         'generation-store',
         materializeRuntimeGeneration({
           guard,
           snapshot,
           stateStoreId,
           store: this.#generationStore,
+        }).then(async (next) => {
+          // ponytail: a throwing test seam leaks this prepared activation; the public provider never sets it.
+          await this.#testing.afterActivationPrepare?.(Object.freeze({ session: this }));
+          return next;
         }),
-        (prepared) => this.#generationStore.abort(prepared),
+        (late) => this.#generationStore.abort(late),
       );
-      await this.#testing.afterActivationPrepare?.(Object.freeze({ phase: 'store', session: this }));
-      const metadata = preparedGeneration.generation.manifest.metadata;
-      preparedRegistry = await this.#boundedActivationPhase(
-        'mcp-registry',
-        this.#mcpRegistry.prepareActivationReconcile({
-          definitionDigest: metadata.definitionDigest,
-          runtimeGenerationId: preparedGeneration.generation.id,
-          servers: metadata.servers,
-          transportDigest: metadata.transportDigest,
-        }),
-        (prepared) => this.#mcpRegistry.abortActivationReconcile(prepared),
-      );
-      await this.#testing.afterActivationPrepare?.(Object.freeze({ phase: 'registry', session: this }));
-      await this.#boundedActivationPhase('activation-guard', guard.wait(preparedGeneration.generation.manifest));
+      preparedGeneration = prepared;
+      await this.#boundedActivationPhase('activation-guard', guard.wait(prepared.generation.manifest));
       await this.#testing.beforeActivationCommit?.();
-      if (!guard.check(preparedGeneration.generation.manifest) || !this.#generationStore.canCommit(preparedGeneration)) {
+      if (!guard.check(prepared.generation.manifest) || !this.#generationStore.canCommit(prepared)) {
         throw new Error('RSC runtime generation activation was superseded.');
       }
-      const generation = this.#generationStore.commit(preparedGeneration);
-      const committed = this.#mcpRegistry.commitActivationReconcile(preparedRegistry);
+      const generation = this.#generationStore.commit(prepared);
       preparedGeneration = undefined;
-      preparedRegistry = undefined;
       this.#active = generation;
       this.#updateSurfaces(snapshot, snapshot.preparedRuntime);
       this.#updateSurfaceAssetApps(snapshot.preparedRuntime);
       this.#setStatus('active');
-      this.#emit(Object.freeze({
-        mcpRegistryRevision: this.#mcpRegistry.snapshot()?.registryRevision,
-        runtimeGenerationId: generation.id,
-        type: 'runtime.generation.activated',
-      }));
-      committed.publish();
-      try {
-        await committed.finalize();
-      } catch (error) {
-        if (!this.#closed) this.#setStatus('degraded', [lifecycleDiagnostic(error)]);
-      }
+      this.#emit(Object.freeze({ runtimeGenerationId: generation.id, type: 'runtime.generation.activated' }));
       return 'activated';
     } catch (error) {
-      if (preparedGeneration !== undefined || preparedRegistry !== undefined) {
-        await Promise.allSettled([
-          ...(preparedGeneration === undefined ? [] : [this.#generationStore.abort(preparedGeneration)]),
-          ...(preparedRegistry === undefined ? [] : [this.#mcpRegistry.abortActivationReconcile(preparedRegistry)]),
-        ]);
-      }
+      if (preparedGeneration !== undefined) await this.#generationStore.abort(preparedGeneration).catch(() => undefined);
       await this.#failAttempt(snapshot.attemptId, error);
       return 'failed';
     } finally {
@@ -2551,205 +2172,20 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   async #reconcilePreparedRuntime(prepared: DevRuntimePreparedProject): Promise<void> {
     const active = this.#active;
     if (active === undefined || this.#closed) return;
-    const metadata = active.manifest.metadata;
-    const definition = JSON.parse(await readFile(join(active.root, 'rsc', 'runtime-definition.json'), 'utf8')) as SerializedRuntimeDefinition;
-    const nextDefinitionDigest = runtimeDefinitionDigest(definition, prepared);
-    const nextTransportDigest = transportDigest(prepared);
-    const current = this.#mcpRegistry.snapshot();
-    if (
-      current?.runtimeGenerationId === active.id &&
-      current.definitionDigest === nextDefinitionDigest &&
-      current.transportDigest === nextTransportDigest
-    ) return;
-    const input: DevRuntimeMcpRegistryReconcileInput = Object.freeze({
-      definitionDigest: nextDefinitionDigest,
-      runtimeGenerationId: active.id,
-      servers: descriptorsFor(prepared, metadata, nextDefinitionDigest, nextTransportDigest),
-      transportDigest: nextTransportDigest,
-    });
-    this.#setStatus('compiling');
     try {
-      await this.#boundedActivationPhase('prepared-runtime-reconcile', this.#mcpRegistry.reconcile(input));
+      const definition = JSON.parse(await readFile(join(active.root, 'rsc', 'runtime-definition.json'), 'utf8')) as SerializedRuntimeDefinition;
       this.#updateSurfaces({ definition }, prepared);
       this.#updateSurfaceAssetApps(prepared);
-      this.#setStatus('active');
     } catch (error) {
       this.#setStatus('degraded', [lifecycleDiagnostic(error)]);
       throw error;
     }
   }
 
-  async #executeMcp(execution: RuntimeMcpExecutionContext): Promise<Readonly<{ readonly stateVersion: number; readonly value: JsonValue }>> {
-    execution.signal.throwIfAborted();
-    const generation = execution.generation as RuntimeGeneration<RscRuntimeGenerationMetadata>;
-    this.#assertMcpExecutionAuthority(execution, generation);
-    if (execution.request.kind === 'read-resource') {
-      const resource = this.#appResource(execution, generation, execution.request.uri);
-      const asset = await this.#readGenerationSurfaceHtml(generation, resource.surfaceId);
-      execution.signal.throwIfAborted();
-      this.#assertMcpExecutionAuthority(execution, generation);
-      return Object.freeze({
-        stateVersion: 0,
-        value: Object.freeze({
-          contents: Object.freeze([Object.freeze({
-            _meta: resource.metadata,
-            mimeType: resource.mimeType,
-            text: asset,
-            uri: resource.uri,
-          })]),
-        }),
-      });
-    }
-    if (execution.request.kind === 'call-tool') {
-      this.#appTool(execution, generation, execution.request.name);
-      return this.#executeTimelineTool(execution, generation, execution.request.arguments);
-    }
-    throw new Error(`Runtime MCP operation ${JSON.stringify(execution.request.kind)} is not available.`);
-  }
-
-  #assertMcpExecutionAuthority(
-    execution: RuntimeMcpExecutionContext,
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-  ): NonNullable<ReturnType<DevRuntimeProviderMcpRegistry['snapshot']>> {
-    this.#assertInvocationOpen();
-    const registry = this.#mcpRegistry.snapshot();
-    const binding = this.#mcpRegistry.session(execution.sessionId)?.snapshot().binding;
-    if (
-      registry === undefined || binding === undefined || this.#active?.id !== generation.id ||
-      registry.runtimeGenerationId !== generation.id ||
-      binding.sessionId !== execution.sessionId || binding.registryRevision !== registry.registryRevision ||
-      !registry.servers.some((descriptor) => descriptor.name === execution.descriptor.name && descriptor.target === execution.descriptor.target &&
-        descriptor.definitionDigest === execution.descriptor.definitionDigest && descriptor.serverDigest === execution.descriptor.serverDigest &&
-        descriptor.transportDigest === execution.descriptor.transportDigest && descriptor.definitionDigest === registry.definitionDigest &&
-        descriptor.transportDigest === registry.transportDigest && descriptor.serverDigest === generation.manifest.metadata.serverDigest) ||
-      binding.definitionDigest !== execution.descriptor.definitionDigest || binding.serverDigest !== execution.descriptor.serverDigest ||
-      binding.serverName !== execution.descriptor.name || binding.target !== execution.descriptor.target ||
-      binding.transportDigest !== execution.descriptor.transportDigest
-    ) {
-      throw new DevRuntimeGenerationConflictError(generation.id, this.#active?.id);
-    }
-    return registry;
-  }
-
-  #appResource(
-    execution: RuntimeMcpExecutionContext,
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    uri: string,
-  ): Readonly<{ readonly metadata: JsonObject; readonly mimeType: string; readonly surfaceId: string; readonly uri: string }> {
-    const resource = execution.descriptor.resources.filter((candidate) =>
-      candidate.uri === uri && candidate.mimeType === 'text/html;profile=mcp-app' && isJsonObject(candidate._meta),
-    );
-    const app = generation.manifest.metadata.appDefinitions.filter((candidate) =>
-      candidate.resourceUri === uri && candidate.serverName === execution.descriptor.name && candidate.targets.includes(execution.descriptor.target),
-    );
-    if (resource.length !== 1 || app.length !== 1) throw new Error('Runtime MCP App resource is not owned by the current generation.');
-    const surfaceId = `mcp.${app[0]!.name}`;
-    if (generation.manifest.metadata.surfaceAssets[surfaceId] === undefined) {
-      throw new Error('Runtime MCP App resource has no current-generation asset.');
-    }
-    return Object.freeze({ metadata: resource[0]!._meta as JsonObject, mimeType: resource[0]!.mimeType as string, surfaceId, uri });
-  }
-
-  #appTool(
-    execution: RuntimeMcpExecutionContext,
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    name: string,
-  ): void {
-    const tool = execution.descriptor.tools.filter((candidate) => candidate.name === name);
-    if (tool.length !== 1 || tool[0]!.handlerId !== 'render_edit_timeline' || !isJsonObject(tool[0]!._meta)) {
-      throw new Error('Runtime MCP App tool is not owned by the current generation.');
-    }
-    const uri = tool[0]!._meta['openai/outputTemplate'];
-    if (typeof uri !== 'string') throw new Error('Runtime MCP App tool has no App resource binding.');
-    this.#appResource(execution, generation, uri);
-  }
-
-  #timelineLimit(argumentsValue: JsonValue | undefined): Readonly<{ readonly limit?: number }> {
-    if (argumentsValue === undefined) return Object.freeze({});
-    if (!isJsonObject(argumentsValue) || Object.keys(argumentsValue).some((key) => key !== 'limit')) {
-      throw new TypeError('Runtime MCP App tool arguments are invalid.');
-    }
-    const limit = argumentsValue.limit;
-    if (limit === undefined) return Object.freeze({});
-    if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
-      throw new TypeError('Runtime MCP App tool arguments are invalid.');
-    }
-    return Object.freeze({ limit });
-  }
-
-  async #executeTimelineTool(
-    execution: RuntimeMcpExecutionContext,
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    argumentsValue: JsonObject,
-  ): Promise<Readonly<{ readonly stateVersion: number; readonly value: JsonValue }>> {
-    const release = this.#reserveInvocation();
-    const runId = `runtime-mcp-${randomUUID()}`;
-    const abort = (): void => this.#workers.get(runId)?.terminate(new Error('Runtime MCP operation was aborted.'));
-    execution.signal.addEventListener('abort', abort, { once: true });
-    try {
-      const snapshot = await this.#stateKernel.readSnapshot(this.#timelineLimit(argumentsValue));
-      execution.signal.throwIfAborted();
-      this.#assertMcpExecutionAuthority(execution, generation);
-      const response = await this.#runInvocationWorker({
-        generation,
-        input: Object.freeze({
-          snapshot: cloneJson(snapshot),
-          stateFile: this.#stateFile,
-          stateStoreId,
-          type: 'mcp/render-timeline',
-        }),
-        runId,
-        surfaceId: 'mcp.render_edit_timeline',
-      });
-      execution.signal.throwIfAborted();
-      this.#assertMcpExecutionAuthority(execution, generation);
-      const stateVersion = response.inspection.state.identity.stateVersion;
-      const durable = await this.#stateKernel.readSnapshot({ stateVersion });
-      const protocol = response.inspection.protocol;
-      if (durable.stateVersion !== stateVersion || protocol === undefined || !isJsonObject(protocol)) {
-        throw new Error('Runtime MCP App tool result is not a durable protocol response.');
-      }
-      execution.signal.throwIfAborted();
-      this.#assertMcpExecutionAuthority(execution, generation);
-      return Object.freeze({ stateVersion, value: cloneJson(protocol) });
-    } finally {
-      execution.signal.removeEventListener('abort', abort);
-      release();
-    }
-  }
-
-  async #readGenerationSurfaceHtml(
-    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-    surfaceId: string,
-  ): Promise<string> {
-    const matches = generation.manifest.metadata.surfaceAssets[surfaceId]?.filter((asset) =>
-      asset.contentType === 'text/html' && asset.requestPath === clientSurfaceEntry,
-    ) ?? [];
-    if (matches.length !== 1) throw new Error('Runtime MCP App resource has no canonical HTML asset.');
-    const asset = matches[0]!;
-    if (asset.bytes > maximumAssetBytes) throw new Error('Runtime MCP App HTML exceeds the asset limit.');
-    const segments = asset.generationPath.split('/');
-    if (segments.some((segment) => !safeSegment(segment))) throw new Error('Runtime MCP App HTML asset path is unsafe.');
-    const path = join(generation.root, ...segments);
-    if (!isInside(generation.root, path)) throw new Error('Runtime MCP App HTML asset escaped its generation root.');
-    const details = await lstat(path);
-    if (!details.isFile() || details.isSymbolicLink() || details.size !== asset.bytes) {
-      throw new Error('Runtime MCP App HTML asset changed.');
-    }
-    const body = await readFile(path);
-    if (body.byteLength !== asset.bytes || createHash('sha256').update(body).digest('hex') !== asset.sha256) {
-      throw new Error('Runtime MCP App HTML asset changed.');
-    }
-    const text = body.toString('utf8');
-    if (Buffer.byteLength(text, 'utf8') !== body.byteLength) throw new Error('Runtime MCP App HTML asset is not UTF-8.');
-    return text;
-  }
-
   async #close(): Promise<void> {
     this.#closed = true;
     this.#invocationAbort.abort(new Error('RSC runtime session is closing.'));
     this.#hmrReady = false;
-    this.#appReloadSubscriptions.clear();
     this.#pendingCohortIds.clear();
     this.#settleCompileObservation();
     for (const worker of this.#workers.values()) {
@@ -2760,11 +2196,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const checkpointStoreClose = this.#checkpointStore.close();
     void checkpointStoreClose.catch(() => undefined);
     this.#setStatus('closed');
-    for (const broker of this.#appBrokers.values()) broker.closedObservation?.unsubscribe();
-    this.#appBrokers.clear();
     this.#surfaceAssetApps.clear();
-    const mcpRegistryClose = this.#closeLiveSessionResource('runtime-mcp-registry', () => this.#mcpRegistry.close());
-    void mcpRegistryClose.catch(() => undefined);
     while (this.#captureTasks.size > 0) await Promise.all([...this.#captureTasks]);
     while (this.#invocations.size > 0) await Promise.allSettled([...this.#invocations]);
     while (this.#runReadTasks.size > 0) {
@@ -2790,7 +2222,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         'rsbuild-dev-server',
         () => this.#server?.close() ?? Promise.resolve(),
       ) }),
-      Object.freeze({ label: 'runtime-mcp-registry' as const, close: () => mcpRegistryClose }),
       Object.freeze({ label: 'environment-checkpoints' as const, close: () => this.#closeLiveSessionResource(
         'environment-checkpoints',
         () => checkpointStoreClose,

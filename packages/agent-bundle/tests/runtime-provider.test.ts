@@ -7,14 +7,11 @@ import { expect, it } from '@rstest/core';
 import {
   DevRuntimeController,
   DevRuntimeGenerationConflictError,
-  RuntimeMcpRegistry,
   DevRuntimeUnavailableError,
   type DevRuntimeControllerOptions,
   type DevRuntimeProvider,
   type DevRuntimePreparedProject,
   type DevRuntimeSession,
-  type DevRuntimeMcpSessionBinding,
-  type DevRuntimeMcpRegistry,
   type DevRuntimeRun,
   type DevRuntimeSurface,
 } from '../src/dev/index.ts';
@@ -71,19 +68,6 @@ const surface = {
   targets: ['claude', 'codex'],
 } satisfies DevRuntimeSurface;
 
-const binding = {
-  definitionDigest: 'definition-a',
-  providerSessionId: 'provider-a',
-  registryRevision: 3,
-  serverDigest: 'server-a',
-  serverName: 'timeline',
-  sessionId: 'mcp-a',
-  sessionRevision: 2,
-  stateStoreId: 'fixture-a',
-  target: 'portable',
-  transportDigest: 'transport-a',
-} satisfies DevRuntimeMcpSessionBinding;
-
 const run = {
   completedAt: '2026-08-15T00:00:01.000Z',
   id: 'run-a',
@@ -129,23 +113,9 @@ const targetlessSurface = {
 // @ts-expect-error Every browser surface must explicitly declare its supported targets.
 const targetfulSurface: DevRuntimeSurface = targetlessSurface;
 
-const incompleteBinding = {
-  providerSessionId: 'provider-a',
-  serverName: 'timeline',
-  sessionId: 'mcp-a',
-  stateStoreId: 'fixture-a',
-  target: 'portable',
-} satisfies Pick<
-  DevRuntimeMcpSessionBinding,
-  'providerSessionId' | 'serverName' | 'sessionId' | 'stateStoreId' | 'target'
->;
-
-// @ts-expect-error Stable MCP bindings include registry/session revisions and all three digests.
-const completeBinding: DevRuntimeMcpSessionBinding = incompleteBinding;
-
 // The satisfies/@ts-expect-error declarations above are the contract checks;
 // they need no runtime test to compile.
-void [binding, jsonOnlyRun, targetfulSurface, completeBinding];
+void [jsonOnlyRun, targetfulSurface];
 
 it('uses stable errors for unavailable and stale runtime generations', () => {
   const unavailable = new DevRuntimeUnavailableError();
@@ -168,7 +138,6 @@ it('starts one provider from the trusted prepared snapshot with only declared en
   const events: unknown[] = [];
   const session = {
     close: async () => undefined,
-    mcpRegistry: {},
     providerSessionId: 'upstream-provider-session',
     status: () => ({
       descriptor: { environmentVariables: ['RUNTIME_TOKEN'], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
@@ -219,17 +188,8 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
   let activated = false;
   let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
   const observedEvents: Array<Readonly<{ readonly state: string; readonly surfaceCount: number; readonly type: string }>> = [];
-  const endpoint = {
-    entryPath: '/',
-    httpOrigin: 'http://127.0.0.1:43111',
-    httpPathPrefixes: ['/'],
-    subscribeReload: () => () => undefined,
-    surfaceId: surface.id,
-  };
   const session = {
-    clientSurface: () => activated ? endpoint : undefined,
     close: async () => undefined,
-    mcpRegistry: {},
     reconcilePreparedRuntime: async () => undefined,
     status: () => activated
       ? { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, lastGoodVector: vector, state: 'active' as const }
@@ -258,7 +218,6 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
   expect(controller.status()).toMatchObject({ hmrReady: false, state: 'compiling' });
   expect(controller.status()).not.toHaveProperty('activeVector');
   expect(controller.surfaces()).toEqual([]);
-  expect(controller.clientSurface(surface.id)).toBeUndefined();
 
   activated = true;
   emit?.({ runtimeGenerationId: vector.runtimeGenerationId, type: 'runtime.generation.activated' });
@@ -272,7 +231,6 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
   expect(controller.surfaces()).toEqual([surface]);
   expect(Object.isFrozen(controller.status())).toBe(true);
   expect(Object.isFrozen(controller.surfaces())).toBe(true);
-  expect(controller.clientSurface(surface.id)).toEqual(endpoint);
   expect(observedEvents).toEqual([{ state: 'active', surfaceCount: 1, type: 'runtime.generation.activated' }]);
 
   await controller.close();
@@ -298,7 +256,6 @@ it('refreshes authoritative failed and status snapshots before forwarding their 
   }>> = [];
   const session = {
     close: async () => undefined,
-    mcpRegistry: {},
     reconcilePreparedRuntime: async () => undefined,
     status: () => malformed
       ? { activeVector: { runtimeGenerationId: 7 }, descriptor, diagnostics: [], hmrReady: true, state: 'active' as const }
@@ -371,7 +328,6 @@ it('refreshes terminal run snapshots before completed or failed events without r
   const observed: Array<Readonly<{ readonly stateVersion: number | undefined; readonly type: string }>> = [];
   const session = {
     close: async () => undefined,
-    mcpRegistry: {},
     reconcilePreparedRuntime: async () => undefined,
     status: () => {
       const current = Object.freeze({ ...vector, stateVersion });
@@ -439,7 +395,6 @@ it('does not overwrite a controller-owned lifecycle failure while publishing its
       descriptor,
       start: async () => ({
         close: async () => undefined,
-        mcpRegistry: {},
         reconcilePreparedRuntime: async () => { throw new Error('Reconcile failed.'); },
         status: () => ({ activeVector: vector, descriptor, diagnostics: [], hmrReady: true, lastGoodVector: vector, state: 'active' as const }),
         surfaces: () => [surface],
@@ -500,7 +455,6 @@ it('detaches and freezes complete activation status and surface snapshots', asyn
         emit = context.emit;
         return {
           close: async () => undefined,
-          mcpRegistry: {},
           reconcilePreparedRuntime: async () => undefined,
           status: () => activated
             ? {
@@ -596,7 +550,6 @@ it('degrades instead of publishing malformed activation snapshots', async () => 
           emit = context.emit;
           return {
             close: async () => undefined,
-            mcpRegistry: {},
             reconcilePreparedRuntime: async () => undefined,
             status: () => activated
               ? invalid.status
@@ -640,7 +593,6 @@ it('accepts acyclic shared JSON fragments in activation snapshots', async () => 
         emit = context.emit;
         return {
           close: async () => undefined,
-          mcpRegistry: {},
           reconcilePreparedRuntime: async () => undefined,
           status: () => activated
             ? { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' as const }
@@ -707,7 +659,6 @@ it('buffers synchronous startup failure and status until controller snapshots in
         context.emit(Object.freeze({ details: Object.freeze({ sequence: 'latest' }), type: 'runtime.status' }));
         return {
           close: async () => undefined,
-          mcpRegistry: {},
           reconcilePreparedRuntime: async () => undefined,
           status: () => ({ descriptor, diagnostics: [sourceBuildDiagnostic], hmrReady: true, state: 'degraded' as const }),
           surfaces: () => [surface],
@@ -750,7 +701,6 @@ it('buffers synchronous startup activation until controller snapshots install', 
         context.emit({ runtimeGenerationId: vector.runtimeGenerationId, type: 'runtime.generation.activated' });
         return {
           close: async () => undefined,
-          mcpRegistry: {},
           reconcilePreparedRuntime: async () => undefined,
           status: () => ({ activeVector: vector, descriptor, diagnostics: [], hmrReady: true, lastGoodVector: vector, state: 'active' as const }),
           surfaces: () => [surface],
@@ -801,7 +751,6 @@ it('drops buffered startup lifecycle events after close or topology failure', as
       : controller.reconcileDeclaration(undefined);
     resolveSession?.({
       close: async () => { closeCalls += 1; },
-      mcpRegistry: {},
       reconcilePreparedRuntime: async () => undefined,
       status: () => ({ activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
       surfaces: () => [surface],
@@ -834,7 +783,6 @@ it('sanitizes a failed activation refresh without recursively publishing runtime
         emit = context.emit;
         return {
           close: async () => undefined,
-          mcpRegistry: {},
           reconcilePreparedRuntime: async () => undefined,
           status: () => ({ descriptor, diagnostics: [], hmrReady: activated, state: activated ? 'active' as const : 'compiling' as const }),
           surfaces: () => {
@@ -958,7 +906,6 @@ it('reconciles the newest revision exactly once after a deferred provider start 
   });
   resolveSession?.({
     close: async () => undefined,
-    mcpRegistry: {},
     reconcilePreparedRuntime: async (prepared: DevRuntimePreparedProject) => { reconciled.push(prepared.sourceRevision); },
     status: () => ({ descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),
     surfaces: () => [],
@@ -966,182 +913,6 @@ it('reconciles the newest revision exactly once after a deferred provider start 
 
   await starting;
   expect(reconciled).toEqual(['source-2']);
-  await controller.close();
-});
-
-it('latches declaration topology failures and revokes registry capabilities captured while active', async () => {
-  let executions = 0;
-  const view = {
-    execute: async () => { executions += 1; return {}; },
-    snapshot: () => ({}),
-    watchClosed: () => ({ closed: false, unsubscribe: () => undefined }),
-  };
-  const registry = {
-    close: async () => undefined,
-    closeSession: async () => undefined,
-    open: async () => ({ ...view, close: async () => undefined }),
-    reconcile: async () => ({}),
-    restart: async () => ({}),
-    session: () => view,
-    snapshot: () => undefined,
-    subscribe: () => ({ unsubscribe: () => undefined }),
-  };
-  const controller = new DevRuntimeController({
-    artifactStatus: () => ({ state: 'missing' }),
-    emit: () => undefined,
-    environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
-    projectRoot: '/workspace/project',
-    provider: {
-      descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
-      start: async () => ({
-        close: async () => undefined,
-        mcpRegistry: registry,
-        status: () => ({ descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),
-        surfaces: () => [],
-      }) as unknown as DevRuntimeSession,
-    },
-    storageRoot: '/workspace/project/.agent-bundle/runtime',
-  });
-  await controller.start();
-  const capturedRegistry = controller.mcpRegistry;
-  const capturedView = capturedRegistry.session('mcp-a');
-  if (capturedView === undefined) throw new Error('Expected a captured runtime MCP view.');
-  const capturedSession = await capturedRegistry.open({ serverName: 'timeline', target: 'portable' });
-  await capturedView.execute({ expectedSessionRevision: 1, kind: 'list-tools' });
-  expect(executions).toBe(1);
-
-  await controller.reconcileDeclaration({
-    apps: [],
-    provider: './src/dev/replaced-provider.ts',
-    servers: [],
-    sourceRevision: 'source-2',
-  });
-
-  expect(controller.status()).toMatchObject({ state: 'failed' });
-  await expect(capturedRegistry.open({ serverName: 'timeline', target: 'portable' })).rejects.toMatchObject({ code: 'AB8201' });
-  await expect(capturedView.execute({ expectedSessionRevision: 1, kind: 'list-tools' })).rejects.toMatchObject({ code: 'AB8201' });
-  await expect(capturedSession.close()).rejects.toMatchObject({ code: 'AB8201' });
-  expect(() => capturedView.snapshot()).toThrow(DevRuntimeUnavailableError);
-  await controller.close();
-});
-
-it('preserves private registry and session receivers through the stable MCP facade', async () => {
-  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
-  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
-  const status = () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' as const });
-  const controllerFor = (mcpRegistry: DevRuntimeMcpRegistry): DevRuntimeController => new DevRuntimeController({
-    artifactStatus: () => ({ state: 'missing' }),
-    emit: () => undefined,
-    environment: {},
-    preparedRuntime: prepared,
-    projectRoot: '/workspace/project',
-    provider: {
-      descriptor,
-      start: async () => ({
-        close: async () => undefined,
-        mcpRegistry,
-        status,
-        surfaces: () => [],
-      }) as unknown as DevRuntimeSession,
-    },
-    storageRoot: '/workspace/project/.agent-bundle/runtime',
-  });
-  const actualRegistry = new RuntimeMcpRegistry({
-    artifactEpochId: () => undefined,
-    connector: { connect: async () => { throw new Error('Connection is not needed by this receiver test.'); } } as never,
-    emit: () => undefined,
-    executor: async () => ({}) as never,
-    generationStore: {} as never,
-    initialRegistry: { definitionDigest: 'definition-1', runtimeGenerationId: 'generation-1', servers: [], transportDigest: 'transport-1' },
-    providerSessionId: 'provider-1',
-    stateStoreId: 'state-1',
-  });
-  const actualController = controllerFor(actualRegistry);
-  await actualController.start();
-  expect(actualController.mcpRegistry.snapshot()).toMatchObject({
-    providerSessionId: 'provider-1',
-    registryRevision: 1,
-  });
-  await actualController.close();
-
-  class PrivateSession {
-    #closed = false;
-    #executions = 0;
-
-    async close(): Promise<void> {
-      this.#closed = true;
-    }
-
-    async execute(): Promise<unknown> {
-      if (this.#closed) throw new Error('Private MCP session is closed.');
-      this.#executions += 1;
-      return { executions: this.#executions };
-    }
-
-    snapshot(): unknown {
-      return { closed: this.#closed, executions: this.#executions };
-    }
-
-    watchClosed(): unknown {
-      return { closed: this.#closed, unsubscribe: () => undefined };
-    }
-  }
-
-  class PrivateRegistry {
-    #calls: string[] = [];
-    #session = new PrivateSession();
-
-    get calls(): readonly string[] {
-      return this.#calls;
-    }
-
-    async close(): Promise<void> { this.#calls.push('close'); }
-    async closeSession(): Promise<void> { this.#calls.push('closeSession'); }
-    async open(): Promise<PrivateSession> { this.#calls.push('open'); return this.#session; }
-    async reconcile(): Promise<unknown> { this.#calls.push('reconcile'); return {}; }
-    async restart(): Promise<unknown> { this.#calls.push('restart'); return {}; }
-    session(): PrivateSession { this.#calls.push('session'); return this.#session; }
-    snapshot(): unknown { this.#calls.push('snapshot'); return { registry: 'private' }; }
-    subscribe(): unknown { this.#calls.push('subscribe'); return { unsubscribe: () => undefined }; }
-  }
-
-  const privateRegistry = new PrivateRegistry();
-  const controller = controllerFor(privateRegistry as unknown as DevRuntimeMcpRegistry);
-  await controller.start();
-  const facade = controller.mcpRegistry;
-  expect(facade.snapshot()).toEqual({ registry: 'private' });
-  expect(facade.subscribe({}, () => undefined)).toEqual({ unsubscribe: expect.any(Function) });
-  const view = facade.session('class-session');
-  if (view === undefined) throw new Error('Expected private MCP session view.');
-  await expect(view.execute({ expectedSessionRevision: 1, kind: 'list-tools' })).resolves.toEqual({ executions: 1 });
-  expect(view.snapshot()).toEqual({ closed: false, executions: 1 });
-  expect(view.watchClosed(() => undefined)).toEqual({ closed: false, unsubscribe: expect.any(Function) });
-  const opened = await facade.open({ serverName: 'timeline', target: 'portable' });
-  await expect(opened.execute({ expectedSessionRevision: 1, kind: 'list-tools' })).resolves.toEqual({ executions: 2 });
-  await expect(opened.close()).resolves.toBeUndefined();
-  await expect(facade.closeSession({ expectedSessionRevision: 1, sessionId: 'class-session' })).resolves.toBeUndefined();
-  await expect(facade.reconcile({ definitionDigest: 'definition-2', runtimeGenerationId: 'generation-2', servers: [], transportDigest: 'transport-2' })).resolves.toEqual({});
-  await expect(facade.restart({ expectedSessionRevision: 1, sessionId: 'class-session' })).resolves.toEqual({});
-  await expect(facade.close()).resolves.toBeUndefined();
-  expect(privateRegistry.calls).toEqual([
-    'snapshot',
-    'subscribe',
-    'session',
-    'session',
-    'session',
-    'session',
-    'open',
-    'closeSession',
-    'reconcile',
-    'restart',
-    'close',
-  ]);
-
-  await controller.reconcileDeclaration({ ...prepared, provider: './src/dev/replaced-provider.ts', sourceRevision: 'source-2' });
-  await expect(facade.open({ serverName: 'timeline', target: 'portable' })).rejects.toMatchObject({ code: 'AB8201' });
-  await expect(view.execute({ expectedSessionRevision: 1, kind: 'list-tools' })).rejects.toMatchObject({ code: 'AB8201' });
-  await expect(opened.close()).rejects.toMatchObject({ code: 'AB8201' });
   await controller.close();
 });
 
@@ -1176,7 +947,6 @@ it('latches every topology failure across a pending runtime start', async () => 
     await controller.reconcilePreparedRuntime({ ...prepared, sourceRevision: 'source-3' });
     resolveSession?.({
       close: async () => { closeCalls += 1; },
-      mcpRegistry: {},
       reconcilePreparedRuntime: async () => undefined,
       status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
       surfaces: () => [],
@@ -1184,7 +954,7 @@ it('latches every topology failure across a pending runtime start', async () => 
     await starting;
 
     expect(controller.status(), topology.name).toMatchObject({ state: 'failed' });
-    await expect(controller.mcpRegistry.open({ serverName: 'timeline', target: 'portable' }), topology.name).rejects.toMatchObject({ code: 'AB8201' });
+    expect(() => controller.runs(1), topology.name).toThrow(DevRuntimeUnavailableError);
     await controller.close();
     expect(closeCalls, topology.name).toBe(1);
   }
@@ -1209,7 +979,6 @@ it('retains a topology failure when it races an accepted runtime reconcile', asy
         emit = context.emit;
         return {
         close: async () => { closeCalls += 1; },
-        mcpRegistry: {},
         reconcilePreparedRuntime: async () => reconcileGate,
         status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
         surfaces: () => [],
@@ -1219,7 +988,6 @@ it('retains a topology failure when it races an accepted runtime reconcile', asy
     storageRoot: '/workspace/project/.agent-bundle/runtime',
   });
   await controller.start();
-  const capturedRegistry = controller.mcpRegistry;
   const reconciling = controller.reconcilePreparedRuntime({ ...prepared, sourceRevision: 'source-2' });
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
   await controller.reconcileDeclaration(undefined);
@@ -1228,7 +996,7 @@ it('retains a topology failure when it races an accepted runtime reconcile', asy
   await reconciling;
 
   expect(controller.status()).toMatchObject({ state: 'failed' });
-  await expect(capturedRegistry.open({ serverName: 'timeline', target: 'portable' })).rejects.toMatchObject({ code: 'AB8201' });
+  expect(() => controller.runs(1)).toThrow(DevRuntimeUnavailableError);
   await controller.close();
   expect(closeCalls).toBe(1);
 });

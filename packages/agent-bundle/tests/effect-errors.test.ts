@@ -6,7 +6,7 @@ import { describe, expect, it } from '@rstest/core';
 import { stableJson } from '../src/core/digest.ts';
 import { CodedError } from '../src/core/errors.ts';
 import { DevCoordinatorCloseError } from '../src/dev/coordinator.ts';
-import { RuntimeMcpRegistryError } from '../src/dev/runtime-mcp-registry.ts';
+import { RuntimeGenerationStoreError } from '../src/dev/runtime-generation-store.ts';
 import { ScriptPlaygroundFailure } from '../src/dev/playground/script-playground-service.ts';
 import { isTypedDevError, runPromise } from '../src/effect/boundary.ts';
 import { YieldableCodedError, YieldableFrameworkError } from '../src/effect/errors.ts';
@@ -51,8 +51,8 @@ describe('yieldable framework error bases (src/effect/errors.ts)', () => {
   });
 
   it('types the yielded error into the fail channel', () => {
-    const program: Effect.Effect<never, RuntimeMcpRegistryError> = Effect.gen(function* () {
-      return yield* new RuntimeMcpRegistryError('RUNTIME_MCP_REGISTRY_CLOSED', 'Runtime MCP registry is closed.');
+    const program: Effect.Effect<never, RuntimeGenerationStoreError> = Effect.gen(function* () {
+      return yield* new RuntimeGenerationStoreError('RUNTIME_GENERATION_CLOSED', 'Runtime generation store is closed.');
     });
     expect(program).toBeDefined();
   });

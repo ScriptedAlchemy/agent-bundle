@@ -306,9 +306,6 @@ export interface Invalidation {
 export interface RuntimeEvent {
   readonly correlationId?: string;
   readonly details?: JsonObject;
-  readonly mcpRegistryRevision?: number;
-  readonly mcpSessionId?: string;
-  readonly mcpSessionRevision?: number;
   readonly providerSessionId: string;
   readonly runId?: string;
   readonly runtimeGenerationId?: string;
