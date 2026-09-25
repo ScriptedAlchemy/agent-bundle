@@ -13,7 +13,7 @@ three layers from step 2, and the v2 authoritative manifest from step 3
 ([PR #604](https://github.com/ScriptedAlchemy/agent-bundle/pull/604)).
 
 Paths below are relative to `packages/agent-bundle/src/` unless a package
-name is spelled out. Type names are the ones the compiler exports — there is
+name is spelled out. Type names are the ones the compiler exports. There is
 no `ApplicationIR`, `ProjectionIR`, or `ArtifactIR` type yet.
 
 The output layout this page describes is the **composite plugin root**: one
@@ -105,21 +105,21 @@ src/scripts/**/*.{ts,tsx,jsx}
 
 The frozen result is a `CompiledRouteGraph` (`routes/types.ts`):
 
-- `servers[]` — `CompiledServerSurface` (`generated` / `custom` / `command` /
+- `servers[]`: `CompiledServerSurface` (`generated` / `custom` / `command` /
   `remote` / `conflict`), each holding `CompiledAgentRoute` rows of kind
   `tool`, `resource`, `prompt`, or `app`.
-- `cli?` — `CompiledCliSurface` (`generated` / `conventional` / `conflict`)
+- `cli?`: `CompiledCliSurface` (`generated` / `conventional` / `conflict`)
   with `CompiledCliCommand` rows whose argv grammar comes from literal
   `config.inputJsonSchema` or JSON input.
-- `events[]` — `CompiledAgentRoute` rows of kind `event-route`.
-- `scripts[]` — kind `script`.
-- `providers[]` — `CompiledProvider` (not a route kind; they wrap execution).
-- `layouts?` — `CompiledLayout` (`root` or `server` scope). Event routes and
+- `events[]`: `CompiledAgentRoute` rows of kind `event-route`.
+- `scripts[]`: kind `script`.
+- `providers[]`: `CompiledProvider` (not a route kind; they wrap execution).
+- `layouts?`: `CompiledLayout` (`root` or `server` scope). Event routes and
   browser Apps are never wrapped.
-- `contracts?` — route-local `config.inputJsonSchema` metadata, identified by
+- `contracts?`: route-local `config.inputJsonSchema` metadata, identified by
   `contract:<module>#inputJsonSchema`.
-- `digest` — sha256 over project-relative identity and declared metadata.
-- `diagnostics` — route-graph errors (`AB48xx` and `AB494x`).
+- `digest`: sha256 over project-relative identity and declared metadata.
+- `diagnostics`: route-graph errors (`AB48xx` and `AB494x`).
 
 Each `CompiledAgentRoute` carries `id`, `kind`, `source`, conventional
 `provenance`, a statically extracted `config` (or `emptyRouteConfig`), an
@@ -171,7 +171,7 @@ planned from it once, then attributed to the composite identity.
 A **projection** is one host's representation of the same
 `NormalizedPlugin`. The config key is still `targets`. After the composite
 root landed, that key selects which projections are planned into the one
-output directory — it does not name the artifact, the runtime, the
+output directory. It does not name the artifact, the runtime, the
 distribution form, or the application.
 
 ### Where targets enter
@@ -437,8 +437,8 @@ keeps only the outline.
 The document has two parts with two version numbers. The **public
 contract** (`manifestVersion: 6`) is what consumers read. The
 **compiler record** (`compiler`, `recordVersion: 1`) is the operational
-account of the run — producer, project digests, provenance, adapter
-revisions, pinned schemas, validation — and changes without bumping
+account of the run, producer, project digests, provenance, adapter
+revisions, pinned schemas, validation, and changes without bumping
 `manifestVersion`; consumer readers never need it.
 
 | Section | What it records |
@@ -597,18 +597,18 @@ land.
 
 ## Next
 
-- [Project structure](../start/project-structure.mdx) — the `src/` roots
+- [Project structure](../start/project-structure.mdx): the `src/` roots
   discovery walks.
-- [Configuration model](../authoring/index.mdx) — the config those roots
+- [Configuration model](../authoring/index.mdx): the config those roots
   fill in.
 - [MCP servers and Apps](../authoring/mcp.mdx) and
-  [Hooks](../authoring/hooks.mdx) — the two executable surfaces most
+  [Hooks](../authoring/hooks.mdx), the two executable surfaces most
   authors meet first.
-- [Artifact manifest](../../reference/artifact-manifest.mdx) — every
+- [Artifact manifest](../../reference/artifact-manifest.mdx): every
   section and field of `agent-bundle.manifest.json`.
-- [Targets and artifacts](../../reference/targets-artifacts.mdx) — the
+- [Targets and artifacts](../../reference/targets-artifacts.mdx): the
   composite root.
-- [Shipping a bundle](../distribution/index.mdx) — how the root compiles
+- [Shipping a bundle](../distribution/index.mdx): how the root compiles
   and what ships inside it.
-- [Artifact validation](../distribution/validation.mdx) — the checks that
+- [Artifact validation](../distribution/validation.mdx): the checks that
   re-read this manifest.

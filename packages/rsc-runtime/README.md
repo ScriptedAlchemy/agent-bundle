@@ -1,7 +1,7 @@
 # `@agent-bundle/runtime`
 
 Agent Document contracts and React-owned Flight execution for Agent Bundle routes.
-Install the pkg.pr.new preview of any `main` commit or pull request — see
+Install the pkg.pr.new preview of any `main` commit or pull request, see
 [Preview packages](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md).
 
 The runtime executes route models through React-owned RSC/Flight behind the
@@ -17,17 +17,17 @@ elapsed time are bounded on the reconciler.
 
 Generated MCP tool calls project the live render-event stream through
 `projectMcpRenderStream`: `notifications/progress` is emitted only when the
-caller supplied a progress token — for `progress.report()` events and for
+caller supplied a progress token, for `progress.report()` events and for
 `Agent.Progress` nodes streamed in a shell/replace document (a `Suspense`
 fallback), under one monotonic `progress` rule so neither source duplicates
-the other — shell/replace content stays internal, and the request resolves to
+the other, shell/replace content stays internal, and the request resolves to
 one final `CallToolResult`. Image, audio, and resource
-blocks are capability-gated — unsupported rich content uses a declared
+blocks are capability-gated, unsupported rich content uses a declared
 fallback or a typed `McpProjectionError`, never a silent drop. The existing
 `documentToCallToolResult` helper projects an already-complete Agent Document.
 
 Task-augmented tool calls (`CreateTaskResult`, `tasks/get`, `tasks/result`,
-`tasks/cancel`, `tasks/list` — the MCP 2025-11-25 Tasks utility) are served by
+`tasks/cancel`, `tasks/list`, the MCP 2025-11-25 Tasks utility) are served by
 the generated route servers of `agent-bundle` for tool routes that declare
 `config.execution.taskSupport`; the projector's `Agent.Progress` projection is
 what feeds a task's `tasks/get` status as well as `notifications/progress`.
@@ -49,12 +49,12 @@ and the `@agent-bundle/runtime/flight/server` render entry. Rich Markdown
 authoring rides `rsc-markdown-stream`, the Markdown renderer published from
 this repository's `packages/rsc-markdown-stream`: `renderToMarkdown` /
 `renderToMarkdownStream` are re-exported, and the async
-`MarkdownContent` component renders JSX children — headings, lists, GFM
-tables, task lists, nested async components — to one escaped Markdown string
+`MarkdownContent` component renders JSX children, headings, lists, GFM
+tables, task lists, nested async components, to one escaped Markdown string
 inside `Agent.Markdown`, replacing hand-concatenated strings in routes. React
-is the host's: the package declares React/React DOM `^19.2.0` as peers — the
+is the host's: the package declares React/React DOM `^19.2.0` as peers, the
 minor the suite proves, inside the `^19.1.0` its Flight binding
-`react-server-dom-rspack` `0.1.0` (an exact dependency) accepts — and
+`react-server-dom-rspack` `0.1.0` (an exact dependency) accepts, and
 react-dom itself insists that `react` and `react-dom` match exactly; the proof
 example compiles them with `rsbuild-plugin-rsc` `0.1.1`. `rsc-markdown-stream`
 is declared `workspace:^`, which pnpm's packer rewrites to the caret of the
@@ -65,7 +65,7 @@ is required.
 Async server utilities and Server Components read the framework request store
 with `const context = await agent()`. The store is a versioned realm singleton
 installed at MCP and CLI entrypoints (and at any other real invocation via
-`runAgentRequest`). Identities are `Observed<T>` — unavailable host, session,
+`runAgentRequest`). Identities are `Observed<T>`, unavailable host, session,
 actor, or workspace is a typed reason, never a fabricated string. The context
 handle throws after the request completes. Workspace identity is deliberately
 scalar: when a native envelope provides multiple `workspace_roots` and no
@@ -73,8 +73,8 @@ scalar: when a native envelope provides multiple `workspace_roots` and no
 roots remain available only in the native event payload. Synchronous Server
 Components and utilities that cannot `await` call `useAgent()` instead; it
 returns the identical handle from the same store under the same lease rules:
-a call with no request in its async context — before a request, or after
-`runAgentRequest` has settled — throws `outside-invocation`, while a handle
+a call with no request in its async context, before a request, or after
+`runAgentRequest` has settled, throws `outside-invocation`, while a handle
 captured inside the request throws `request-closed` once it completes. `providers`
 carries the values contributed by conventional `src/providers/*` modules, which
 the `agent-bundle` compiler discovers, executes in order, and types per project;
@@ -85,12 +85,12 @@ boundary before being returned, so later caller mutations do not alter a result.
 The copy follows MCP SDK wire semantics for `undefined`: object properties whose
 value is `undefined` are dropped and `undefined` array elements lower to `null`,
 exactly as `JSON.stringify` serializes them. Values that cannot round-trip as
-JSON — cycles, accessors, sparse arrays, non-finite numbers, non-plain objects —
+JSON, cycles, accessors, sparse arrays, non-finite numbers, non-plain objects,
 are still rejected, and the error names the offending key path.
 
 ## Applications
 
-Structure — targets, skills, scripts, MCP servers, MCP apps — lives in
+Structure, targets, skills, scripts, MCP servers, MCP apps, lives in
 `agent-bundle.config.ts` and file conventions; JSX renders. That split is the
 whole authoring model, described on one screen in
 [Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md).
@@ -142,7 +142,7 @@ export const editTimeline = defineState({
 });
 ```
 
-Every state declares one explicit lifetime — `request` (discarded with the
+Every state declares one explicit lifetime, `request` (discarded with the
 invocation), `process` (a warm runtime's heap; lost on restart by definition),
 `workspace-durable` (survives restarts for one workspace), or `external` (an
 application-provided authority). Nothing infers durability from the presence
@@ -152,7 +152,7 @@ The kernel owns monotonic revisions, exact-revision snapshot reads,
 idempotency-key replay (a committed key returns its committed result; the same
 key with a different payload is a typed `idempotency-conflict`),
 compare-and-swap via `expectedRevision`, deterministic resets, explicit
-versioned migrations, and polling change cursors — subscriptions across
+versioned migrations, and polling change cursors, subscriptions across
 short-lived processes are polling, and the kernel promises nothing stronger.
 Corruption fails closed with typed errors, and error messages never embed
 state or payload contents.
@@ -163,8 +163,8 @@ the reserved context slot, so routes read
 `state.dispatch(event, payload, { idempotencyKey })`. The in-memory driver
 (`createMemoryStateDriver`) serves the two volatile lifetimes and doubles as
 the test stand-in; it is never durable. The workspace-durable driver ships on
-`node:sqlite` behind `@agent-bundle/runtime/state/sqlite`. Any driver —
-including external ones — must pass the exported conformance suite
+`node:sqlite` behind `@agent-bundle/runtime/state/sqlite`. Any driver,
+including external ones, must pass the exported conformance suite
 (`stateDriverConformanceCases`); a disconnected adapter is not a completed
 integration.
 
@@ -180,13 +180,13 @@ subpath and ship no state or notice implementation.
 Inside an authorized request, `(await agent()).notices` is a request-bound
 handle with `publish()`, `read()`, `inbox()`, `acknowledge()`, and
 `published()`. A
-recipient is the conjunction of the observed axes it names — `actor`, `host`,
+recipient is the conjunction of the observed axes it names, `actor`, `host`,
 `session`, `workspace`, plus the two lineage axes read from the admitting
 request's `lineage`: `conversation` (exactly one agent thread,
 `request.lineage.conversation`) and `root` (the root conversation and every
 subagent under it, `request.lineage.root`). Every named axis must match, and
-an axis the request cannot observe — including lineage the runtime could not
-resolve, or a principal built without the optional `lineage` at all —
+an axis the request cannot observe, including lineage the runtime could not
+resolve, or a principal built without the optional `lineage` at all,
 matches nothing, so a `conversation`-addressed notice is never
 admitted on a sibling's event even though Claude and Codex give every
 subagent the root `session_id`. Admissions journal the principal's lineage as
@@ -197,29 +197,29 @@ authorization runs before persistence, and delivery authorization runs again
 when a matching event is admitted.
 
 `published()` is the publisher's own view (#460): the notices this request's
-principal published, in every state, with their receipts — the answer to "was
+principal published, in every state, with their receipts, the answer to "was
 my notice attempted or acknowledged?" that `read()` (this invocation's
 deliveries) and `inbox()` (this recipient's pending notices) cannot give.
 `publish()` records the publishing principal's observed axes on the notice as
 `publisher` (`actor`, `host`, `session`, `workspace`, and `conversation` from
 `request.lineage`; absent when the request observed none, so such a notice
 belongs to no view). A reader is the publisher when it resolves the same
-lineage conversation — the identity of an agent thread, whichever transport
+lineage conversation, the identity of an agent thread, whichever transport
 observed it, so the hook that published and the MCP tool call that asks agree
-even though host name, session id, and cwd differ — or, for a publisher
+even though host name, session id, and cwd differ, or, for a publisher
 recorded without lineage, when every recorded axis matches. It is a read with
 no route behind it: it records no receipt, is judged per notice under
 authorization `phase: 'published'`, and discloses content under the default
 `internal` ceiling only (`internal` secret-passed, `public` as authored,
 `secret` as the placeholder). It never returns another publisher's notices,
 never a notice deduplicated onto another author's, and is not a recipient
-view — cross-recipient reads stay structurally impossible. `read()` exposes notices selected for that event
+view, cross-recipient reads stay structurally impossible. `read()` exposes notices selected for that event
 while the ledger records a receipt containing the invocation id and state
 `attempted`. `acknowledge()` is recipient-matched and authorization-gated and
-produces the terminal `acknowledged` state — the strongest evidenced outcome.
+produces the terminal `acknowledged` state, the strongest evidenced outcome.
 
 `publish()` accepts optional `retryBudget` (default one attempt) and
-`nextAttemptAt`; both are evaluated only when a matching event is admitted —
+`nextAttemptAt`; both are evaluated only when a matching event is admitted,
 no timer or retry worker is implied, and a retriable notice past `expiresAt`
 expires instead of retaining unused attempts. Wire-level
 `notifications/resources/updated` signals are recorded through the ledger's
@@ -231,20 +231,20 @@ itself: one long-lived MCP connection's subscription to the reserved inbox
 resource (`AGENT_NOTICE_INBOX_URI`). The generated server process opens its
 own handle on the workspace-durable store its Flight worker mounts
 (`createGeneratedNoticeRuntime` from `@agent-bundle/runtime/mount`), and
-after every completed render `observe(send)` — detached from that render's
-response, so a slow subscriber's wire never delays a tool result — reads the ledger, reserves the
+after every completed render `observe(send)`, detached from that render's
+response, so a slow subscriber's wire never delays a tool result, reads the ledger, reserves the
 budget slot of the subscriber's newly eligible pending notices as one
 compare-and-swap against the revision it read (`reserveAvailability()` with
 `expectedRevision`), sends at most one `notifications/resources/updated`, and
 then finalizes the reservation into the availability receipt
-(`signalAvailability()`) — or releases it (`releaseAvailability()`) when the
+(`signalAvailability()`), or releases it (`releaseAvailability()`) when the
 protocol write failed, so the receipt only ever means the write succeeded and
 a failed send costs no budget. Eligibility is recipient-matched against the
 subscriber's observed identity, respects `nextAttemptAt`, skips notices whose
 slot another signaller currently holds (a hold older than
 `AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` counts as abandoned; a live
 holder renews it under its key while its write is pending, and the reducer
-refuses a renewal once another key has legitimately taken over — or once the
+refuses a renewal once another key has legitimately taken over, or once the
 takeover's receipt has spent the budget and cleared the hold), and is
 bounded by `retryBudget` (availability receipts per notice, durable across
 restarts); because the slot is held before the wire write, two server processes
@@ -269,17 +269,17 @@ awaited before the hold is released or finalized, so no orphan hold is
 re-created behind a release. Shutdown never waits on the wire, nor on a ledger
 call that has not answered: `close()` abandons a `resources/updated` write or
 ledger call still pending (its outcome is unknown, so nothing is inferred from
-it — no receipt, no release — and its hold lapses after the TTL), then gives
+it, no receipt, no release, and its hold lapses after the TTL), then gives
 owed receipts and the store close one chance bounded by `closeTimeoutMs`
 (default 5 s), so neither a subscriber that stopped reading nor a store that
 stopped answering can wedge server teardown. The generated
-server coalesces observations — one in flight, at most one owed — because every
+server coalesces observations, one in flight, at most one owed, because every
 observation reads the whole ledger, so renders completing behind a pending
 write never queue per-render work. Exposure and availability
 receipts never re-trigger a signal, so a subscribed client cannot be driven into
 a refetch loop. Subscribing fails closed when the store is unreadable,
 `unsubscribe()` resolves only after in-flight observations settle, and only the
-workspace-durable lifetime is wired — volatile stores live in the worker's
+workspace-durable lifetime is wired, volatile stores live in the worker's
 heap, so those servers honestly advertise no `resources.subscribe`.
 
 States are `pending | attempted | expired | unavailable | withdrawn |
@@ -292,7 +292,7 @@ unavailable outcome when none is supported; it never fabricates a channel.
 
 ### Redaction (#99 acceptance item 7)
 
-A notice's free text lives only in its detached `AgentDocument` —
+A notice's free text lives only in its detached `AgentDocument`,
 `text`, `markdown`, `context`, `progress.message`, `error.message`,
 `resource.name`/`uri`, and every string inside `json.value`, `result.metadata`,
 and the document `value`. Recipient, priority, dedupe key, timestamps, and
@@ -304,11 +304,11 @@ redaction happens on egress, per route.
 `internal`, persisted explicitly on new notices; notices journaled before the
 contract have no class and are `internal`):
 
-- `public` — safe for any surface; delivered as authored.
-- `internal` — for the recipient's own context; every route passes it through
+- `public`: safe for any surface; delivered as authored.
+- `internal`: for the recipient's own context; every route passes it through
   `redactSecretText()` first, so a credential pasted into a coordination
   message never crosses into another actor's context.
-- `secret` — delivered as authored, but only over a route whose host row
+- `secret`: delivered as authored, but only over a route whose host row
   admits `secret`; otherwise it never leaves the store through that route.
 
 Each route has a structural shape (`AGENT_NOTICE_ROUTE_SHAPES`): `mcp-inbox`,
@@ -383,7 +383,7 @@ route hands out, keeping the original `status` and `version`), so the bound
 made at publish holds on egress. The compiler keeps its
 own, older credential pass for probe and log text
 (`packages/agent-bundle/src/core/credentials.ts`); the two are not held in
-parity, and no vendored-code notice is involved — `flare-redact` is an
+parity, and no vendored-code notice is involved, `flare-redact` is an
 ordinary npm dependency under its own MIT license.
 
 Libraries evaluated for the pass (September 2026), against: MIT/Apache
@@ -398,7 +398,7 @@ credentials:
 | `fast-redact` 3.5.0 | MIT | 93 kB | 2024-03 | CJS, zero dependencies; compiles redactors with `Function()`, so it needs `unsafe-eval` under a browser CSP | Field-path redaction of known keys only, no pattern detection, no arbitrary-depth wildcards | Not chosen: covers structured fields but has no credential pass, and notice free text needs one |
 | `@sanity-labs/secret-scan` 1.1.0 | MIT | 1.1 MB | 2026-09 | ESM + CJS, zero dependencies, browser safe | 1,100+ TruffleHog-derived provider-token rules, JWT, connection strings; no generic `password=` assignments, no key-name masking, no e-mail | Not chosen: strong provider coverage but no structured-field or assignment redaction |
 | `redact-pii` 3.4.0 | MIT | 462 kB | 2022-07 | CJS; depends on `lodash` and `@google-cloud/dlp` (gRPC, Node only) | PII (names, addresses, cards, phones, e-mail) with optional Google DLP | Not chosen: Node-only heavy dependency, no releases since 2022, PII rather than credentials |
-| `@redact-pii/core`, `secret-scan`, `gitleaks-regexes` | — | — | — | — | — | Do not exist on npm |
+| `@redact-pii/core`, `secret-scan`, `gitleaks-regexes` | none | none | none | none | none | Do not exist on npm |
 | `detect-secrets` 1.0.6 | Apache-2.0 | 37 kB | 2025-10 | CJS, CLI oriented (`which`, `debug`) | Yelp-style detectors for CI and pre-commit scanning, reports rather than redacts | Not chosen: a scanner for files, not a redaction primitive |
 | `secretlint` / `@secretlint/secretlint-rule-preset-recommend` 13.0.5 | MIT | 56 kB + 633 kB | 2026-08 | ESM, Node ≥ 22 | gitleaks-class rule presets through an async linting engine | Not chosen: async file-linting API and a large dependency graph for a synchronous egress pass |
 | `@zapier/secret-scrubber` 1.1.6 | ISC | 22 kB | 2026-07 | CJS; uses `node:url`, `Buffer`, `process.env`, `create-hash` | Scrubs values you already know are secret from objects | Not chosen: value-driven (needs the secrets up front), Node-only, ISC |
@@ -407,8 +407,8 @@ credentials:
 
 ### Retention (#99 acceptance item 7)
 
-Terminal notices — `expired`, `unavailable`, `withdrawn`, `acknowledged`, and
-`attempted` with an exhausted retry budget (`noticeSettledAt()`) — no longer
+Terminal notices, `expired`, `unavailable`, `withdrawn`, `acknowledged`, and
+`attempted` with an exhausted retry budget (`noticeSettledAt()`), no longer
 stay in the ledger forever. `createAgentNoticeLedger(store, { retention })`
 takes an `AgentNoticeRetentionPolicy` (`resolveNoticeRetentionPolicy()`
 validates it; defaults are `AGENT_NOTICE_DEFAULT_RETENTION`: `terminalTtlMs`
@@ -422,7 +422,7 @@ stale decision can never drop a pending notice, and records
 snapshot); then, when the store's retained journal exceeds `maxJournalBytes`,
 the journal is compacted (`store.compact()`). Event admission runs the same
 pass after it commits, under a per-invocation key, so retention rides
-admitted events only — V1 implies no timer — and the prune key is
+admitted events only, V1 implies no timer, and the prune key is
 content-addressed on the selected ids, so a retry that selects the same set
 replays and one that selects a different set commits its own decision instead
 of an idempotency conflict. `inspect()` reports the policy, live counts by
@@ -439,7 +439,7 @@ that takes the next revision, every earlier record is deleted, exact reads
 below the baseline become `revision-unavailable` (as below a migration), the
 change cursor delivers the baseline as a `compact` discontinuity so a
 subscriber positioned before it re-reads, and the idempotency keys of the
-deleted records are remembered without their results — replaying one is
+deleted records are remembered without their results, replaying one is
 `revision-unavailable` (the commit happened; its result is gone) and reusing
 one with a different input is still `idempotency-conflict`. On SQLite the
 baseline insert, key bookkeeping, delete, head update, and the kernel-format

@@ -5,7 +5,7 @@ description: 'The agent-bundle contributor workflow: the three local gates, the 
 # Contributing
 
 This page is for people changing **agent-bundle itself**. None of it is a requirement for
-authoring a plugin — a plugin author needs `agent-bundle` and Node.js, and nothing on this page.
+authoring a plugin, a plugin author needs `agent-bundle` and Node.js, and nothing on this page.
 
 The repository is a pnpm workspace. Node.js 22.19 or later is the floor here for the same reason
 it is the floor for the framework.
@@ -26,7 +26,7 @@ so it comes first after a fresh install.
 | --- | --- | --- |
 | `pnpm check` | The local delivery gate: build, unit, route-unit, projection, and integration tests, lint, typecheck. | While working, and before every push. |
 | `pnpm check:release` | Packaging evidence alongside `pnpm check`: `npm pack` dry run, the release audit, and the packed test pools including the scaffolder template matrix. | Before touching packaging, exports, or the published surface. |
-| `pnpm check:local-ci` | The full hosted CI gate — the three-Node verify matrix plus the examples, release, and micro-eval jobs — in parallel local worktrees. | As the merge gate. |
+| `pnpm check:local-ci` | The full hosted CI gate, the three-Node verify matrix plus the examples, release, and micro-eval jobs, in parallel local worktrees. | As the merge gate. |
 
 Narrower scripts exist for iteration: `pnpm test:unit`, `pnpm test:route-unit`,
 `pnpm test:projection`, `pnpm test:integration`, `pnpm lint`, and `pnpm typecheck`. They are
@@ -38,7 +38,7 @@ faster signals, not gates.
 merges a branch here. It runs every leg in an isolated git worktree pinned to the branch's HEAD
 commit, each with its own `node_modules` and its own temp root:
 
-1. Run `pnpm check:local-ci` on the branch's HEAD commit — uncommitted changes are **not**
+1. Run `pnpm check:local-ci` on the branch's HEAD commit, uncommitted changes are **not**
    covered, and the runner warns when it finds them.
 2. If the gate is green, the branch is mergeable.
 3. Hosted CI still runs on the merged commit and stays the asynchronous post-merge safety net. If
@@ -68,7 +68,7 @@ same commit as a user-visible change:
 pnpm changeset
 ```
 
-Pick the affected packages and the bump, and describe the change from the reader's side — a
+Pick the affected packages and the bump, and describe the change from the reader's side, a
 changeset is release-note copy, not a commit message. `pnpm version-packages` applies pending
 changesets, and a Version Packages merge runs `pnpm check:release` after its pkg.pr.new previews
 resolve. Private workspace packages, including the examples and this site, are not versioned.
@@ -99,7 +99,7 @@ levels in [Testing](../guide/development/testing.mdx): a level is never reported
 a stronger one.
 
 Dependency review, package previews, and the Release packages workflow are hosted-only for
-structural reasons — the first reads GitHub's advisory database against the pull-request diff,
+structural reasons, the first reads GitHub's advisory database against the pull-request diff,
 and the other two publish to pkg.pr.new; Release packages also verifies the remote commit URLs.
 
 ## Working on the Workbench UI
@@ -132,7 +132,7 @@ pnpm docs:site:preview   # serve the built site
 
 `pnpm docs:site:build` is the gate, and the `Docs` workflow runs it on every pull request and
 deploys `main` to GitHub Pages. The build fails on a dead internal link, a dead anchor, a missing
-image, or a page that exists in one locale but not the other — the last one is why every English
+image, or a page that exists in one locale but not the other, the last one is why every English
 page under `guide/`, `reference/`, `examples/`, and `contributing/` has a Chinese counterpart with
 the same structure. TypeScript samples stay identical across locales; prose and code comments are
 translated. The generated Type API, host capability, event, notice, and diagnostics reference

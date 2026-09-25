@@ -43,11 +43,11 @@ An unclaimed plain module at `src/scripts/<name>.ts` ships through the same pipe
 declaration at all. A `scripts` entry that references the file claims it, which is how the
 example above keeps `detect-risk` explicit only because it restricts targets.
 
-Nested modules under `src/scripts/` are a hard error (`AB4808`) — the output name must be
+Nested modules under `src/scripts/` are a hard error (`AB4808`), the output name must be
 unambiguous. Opt out by prefixing a path segment with `_`, or by claiming the file with an
 explicit `scripts` entry.
 
-Every explicit config entry that references a module — `scripts`, `hooks`, `mcp`, `lib` — claims
+Every explicit config entry that references a module, `scripts`, `hooks`, `mcp`, `lib`, claims
 it out of convention, with one exception: a `bin` entry does **not** claim a direct
 `src/scripts/<name>.ts` child. The bin compiles to `dist/bin/<name>.js`, disjoint from every
 artifact, and both envelopes run the same `main`, so the module ships as the npm bin *and* the
@@ -85,7 +85,7 @@ worker does not echo React stack frames.
 
 The mode is selected from the executable's probed
 [terminal capability](./mcp.mdx#the-terminal-capability), and the component reads the same
-value from `(await agent()).terminal` (`hostSurface: 'script'`) — so a script that writes its
+value from `(await agent()).terminal` (`hostSurface: 'script'`), so a script that writes its
 own progress to stderr colors and sizes it exactly as the framework would, without probing
 `process.stdout` itself. A plain `main`-exporting script receives the same value as
 `main`'s second argument (see [Package entries](./package-entries.mdx#the-executable-envelope)).
@@ -102,7 +102,7 @@ cancellation, and raw event references. It cannot be handed a browser-supplied c
 Files under a root `assets/` directory copy byte-for-byte into the artifact root's `assets/`
 directory, once, shared by every selected host. That convention needs no configuration.
 
-A top-level `assets` list **replaces** that convention with explicit entries — literal file
+A top-level `assets` list **replaces** that convention with explicit entries, literal file
 paths, whole directories, or globs, all resolved from the project root:
 
 ```ts twoslash
@@ -133,5 +133,5 @@ npx agent-bundle validate --artifact artifact --strict
 
 ## Next
 
-- [Package entries](./package-entries.mdx) — `bin`, `lib`, the routed CLI, and the bundler escape hatch.
-- [Hooks](./hooks.mdx) — the lifecycle handlers that often invoke these scripts.
+- [Package entries](./package-entries.mdx): `bin`, `lib`, the routed CLI, and the bundler escape hatch.
+- [Hooks](./hooks.mdx): the lifecycle handlers that often invoke these scripts.

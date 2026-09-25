@@ -18,7 +18,7 @@ agent-bundle dev --root .
 
 `inspect` reads source configuration; use `validate --artifact artifact` for source-free artifact validation. `dev.runtime.provider` is an advanced optional extension: a normal project starts the dev server and Workbench without loading an RSC provider.
 
-The artifact root defaults to `artifact` for the `agent-bundle build` and `agent-bundle prepack` commands (they also emit the npm package build into `dist/`) and to `dist` for the programmatic `build()` API; set `output: { distPath: '<path>' }` in `agent-bundle.config.ts` to relocate it (Rsbuild/Rslib naming, string shorthand only) — `--output` still wins per invocation. See [Framework mode](../../docs/framework-mode.md#output).
+The artifact root defaults to `artifact` for the `agent-bundle build` and `agent-bundle prepack` commands (they also emit the npm package build into `dist/`) and to `dist` for the programmatic `build()` API; set `output: { distPath: '<path>' }` in `agent-bundle.config.ts` to relocate it (Rsbuild/Rslib naming, string shorthand only), `--output` still wins per invocation. See [Framework mode](../../docs/framework-mode.md#output).
 
 Generated executables target Node.js 22.12 or newer by default. `runtime: { node: '24.0' }` raises
 that floor (it can never be lowered), and the selected floor is recorded as `runtime.node` in the
@@ -105,13 +105,13 @@ merged last into every synthesized config and bounded by the artifact invariant 
 
 MCP App views (`src/mcp/<server>/apps/*` or `mcp.servers.<id>.apps`) compile to one self-contained
 HTML resource each and talk to their host through `createAppClient()` from the browser-safe
-`agent-bundle/app` — the MCP Apps handshake, request ids, timeouts and cancellation, JSON-RPC and
+`agent-bundle/app`, the MCP Apps handshake, request ids, timeouts and cancellation, JSON-RPC and
 result decoding, and exact parent source/origin pinning are framework-owned, so a view never
 hand-writes `postMessage` frames. `call('tool:<server>/<name>', input)` resolves the tool's
 structured result object directly (an object-rooted `resultSchema` is what makes a tool callable
-from an App), `onToolInput` / `onToolResult` / `onToolError` observe the opening call — dispatched
+from an App), `onToolInput` / `onToolResult` / `onToolError` observe the opening call, dispatched
 to the listeners registered for the tool the host's initialize result names, with a failed or
-malformed opening result arriving on `onToolError` — `onToolCancelled` reports its cancellation,
+malformed opening result arriving on `onToolError`, `onToolCancelled` reports its cancellation,
 `request()` covers `resources/read` and supported `ui/*` methods, and every wire or lifecycle
 failure is an `AppClientError` with a discriminated `code` (option misuse is a plain `TypeError` or
 `RangeError`). A request that times out or is aborted sends `notifications/cancelled`, which the
@@ -235,8 +235,8 @@ itself stays spec-conformant for other Agent Plugins clients.
 
 Cursor installation is user-scoped. Amp accepts project scope and user scope
 (its system root). Claude also accepts `--scope project` and `--scope local`;
-Codex is user-scoped. `--from` names the composite root itself —
-the directory that holds `agent-bundle.manifest.json` — and a source-free copy
+Codex is user-scoped. `--from` names the composite root itself,
+the directory that holds `agent-bundle.manifest.json`, and a source-free copy
 of that root is accepted. Identity (name, version, marketplace) and the host
 plugin document come from that manifest's `application` and `projections[]`
 rows, never from probing host files; a root whose manifest is missing, not
@@ -332,7 +332,7 @@ receipt and remove exactly what it owns:
 - Claude / Codex: `claude plugin uninstall <id> --scope <scope> --keep-data` /
   `codex plugin remove <id>`, then `plugin marketplace remove <marketplace>`
   unless another installed plugin still uses it (live row, another store
-  receipt, or — Claude — an install at another scope or in another project
+  receipt, or, Claude, an install at another scope or in another project
   recorded in `plugins/installed_plugins.json`), then the store receipt. An
   unusable `plugin list --json` fails closed (`AB7004`); a registration the
   host no longer holds is `already-absent`, so an orphaned receipt is consumed
@@ -419,7 +419,7 @@ disk, while the stable proxy command fails closed until that project dev server 
 `script.run` is a production-mounted, trusted-local Playground operation. It runs only the selected
 manifest-owned emitted script for the selected target, in a managed workspace, and preserves bounded
 stdout/stderr, exit, cancellation, and raw event references. Native prompts choose a server catalog
-selection — case, fixture, host, and pinned model — for the selected epoch rather than accepting a
+selection, case, fixture, host, and pinned model, for the selected epoch rather than accepting a
 browser-supplied command or model.
 
 Only actions started in Playground join its ordered durable trace. Hook and MCP page operations remain
@@ -466,7 +466,7 @@ longer prepares at all, the `dev.contracts` declaration cannot be read and the r
 adopted directly, exactly as an undeclared project would be.
 
 The Workbench project stream emits `dev.contract.status`, and `status()` (and `/api/project/status`)
-carries a `hostAdoption` snapshot — `mode` (`gated` or `direct`), the `adoptedEpochId` hosts serve,
+carries a `hostAdoption` snapshot, `mode` (`gated` or `direct`), the `adoptedEpochId` hosts serve,
 and the latest `contracts` evaluation. The Overview page renders it as **Host adoption**: a failed
 gate names the published build, the build hosts kept, and the failed check names grouped by route,
 and folds the gate diagnostics into the Diagnostics table; the Logs page carries the same records.
@@ -556,10 +556,10 @@ bundler configuration. Two subpaths ship that harness, and both are opt-in:
 `@rstest/core` and `react` are optional peer dependencies, so a project that
 never tests routes installs neither. Rendering also needs
 `@agent-bundle/runtime`, which the project already owns whenever it has route
-modules — the generated entries import it the same way.
+modules, the generated entries import it the same way.
 
-`agent-bundle/rstest` is the configuration helper. It compiles the project once
-— the same route-graph compilation the build performs, with no artifact build —
+`agent-bundle/rstest` is the configuration helper. It compiles the project once,
+the same route-graph compilation the build performs, with no artifact build,
 and returns a plain Rstest configuration object carrying the test manifest,
 the route loaders, React's `react-server` resolution, and the automatic JSX
 runtime:
@@ -583,11 +583,11 @@ carrying the project identity the compiler pass reported (`name`,
 source that imports it loads under the pool without a build. A pool that is
 not built from `agentBundleRstest()` (or `agentBundleBrowserRstest()`) has no
 such alias, and importing that source raises `AB4760`; build the pool that
-reaches it from the preset too — `agentBundleRstest({ include: ['tests/unit/**/*.test.ts'] })`
-— or add the alias the diagnostic names.
+reaches it from the preset too, `agentBundleRstest({ include: ['tests/unit/**/*.test.ts'] })`,
+or add the alias the diagnostic names.
 
-`agent-bundle/test` holds the helpers. `renderRoute` executes a route — by
-compiled route id, or by importing the module directly — through the real
+`agent-bundle/test` holds the helpers. `renderRoute` executes a route, by
+compiled route id, or by importing the module directly, through the real
 renderer and the real request store, and resolves to the final Agent Document:
 
 ```ts
@@ -605,18 +605,18 @@ expectDocument(document).toHaveStatus('success').toContainMarkdown('Dune').toHav
 ```
 
 `renderRoute` accepts `input`, `args` (CLI routes), request-`context`
-overrides — including a `context.progress` reporter — render `limits`, and a
+overrides, including a `context.progress` reporter, render `limits`, and a
 `signal`; it returns the document, the request-scoped progress the route
 reported, the resolved provenance, and the route's own `resultSchema`-parsed
 value. Progress is recorded whether or not the caller supplies a reporter of
 its own. `testManifest()` exposes the
 compiled route inventory, so a suite can iterate every route in process rather
-than paying for a build per route. Every failure — an unknown route, a refused
-route kind, a rejected input, a render error — names the route id, the target
+than paying for a build per route. Every failure, an unknown route, a refused
+route kind, a rejected input, a render error, names the route id, the target
 kind, and the module provenance. `loadRouteModule(id)` returns the evaluated
 module behind one compiled id through the same registered loader `renderRoute`
-uses — the module object itself, so `inputSchema`, `resultSchema`, `config`,
-and `default` are the route's own exports by reference — which replaces a
+uses, the module object itself, so `inputSchema`, `resultSchema`, `config`,
+and `default` are the route's own exports by reference, which replaces a
 hand-maintained list of static route imports in a schema-identity suite; it
 fails closed with `manifest-unavailable` outside an `agentBundleRstest()` pool
 or against a manifest the registered loaders did not come from.
@@ -632,13 +632,13 @@ is its `{ canonical, native }` payload and its `result` `undefined`);
 `RegisteredRouteId`,
 `RegisteredRouteInput`, and `RegisteredRouteResult` from `@agent-bundle/runtime`
 name that surface for wrappers. A value typed `string`, a module target, or a
-program without the generated file sees the previous types — any id, `unknown`
+program without the generated file sees the previous types, any id, `unknown`
 input and result.
 
 The registration flows to every harness surface that takes a route id or
 payload, not only `renderRoute`: `invokeMcpTool('find', { input })` and
 `getMcpPrompt` check the wire name against the registered tool/prompt names and
-type `input` from that route — of the literal `server`, when passed
+type `input` from that route, of the literal `server`, when passed
 (`RegisteredMcpServerName`, `RegisteredMcpRouteName`,
 and `RegisteredMcpRouteId` name what a `tool:<server>/<name>` id encodes); the
 contract matrices type each registered key of `fixtures` while an MCP App key
@@ -651,9 +651,9 @@ only for object-valued documents) deliberately stay untyped.
 
 Conventional request context providers (`src/providers/*`, see
 [entry conventions](../../docs/entry-conventions.md#request-context-providers-power-tier))
-are resolved on demand for every manifest-backed helper — `renderRoute`,
+are resolved on demand for every manifest-backed helper, `renderRoute`,
 `renderRouteEvents`, `invokeCli`, `runScript` (rendered scripts), and the
-in-memory MCP helpers — exactly as the
+in-memory MCP helpers, exactly as the
 generated request scopes mount them: discovered from the compiled manifest,
 loaded once per requested key per request, handed the same
 surface-specific `invocation` (`tool`, `event`, `cli`, `script`), and failing the
@@ -708,8 +708,8 @@ is never a receipt for another.
 | `route-unit` | `renderRoute`, `renderRouteEvents` | a route module renders to the document (and render-event stream) it claims |
 | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
 | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a plain or rendered argv vector resolved and run through the routed CLI's own shell, including rendered Markdown, explicit TTY, JSON, and NDJSON modes, in-process |
-| `script-dispatch` | `runScript`, `scriptJson`, `scriptNdjson` | a conventional `src/scripts/*` module run through its generated executable's contract: a rendered `.tsx` script through the rendered-script shell in-process (piped Markdown, explicit TTY, `--json`, `--ndjson`), a plain `.ts` script through the `main` process envelope as a Node process of its own over the source — fresh module state, real `process.exit`, its own argv, exit code, and streams — without bundling |
-| `workbench-surface` | `inspectWorkbenchSurface`, `workbenchSurfaceFromRouteGraph` | what the dev server would hand the Workbench for this project — the route manifest, the grouped route catalog, the state declaration, lifecycle-replay fixtures per host, and page availability — from the same compiler pass and projection functions, with no browser and no dev server |
+| `script-dispatch` | `runScript`, `scriptJson`, `scriptNdjson` | a conventional `src/scripts/*` module run through its generated executable's contract: a rendered `.tsx` script through the rendered-script shell in-process (piped Markdown, explicit TTY, `--json`, `--ndjson`), a plain `.ts` script through the `main` process envelope as a Node process of its own over the source, fresh module state, real `process.exit`, its own argv, exit code, and streams, without bundling |
+| `workbench-surface` | `inspectWorkbenchSurface`, `workbenchSurfaceFromRouteGraph` | what the dev server would hand the Workbench for this project, the route manifest, the grouped route catalog, the state declaration, lifecycle-replay fixtures per host, and page availability, from the same compiler pass and projection functions, with no browser and no dev server |
 | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio |
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent |
 | `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | a built bundle staged into an isolated host root, discovered in the emitted host format, and spawned from the installed layout |
@@ -738,7 +738,7 @@ expect(tty.stdout).toContain('\r\u001B[2K');
 `runScript` is the same idea for the `src/scripts/*` convention. The manifest
 carries every conventional script with its extension contract
 (`testManifest().scripts`), and the helper runs the module through what its
-generated `scripts/<name>.mjs` would do — never by bundling it: a rendered
+generated `scripts/<name>.mjs` would do, never by bundling it: a rendered
 `.tsx` script runs in-process through the same shell the executable uses,
 and a plain `.ts` script runs as a Node process of its own, as the
 executable does (see below):
@@ -764,8 +764,8 @@ A plain script runs as a Node process of its own over the source module, so
 the process contract is Node's rather than a simulation of it: every run
 evaluates the module afresh (module-level state never survives between runs,
 as it never survives between processes), `process.argv` is
-`[node, <source>, ...argv]`, `process.exit` ends the script for real — work
-queued after it never runs, whether or not the script caught the call —
+`[node, <source>, ...argv]`, `process.exit` ends the script for real, work
+queued after it never runs, whether or not the script caught the call,
 process-level APIs such as `process.chdir` work and affect only the script, a
 numeric `main` return goes through the real `process.exitCode` setter (`300`
 reports `44`; `1.5` exits 1 with the setter's `RangeError`), a signal that
@@ -776,8 +776,8 @@ between the `main` envelope and a self-executing module, and a non-callable
 `main` fails the way the generated executable fails. The process resolves
 relative `.js` specifiers to their TypeScript sources, transforms `.ts` with
 Node's own type transform, lowers the `.tsx` and `.jsx` helpers a plain
-script imports with the bundler's SWC — the same lowering the generated
-executable was built with — and serves `agent-bundle/meta` as the identity the build stamps from the
+script imports with the bundler's SWC, the same lowering the generated
+executable was built with, and serves `agent-bundle/meta` as the identity the build stamps from the
 manifest's `plugin`. Explicit `scripts:` configuration entries are bundled
 entries rather than routes and stay with the packed level. A rendered script
 composes the project's root layout (a script belongs to no server, so no
@@ -795,8 +795,8 @@ it reads end-of-file at once); `process.execArgv` is empty as under plain
 `node`; an aborted `signal` sends SIGTERM and, should the script trap it,
 kills the process after a one-second grace before the run rejects. A rendered
 script's own `console` and stream writes during the run land on the
-invocation's `stderr` — the generated executable forwards its render worker's
-stdout and stderr there — so `stdout` holds machine output only and nothing
+invocation's `stderr`, the generated executable forwards its render worker's
+stdout and stderr there, so `stdout` holds machine output only and nothing
 escapes into the test runner. `process.exit` from rendered code is that
 worker's exit, never the test process's: the run fails as the executable's
 shell reports it (`Generated render worker exited with code N.` on `stderr`,
@@ -809,11 +809,11 @@ module load that has not begun is started on its behalf. Every `ScriptInvocation
 
 `inspectWorkbenchSurface` answers "what would the Workbench show for this
 project?" without a browser. It runs the dev server's own preparation as the
-Workbench server constructs it — `development` mode for a configuration
+Workbench server constructs it, `development` mode for a configuration
 factory that branches on `context.mode`, the selected `configPath` for both
-the compiler pass and eval-suite discovery — and the same projection functions
-the dev server serves — `GET /api/routes/manifest` and `GET /api/lifecycles`
-byte for byte — then applies the Workbench's own grouping and navigation
+the compiler pass and eval-suite discovery, and the same projection functions
+the dev server serves, `GET /api/routes/manifest` and `GET /api/lifecycles`
+byte for byte, then applies the Workbench's own grouping and navigation
 rules:
 
 ```ts
@@ -836,8 +836,8 @@ and the RSC runtime page are artifact- or process-bound and are not projected
 here.
 
 `expectEvents` asserts over a render-event stream. `toContainSequence` is
-sequence-tolerant — an extra `progress` or `replace` frame is legal and cannot
-turn a passing render red — while a missing frame, a reordering, or a regressed
+sequence-tolerant, an extra `progress` or `replace` frame is legal and cannot
+turn a passing render red, while a missing frame, a reordering, or a regressed
 ordinal still fails; `toHaveMonotonicSequence`, `toCompleteOnce`,
 `toHaveProgress`, and `toHaveNoErrors` cover the rest of the contract.
 
@@ -861,7 +861,7 @@ remain login-gated.
 
 The contract matrix is the framework-owned generated-plugin wire-contract suite.
 Three entry points share one implementation; boundary differences are explicit
-capability flags, not forked check logic. The project supplies only fixtures —
+capability flags, not forked check logic. The project supplies only fixtures,
 valid inputs, a declared `resultCompat` policy for every in-memory tool route,
 optional `previousResults` payloads, optional `cancellation` cases, and an
 optional deterministic lifecycle transition driver with declarative
@@ -898,8 +898,8 @@ against an already-open packed session (the single packed journey owns session
 open/close). It proves process stdio evidence for surface completeness
 (including compiled MCP App resource URIs in `listResources`), fixture coverage,
 successful-path sweeps, advertised input-schema rejection, and client-side
-cancellation hygiene. It cannot load project route modules — source may be
-deleted and verified absent — so serialized-round-trip, compat-probe, and
+cancellation hygiene. It cannot load project route modules, source may be
+deleted and verified absent, so serialized-round-trip, compat-probe, and
 version-skew (including their per-lifecycle-phase variants) are reported
 `not-applicable` with an honest reason. The packed
 server validates every tool result through its bundled `resultSchema` before
@@ -907,8 +907,8 @@ returning; a successful sweep invocation is that evidence.
 
 **MCP App coverage per level.** Fixtures must cover every compiled tool, prompt,
 and resource route on the server. App routes are covered at every boundary that
-registers app resources — `packed-stdio`, `packed-deleted-source`,
-`host-install`, and `dev-epoch` — where `surface-completeness` requires the
+registers app resources, `packed-stdio`, `packed-deleted-source`,
+`host-install`, and `dev-epoch`, where `surface-completeness` requires the
 compiled `ui://` URI in `listResources` and `sweep` reads that resource. With
 the default `apps: 'auto'` an app route needs no fixture entry: `coverage`
 passes with a reason naming the auto-covered sweep. An explicit
@@ -1054,7 +1054,7 @@ Top-level `scripts` is a record of stable output names to an entry path or `{ en
 
 A project with routed `src/cli/**` commands also ships that CLI inside the plugin root as
 `bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when a command renders), a
-self-contained module run as `node <plugin-root>/bin/<plugin-name>.mjs <command>` — so a script
+self-contained module run as `node <plugin-root>/bin/<plugin-name>.mjs <command>`, so a script
 route can spawn its `../bin/<plugin-name>.mjs` sibling and a Claude skill can point at
 `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs` without a separate npm install. Every built-in host
 publishes the `cli` capability that admits it; `inspect` accounts for it as a `cli` component, and
@@ -1133,7 +1133,7 @@ harness.
   failure. Their live smoke tests are opt-in and are not part of an ordinary test run.
 - Codex exposes no authoritative Skill-activation event, so Codex activation evidence is `inferred`
   and is never reported as `observed`.
-- Comparison facets that a run did not record — semantic grader identity, host CLI version, invocation — are
+- Comparison facets that a run did not record, semantic grader identity, host CLI version, invocation, are
   labeled unverified rather than assumed aligned.
 - Semantic grading requires a native Claude harness and a signed-in Claude Code session; deterministic
   and Codex selections are refused when it is configured.

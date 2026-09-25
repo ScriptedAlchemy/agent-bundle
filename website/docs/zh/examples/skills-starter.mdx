@@ -11,7 +11,7 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 - **包名：** `@agent-bundle-example/skills-starter`
 - **公开依赖：** `agent-bundle`（`workspace:*`）
 - **Target：** `portable`、`codex`、`cursor`
-- **凭据：** 不需要——两个 eval 套件都是确定性的，只读取签入的夹具
+- **凭据：** 不需要，两个 eval 套件都是确定性的，只读取签入的夹具
 - **源码：** [`examples/skills-starter`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/skills-starter)
 
 ## 它证明什么
@@ -20,7 +20,7 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
   都按约定发现。这正是
   [Skills](../guide/authoring/skills.mdx) 中描述的编写模型。
 - **一份源码，三种宿主投影。** 同一批文档为复合插件根目录中的 portable、Codex 与 Cursor
-  投影分别降级——`skills/` 只输出一份，由所有选中宿主共同读取。Workbench 的 Source 与 Generated 视图
+  投影分别降级，`skills/` 只输出一份，由所有选中宿主共同读取。Workbench 的 Source 与 Generated 视图
   会显示某个宿主究竟是复制还是改写了一份文档。
 - **不虚构运行时。** 构建产物没有 MCP 可执行文件、App 运行时、Flight worker、状态所有者或 notice
   kernel。Workbench 直接打开静态叶子，并如实说明不支持的宿主投影，而不是伪造调用。
@@ -58,7 +58,7 @@ dependency-upgrade Skill 区分计划、实施与发布就绪，按受影响的�
    它只消费签入的证据夹具。
 5. 想演练修复，就对发布策略做一处可逆修改，按 **Rebuild**，并等待 Failed 或 Idle 结果，而不是 Building
    状态。失败时从页眉计数打开 **Problems**，同时 Application 保留上一个可用的树。恢复签入的策略
-   并重建。此时先前那次 eval 对改动后的构建已经过期——重新运行 `release-readiness`，记录当前已修复
+   并重建。此时先前那次 eval 对改动后的构建已经过期，重新运行 `release-readiness`，记录当前已修复
    状态下的证据。
 
 ## 非交互检查

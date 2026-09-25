@@ -38,8 +38,8 @@ package-only entries:
 - The package build runs for `agent-bundle build` (CLI, or
   `build({ packageOutputs: true })` through the API) and inside the
   `agent-bundle dev` rebuild loop (see “Dev-watch of the package build”
-  below). Other programmatic artifact operations — temporary artifacts,
-  evals — never write `dist/`.
+  below). Other programmatic artifact operations, temporary artifacts,
+  evals, never write `dist/`.
 - Outputs are staged and published atomically, and their provenance
   (bytes, SHA-256, sorted project-relative source inputs) is reported on the
   build result exactly like artifact files.
@@ -48,7 +48,7 @@ package-only entries:
 - An artifact `--output` that overlaps `dist` is rejected (`AB4706`).
 - The `lib` profile is deliberately thin. A package that needs a multi-format
   library matrix (UMD, multiple entries, per-format tsconfig) has outgrown the
-  profile and genuinely wants Rslib — that is the one case where a second
+  profile and genuinely wants Rslib, that is the one case where a second
   bundler config remains, by choice.
 
 ### Declarations
@@ -57,7 +57,7 @@ package-only entries:
 from the project (add it as a devDependency) and compiles the lib entry's
 source directory as its own program: compiler options come from the project
 `tsconfig.json` (via `extends`), `rootDir` is pinned to the entry's directory,
-and only that subtree is included — test files never fail or pollute the
+and only that subtree is included, test files never fail or pollute the
 package build. Declarations land flat under `dist/`, one `.d.ts` per source
 module.
 
@@ -72,14 +72,14 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/index.ts` | Library output with declarations. | `lib: false` |
 | `src/mcp/<server-id>.ts` | Stdio entry for the declared MCP server `<server-id>` that names no `entry`, `command`, or `url`. | Declare `entry` explicitly |
 | `src/mcp/<server>/{tools,resources,prompts}/*.{ts,tsx}` | Generated MCP server routes; path supplies identity. Tool modules default-export a direct `defineTool({ inputSchema, resultSchema, ... }, handler)` call; resources and prompts supply their static `config`, schemas, and default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote` |
-| `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required (`AB4812`), and two App routes of one server sharing a URI are `AB4829` (the same URI on different servers is not a collision). An optional `config.template` HTML shell resolves relative to the route module like its imports (`'./dashboard.html'`) and reports `AB4827` when missing. Tools, resources, and prompts reference the App from their own static `config` with `appResourceUri('<app>')` from `agent-bundle/routes` or a shared `const` string literal instead of repeating the `ui://` literal. The view talks to its host through `createAppClient()` from the browser-safe `agent-bundle/app` (see [`agent-bundle/app`](#agent-bundleapp--the-app-side-bridge-client)), typed by the generated `AppRegister` augmentation. | Use a custom server or prefix the file with `_` |
-| `src/scripts/<name>.ts` | Plain script compiled once to `scripts/<name>.mjs` in the plugin root, shared by every selected host — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). A `bin` entry that references the file does **not** claim it: the module ships as both the npm bin and the artifact script (see [Which config keys claim a conventional module](#which-config-keys-claim-a-conventional-module)); export `main` or make the module self-executing, because a `default`-only module would run as the bin but ship as an inert script (`AB4738`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
-| `src/scripts/<name>.tsx` | Rendered script: the default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. A `bin` entry that references a rendered script is `AB4737` unless the module exports both the default component (for the script) and a named `main` (for the bin envelope); with both, the module serves both surfaces. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
+| `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required (`AB4812`), and two App routes of one server sharing a URI are `AB4829` (the same URI on different servers is not a collision). An optional `config.template` HTML shell resolves relative to the route module like its imports (`'./dashboard.html'`) and reports `AB4827` when missing. Tools, resources, and prompts reference the App from their own static `config` with `appResourceUri('<app>')` from `agent-bundle/routes` or a shared `const` string literal instead of repeating the `ui://` literal. The view talks to its host through `createAppClient()` from the browser-safe `agent-bundle/app` (see [`agent-bundle/app`](#agent-bundleapp-the-app-side-bridge-client)), typed by the generated `AppRegister` augmentation. | Use a custom server or prefix the file with `_` |
+| `src/scripts/<name>.ts` | Plain script compiled once to `scripts/<name>.mjs` in the plugin root, shared by every selected host, the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). A `bin` entry that references the file does **not** claim it: the module ships as both the npm bin and the artifact script (see [Which config keys claim a conventional module](#which-config-keys-claim-a-conventional-module)); export `main` or make the module self-executing, because a `default`-only module would run as the bin but ship as an inert script (`AB4738`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
+| `src/scripts/<name>.tsx` | Rendered script: the default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract, plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. A `bin` entry that references a rendered script is `AB4737` unless the module exports both the default component (for the script) and a named `main` (for the bin envelope); with both, the module serves both surfaces. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project), plus the same executable as `bin/<plugin-name>.mjs` in the plugin root whenever a selected host publishes the `cli` capability (all built-in hosts do). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
-| `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; `.ts` handlers return lightweight results; `.tsx` handlers render JSX; `.ts` handlers can return `ctx.render('./name.view.js', data)` to load a separate `.view.tsx` sibling. Rendering defaults to standalone. The default Server Component receives `AgentEventRouteProps<E>` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. `canonical.payload` is the family's cross-host reading of the envelope (#466) — the fields at least two hosts report (`toolName`, `toolInput`, `toolResponse`, `sessionId`, `transcriptPath`, `cwd`, `prompt`, `agentId`/`agentType`, `reentry`, …), each as `{ value, nativeKey }` naming the host key it came from and absent when the host did not send it; `E` narrows it to the route's family. The per-family field table is `agentEventPayloadFields` and the per-host key table `agentEventPayloadNativeKeys` (`routes/events.ts`), mirrored under `hooks.eventRoutes.<event>.payload` in each pinned capability table so the generated events reference documents the mapping per host. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
+| `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; `.ts` handlers return lightweight results; `.tsx` handlers render JSX; `.ts` handlers can return `ctx.render('./name.view.js', data)` to load a separate `.view.tsx` sibling. Rendering defaults to standalone. The default Server Component receives `AgentEventRouteProps<E>` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. `canonical.payload` is the family's cross-host reading of the envelope (#466), the fields at least two hosts report (`toolName`, `toolInput`, `toolResponse`, `sessionId`, `transcriptPath`, `cwd`, `prompt`, `agentId`/`agentType`, `reentry`, …), each as `{ value, nativeKey }` naming the host key it came from and absent when the host did not send it; `E` narrows it to the route's family. The per-family field table is `agentEventPayloadFields` and the per-host key table `agentEventPayloadNativeKeys` (`routes/events.ts`), mirrored under `hooks.eventRoutes.<event>.payload` in each pinned capability table so the generated events reference documents the mapping per host. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
-| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal, host, session, workspace, plugin, lineage, state?, notices? }` — the request's observed identity (plugin root included) and lineage plus read-only views of the mounted state (`read`) and notice (`inbox`, `published`) handles; its value is mounted at `await (await agent()).provider("<camelCaseName>")` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
-| `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route — generated MCP tools, resources, and prompts, rendered routed CLI commands, projected MCP commands, and rendered scripts. Event routes are never wrapped. | Rename to `_layout.tsx` |
+| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal, host, session, workspace, plugin, lineage, state?, notices? }`, the request's observed identity (plugin root included) and lineage plus read-only views of the mounted state (`read`) and notice (`inbox`, `published`) handles; its value is mounted at `await (await agent()).provider("<camelCaseName>")` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
+| `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route, generated MCP tools, resources, and prompts, rendered routed CLI commands, projected MCP commands, and rendered scripts. Event routes are never wrapped. | Rename to `_layout.tsx` |
 | `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode |
 
 Route and package entry conventions match `.ts` and `.tsx` files exactly;
@@ -96,7 +96,7 @@ from every artifact output, and the bin envelope and the artifact-script
 envelope run the same `main`, so a direct `src/scripts/<name>` child a `bin`
 entry references stays a conventional script and ships on both surfaces. (A
 nested `src/scripts/<dir>/<name>` module or one whose stem is not a safe route
-identity — which the flat scripts artifact could not ship anyway — stays
+identity, which the flat scripts artifact could not ship anyway, stays
 claimed, so a bin-only entry there never turns into `AB4808` or `AB4803`.)
 `inspect` shows such a module under both `packageBuild.bins` and `scripts`; no
 diagnostic fires, because that is the intended "same entry, npm bin + hook
@@ -109,7 +109,7 @@ its module like every other key.
 | `hooks.<event>[].handler` | every route directory | Claimed: the module is a hook handler compiled under `hooks/`, not an artifact script. |
 | `mcp.servers.<id>.entry`, `mcp.servers.<id>.apps.<app>.entry` / `.template` | every route directory | Claimed: the module is the server or App entry compiled under `mcp/` or `mcp-apps/`. |
 | `lib.entry` | every route directory | Claimed: the module is the library entry compiled to `dist/<stem>.js`, not an artifact script. |
-| `bin.<name>` | `src/cli/**`, `src/events/**`, `src/mcp/**`, `src/providers/*`, and any `src/scripts/**` module that is nested or unsafely named — **not** a safely named direct `src/scripts/<name>` child | Not claimed: the module ships as both `dist/bin/<name>.js` and `scripts/<name>.mjs`. The module must export `main` or be self-executing: a plain `default`-only module is `AB4738`, and a rendered `src/scripts/<name>.tsx` must export both the default component and `main`, otherwise `AB4737`. |
+| `bin.<name>` | `src/cli/**`, `src/events/**`, `src/mcp/**`, `src/providers/*`, and any `src/scripts/**` module that is nested or unsafely named, **not** a safely named direct `src/scripts/<name>` child | Not claimed: the module ships as both `dist/bin/<name>.js` and `scripts/<name>.mjs`. The module must export `main` or be self-executing: a plain `default`-only module is `AB4738`, and a rendered `src/scripts/<name>.tsx` must export both the default component and `main`, otherwise `AB4737`. |
 
 To ship a `src/scripts/` module as a bin only, prefix a path segment with `_`
 (`src/scripts/_hauler.ts`): private segments opt the module out of discovery
@@ -118,14 +118,14 @@ while the `bin` entry still references it explicitly.
 ### Config beside a route-generated MCP server
 
 A `mcp.servers.<server>` block whose `<server>` the route graph compiles in
-`generated` mode does not redeclare the server — its entry is the route
-modules — it **augments** it. This is the precedence table for one generated
+`generated` mode does not redeclare the server, its entry is the route
+modules. It **augments** it. This is the precedence table for one generated
 server (config wins, conventions fill):
 
 | Field | Source of truth | Config declaration |
 | --- | --- | --- |
 | Entry, transport (`stdio`), `cwd` (plugin root) | `src/mcp/<server>/{tools,resources,prompts}/*` and the generated stdio shell | `entry`, `command`, or `url` is `AB4340` under `routes.servers.<server>: 'generated'` and `AB4800` without an explicit mode; `transport: 'stdio'` is accepted, any other transport is `AB4308`; `cwd` is `AB4309`; `headers` is `AB4310`. |
-| `env` | — | Applied verbatim beneath the injected plugin-root anchor (`AB4312` shape rules). |
+| `env` | none | Applied verbatim beneath the injected plugin-root anchor (`AB4312` shape rules). |
 | `args` | The content-hashed entry path | Appended after the entry path (`AB4311` shape rules). |
 | `targets` | The project's selected targets | Replaces the default selection (`AB4305` shape rules). |
 | `apps` | `src/mcp/<server>/apps/*` routes | Config-side Apps are compiled and registered on the generated server beside the route-declared ones (`AB432x` rules; `AB4334` checks App targets against the declared server targets). The route-declared Apps take part in the collision checks: reusing a route App's name is `AB4325`, reusing its `resourceUri` under another name is `AB4330`. |
@@ -145,9 +145,9 @@ Volatile lifetimes use the memory driver. Request lifetime opens and releases
 fresh project and notice stores per invocation; process lifetime shares them
 for the generated worker or executable process.
 
-Workspace-durable artifact shells — generated MCP workers, artifact CLI bins
+Workspace-durable artifact shells, generated MCP workers, artifact CLI bins
 and their render workers, rendered script workers, and standalone hook
-wrappers — call `resolvePluginRoot`
+wrappers, call `resolvePluginRoot`
 with `stateAnchor: 'user-data'`. `AGENT_BUNDLE_PLUGIN_ROOT` still names the
 code root and otherwise falls back to the artifact root derived from the
 shell's own location. An expanded, non-blank `AGENT_BUNDLE_STATE_ROOT`
@@ -173,9 +173,9 @@ native or derived; `stateSource` does the same independently for the state
 root. An unexpanded `${…}` token in either root override is treated as unset
 (and reported once on stderr), never joined into a path. Notice authorization is deliberately permissive
 in generated mounting v1 (`authorized`); recipient/principal matching remains
-enforced by the ledger — every generated scope mounts the request's `lineage`
+enforced by the ledger, every generated scope mounts the request's `lineage`
 on the notice principal, so `recipient.conversation` / `recipient.root` are
-matched against `request.lineage` on every surface — while application
+matched against `request.lineage` on every surface, while application
 authorization policy is deferred.
 
 Each cross-request notice route is selected from the host's pinned
@@ -211,14 +211,14 @@ to both the worker's `createGeneratedRuntimeState` and the server's
 row may name a `sensitivity` ceiling (`public | internal | secret`, absent
 means `internal`) with dated `sensitivityEvidence`, and the ledger withholds a
 notice whose author-declared `sensitivity` exceeds the ceiling of the route
-about to carry it — the inbox omits it, event admission neither authorizes nor
-attempts it, the signaller never announces it — recording the refusal on the
+about to carry it, the inbox omits it, event admission neither authorizes nor
+attempts it, the signaller never announces it, recording the refusal on the
 notice (`withheld[route]`) instead of moving its state. `internal` content
 (the default) is passed through the runtime's secret pass on every route
-before it leaves the store — `flare-redact`, an exact-pinned dependency of
+before it leaves the store, `flare-redact`, an exact-pinned dependency of
 `@agent-bundle/runtime`, with its default detectors and every finding replaced
 whole by `[REDACTED]`; the runtime README's notices section lists the coverage
-and the libraries evaluated — `public` travels as authored;
+and the libraries evaluated, `public` travels as authored;
 `secret` travels as authored only where the row admits it. The built-in hosts
 admit `secret` on `current-response` and `next-event` and `internal` on
 `mcp-inbox` and `mcp-resource-updated`; the pinned tables carry the dated
@@ -241,13 +241,13 @@ facts of one installed store, read through `AgentNoticeLedger.inspect()`.
 `defineState({ ... })` accepts an optional `budgets` runtime policy. Omitted
 fields resolve to these fail-closed defaults:
 
-- `maxEventBytes: 262_144` — UTF-8 bytes in the canonical JSON of each
+- `maxEventBytes: 262_144`: UTF-8 bytes in the canonical JSON of each
   schema-validated event payload.
-- `maxStateBytes: 1_048_576` — UTF-8 bytes in the canonical JSON of the
+- `maxStateBytes: 1_048_576`: UTF-8 bytes in the canonical JSON of the
   initial state and each event, reset, or migration result.
-- `maxRevisions: 100_000` — total journal revisions admitted for
+- `maxRevisions: 100_000`: total journal revisions admitted for
   caller-initiated events and resets.
-- `maxCommitMs: 5_000` — wall-clock milliseconds from mutation validation
+- `maxCommitMs: 5_000`: wall-clock milliseconds from mutation validation
   start until the commit is ready to append.
 
 Each override must be an integer of at least 1. A definition whose initial
@@ -288,10 +288,10 @@ interface AgentProviderContext {
 values the route will read, provenance and unavailable reasons included.
 `state` is present for projects that declare `src/state.ts` and `notices` for
 projects whose scope mounts the notice ledger; both are the real request
-handles narrowed by construction to their read paths (#459) — `inbox()` is
+handles narrowed by construction to their read paths (#459), `inbox()` is
 what is pending for this request's principal, `published()` what became of
-the notices it published (#460) — so a provider can expose a derived view of
-shared state — a topology, a summary, a peers list — but never dispatch a
+the notices it published (#460), so a provider can expose a derived view of
+shared state, a topology, a summary, a peers list, but never dispatch a
 state event or publish, acknowledge, or withdraw a notice: those stay
 route-only. Providers also run outside the request's async context, so
 `agent()` and `useAgent()` inside a factory throw `outside-invocation` rather
@@ -324,7 +324,7 @@ spawn the artifact.
 ### Shared layouts
 
 A layout is the conventional composition point around every rendered route
-of a project — the `layout.tsx` idea from page frameworks, applied to Agent
+of a project, the `layout.tsx` idea from page frameworks, applied to Agent
 Documents. `src/layout.{ts,tsx}` wraps every rendered route (generated MCP
 tools, resources, and prompts; rendered `src/cli/**` commands; projected MCP
 commands; rendered `src/scripts/*.tsx`), and `src/mcp/<server>/layout.{ts,tsx}`
@@ -349,15 +349,15 @@ export default function Layout({ children, route }: AgentLayoutProps) {
 
 The layout renders `Agent.Result` around `children`, the route's rendered
 element. An `Agent.Result` that declares no `value` is a **container**: when
-it directly holds a result that does carry a value — the route's own
-`<Agent.Result value={...}>` — the runtime merges the two while decoding the
+it directly holds a result that does carry a value, the route's own
+`<Agent.Result value={...}>`, the runtime merges the two while decoding the
 document. The route's value becomes the document value, its children take the
 inner result's place, and `metadata` combines: two JSON objects merge key by
 key with the container winning conflicts, any other shape lets the container
 win outright, and a container without metadata adopts the inner one. A route
 therefore keeps its result value, its `structuredContent`, and its rendered
 content whether or not a layout exists; what the layout adds is the shared
-shell around it — a heading, a trailing `Agent.Context` note, document
+shell around it, a heading, a trailing `Agent.Context` note, document
 metadata. Because the MCP projector exposes root metadata as the result's
 `_meta`, a layout that declares metadata does change the MCP response there;
 a layout without metadata leaves `_meta` exactly as the route authored it.
@@ -367,9 +367,9 @@ document contract under a layout exactly as it does without one.
 
 The generated worker resolves the route's element **before** the layout chain
 renders, then wraps it. That keeps failure semantics identical with and
-without a layout — a route that throws rejects the whole render (CLI exit 1
+without a layout, a route that throws rejects the whole render (CLI exit 1
 with the route's message; on MCP the SDK's default `isError` tool result or a
-JSON-RPC error, with no layout `_meta` — see
+JSON-RPC error, with no layout `_meta`, see
 [What happens when a route throws](framework-mode.md#what-happens-when-a-route-throws))
 instead of being downgraded to a represented `boundary` error beneath the
 layout's shell. The trade-off is
@@ -407,7 +407,7 @@ convention rather than a property of the module.
 
 Conventional route components receive only their surface props, such as
 `{ input, signal }`. They read transport-owned request context with
-`await agent()` from `@agent-bundle/runtime` — or, in a synchronous component
+`await agent()` from `@agent-bundle/runtime`, or, in a synchronous component
 or utility, `useAgent()`, which returns the identical handle under the same
 lease rules without suspending. The handle exposes the
 invocation plus `host`, `session`, `actor`, and `workspace` identity axes.
@@ -421,9 +421,9 @@ axes remain honestly unavailable. `actor` is the HTTP-authenticated MCP
 client and nothing else: hook-driven event scopes observe it as unavailable
 rather than receiving a fabricated value, and the framework never derives an
 operator identity (a signed-in user, an email) from any host payload or
-environment — hosts that send one (Cursor's `user_email`) have it passed
-through inside `native` untouched and unread. Who the *conversation* is —
-its parent, its root, whether it is a subagent — is the
+environment, hosts that send one (Cursor's `user_email`) have it passed
+through inside `native` untouched and unread. Who the *conversation* is,
+its parent, its root, whether it is a subagent, is the
 [`lineage` axis](#conversation-lineage-requestlineage).
 
 Handlers authored with `defineTool` receive parsed schema output and the request context as
@@ -457,7 +457,7 @@ surface-specific `invocation.kind` the generated executable would use.
 conversation, and are we a subagent (of whom)?". It is the only place the
 framework places a request in the host's conversation tree; there is no
 separate operator or user identity axis, by design. `(await agent()).lineage`
-is an `Observed<AgentLineage>` with one shape on every surface — event routes,
+is an `Observed<AgentLineage>` with one shape on every surface, event routes,
 generated MCP tools, routed CLI commands, and rendered scripts:
 
 ```ts
@@ -490,8 +490,8 @@ interface AgentLineagePeer {
 
 `tree` is the other half of "where am I": the live conversations around this
 one, read from the same registry that placed the request (#457). It lists
-only what the registry holds — no node is invented, and a stopped node is not
-listed — scoped to what the conversation may see: everything alive under its
+only what the registry holds, no node is invented, and a stopped node is not
+listed, scoped to what the conversation may see: everything alive under its
 own root (`siblings`, oldest first, the root itself included for a subagent,
 so a coordinator sees the whole live tree it belongs to; filter by `parent`
 for same-parent siblings), its direct `children`, and the other live `roots`
@@ -505,14 +505,14 @@ still answers "who am I" but not "who else is here". It travels as plain
 frozen data, so the Flight worker receives it unchanged and route-unit tests
 inject it through the same `context.lineage` seam.
 
-`resolution` is the trust level of `parent`/`root`/`depth`: `native` — the
+`resolution` is the trust level of `parent`/`root`/`depth`: `native`, the
 host named them on this payload (a Claude/Codex root, a Codex tool call's
-`_meta`); `registry` — the warm runtime's registry placed the conversation
+`_meta`); `registry`, the warm runtime's registry placed the conversation
 when its subagent started, matching the start to the newest unclaimed spawn
-call; `confirmed` — that registry edge, and every edge above it up to the
+call; `confirmed`, that registry edge, and every edge above it up to the
 root, was afterwards named by the host itself (Claude's `Agent` PostToolUse
 carries the spawn `tool_use_id`, the caller's identity and
-`tool_response.agentId`, the child); `inferred` — ordering inference the host
+`tool_response.agentId`, the child); `inferred`, ordering inference the host
 forced (Cursor binds a child conversation to the single pending
 `subagentStart`).
 
@@ -536,7 +536,7 @@ for every event by the id the payload carries. The observed host vocabulary
 A Claude subagent is placed only when its spawning pre-tool hook
 (`Agent`/`Task`) was observed, so projects that want `parent`/`depth` for
 subagents route `tool/before` alongside `agent/start`; a start with no
-claimable spawn — none open, or several parents with one — stays
+claimable spawn, none open, or several parents with one, stays
 `id-not-resolvable`, and the registry keeps what the start said (id, type,
 time, and a stop that follows) as an unplaced start.
 
@@ -544,14 +544,14 @@ A Codex thread carries its own evidence: the rollout its payload names opens
 with a `session_meta` line recording the spawning thread, the depth, and the
 `agent_path`, so the registry places it from that file (`resolution:
 'transcript'`, provenance `derived`) at `SubagentStart`, on the first hook of
-a thread it never saw start (or held unplaced), and at `SubagentStop` — no
+a thread it never saw start (or held unplaced), and at `SubagentStop`, no
 spawn ordering involved, and two parents with unclaimed spawns are no longer
 ambiguous. The `spawn_agent` call is still claimed, by parent and by the
 `agent_path` its `PostToolUse` `tool_response.task_name` carried, so
 `subagent.toolCallId` is exact even for same-parent siblings. Only when the
 rollout is unreadable does Codex fall back to the Claude rule (`resolution:
 'registry'`), and a parent inferred that way is corrected at `SubagentStop`,
-— from the child's own rollout (`agent_transcript_path`, exact parent and
+from the child's own rollout (`agent_transcript_path`, exact parent and
 depth) when it is readable by then, else from the parent rollout in
 `transcript_path` (`rollout-<timestamp>-<thread id>.jsonl`); descendants move
 with it.
@@ -607,8 +607,8 @@ elimination and refuses when elimination is not possible:
   stays `id-not-resolvable` until all but one have stopped; after a registry
   restart it stays unresolved, because nothing distinguishes it from a root.
 - A blind binding is undone the moment the bound conversation carries any
-  root-shaped event (`prompt/submit`, `stop`, `session/end`, `compact/*`) —
-  subagents never do — so a second chat tab whose prompt predates the registry
+  root-shaped event (`prompt/submit`, `stop`, `session/end`, `compact/*`),
+  subagents never do, so a second chat tab whose prompt predates the registry
   (Cursor desktop restarts mid-conversation, and many conversations are first
   seen on a tool hook) becomes the root it is, anything it started meanwhile is
   re-rooted beneath it, and the pending child waits for its real conversation
@@ -623,17 +623,17 @@ storeless registry keeps an in-memory ledger of applied keys). A project with
 several generated MCP servers attaches its event routes to one of them; the
 others resolve tool calls by re-reading the shared journal, so their
 `request.lineage` is populated only when the project's state is
-workspace-durable — volatile and stateless multi-server projects report
+workspace-durable, volatile and stateless multi-server projects report
 `id-not-resolvable` from the servers that host no event routes.
 
 `resolution` says which of those paths produced the answer. When none can,
 the axis is `unavailable` with a typed reason: `no-subagent-events` (the
-target defines no subagent families — portable), `id-not-resolvable` (the
+target defines no subagent families, portable), `id-not-resolvable` (the
 payload names an agent the registry never saw start, e.g. a cold runtime),
 `cloud-agent-no-user-hooks` (Cursor cloud agents run no user hooks),
 `no-shared-runtime` (a standalone hook process holds no registry; Claude and
 Codex root payloads still resolve to depth 0 from the payload alone, and a
-Codex subagent payload resolves fully from the rollout it names —
+Codex subagent payload resolves fully from the rollout it names,
 `resolveStandaloneLineage`),
 `unsupported-surface` (routed CLI and rendered scripts run outside any host
 conversation), or `not-provided` (no registry was mounted). Per-host
@@ -652,7 +652,7 @@ process's output streams are, computed **once per invocation by the framework
 shell** with the same rules that pick the CLI output mode, so a route that
 colors its own stderr or sizes its own table agrees with the framework's
 rendering instead of re-probing `process.stdout` per plugin. It is information
-only — never a writer — and it never changes what `Agent.*` components render.
+only, never a writer, and it never changes what `Agent.*` components render.
 
 ```ts
 interface AgentTerminal {
@@ -675,7 +675,7 @@ into emitted executables as `agent-bundle/terminal-capability`) reads
 the descriptors (`tty`; any other open descriptor is `pipe`; a closed one is
 `none`; `sharesTarget` compares device and inode), and resolves color in the
 informal standards' precedence: `FORCE_COLOR` decides outright when set
-(`0`/`false` off; empty, `1`, or `true` basic; `2` 256; `3` truecolor — Node's
+(`0`/`false` off; empty, `1`, or `true` basic; `2` 256; `3` truecolor, Node's
 reading), then `CLICOLOR_FORCE` forces color on even for a pipe at the depth
 `COLORTERM`/`TERM` advertise, `NO_COLOR` (any non-empty value) and `CLICOLOR=0`
 force it off, `TERM=dumb` renders none, and otherwise a terminal renders at its
@@ -690,10 +690,10 @@ Per surface, the value the generated request scope mounts:
 | --- | --- | --- | --- |
 | Routed CLI executable (npm-root and plugin-root `bin/<name>.mjs`), plain or rendered command, projected MCP command | `cli` | Probed from the executable's own process; a rendered command's worker thread receives the executable's probe, never its own pipes. Machine output owns fd 1, so `stdout` describes where the rendered document lands and `stderr` the channel a route may write to itself. | `native` |
 | Rendered script (`scripts/<name>.mjs` from `src/scripts/<name>.tsx`) | `script` | Probed, as above. | `native` |
-| Generated MCP server (any transport) | `mcp` | `none` on both, `color: 'none'`, `sharesTarget: false` — stdout is the protocol wire and stderr the host's log. Never probed, whatever the descriptors are. | `derived` |
-| Event route (shared runtime or standalone hook process) | `hook` | `none` on both — stdout is the host's hook envelope. Never probed. | `derived` |
-| Workbench lifecycle replay | `workbench` | `none` on both — the document renders into a panel. | `derived` |
-| Custom host calling `runAgentRequest` without `terminal` | — | `unavailable` (`not-provided`) | — |
+| Generated MCP server (any transport) | `mcp` | `none` on both, `color: 'none'`, `sharesTarget: false`, stdout is the protocol wire and stderr the host's log. Never probed, whatever the descriptors are. | `derived` |
+| Event route (shared runtime or standalone hook process) | `hook` | `none` on both, stdout is the host's hook envelope. Never probed. | `derived` |
+| Workbench lifecycle replay | `workbench` | `none` on both, the document renders into a panel. | `derived` |
+| Custom host calling `runAgentRequest` without `terminal` | not applicable | `unavailable` (`not-provided`) | not applicable |
 
 Plain `main`-exporting scripts and bins have no request scope, so the
 executable envelope hands them the same probe directly as the second argument
@@ -711,7 +711,7 @@ real child process's probe (two pipes). A test that wants other values injects
 
 ### Migration nudges
 
-Source validation reports **informational** nudges (never errors — migrations
+Source validation reports **informational** nudges (never errors, migrations
 stay optional) when a project exhibits a pre-convention pattern: `AB4730` for
 a self-connecting stdio entry that a default-exported factory would upgrade
 to the framework lifecycle shell, and `AB4731`/`AB4732`/`AB4733` when
@@ -735,7 +735,7 @@ synthesis and invariant assertions as all generated executables.
 
 ### The executable envelope (bin + Scripts)
 
-A `bin` entry — or an artifact `Script` — whose module exports `main` (or a
+A `bin` entry, or an artifact `Script`, whose module exports `main` (or a
 default function for bin entries) receives the generated process envelope:
 
 ```ts
@@ -753,14 +753,14 @@ numeric return as the process exit code, and lets an escaped rejection surface
 through Node's top-level failure path (stack to stderr, exit code 1).
 `terminal` is the process's [terminal capability](#terminal-capability-requestterminal)
 (#511), probed once before `main` runs by the dependency-free
-`agent-bundle/terminal-capability` module the envelope aliases in — plain
+`agent-bundle/terminal-capability` module the envelope aliases in, plain
 scripts and bins load no Effect runtime and no `@agent-bundle/runtime` for it.
 Its `hostSurface` is `cli` for a package bin (`dist/bin/<name>.js` for an authored bin,
 `dist/bin/<name>.mjs` for the manifest-selected routed CLI) and
 `script` for an artifact script (`scripts/<name>.mjs`); a module shipped on
 both surfaces sees the surface it was launched from. A `main` declared with
-one parameter keeps working — the second argument is simply unread.
-Self-executing modules (no `main` export) bundle directly, byte for byte —
+one parameter keeps working, the second argument is simply unread.
+Self-executing modules (no `main` export) bundle directly, byte for byte,
 existing Scripts keep their behavior and receive no probe.
 
 ### The routed CLI shell (#102 stages 2-3)
@@ -810,7 +810,7 @@ stdout, and maps exit codes deterministically (0 success or the result's
 or input failure; 130/143 on SIGINT/SIGTERM, which reach the route's
 `AbortSignal`). `--json` is accepted on every command; plain commands
 already emit the canonical JSON document. Routed CLI projects need
-`@agent-bundle/runtime` as a dependency — the generated executable installs
+`@agent-bundle/runtime` as a dependency, the generated executable installs
 the request context through it.
 
 Runtime schemas may be imported or constructed by factories. Inspection reads literal
@@ -848,7 +848,7 @@ invocation; raw Flight bytes never reach the terminal). The four output
 modes: an interactive TTY updates progress in place and prints the final
 document as Markdown; piped output emits exactly one final Markdown document
 with no partial fallbacks; `--json` emits the canonical validated final
-value; `--ndjson` emits the sequence-numbered render-event stream — an
+value; `--ndjson` emits the sequence-numbered render-event stream, an
 Agent Bundle CLI/script output dialect, not MCP JSON-RPC, and never written
 as non-MCP bytes to an MCP server's stdout. Diagnostics stay on stderr;
 machine output owns stdout. Rendered scripts
@@ -859,8 +859,8 @@ machine output owns stdout. Rendered scripts
 
 Hooks, skills, script routes, and npm consumers all use the **plugin root**,
 so the build emits one compiled command graph there whenever a selected host's
-adapter publishes the `cli` capability — all built-in hosts do (`claude`,
-`codex`, `cursor`, `portable`) — because the artifact root is
+adapter publishes the `cli` capability, all built-in hosts do (`claude`,
+`codex`, `cursor`, `portable`), because the artifact root is
 already a plain directory Node executes `mcp/` and `scripts/` files from.
 The same `bin/<plugin-name>.mjs` is also emitted when `web` is configured,
 even if `src/cli/**` compiled no commands (the bin then carries only the
@@ -934,7 +934,7 @@ export default defineConfig({
 ```
 
 `true` selects every eligible tool. A tool that already has a colocated
-`<tool>.cli.{ts,tsx}` is not eligible — the explicit projection is the
+`<tool>.cli.{ts,tsx}` is not eligible, the explicit projection is the
 command for that operation. Object-form `include` defaults to every
 eligible tool when omitted; `exclude` removes matches afterward. Patterns
 match the `<server>:<tool>` identity and support only literal text plus `*`
@@ -959,8 +959,8 @@ A tool whose validated result carries an integer `exitCode` can declare
 domain failures exit nonzero. Other projected tools retain the success-status
 policy and exit zero only for a successful rendered document.
 
-Every rendered route — generated MCP tool, resource, or prompt, projected MCP
-command, rendered `src/cli/**` command — runs inside one render session whose
+Every rendered route, generated MCP tool, resource, or prompt, projected MCP
+command, rendered `src/cli/**` command, runs inside one render session whose
 wall clock defaults to `DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs` (60 s). A
 route whose legitimate work runs longer declares `config.render:
 { maxElapsedMs }` (#454): a positive integer of milliseconds up to
@@ -992,26 +992,26 @@ The module exports a static `config` that satisfies `CliProjectionConfig`
 from `agent-bundle/routes` (the same extract grammar as a route `config`)
 and, optionally, a sync or async `mapInput`:
 
-- `command` — path segments; default `[tool]`; each must pass
+- `command`: path segments; default `[tool]`; each must pass
   `safeIdentitySegment`.
-- `description` — help text; default: the tool's `config.description`.
-- `positionals` — canonical keys consumed as bare arguments, in order
+- `description`: help text; default: the tool's `config.description`.
+- `positionals`: canonical keys consumed as bare arguments, in order
   (same rules as a `src/cli` route).
-- `flags` — keyed by the canonical key of the tool's
+- `flags`: keyed by the canonical key of the tool's
   `RouteContract.input`. Each entry may set `name` (CLI spelling,
   kebab-case, no leading dashes; default `kebab(key)`), `aliases` (extra
   long-form spellings), `description` (overrides schema `.describe()`),
   `default` (CLI-only, applied by the shell before `mapInput`), and
   `required: false` (relax a canonical-required key; legal only when
   `mapInput` is exported).
-- `aliases` — command aliases (same rules as a `src/cli` route).
-- `confirm` — default `!(tool config.annotations.readOnlyHint === true)`.
-- `exitCode` — `'result'` or `'zero'`; default: the tool's
+- `aliases`: command aliases (same rules as a `src/cli` route).
+- `confirm`: default `!(tool config.annotations.readOnlyHint === true)`.
+- `exitCode`: `'result'` or `'zero'`; default: the tool's
   `config.exitCode ?? 'zero'`.
-- `input` — `'json'` (#746): the command takes the tool's canonical input
+- `input`: `'json'` (#746): the command takes the tool's canonical input
   as one JSON object through `--input`, exactly as the bulk `mcpCommands`
   projection does (`parseMcpCommandInput` in `cli-entry.ts` runs the same
-  JSON path for both), and never reads the tool's argv grammar — the mode
+  JSON path for both), and never reads the tool's argv grammar, the mode
   for a schema the grammar cannot express (a nested object, a union, a
   transform), which a flag-bound projection over it reports as `AB4814`
   with a recovery that names this mode. `compileProjectedCliCommands`
@@ -1028,7 +1028,7 @@ is recorded statically (`scanRouteModuleExports`) and loaded only by the
 CLI bin; the MCP worker never sees the module. `mapInput` is a surface
 adapter, not domain logic: it only reshapes or defaults argv into the
 canonical input (renames, splitting lists, deriving a working directory).
-Domain validation and behaviour stay in the operation — its
+Domain validation and behaviour stay in the operation, its
 `inputSchema` refinements and its component. A mapper that recreates
 command logic is the duplication the projection exists to remove. A
 contract problem is `AB4844`; a grammar that does not bind to the tool's
@@ -1043,7 +1043,7 @@ id; at run time the tool runs with
 (`tool:<server>/<tool>`), so a route can pick surface wording from
 `agent().invocation.kind` while the operation stays the tool. A route
 observes `kind: 'cli'` whenever it runs from the generated CLI
-executable, whichever projection mechanism produced the command — the
+executable, whichever projection mechanism produced the command, the
 bulk `--input` projection is a CLI surface too. The generated MCP
 server still passes `kind: 'tool'`.
 `inspect --routes` prints `cli.commands[].projection`
@@ -1063,7 +1063,7 @@ export default () => new McpServer({ name: 'curator', version: '1.0.0' });
 
 The generated shell provides, in order: console-to-stderr redirection before
 the consumer module evaluates (installed by the shell's first import, its
-stdio prelude — see below), the factory call, raw `process.stdout.write`
+stdio prelude, see below), the factory call, raw `process.stdout.write`
 restored for protocol frames, `StdioServerTransport` construction and
 connect, SIGINT → exit 130, SIGTERM → exit 143, stdin EOF → exit 0 (so the
 client can respawn), transport-close → exit 0, a 5-second bounded shutdown
@@ -1071,8 +1071,8 @@ race against wedged transports, and heartbeat/activity logging on stderr
 (5-minute interval, 60-second activity throttle, labeled with the server
 name).
 
-Self-connecting entries — modules that construct and connect a transport at
-top level without a default export — keep today's behavior byte for byte: no
+Self-connecting entries, modules that construct and connect a transport at
+top level without a default export, keep today's behavior byte for byte: no
 lifecycle shell and no operator `.env` layer (#469); an entry that wants the
 layer calls `applyOperatorEnv` from `agent-bundle/launch-env` itself,
 passing its own declared `env` block as `manifestEnv` if a passed-through
@@ -1109,7 +1109,7 @@ The Workbench Lifecycles view exposes the request context used for each
 deterministic replay. Host, session, actor, and workspace are separate
 observed axes beside invocation kind, operation, surface, and host-contract
 revision. Values parsed from the checked-in or pasted native receipt use the
-`receipt` source — never `native`, because a Workbench replay is not evidence
+`receipt` source, never `native`, because a Workbench replay is not evidence
 that the named host dispatched the event. A missing session, actor, or
 workspace remains visibly `unavailable` with its typed reason.
 
@@ -1118,7 +1118,7 @@ rendering, so `await agent()` and the Workbench evidence panel describe one
 context rather than parallel snapshots. User-edited business input cannot
 replace these axes.
 
-## `agent-bundle/meta` — build-time release identity
+## `agent-bundle/meta`, build-time release identity
 
 Plugin code reads its own identity from the framework instead of maintaining
 a hand-written `src/lib/version.ts`:
@@ -1127,8 +1127,8 @@ a hand-written `src/lib/version.ts`:
 import meta, { name, packageName, packageVersion, version } from 'agent-bundle/meta';
 ```
 
-`version` is the `package.json` version. `name` is the host-native plugin slug
-— never the npm package name. `packageName` and `packageVersion` are the
+`version` is the `package.json` version. `name` is the host-native plugin slug,
+never the npm package name. `packageName` and `packageVersion` are the
 validated npm axes, `undefined` for an unpackaged development project. Every
 value is exactly what artifact manifests, `inspect`, and dev status report for
 the same build.
@@ -1141,7 +1141,7 @@ and no emitted bundle can still carry an unresolved import of it.
 
 Types ship with the package export, so no generated declaration file is
 involved. Outside Agent Bundle compilation the published module throws the
-`AB4760` diagnostic rather than reporting a fabricated identity — a plugin
+`AB4760` diagnostic rather than reporting a fabricated identity, a plugin
 slug exists only in the config, and a runtime guess at it would silently
 disagree with the artifact. A release build refuses a project with no release
 version at all (`AB4013`), so a compiled artifact never carries the
@@ -1152,8 +1152,8 @@ Tests are not outside the compiler: `agentBundleRstest()` and
 `.agent-bundle/test/meta.mjs`, a module generated by the same
 `generatedMetaModuleSource` the build injects, fed from the same compiler
 pass's plugin identity. A source module importing `agent-bundle/meta` therefore
-loads under any Rstest pool built from the preset — plain unit tests, the
-route-unit level, `renderRoute`, and `invokeCli` alike — with the identity
+loads under any Rstest pool built from the preset, plain unit tests, the
+route-unit level, `renderRoute`, and `invokeCli` alike, with the identity
 `package.json` and `agent-bundle.config.ts` declare. A custom runner that
 does not use the preset must add the same alias; the `AB4760` recovery text
 spells it out (see [Diagnostics](diagnostics.md#build-time-identity-outside-the-compiler-ab4760)).
@@ -1166,11 +1166,11 @@ normalization is about to stamp into the model (`plugin.name`, the
 prints the one its artifact manifest reports, under `validate`, `build`,
 `inspect`, dev, the Workbench's source documents, and `inspectWorkbenchSurface`.
 
-## Prebuilt payloads — package what you compiled yourself
+## Prebuilt payloads, package what you compiled yourself
 
-Some projects legitimately own their compilation — a coordinated
+Some projects legitimately own their compilation, a coordinated
 multi-environment bundler topology the per-entry `tools` hatch cannot
-express — but still want framework-owned host packaging (manifests, hook
+express, but still want framework-owned host packaging (manifests, hook
 documents, env anchors, provenance, validation). The `payload` block
 declares already-built directory trees the build packages **as-is**, and the
 `{ prebuilt: ... }` marker points MCP entries and hook handlers at files
@@ -1210,8 +1210,8 @@ export default defineConfig({
 
 - **Stable paths, not content-hashing.** Every payload file keeps its exact
   relative path under the destination directory. The framework did not
-  compile these files, so it cannot rewrite the references inside them —
-  sibling chunk imports, worker entries resolved from `import.meta.url` —
+  compile these files, so it cannot rewrite the references inside them,
+  sibling chunk imports, worker entries resolved from `import.meta.url`,
   and hosts, manuals, and tests pin the entry paths. Integrity stays
   content-addressed anyway: each payload file lands in the artifact manifest
   with its SHA-256 and the `prebuilt` file kind, and the payload files hash
@@ -1224,7 +1224,7 @@ export default defineConfig({
   `cwd: "./"`, `${PLUGIN_ROOT}/…`), the `AGENT_BUNDLE_PLUGIN_ROOT` env
   anchor is injected as usual, and artifact validation confirms the
   referenced file is present and manifested. A prebuilt hook emits its
-  native command as `node "<root>/<payload path>" <args…>` — one config
+  native command as `node "<root>/<payload path>" <args…>`, one config
   declaration replaces a hand-rolled `hooks/hooks.json` per host. Prebuilt
   hook `args` (for example `--host claude`) accept shell-safe strings only.
 - **Prebuilt means opaque.** Payload files are exempt from generated-output
@@ -1248,7 +1248,7 @@ export default defineConfig({
   empty payload is a validation warning (`AB4743`/`AB4745`) so `dev` works
   from a clean checkout, but `agent-bundle build` refuses it
   (`AB4747`/`AB4748`). Payload directories must not overlap the artifact
-  `--output` root (`AB4749`) — with payloads under `dist/`, pass an output
+  `--output` root (`AB4749`), with payloads under `dist/`, pass an output
   like `dist/plugins`. See `docs/diagnostics.md` for the full `AB474x`
   table.
 
@@ -1257,10 +1257,10 @@ owns a three-environment RSC compilation, and `agent-bundle build` packages
 the resulting `dist/runtime` and `dist/app` trees into the Claude, Codex,
 and portable artifacts.
 
-## `tools` — THE escape hatch
+## `tools`, THE escape hatch
 
 `tools.rsbuild` (an Rsbuild environment-config fragment) and `tools.rspack`
-(an Rspack config object, mutator function, or array — Rslib semantics) merge
+(an Rspack config object, mutator function, or array, Rslib semantics) merge
 **last** into every bundler config agent-bundle synthesizes: artifact scripts,
 MCP entries, hook wrappers, MCP App views, and the package build. This mirrors
 Rslib's user-config-highest priority and Rspress's `builderConfig` position,
@@ -1283,7 +1283,7 @@ layer re-pins `output.autoExternal: false` after the hatch merge. Reserved
 module specifiers are protected the same way: a hatch that externalizes
 `agent-bundle/mcp-entry` or a generated module specifier (`agent-bundle/meta`,
 or a registry specifier such as `agent-bundle/mcp-apps`) fails the build with
-a hard diagnostic — at config inspection for statically visible `externals`,
+a hard diagnostic, at config inspection for statically visible `externals`,
 and from the emitted bundle's residual imports for function-form `externals`.
 The hatch customizes *how code compiles*, never *what the artifact promises*. The framework's own
 profile keeps the same promise: `output.autoExternal` is `false`, `bundle:
@@ -1311,9 +1311,9 @@ verbatim.
 The hatch merges *beside* the framework profile, not over it: `plugins`
 arrays concatenate, and Rsbuild's plugin manager appends every plugin it is
 handed without deduping by name. So a `tools.rsbuild.plugins` entry that
-re-adds a plugin the framework already registers — `@rsbuild/plugin-react`
+re-adds a plugin the framework already registers, `@rsbuild/plugin-react`
 (`rsbuild:react`), carried by every synthesized Rslib entry and every MCP
-App view — would run it twice. `agent-bundle validate`
+App view, would run it twice. `agent-bundle validate`
 reports that as `AB4724` (an error, like the other `tools` shape checks) with
 the plugin and package name; remove the entry, the framework already
 registers it.
@@ -1328,8 +1328,8 @@ dependency, not the consumer's: a class imported from a separately installed
 `@rspack/core` can have a different identity than the engine executing the
 config. So a hatch must never construct plugins or run `instanceof` checks
 against an imported `@rspack/core`. Use instead the utils argument
-Rslib/Rsbuild pass to `tools.rspack` mutator functions —
-`tools: { rspack: (config, { rspack }) => { ... } }` — which always hands the
+Rslib/Rsbuild pass to `tools.rspack` mutator functions,
+`tools: { rspack: (config, { rspack }) => { ... } }`, which always hands the
 engine's own `rspack` object.
 
 ### `agent-bundle inspect` component accounting
@@ -1338,9 +1338,9 @@ engine's own `rspack` object.
 agent-bundle inspect [--target <t>] [--json]
 ```
 
-Every inspection plan accounts for each host component the project declares
-— skills, commands, rules, config-declared hooks, filesystem event routes,
-LSP servers, MCP servers, MCP Apps, and scripts — as either `selected`
+Every inspection plan accounts for each host component the project declares,
+skills, commands, rules, config-declared hooks, filesystem event routes,
+LSP servers, MCP servers, MCP Apps, and scripts, as either `selected`
 (emitted for that target) or `skipped` (omitted), in one deterministic order.
 Each component carries its canonical `kind` (`AgentComponentKind`); event
 routes report as `event-route`, judged by the host's row for their canonical
@@ -1350,8 +1350,8 @@ A skipped component names its cause: `excluded-by-targets`
 when the author's `targets` left the host out, or `unsupported-capability` when
 the host's pinned capability table does not support the surface. Components
 that need a host capability carry that target's own four-state judgment as
-`capability` — `{ name, state: 'supported', evidence }` for emitted surfaces,
-or `{ name, state: 'degraded' | 'unavailable' | 'prohibited', reason }` — so
+`capability`, `{ name, state: 'supported', evidence }` for emitted surfaces,
+or `{ name, state: 'degraded' | 'unavailable' | 'prohibited', reason }`, so
 the JSON explains why a Cursor rule is absent from a Claude bundle in the
 host's words rather than the compiler's. An adapter that publishes no row for
 a needed capability reads as an honest `unavailable`, never a silent pass.
@@ -1363,7 +1363,7 @@ warnings `validate` reports (see
 [Component feature sets](framework-mode.md#component-feature-sets)). Every
 plan also carries `kinds`: one entry per canonical kind, in kind order, with the target's own
 row for that kind (`capability`) and the counts of selected and skipped
-components of it — so a host with no `lsp`, `native-diagnostics`,
+components of it, so a host with no `lsp`, `native-diagnostics`,
 `native-extension`, or `agent` surface says so in its own words even when the
 project declares none of them (`script` and `event-route` carry no kind-level
 row; event routes are judged per component). The human output prints one line
@@ -1379,8 +1379,8 @@ agent-bundle inspect --bundler [--target <t>] [--json]
 ```
 
 Dumps the synthesized bundler configuration for every output the build
-composes — artifact scripts, MCP entries, hook wrappers, the composite root's
-MCP Apps Rsbuild config, and the `dist/` package build — exactly as the build
+composes, artifact scripts, MCP entries, hook wrappers, the composite root's
+MCP Apps Rsbuild config, and the `dist/` package build, exactly as the build
 lowers it: in production mode whatever `NODE_ENV` says, the framework profile
 with the consumer `tools` hatch merged over it and the invariant hook appended
 last (functions render as `[function <name>]`). Entries the framework wraps also carry the generated
@@ -1405,14 +1405,14 @@ provenance-based incremental boundary: after a successful package build, the
 sorted source inputs of every emitted file (recorded from bundler stats) are
 kept, and the next rebuild is skipped unless an invalidated path was one of
 those inputs, the configuration file, `package.json`, or `tsconfig.json`
-changed, the rebuild identity changed — the normalized `bin`/`lib`
+changed, the rebuild identity changed, the normalized `bin`/`lib`
 declaration plus the `tools` escape hatch, with hatch functions compared by
-source text — the invalidation was manual or initial, or the previous
+source text, the invalidation was manual or initial, or the previous
 package build failed. When every package entry disappears within a live
 session (entries removed or opted out), the outputs that session previously
 published are removed; outputs from earlier sessions are untouched, matching
 `agent-bundle build`. A package build failure never invalidates the
-committed artifact epoch — it surfaces as one `AB7103` warning on the
+committed artifact epoch. It surfaces as one `AB7103` warning on the
 succeeded attempt and retries on the next invalidation. The boundary this
 does **not** cover: a brand-new file that changes module resolution without
 touching a tracked input is picked up on the next tracked change, not
@@ -1434,9 +1434,9 @@ temporary artifact is built first.
 
 ### Launch environment
 
-The runner loads the project-root `.env` set by default — rsbuild's `loadEnv`
+The runner loads the project-root `.env` set by default, rsbuild's `loadEnv`
 conventions (`.env`, `.env.local`, `.env.<mode>`, `.env.<mode>.local`, with
-`--mode` selecting the variants) — so operator credentials configured for the
+`--mode` selecting the variants), so operator credentials configured for the
 plugin reach a bare `mcp run` without a wrapper script. This is a
 launch-time-only layer: the framework's programmatic Rslib builds never pass
 `loadEnv` to `createRslib`, so `agent-bundle build` and the package build read
@@ -1456,10 +1456,10 @@ canonical precedence order (highest wins):
 | 1 (lowest) | Manifest env | Entries declared in the server config plus the injected plugin-root anchor, path tokens expanded. |
 
 Installed packs get the same layer and the same order without `mcp run`
-(#469): every artifact shell that runs plugin code — the stdio MCP entry of a
+(#469): every artifact shell that runs plugin code, the stdio MCP entry of a
 factory-exporting server (a self-connecting entry has no shell), the hook
 wrappers that execute handlers or render standalone, and the artifact CLI
-`bin/<name>.mjs` — applies `agent-bundle/launch-env` (`src/launch-env.ts`,
+`bin/<name>.mjs`, applies `agent-bundle/launch-env` (`src/launch-env.ts`,
 plain Node, inlined into the bundle) at startup. It reads `<plugin
 root>/.env` then `.env.local`, where the plugin root is the expanded
 `AGENT_BUNDLE_PLUGIN_ROOT` or the shell's parent directory, or the files
@@ -1484,14 +1484,14 @@ Two details keep the installed order equal to the `mcp run` table above:
   from that default: a passed-through default yields to the file, a host or
   operator export is kept. The accepted ambiguity: an operator export equal to
   the manifest default reads as the default and yields too. A default carrying
-  a path token never equals its host-expanded value and is always kept — this
+  a path token never equals its host-expanded value and is always kept. This
   covers the injected `AGENT_BUNDLE_PLUGIN_ROOT`. Hook wrappers and the CLI
   bin have no manifest env and embed none. The host manifests are unchanged;
   hosts still show `env` in their UIs.
 - **The layer precedes every consumer module.** Rspack inlines the modules of
   a single-chunk bundle into one scope, evaluates all of them before the
   entry module's own body, and places a dynamic import's target ahead of the
-  static ones — so neither a statement in the shell body nor an awaited
+  static ones, so neither a statement in the shell body nor an awaited
   `import()` after it runs before a consumer module's top level. The layer is
   instead a generated virtual module that each shell imports first, and the
   server module, hook handler, routes, providers, and state definition are
@@ -1501,7 +1501,7 @@ Two details keep the installed order equal to the `mcp run` table above:
   legitimately write stdout. The stdio MCP shell imports its prelude instead
   (`agent-bundle/stdio-prelude`, `src/build/entry-shell.ts`), which calls
   `redirectConsoleToStderr` from `agent-bundle/mcp-entry` and then applies
-  the layer — stdout is the protocol wire there, and the same ordering
+  the layer, stdout is the protocol wire there, and the same ordering
   argument means only an earlier import can put the guard ahead of a
   `console.log` or `process.stdout.write` at the server module's top level.
   The guard has one implementation: while a guard is installed,
@@ -1524,8 +1524,8 @@ Two details keep the installed order equal to the `mcp run` table above:
 Under `mcp run` the artifact is an ephemeral build product, so both
 durable-state anchors point at the project root: state anchored on the
 plugin-data token persists under `.agent-bundle/mcp-run/<target>/<server>`,
-and plugin-root tokens in *env values* — including the injected
-`AGENT_BUNDLE_PLUGIN_ROOT` anchor — expand to the project root itself.
+and plugin-root tokens in *env values*, including the injected
+`AGENT_BUNDLE_PLUGIN_ROOT` anchor, expand to the project root itself.
 Targets without token interpolation (Codex serializes the anchor as a `./`
 path) re-anchor their relative env values against the same durable root.
 `args` and `cwd` stay artifact-rooted (the first argument is the
@@ -1565,8 +1565,8 @@ host, not a deployment target.
 
 `serveApp` in `agent-bundle/api` is the programmatic form (`{ url, close,
 closed }`). It is a host-process API: it belongs to processes the framework
-does not compile — the first-party CLI, the Workbench, tests, a plugin's own
-`package.json` scripts or a hand-written `.mjs` run from the checkout — and
+does not compile, the first-party CLI, the Workbench, tests, a plugin's own
+`package.json` scripts or a hand-written `.mjs` run from the checkout, and
 never to the MCP server shell. A routed CLI command inside the artifact
 cannot import it: routed CLI bins are self-contained (#387), so the bundler
 would inline `agent-bundle/dist/api.js` into the bin and fail on the
@@ -1584,7 +1584,7 @@ installed artifact the supported command is `<plugin> web` on
 `bin/<plugin>.mjs` (emitted when `web` is configured, even with no
 `src/cli/**` commands). It reads the manifest `web` section beside `bin/`,
 launches the plugin's own packed MCP server, and prints the same ready line
-`MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` —
+`MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)`,
 `src/serve-app/command-contract.ts` is the shared contract for that line
 and for `--json` `{ app, server, tool, url, port, resourceUri, sandboxOrigin }`.
 `agent-bundle/serve-app-command` (`spawnServeApp`) is removed. The worked
@@ -1628,7 +1628,7 @@ without one, every candidate's normalized launch descriptor (command,
 arguments, cwd, declared env, runtime binding) is compared, materially
 identical launches proceed unprompted whatever the host order, and
 materially different ones answer 409 naming the choices. No portable
-projection or `mcp.json` is required — a Claude- or Codex-only build opens
+projection or `mcp.json` is required, a Claude- or Codex-only build opens
 `/web/<server>/<app>` from its own projection. Web sessions are cached by
 epoch, server, and resolved launch identity; a successful rebuild retires
 unused sessions of older epochs (pages still leasing one keep it until
@@ -1645,15 +1645,15 @@ lineage journal likewise use `stateAnchor: 'user-data'` and live under
 unless `AGENT_BUNDLE_STATE_ROOT` overrides it, so a read-only install still
 launches.
 
-## `agent-bundle/app` — the App-side bridge client
+## `agent-bundle/app`, the App-side bridge client
 
 `agent-bundle/app` (`src/app/index.ts`, #594) is the half of the MCP Apps
 bridge that runs inside the App document. It is a browser-safe leaf of the
 package: its only imports are the shared protocol-version constant
 (`src/contracts/mcp-app-protocol.ts`, which
 `src/dev/mcp-app-profile-descriptors.ts` re-exports for the host side, so
-`APP_PROTOCOL_VERSION` and the host's `MCP_APP_PROTOCOL_VERSION` are one value
-— `tests/app-client.test.ts` asserts it), the browser-safe strict-JSON
+`APP_PROTOCOL_VERSION` and the host's `MCP_APP_PROTOCOL_VERSION` are one value,
+`tests/app-client.test.ts` asserts it), the browser-safe strict-JSON
 helpers, and the route-name parser, so `dist/app.js` names no Zod, Node
 built-in, Effect, route module, or compiler code, and the App compile inlines
 it into the self-contained HTML from the installed package inside the document
@@ -1674,9 +1674,9 @@ cancellation: `createMcpAppBridge` now honors the client's
 and session lease (below). The `browser-app` proof level
 (`mountBrowserApp` in `agent-bundle/test/browser`, which hosts the compiled
 document over `createMcpAppBridge`) is where the client meets that host bridge
-in a real browser — `examples/mcp-app/tests/browser-app` asserts the
+in a real browser, `examples/mcp-app/tests/browser-app` asserts the
 App-to-host traffic is exactly the client's `ui/initialize` and
-`ui/notifications/initialized` until the view acts — so there is one wire
+`ui/notifications/initialized` until the view acts, so there is one wire
 contract, not a second host bridge. The checkout hosts are driven by the same
 client rather than by hand-written frames: `tests/serve-app.test.ts` connects
 `createAppClient` to the served example App over injected ports whose
@@ -1684,8 +1684,8 @@ client rather than by hand-written frames: `tests/serve-app.test.ts` connects
 relay uses, and the Workbench real-App E2E
 (`packages/workbench/tests/mcp-app-real.e2e.test.ts`) compiles a fixture view
 on `createAppClient` and reads its `call()` result through the relay. The
-client's own contract — envelopes, handshake, transport authentication, dispatch, cancellation,
-rebind, disposal — is proven in `tests/app-client.test.ts` over injected
+client's own contract, envelopes, handshake, transport authentication, dispatch, cancellation,
+rebind, disposal, is proven in `tests/app-client.test.ts` over injected
 ports. The client never decides which server a call reaches or which
 capability needs consent.
 
@@ -1695,12 +1695,12 @@ capability needs consent.
 
 | Member | Contract |
 | --- | --- |
-| `connect(options?)` | Performs the `ui/initialize` handshake once and resolves the validated `AppInitializeResult` (`protocolVersion` `2026-01-26` — `APP_PROTOCOL_VERSION` — plus `hostInfo`, `hostCapabilities`, `hostContext`), then sends `ui/notifications/initialized` and records the opening tool name from `hostContext.toolInfo.tool.name` for the opening-notification listeners. Idempotent: a connected client resolves the cached result, a connecting one returns the in-flight promise; a handshake that `rebind()` overtakes rejects with `connection-rebound`. |
-| `call(routeId, input, options?)` | `tools/call` for the tool a `tool:<server>/<name>` route id names — the standard wire name is the final segment, derived the way the generated server derives it (`src/routes/protocol-name.ts`); any other shape rejects with a `TypeError`. The client also carries the canonical id in framework-private `_meta`, and `createMcpAppBridge` rejects it with `-32602` unless both server and tool match the bound server before dispatch. `input` must be a finite strict-JSON object (`invalid-message` otherwise). Resolves the result's `structuredContent` **directly**; rejects a result with `isError: true` (`rpc`, whole result on `error.data`), one without an object `structuredContent`, or a malformed envelope (`invalid-message`). The MCP projection emits `structuredContent` for object-valued results only (`advertisedOutputSchema` in `src/mcp-server-runtime.ts`), so a tool whose `resultSchema` is scalar- or array-rooted is typed by the generated map but never resolves through `call()`. |
+| `connect(options?)` | Performs the `ui/initialize` handshake once and resolves the validated `AppInitializeResult` (`protocolVersion` `2026-01-26`, `APP_PROTOCOL_VERSION`, plus `hostInfo`, `hostCapabilities`, `hostContext`), then sends `ui/notifications/initialized` and records the opening tool name from `hostContext.toolInfo.tool.name` for the opening-notification listeners. Idempotent: a connected client resolves the cached result, a connecting one returns the in-flight promise; a handshake that `rebind()` overtakes rejects with `connection-rebound`. |
+| `call(routeId, input, options?)` | `tools/call` for the tool a `tool:<server>/<name>` route id names, the standard wire name is the final segment, derived the way the generated server derives it (`src/routes/protocol-name.ts`); any other shape rejects with a `TypeError`. The client also carries the canonical id in framework-private `_meta`, and `createMcpAppBridge` rejects it with `-32602` unless both server and tool match the bound server before dispatch. `input` must be a finite strict-JSON object (`invalid-message` otherwise). Resolves the result's `structuredContent` **directly**; rejects a result with `isError: true` (`rpc`, whole result on `error.data`), one without an object `structuredContent`, or a malformed envelope (`invalid-message`). The MCP projection emits `structuredContent` for object-valued results only (`advertisedOutputSchema` in `src/mcp-server-runtime.ts`), so a tool whose `resultSchema` is scalar- or array-rooted is typed by the generated map but never resolves through `call()`. |
 | `request(method, params?, options?)` | The typed JSON-RPC escape hatch for `resources/read` and supported `ui/*` methods; resolves the raw result. An empty method rejects with a `TypeError`. |
-| `onToolInput(routeId, listener)` / `onToolResult(routeId, listener)` / `onToolError(routeId, listener)` | The opening call's `ui/notifications/tool-input` arguments, the decoded `structuredContent` of a successful `ui/notifications/tool-result`, and that notification's failures as an `AppClientError` — `isError: true` is `rpc` with the whole result on `data`; a malformed envelope or one without an object `structuredContent` is `invalid-message`; a failed result never reaches `onToolResult`. The notifications carry no tool name, so dispatch keys on the tool the handshake named: `hostContext.toolInfo.tool.name` from the initialize result, matched against the final segment of each registered route id. Listeners for other tools stay silent; when the initialize result names no tool, `tool-input` and `tool-result` reach no listener. Listeners run on a microtask, exceptions dropped. Each returns its unsubscribe function. |
+| `onToolInput(routeId, listener)` / `onToolResult(routeId, listener)` / `onToolError(routeId, listener)` | The opening call's `ui/notifications/tool-input` arguments, the decoded `structuredContent` of a successful `ui/notifications/tool-result`, and that notification's failures as an `AppClientError`, `isError: true` is `rpc` with the whole result on `data`; a malformed envelope or one without an object `structuredContent` is `invalid-message`; a failed result never reaches `onToolResult`. The notifications carry no tool name, so dispatch keys on the tool the handshake named: `hostContext.toolInfo.tool.name` from the initialize result, matched against the final segment of each registered route id. Listeners for other tools stay silent; when the initialize result names no tool, `tool-input` and `tool-result` reach no listener. Listeners run on a microtask, exceptions dropped. Each returns its unsubscribe function. |
 | `onToolCancelled(listener)` | `ui/notifications/tool-cancelled` as `{ reason? }`, unfiltered; returns its unsubscribe function. |
-| `rebind({ parent?, targetOrigin?, window? })` | Bumps the connection generation and rejects the previous generation's pending requests with `connection-rebound` — a `connect()` still in flight included; its late response can never become the live connection — clears the opening tool name, moves the message listener when `window` changes, adopts the new parent, keeps the configured `targetOrigin` unless the call names the key, and runs `connect()` again. |
+| `rebind({ parent?, targetOrigin?, window? })` | Bumps the connection generation and rejects the previous generation's pending requests with `connection-rebound`, a `connect()` still in flight included; its late response can never become the live connection, clears the opening tool name, moves the message listener when `window` changes, adopts the new parent, keeps the configured `targetOrigin` unless the call names the key, and runs `connect()` again. |
 | `dispose()` | Idempotent. Removes the message listener, rejects pending requests with `disposed`, and drops every registration. A host `ui/resource-teardown` request is answered with `{}` and disposes the client; any other host request is answered `-32601`. |
 | `connected` / `disposed` | Read-only state. |
 
@@ -1716,8 +1716,8 @@ A request that times out or is aborted rejects with `timeout` / `aborted` and,
 once connected, sends `notifications/cancelled` with the request id and the
 reason; the client does not wait to learn whether the host stopped anything.
 
-Two error kinds, deliberately. Everything asynchronous — wire, host, and
-lifecycle — rejects with the one `AppClientError` class: `code` is `timeout`,
+Two error kinds, deliberately. Everything asynchronous, wire, host, and
+lifecycle, rejects with the one `AppClientError` class: `code` is `timeout`,
 `aborted`, `disposed`, `connection-rebound`, `invalid-message`, `rpc`,
 `capability-unavailable`, or `consent-required`; a host JSON-RPC error maps
 `-32601` to `capability-unavailable`, `-32001` to `consent-required`, and
@@ -1738,12 +1738,12 @@ involved: App-side failures are browser errors.
 
 The client's `notifications/cancelled` is honored by `createMcpAppBridge`
 (`src/dev/mcp-apps/mcp-app-bridge.ts`), which the Workbench, `serve-app`, and
-`mountBrowserApp` run. Every operation request the bridge accepts —
+`mountBrowserApp` run. Every operation request the bridge accepts,
 `tools/call`, `resources/read`, and the `ui/*` requests; `ping` is answered
-inline — is tracked in flight under its JSON-RPC id with an `AbortController`;
+inline, is tracked in flight under its JSON-RPC id with an `AbortController`;
 a well-formed cancellation for an in-flight id aborts that controller, drops
 the request's pending consent challenge (resolving it as denied, so a later
-approval cannot run the action), and suppresses the late response — a
+approval cannot run the action), and suppresses the late response, a
 cancelled request gets neither a result nor an error. The abort signal is
 threaded through `McpAppBindingService.callTool`/`readResource` and the
 `McpAppSessionLease` into `McpSession`, which composes it into the SDK request
@@ -1769,7 +1769,7 @@ the opening tool (`hostContext.toolInfo.tool.name`), which is what the
 opening-notification listeners dispatch on. A malformed message that still
 names a pending id rejects that request as `invalid-message`.
 
-A host that can name a trusted origin passes `targetOrigin` — an exact
+A host that can name a trusted origin passes `targetOrigin`, an exact
 `http:` or `https:` origin; `'*'`, `'null'`, other schemes, and non-origin
 strings are a `TypeError`. The client then uses that exact origin for every
 outgoing frame and requires every incoming `event.origin` to match it. The
@@ -1784,7 +1784,7 @@ injected ports.
 `generateRouteTypes` (`src/routes/typegen.ts`) emits, for a graph with at
 least one tool route, `AppToolRouteId` (the `tool:<server>/<name>` subset of
 `RouteId`), `AgentBundleAppRouteContracts` (one `{ input: RouteInput<Id>;
-result: RouteResult<Id> }` per tool — `input` from the module's own
+result: RouteResult<Id> }` per tool, `input` from the module's own
 `inputSchema` *input* type, what a caller sends before the server parses it,
 so a defaulted field is optional and a transformed field is spelled as the
 wire carries it; `result` from the `resultSchema` output; a structural schema

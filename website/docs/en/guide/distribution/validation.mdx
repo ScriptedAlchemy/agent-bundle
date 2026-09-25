@@ -23,7 +23,7 @@ present is not really self-contained, and the `packed-deleted-source` proof leve
 `agent-bundle.manifest.json` records a SHA-256 digest for every emitted file, including copied
 scripts and assets. Artifact validation compares real bytes against those digests, so a
 hand-edited generated file fails rather than passing because the path still exists. Referenced
-files are checked too — a manifest-declared `logo` that is missing from the artifact or escapes
+files are checked too, a manifest-declared `logo` that is missing from the artifact or escapes
 the deploy tree reports `AB6025`. A listed compile evidence record that does not match the
 manifest file table reports `AB6039`.
 
@@ -41,15 +41,15 @@ Rslib's profile leaves it verbatim without parsing it, so it is neither bundled 
 The emitted-module walk remains behind that compiler evidence for exactly what the compiler cannot
 see. It reads every emitted `.js`/`.mjs` module as an ES module and, in any of them, compiled ones
 included, fails an expression `import()` (`AB6005 has a non-literal dynamic import`). A module the
-compile evidence record proves — a manifest `bundle` file the record covers with the same bytes,
-from a build without a [`tools` hatch](../../reference/configuration.mdx#tools) — is lexed, not
+compile evidence record proves, a manifest `bundle` file the record covers with the same bytes,
+from a build without a [`tools` hatch](../../reference/configuration.mdx#tools), is lexed, not
 parsed, and each literal import it still carries is held to the record: a Node built-in or one of
 the file's recorded externals passes; any other request is one the build was told to ignore
-(`rspackIgnore`/`webpackIgnore` — Rspack leaves it verbatim with no module, external, or warning)
+(`rspackIgnore`/`webpackIgnore`, Rspack leaves it verbatim with no module, external, or warning)
 and fails `AB6005 loads "<request>", which the compiler neither bundled nor recorded as an
 external`. A matching digest proves the bytes are the compiler's, not that every import in them was
 resolved. Every other module is parsed in full and its
-imports resolved against the manifest — a generated `install.mjs`, a copied consumer script, every
+imports resolved against the manifest, a generated `install.mjs`, a copied consumer script, every
 module of an artifact without a record, and every module of a build whose hatch could have rewritten
 the emitted assets (the record's `coverage.rewritable`). Those findings are the residual `AB6005`
 forms: unsupported or invalid specifiers, targets missing from or outside the emitted tree, invalid
@@ -103,11 +103,11 @@ evidence record describes the emitted files. Message forms:
 - `Compile evidence for "<path>" records "<request>" as an external; a view inlines every module it loads.`
 
 Every diagnostic is one structured record: a stable `AB` code, a severity, a message, and usually
-a `sourcePath` and a `recovery` hint. The diagnostic-gated commands — `build`, `prepack`,
-`validate`, `doctor`, `install`, and `dev` — exit nonzero **only** when an error diagnostic is
+a `sourcePath` and a `recovery` hint. The diagnostic-gated commands, `build`, `prepack`,
+`validate`, `doctor`, `install`, and `dev`, exit nonzero **only** when an error diagnostic is
 present; warnings and infos never gate a build, a validation, or a dev rebuild. `eval` and
 `inspect` also exit `1` for a failing or inconclusive trial or an invalid model, with no error
-diagnostic involved — see the [CLI exit codes](../../reference/cli.mdx#exit-codes).
+diagnostic involved, see the [CLI exit codes](../../reference/cli.mdx#exit-codes).
 
 ## Claude Code strict validation
 
@@ -143,7 +143,7 @@ claude plugin validate <root>/.claude-plugin/marketplace.json --strict
 ### The load check
 
 Validation is not a load verdict. Claude Code 2.1.250 through 2.1.260 accept, under `--strict`,
-manifests and component files that a session then refuses to load — an invalid
+manifests and component files that a session then refuses to load, an invalid
 `monitors/monitors.json`, or a `hooks` field naming the auto-loaded `hooks/hooks.json`. The only
 place the refusal shows is the plugin's row in `claude --plugin-dir <root> plugin list --json`
 ("Plugins reference" → "plugin list"): a refused row carries an `errors` array with the host's
@@ -152,8 +152,8 @@ validation runs with exactly that listing and read the bundle's `<name>@inline` 
 
 | `load.status` | Meaning | Code |
 | --- | --- | --- |
-| `loaded` | The row has no `errors`. | — |
-| `refused` | The row carries `errors`; they are quoted verbatim. | `AB7325` (error; a warning when every entry is `Dependency "…" is not installed`, since that describes the validating machine rather than the artifact — `--strict` promotes it) |
+| `loaded` | The row has no `errors`. | none |
+| `refused` | The row carries `errors`; they are quoted verbatim. | `AB7325` (error; a warning when every entry is `Dependency "…" is not installed`, since that describes the validating machine rather than the artifact, `--strict` promotes it) |
 | `unregistered` | No row for the bundle: Claude Code did not register the directory. | `AB7311` |
 | `failed` | The listing could not be read (nonzero exit, timeout, not a JSON array). | `AB6022` |
 
@@ -166,7 +166,7 @@ CI should use strict validation:
 npx agent-bundle validate --artifact artifact --strict
 ```
 
-Use `--no-host-validation` when a deterministic schema-only check is required — a machine without
+Use `--no-host-validation` when a deterministic schema-only check is required, a machine without
 the hosts installed must still be able to run the same gate and get the same schema verdict.
 
 During development, load the built root for one session without installing it, then iterate:
@@ -194,7 +194,7 @@ Doctor also reads each row's `enabled` flag. A copy that `claude plugin disable`
 ("Plugins reference" → "plugin disable") is still installed and may still be byte-identical to the
 bundle, but none of it reaches a session; Doctor lists it as `disabled`, keeps its content verdict,
 and adds an `AB7327` warning whose recovery is the exact `claude plugin enable <name>@<marketplace>
-[--scope <scope>]` command — reinstalling does not enable a disabled plugin.
+[--scope <scope>]` command, reinstalling does not enable a disabled plugin.
 
 ## Codex and Cursor: pinned schemas
 
@@ -256,7 +256,7 @@ package-only compile evidence, and the installed-dependency fields of `package.j
 host directory and every manifest file is packed, or prepack fails before publication. The build
 inlines every dependency into authored package entries and the host packs, so a published plugin should install nothing:
 declare the framework, `@agent-bundle/runtime`, `react`, `zod`, and the rest of the stack under
-`devDependencies`. A compiled bundle — a host-pack module or a `dist` bundle alike — cannot keep
+`devDependencies`. A compiled bundle, a host-pack module or a `dist` bundle alike, cannot keep
 a bare package external: the compiler reports `AB6005` before `prepack` reaches the inventory. So
 bundling a package does not prove that consumers need it installed. `--output` is an artifact path
 relative to `--root` that overrides the configured
@@ -271,13 +271,13 @@ files. Unsupported Node commands and absent source assets report `AB4768`; the p
 never copies the source tree to make a lifecycle path work.
 
 That inlining is the compiler's contract, not a bundler default a toolchain upgrade may flip.
-Generated executables — artifact scripts, the routed CLI, MCP entries, hook wrappers, and the
-package build's JavaScript bundles — compile with Rslib's `autoExternal` disabled, `bundle: true`,
+Generated executables, artifact scripts, the routed CLI, MCP entries, hook wrappers, and the
+package build's JavaScript bundles, compile with Rslib's `autoExternal` disabled, `bundle: true`,
 and `splitChunks: false`, and the framework adds no `externals` of its own; Rslib's `node` target
 leaves only Node built-ins (`node:fs`, `path`, plus Yarn PnP's `pnpapi`) external. MCP App views
 inline every script and style into one HTML file, and the same audit plugin sits in their Rsbuild
 compiler: a browser document has no allowable external, so any module a view's compilation kept
-external — a `react` mapped to a global through the hatch, say — fails the view with `AB6005`
+external, a `react` mapped to a global through the hatch, say, fails the view with `AB6005`
 (`Compiled MCP App view "mcp-apps/<name>.html" keeps … external …`). `AB4725` rejects
 `tools.rsbuild.output.autoExternal` other than `false` and statically visible string or object
 `externals` entries that name packages. RegExp, function-form, relative, and mutator externals are
@@ -314,7 +314,7 @@ names or runs, or a prebuilt payload declares in `runtimeDependencies` (`defineP
 | `AB7012` | A bin in the generated npm-root or published `package.json` points into `src/` or names a file absent from that package's packed file set. Point each bin at a packed file; routed CLIs use manifest-declared `bin/<name>.mjs` and authored bins use generated `bin/*.js`. |
 | `AB7013` | `package.json`, normalized plugin metadata, a host manifest, or artifact provenance reports a different release version. Make every release identity agree. |
 | `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages a consumer never needs installed. Use requires one of the three evidence sources above; compiled bundles that inline a package do not count. The diagnostic names any `dist` bundles that inlined an otherwise unused package. It is an error for `dependencies` and `optionalDependencies`, and a warning for `peerDependencies`; optional peers are skipped, and an `optionalDependencies` entry supersedes the same name under `dependencies`. |
-| `AB7015` | A `dependencies`, `optionalDependencies`, or `peerDependencies` entry a consumer's npm cannot resolve through a registry. Name and specifier are read with `npm-package-arg`, npm's own parser, and come out as one of three kinds: registry (a version, range, dist-tag, or `npm:` alias of one), fetched (a git, GitHub-shorthand, remote-tarball, or path source — npm 12 refuses git and remote fetches by default (`allow-git`, `allow-remote`), and a path never exists on the consumer's disk), or unparseable (a name npm rejects, a scheme it lacks such as `link:`, `portal:`, or a typo, a selector that is neither a range nor a URL-safe dist-tag, an alias of a non-registry target, or an invalid URL — the manifest read itself fails, so this is reported even on an optional peer). A fetched `optionalDependencies` entry warns because npm can continue without it, but escalates to an error when an install script needs the package: its `bin` command appears in command position, a `node_modules/<name>/` file is run, or a bare package is preloaded with `-r`/`--require`/`--import`/`--loader` (including through `NODE_OPTIONS`). A peer also present in `dependencies` or `optionalDependencies` is judged by that concrete entry. The canonical root is validated for `npm publish ./dist`, so `workspace:` and `catalog:` are always rejected; packed `bundleDependencies` and installable in-package `file:` sources are not reported. Depend on a published version, or bundle the package and declare it under `devDependencies`. |
+| `AB7015` | A `dependencies`, `optionalDependencies`, or `peerDependencies` entry a consumer's npm cannot resolve through a registry. Name and specifier are read with `npm-package-arg`, npm's own parser, and come out as one of three kinds: registry (a version, range, dist-tag, or `npm:` alias of one), fetched (a git, GitHub-shorthand, remote-tarball, or path source, npm 12 refuses git and remote fetches by default (`allow-git`, `allow-remote`), and a path never exists on the consumer's disk), or unparseable (a name npm rejects, a scheme it lacks such as `link:`, `portal:`, or a typo, a selector that is neither a range nor a URL-safe dist-tag, an alias of a non-registry target, or an invalid URL, the manifest read itself fails, so this is reported even on an optional peer). A fetched `optionalDependencies` entry warns because npm can continue without it, but escalates to an error when an install script needs the package: its `bin` command appears in command position, a `node_modules/<name>/` file is run, or a bare package is preloaded with `-r`/`--require`/`--import`/`--loader` (including through `NODE_OPTIONS`). A peer also present in `dependencies` or `optionalDependencies` is judged by that concrete entry. The canonical root is validated for `npm publish ./dist`, so `workspace:` and `catalog:` are always rejected; packed `bundleDependencies` and installable in-package `file:` sources are not reported. Depend on a published version, or bundle the package and declare it under `devDependencies`. |
 
 A release build also refuses a project whose `package.json` has **no valid release version**
 (`AB4013`), so a published artifact never carries the
@@ -322,5 +322,5 @@ A release build also refuses a project whose `package.json` has **no valid relea
 
 ## Next
 
-- [Host installation](./installation.mdx) — registering a validated bundle with a host.
-- [Preview packages](./preview-packages.mdx) — how these outputs reach consumers today.
+- [Host installation](./installation.mdx): registering a validated bundle with a host.
+- [Preview packages](./preview-packages.mdx): how these outputs reach consumers today.

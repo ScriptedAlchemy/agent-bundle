@@ -5,7 +5,7 @@ Source: `repos/effect/packages/effect/src/Cause.ts`, `Exit.ts`,
 `repos/effect/LLMS.md` § Error handling. Refresh when the subtree moves.
 
 This repo already has fail-closed typed errors. Effect's error channel maps
-onto those classes at the boundary — it does not replace them.
+onto those classes at the boundary. It does not replace them.
 
 ## Existing contracts (keep)
 
@@ -29,7 +29,7 @@ onto those classes at the boundary — it does not replace them.
   `return yield* new RuntimeMcpRegistryError('RUNTIME_MCP_REGISTRY_CLOSED', message)`.
   `Effect.fail(new RuntimeMcpRegistryError(...))` is equally valid; do not
   churn call sites for style.
-- Defect (bug): `Effect.die(defect)` — not for expected fail-closed states.
+- Defect (bug): `Effect.die(defect)`: not for expected fail-closed states.
 - Recover: `Effect.catch`, `Effect.catchTag` when the error is tagged.
   None of our classes are tagged (`Data.Error`, not `Data.TaggedError` or
   `Schema.TaggedError`). Catch them with `Effect.catch((error) => ...)` and
@@ -64,17 +64,17 @@ export class DevCoordinatorCloseError extends YieldableFrameworkError {
 
 The bases keep the `Error` / `CodedError` constructor shapes, so migrating
 an existing class is the `extends` clause plus the import. They also keep
-the plain-`Error` observable shape — `JSON.stringify`, `stableJson`,
-`{ ...error }`, `util.inspect`, non-enumerable `cause` — which rc.112
+the plain-`Error` observable shape, `JSON.stringify`, `stableJson`,
+`{ ...error }`, `util.inspect`, non-enumerable `cause`, which rc.112
 `Data.Error` alone would change (its prototype `toJSON` spreads the
 constructor fields; its `[nodejs.util.inspect.custom]` prints that instead
 of the stack). Never extend `Data.Error` directly.
 
 Stay on plain `Error` / `CodedError` when the class's declaration file is
-reachable from any `package.json` export's `types` — exported or not; a
+reachable from any `package.json` export's `types`, exported or not; a
 consumer's `tsc` follows the whole `.d.ts` graph, so `McpSessionError`
 (reached from `.` / `./api` through the dev types) stays plain even though
-it is never exported — when it is reachable from an Effect-free entry
+it is never exported, when it is reachable from an Effect-free entry
 (`agent-bundle/config`, `meta`, `rstest`, `test/browser`, the CLI `--help`
 path, the host MCP proxy), or when it ships inside an emitted artifact.
 `docs/effect-conventions.md` § "Yieldable framework errors" lists the
@@ -103,9 +103,9 @@ Callers of `runPromise` see the same types they see today.
 - Putting `unknown` or global `Error` in the fail channel
   (`unknownInEffectCatch`, `globalErrorInEffectFailure`).
 - Swallowing interruption as a typed success. Cancellation is `AbortError`.
-  `Stream.toReadableStream`'s `Cause.squash` is not that mapping — use the
+  `Stream.toReadableStream`'s `Cause.squash` is not that mapping, use the
   boundary helper.
 - `Effect.runPromise` in a test to "see the error" when `Effect.exit` +
-  `Cause` is the assertion you want — still only through the boundary.
+  `Cause` is the assertion you want, still only through the boundary.
 - New public error codes without updating the authoring docs and the mapping
   table in `docs/effect-conventions.md`.

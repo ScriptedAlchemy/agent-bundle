@@ -2,7 +2,7 @@
 
 A probing plugin. Install it into a Claude Code, Codex, or Cursor home, drive
 one agent session, and read back exactly what that host sent to every plugin
-hook and MCP call — the raw envelope, the framework request context each
+hook and MCP call, the raw envelope, the framework request context each
 handler saw, and the conversation lineage the runtime resolved for it.
 It is the acceptance vehicle for `request.lineage` and the evidence source for
 `docs/audits/*-host-lineage-matrix.md`.
@@ -34,7 +34,7 @@ bounded summary into the durable state kernel (`src/state.ts`,
 | `event.canonical` | The framework's canonical identity (`event`, `idempotencyKey`, `observedAt`, `provenance`). |
 | `request` | `(await agent())` as the route saw it: `invocation`, `host`, `session`, `actor`, `workspace`, `capabilities`, `lineage`, provider keys, and whether state and notices were mounted. `lineage` is always present: `available` with the resolved tree position, or `unavailable` with the runtime's per-host reason. |
 | `ids` | Every identity-shaped native field (`conversation_id`, `generation_id`, `session_id`, `subagent_id`, `tool_call_id`, `agent_id`, `turn_id`, `user_email`, …) lifted out for filtering. |
-| `process` | `pid`, `ppid`, `cwd`, `execPath`, entry file, uptime — of the process that ran the route. |
+| `process` | `pid`, `ppid`, `cwd`, `execPath`, entry file, uptime, of the process that ran the route. |
 | `runtime` | `standalone-hook` for handler-only events, `shared-runtime` when the rendered session-start view reaches the warm MCP-hosted runtime, `mcp-server`, or `cli`. |
 | `env.names` | Environment variable **names** matching `CURSOR_*`, `CLAUDE_*`, `CODEX_*`, `AGENT_BUNDLE_*`, `PLUGIN_*`, `MCP_*`, `HOST_TEST_*`. Values are never written. |
 
@@ -43,8 +43,8 @@ Two MCP servers ship in the plugin:
 - `host-test` (generated routes, `src/mcp/host-test/tools/`): `dump` (filter by
   any conversation/session/subagent id, `full` for raw lines), `reset`, and
   `slow`. Each `dump` call records the request context the generated server
-  mounted for it. A bare `dump` returns the newest 50 matching records — a
-  whole log of a few hundred records overflows the tool-result document — so
+  mounted for it. A bare `dump` returns the newest 50 matching records, a
+  whole log of a few hundred records overflows the tool-result document, so
   pass `limit` (up to 5000) for more; `matched` and `total` always count the
   whole log. `slow` holds a call open for `holdMs` (up to 30 s) and reports
   progress every `tickMs`; it declares `execution.taskSupport: "optional"`, so
@@ -53,8 +53,8 @@ Two MCP servers ship in the plugin:
   while every other host receives the ordinary result. The recorded call and
   the `host-test-raw` envelope show which path the host took.
 - `host-test-raw` (hand-rolled stdio factory, `src/mcp/host-test-raw.ts`):
-  `probe` records the raw SDK request context — session id, JSON-RPC id,
-  `_meta`, lifted envelope, negotiated client info — so hook↔MCP correlation is
+  `probe` records the raw SDK request context, session id, JSON-RPC id,
+  `_meta`, lifted envelope, negotiated client info, so hook↔MCP correlation is
   judged against the wire.
 
 The rendered CLI `host-test dump [--conversation <id>] [--full] [--log <file>]`
@@ -131,7 +131,7 @@ the printed command, open the Agents pane, and use the same scenario prompt.
 ## Workbench walkthrough
 
 1. **Application** lists the twenty event routes, both MCP servers, the skill,
-   and the routed CLI with their per-target capability judgments — `workspace/open`
+   and the routed CLI with their per-target capability judgments, `workspace/open`
    is Cursor-only, `task/*` and `file/change` are Claude-only, and portable
    carries no hooks at all.
 2. Under **Application → Events / Hooks**, select any family and run it with
