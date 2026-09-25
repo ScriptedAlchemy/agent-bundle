@@ -18,6 +18,7 @@ export const gatedRouteFiles: Readonly<Record<string, string>> = Object.freeze({
     '',
   ].join('\n'),
   'src/mcp/status/tools/live.tsx': [
+    "import { defineTool } from 'agent-bundle/routes';",
     "import { Agent } from '@agent-bundle/runtime';",
     "import { createElement, Suspense } from 'react';",
     "import { z } from 'zod';",
@@ -30,9 +31,9 @@ export const gatedRouteFiles: Readonly<Record<string, string>> = Object.freeze({
     "  return createElement(Agent.Text, null, 'stream complete');",
     '};',
     '',
-    'export default async function Live({ input, signal }) {',
+    'export default defineTool({ inputSchema, resultSchema }, async (input, { signal }) => {',
     "  return createElement(Agent.Result, { value: { done: true } }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'streaming', total: 1 }) }, createElement(Slow, { gate: input.gate, signal })));",
-    '}',
+    '});',
     '',
   ].join('\n'),
 });

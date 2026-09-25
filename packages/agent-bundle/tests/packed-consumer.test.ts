@@ -165,7 +165,7 @@ it('uses only an installed tarball after source deletion', async () => {
       writeFile(join(scriptProjectRoot, 'package.json'), '{"type":"module"}\n'),
       writeFile(
         join(scriptProjectRoot, 'agent-bundle.config.ts'),
-        "export default { plugin: { name: 'packed-script-run', version: '1.0.0' }, scripts: { shell: './shell.sh' }, targets: ['portable'] };\n",
+        "export default { plugin: { name: 'packed-script-run' }, scripts: { shell: './shell.sh' }, targets: ['portable'] };\n",
       ),
       writeFile(join(scriptProjectRoot, 'shell.sh'), "printf 'packed script stdout\\n'\nprintf 'packed script stderr\\n' >&2\n"),
     ]);
@@ -378,7 +378,7 @@ it('uses only an installed tarball after source deletion', async () => {
     const frameworkRoot = join(consumerRoot, 'framework-build-project');
     await mkdir(join(frameworkRoot, 'src', 'mcp'), { recursive: true });
     await Promise.all([
-      writeFile(join(frameworkRoot, 'package.json'), '{"name":"framework-build-fixture","type":"module","private":true}\n'),
+      writeFile(join(frameworkRoot, 'package.json'), '{"name":"framework-build-fixture","type":"module","private":true,"version":"1.0.0"}\n'),
       writeFile(join(frameworkRoot, 'tsconfig.json'), JSON.stringify({
         compilerOptions: {
           module: 'esnext',
@@ -391,7 +391,7 @@ it('uses only an installed tarball after source deletion', async () => {
       writeFile(join(frameworkRoot, 'agent-bundle.config.ts'), [
         'export default {',
         '  mcp: { servers: { greeter: {} } },',
-        "  plugin: { name: 'framework-build-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'framework-build-fixture' },",
         "  targets: ['claude', 'codex', 'portable'],",
         '};',
         '',

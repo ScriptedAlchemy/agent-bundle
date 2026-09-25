@@ -8,6 +8,11 @@ import { afterEach, expect, it } from '@rstest/core';
 import ts from 'typescript-5';
 
 import { build, validate } from '../src/api.ts';
+import {
+  agentBundleNodeModules,
+  agentBundlePackageRoot,
+  workspaceNodeModules,
+} from './helpers/workspace-paths.ts';
 import { removeTree } from './support/remove-tree.ts';
 
 const roots: string[] = [];
@@ -31,19 +36,22 @@ const equality = [
 
 /** The tool records every invocation it actually ran, so a rejected input provably ran nothing. */
 const tool = (name: string, schema: string, result: string, body: string): string => [
+  "import { defineTool } from 'agent-bundle/routes';",
   "import { Agent } from '@agent-bundle/runtime';",
-  "import type { ToolRouteProps } from 'agent-bundle';",
   "import { appendFile } from 'node:fs/promises';",
   "import { createElement } from 'react';",
   "import { z } from 'zod';",
-  `export const config = { description: '${name}' };`,
   `export const inputSchema = ${schema};`,
   `export const resultSchema = ${result};`,
-  `export default async function Route({ input }: ToolRouteProps<typeof inputSchema>) {`,
+  'export default defineTool({',
+  `  description: '${name}',`,
+  '  inputSchema,',
+  '  resultSchema,',
+  '}, async (input) => {',
   `  await appendFile(process.env['INVOCATIONS']!, JSON.stringify({ input, tool: '${name}' }) + '\\n');`,
   `  const value = ${body};`,
   "  return createElement(Agent.Result, { value }, createElement(Agent.Text, null, JSON.stringify(value)));",
-  '}',
+  '});',
   '',
 ].join('\n');
 
@@ -58,7 +66,7 @@ const tsconfig = (include: readonly string[], lib: readonly string[]): string =>
     skipLibCheck: true,
     strict: true,
     target: 'ES2022',
-    types: [],
+    types: ['node'],
   },
   include,
 }, null, 2)}\n`;
@@ -99,7 +107,15 @@ const callTool = async (client: Client, name: string, input: Record<string, unkn
 it('types callers by schema input and components by schema output in a clean generated project', { timeout: 120_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-caller-input-types-'));
   roots.push(root);
-  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await mkdir(join(root, 'node_modules', '@types'), { recursive: true });
+  await Promise.all([
+    symlink(join(agentBundleNodeModules, '@agent-bundle'), join(root, 'node_modules', '@agent-bundle'), 'dir'),
+    symlink(join(workspaceNodeModules, '@types', 'node'), join(root, 'node_modules', '@types', 'node')),
+    symlink(join(agentBundleNodeModules, '@types', 'react'), join(root, 'node_modules', '@types', 'react')),
+    symlink(join(agentBundleNodeModules, 'react'), join(root, 'node_modules', 'react'), 'dir'),
+    symlink(agentBundlePackageRoot, join(root, 'node_modules', 'agent-bundle'), 'dir'),
+    symlink(join(agentBundleNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
+  ]);
   const invocations = join(root, 'invocations.ndjson');
   await Promise.all([
     writeProjectFile(root, 'package.json', JSON.stringify({
@@ -110,7 +126,7 @@ it('types callers by schema input and components by schema output in a clean gen
     })),
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
-      "export default defineConfig({ plugin: { name: 'caller-input-types-fixture', version: '1.0.0' }, targets: ['portable'] });",
+      "export default defineConfig({ plugin: { name: 'caller-input-types-fixture' }, targets: ['portable'] });",
       '',
     ].join('\n')),
     // A defaulted field: optional to the caller, present for the component.

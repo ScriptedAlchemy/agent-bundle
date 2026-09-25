@@ -72,7 +72,7 @@ const writeProxyProject = async (root: string): Promise<string> => {
       '',
       'export default defineConfig({',
       "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
-      "  plugin: { name: 'host-proxy-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'host-proxy-fixture' },",
       "  targets: ['portable'],",
       '});',
       '',

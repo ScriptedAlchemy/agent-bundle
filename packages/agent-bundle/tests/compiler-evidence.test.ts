@@ -271,7 +271,7 @@ describe('compiler evidence on host-pack builds', () => {
     const root = await fixtureRoot({
       'agent-bundle.config.ts': [
         'export default {',
-        "  plugin: { name: 'compiler-evidence-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'compiler-evidence-fixture' },",
         "  targets: ['portable'],",
         "  tools: { rsbuild: { output: { externals: ['left-pad'] } } },",
         '};',

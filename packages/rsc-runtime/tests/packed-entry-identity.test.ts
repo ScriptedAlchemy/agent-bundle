@@ -63,7 +63,7 @@ describe.sequential('packed @agent-bundle/runtime entry identity', () => {
         markdownStream.tarball,
         'react@19.2.8',
         'react-dom@19.2.8',
-        'zod@4.5.4',
+        'zod@4.6.4',
       ], { cwd: consumer, env: installedEnvironment() });
 
       const installed = join(consumer, 'node_modules', '@agent-bundle', 'runtime');

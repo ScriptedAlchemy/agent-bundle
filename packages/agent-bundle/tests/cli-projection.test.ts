@@ -35,7 +35,7 @@ const writeTree = async (root: string, files: Readonly<Record<string, string>>):
 };
 
 const fixtureConfig = (extra: Readonly<Record<string, unknown>> = {}): AgentBundleConfig => ({
-  plugin: { name: 'projection-fixture', version: '1.0.0' },
+  plugin: { name: 'projection-fixture' },
   ...extra,
 });
 
@@ -46,13 +46,22 @@ const toolModule = (options: {
   readonly config?: string;
   readonly schema?: string;
   readonly inputJsonSchema?: RouteInputSchema | null;
-} = {}): string => [
-  `export const config = ${options.inputJsonSchema === null ? options.config ?? '{}' : (options.config ?? "{ description: 'Submit work.' }").replace('{', '{ inputJsonSchema: ' + JSON.stringify(options.inputJsonSchema ?? { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' } }, required: ['laneKey'] }) + ',')};`,
-  `export const inputSchema = ${options.schema ?? 'z.object({ laneKey: z.string() }).strict()'};`,
-  'export const resultSchema = z.object({ ok: z.boolean() });',
-  'export default async function Tool() { return undefined; }',
-  '',
-].join('\n');
+} = {}): string => {
+  const config = options.inputJsonSchema === null
+    ? options.config ?? '{}'
+    : (options.config ?? "{ description: 'Submit work.' }").replace(
+      '{',
+      `{ inputJsonSchema: ${JSON.stringify(options.inputJsonSchema ?? { type: 'object', additionalProperties: false, properties: { laneKey: { type: 'string' } }, required: ['laneKey'] })},`,
+    );
+  const fields = config.slice(1, -1).trim();
+  return [
+    "import { defineTool } from 'agent-bundle/routes';",
+    `export const inputSchema = ${options.schema ?? 'z.object({ laneKey: z.string() }).strict()'};`,
+    'export const resultSchema = z.object({ ok: z.boolean() });',
+    `export default defineTool({ ${fields}${fields.length === 0 ? '' : ', '}inputSchema, resultSchema }, async function Tool() { return undefined; });`,
+    '',
+  ].join('\n');
+};
 
 const cliModule = (config: string, mapInput?: string): string => [
   `export const config = ${config};`,

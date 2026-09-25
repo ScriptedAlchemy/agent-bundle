@@ -24,7 +24,6 @@ export default {
   plugin: {
     description: 'A plugin whose MCP App is exposed through web.apps and opened with <plugin> web.',
     name: 'web-surface-fixture',
-    version: '1.0.0',
   },
   targets: ['portable'],
   // Omitting `tool` proves unique live-server resolution.

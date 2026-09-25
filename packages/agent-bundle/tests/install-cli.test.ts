@@ -42,7 +42,7 @@ describe('package-bound lifecycle commands', () => {
   it('pins the bundle root and forwards install flags to installBundle', async () => {
     const calls: unknown[] = [];
     const { code, stdout } = await runPinned(
-      ['install', 'cursor', '--mode', 'marketplace', '--scope', 'project', '--force', '--json'],
+      ['install', 'cursor', '--mode', 'marketplace', '--scope', 'project', '--replace', '--json'],
       {
         installBundle: async (options) => {
           calls.push(options);

@@ -164,7 +164,7 @@ const publishHookEpoch = async (
         sessionStart: './src/hooks/session-start.ts',
         stop: './src/hooks/stop.ts',
       },
-      plugin: { name: 'hook-playground-fixture', version: '1.0.0' },
+      plugin: { name: 'hook-playground-fixture' },
       targets: ['codex', 'claude'],
     }),
     { skills: [] },

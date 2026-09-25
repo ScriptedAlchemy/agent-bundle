@@ -67,7 +67,7 @@ const writeProject = async (root: string, options: FixtureOptions): Promise<void
       "  codex: { nativeHooks: './native/codex.json' },",
       "  hooks: { sessionStart: './src/hooks/session-start.ts' },",
       "  mcp: { servers: { fixture: { entry: './src/mcp/fixture.ts' } } },",
-      "  plugin: { description: 'Composite root fixture.', logo: 'docs/media/logo.svg', name: 'composite-fixture', version: '1.0.0' },",
+      "  plugin: { description: 'Composite root fixture.', logo: 'docs/media/logo.svg', name: 'composite-fixture' },",
       "  scripts: { hello: './src/tools/hello.ts' },",
       `  targets: ${JSON.stringify(options.targets)},`,
       '};',

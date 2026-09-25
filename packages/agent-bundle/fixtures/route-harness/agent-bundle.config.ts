@@ -5,7 +5,6 @@ export default {
   plugin: {
     description: 'Conventional route modules for the route-unit test harness.',
     name: 'route-harness',
-    version: '1.0.0',
   },
   routes: {
     mcpCommands: true,

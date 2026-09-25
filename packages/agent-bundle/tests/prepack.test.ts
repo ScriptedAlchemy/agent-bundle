@@ -267,7 +267,7 @@ it('reports package, model, host, and provenance version disagreement as AB7013'
 
 it('reports installed dependencies a consumer never needs as AB7014, per field', () => withPackageDocument(
   (document) => {
-    document.dependencies = { zod: '4.5.4', effect: '4.0.0' };
+    document.dependencies = { zod: '4.6.4', effect: '4.0.0' };
     document.peerDependencies = { react: '19.2.8', 'optional-host': '^1.0.0' };
     document.peerDependenciesMeta = { 'optional-host': { optional: true } };
     document.devDependencies = { 'agent-bundle': 'workspace:*' };
@@ -644,7 +644,7 @@ it('surfaces a warning when the only finding is an unresolvable optional depende
 
 it('accepts a dependency that only packed declaration files reference, including @types for a type directive', () => withPackageDocument(
   (document) => {
-    document.dependencies = { zod: '^4.5.4', '@types/node': '^22.0.0', 'driver-package': '^1.0.0', 'never-loaded': '^1.0.0' };
+    document.dependencies = { zod: '^4.6.4', '@types/node': '^22.0.0', 'driver-package': '^1.0.0', 'never-loaded': '^1.0.0' };
     document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
   },
   async () => {

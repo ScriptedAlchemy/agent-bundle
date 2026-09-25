@@ -10,8 +10,8 @@ Agent Bundle has one newcomer model:
    static resources, and `agent-bundle.config.ts` stays at the project root.
 2. **One small flat config.** `agent-bundle.config.ts` holds project identity,
    targets, and policy that no route file can own. The release version is
-   not repeated there: `package.json` is the single version source
-   (`plugin.version` is deprecated; see [Diagnostics](diagnostics.md#release-identity-ab4001-ab4008ab4011-ab4013)).
+   not repeated there: `package.json` is the single version source; see
+   [Diagnostics](diagnostics.md#release-identity-ab4009ab4011-ab4013).
 3. **JSX = rendering.** An executable route is one async default Server
    Component. It does the work and returns `Agent.*`; there is no public
    `execute`/`render` split.
@@ -42,24 +42,20 @@ A tool is one file:
 
 ```tsx
 // src/mcp/runtime/tools/status.tsx
-import React from 'react';
-import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
-import { Agent, agent } from '@agent-bundle/runtime';
+import { defineTool } from 'agent-bundle/routes';
+import { Agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
-export const config = {
+export default defineTool({
   annotations: { readOnlyHint: true },
   description: 'Read runtime status.',
-} satisfies ToolConfig;
-export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();
-export const resultSchema = z.object({ status: z.literal('ready') }).strict();
-
-export default async function Status({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  inputSchema: z.object({ verbose: z.boolean().optional() }).strict(),
+  resultSchema: z.object({ status: z.literal('ready') }).strict(),
+}, async (input, { signal }) => {
   if (signal.aborted) throw new DOMException('aborted', 'AbortError');
-  if (input.verbose) await agent();
   const result = { status: 'ready' as const };
   return <Agent.Result value={result}><Agent.Text>Runtime is ready.</Agent.Text></Agent.Result>;
-}
+});
 ```
 
 An MCP App is one browser entry under `src/mcp/<server>/apps/`, and a tool
@@ -77,13 +73,14 @@ export const config = {
 
 ```tsx
 // src/mcp/runtime/tools/open-dashboard.tsx
-import type { ToolConfig } from 'agent-bundle';
-import { appResourceUri } from 'agent-bundle/routes';
+import { appResourceUri, defineTool } from 'agent-bundle/routes';
 
-export const config = {
+export default defineTool({
   _meta: { ui: { resourceUri: appResourceUri('dashboard') } },
   description: 'Open the dashboard.',
-} satisfies ToolConfig;
+  inputSchema,
+  resultSchema,
+}, handler);
 ```
 
 `appResourceUri('dashboard')` is resolved by the compiler to the App route's
@@ -107,9 +104,9 @@ emitted when the `web` config key lists declared Apps; `agent-bundle dev`
 serves the same host at `/web/<server>/<app>`. See
 [Entry conventions](entry-conventions.md#plugin-web).
 
-The compiler statically reads `config`, imports schemas and implementations
-only into generated entries, installs `runAgentRequest`, and derives the real
-MCP server from the route graph. Each call renders through a warm internal
+The compiler statically reads `defineTool` metadata and other routes' `config`,
+imports schemas and implementations only into generated entries, installs
+`runAgentRequest`, and derives the real MCP server from the route graph. Each call renders through a warm internal
 Flight dispatcher and lowers the final Agent Document to legal MCP output.
 Flight is an implementation transport inside the generated runtime, never a
 public host wire protocol.
@@ -627,7 +624,7 @@ content, records an install receipt (`.agent-bundle-install.json`: plugin,
 version, content hash, owned files and directories), replaces a same-version stale copy of its
 own plugin in place (owned files only; legacy `state/` survives, while current builds keep
 framework state outside the plugin root), and accepts
-`--replace` (alias `--force`) to replace a different installed version or adopt
+`--replace` to replace a different installed version or adopt
 a pre-receipt copy. Foreign directories are refused with a content-hash
 comparison. It never invokes sudo or changes PATH. `agent-bundle install <host>
 [--replace]` applies the same policy for every host, and `agent-bundle doctor

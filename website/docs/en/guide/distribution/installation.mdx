@@ -153,7 +153,7 @@ Every emitted installer, `agent-bundle install <host>` and the standalone `insta
 shares one replace policy. An identical copy is an `already-installed`
 no-op. A copy of the **same version whose content hash differs** is replaced automatically, so
 rebuilding without a version bump no longer needs an uninstall and `rm -rf`. A different version is
-refused with `AB7005` unless you pass `--replace` (alias `--force`), and a foreign directory, one
+refused with `AB7005` unless you pass `--replace`, and a foreign directory, one
 this plugin's installer did not place, is refused either way. The standalone `install.mjs` hashes a
 receipt-less destination from the files present there. That includes a legacy copy and a staged
 marketplace plugin. When `agent-bundle.manifest.json` is present, the artifact hash uses that

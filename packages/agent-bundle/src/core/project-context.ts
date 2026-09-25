@@ -200,10 +200,9 @@ export const snapshotPackageDescriptiveMetadata = (root: string): PackageDescrip
 
 /**
  * The version a project carries while it has no release identity at all:
- * neither an authored `plugin.version` nor a valid `package.json` version.
- * It is a development-only value — `agent-bundle build` refuses to package
- * a project resting on it (AB4013), so it can never reach a release
- * artifact.
+ * no valid `package.json` version. It is a development-only value —
+ * `agent-bundle build` refuses to package a project resting on it (AB4013),
+ * so it can never reach a release artifact.
  */
 export const developmentFallbackVersion = '0.0.0-dev';
 

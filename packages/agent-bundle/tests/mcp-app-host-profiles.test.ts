@@ -70,7 +70,7 @@ const normalizedExtensions = async (extensions: Readonly<Record<string, unknown>
   (await normalizeProject({
     config: {
       ...extensions,
-      plugin: { name: 'host-profile-normalized-config', version: '1.0.0' },
+      plugin: { name: 'host-profile-normalized-config' },
     },
     configPath: `${projectRoot}/agent-bundle.config.ts`,
     context: {

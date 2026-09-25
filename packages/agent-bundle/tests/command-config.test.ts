@@ -22,7 +22,7 @@ const loadedProject = (
   targets: readonly string[],
 ): LoadedConfig => ({
   config: {
-    plugin: { name: 'command-fixture', version: '1.0.0' },
+    plugin: { name: 'command-fixture' },
     targets: [...targets],
   },
   configPath: join(root, 'agent-bundle.config.ts'),
@@ -41,7 +41,7 @@ const withProject = async (
   try {
     await writeFile(
       join(root, 'agent-bundle.config.ts'),
-      "export default { plugin: { name: 'command-fixture', version: '1.0.0' } };\n",
+      "export default { plugin: { name: 'command-fixture' } };\n",
     );
     await run(root);
   } finally {
@@ -164,7 +164,7 @@ it('discovers flat non-ignored commands deterministically and omits the collecti
       writeFile(join(root, 'src', 'commands', 'ignored.md'), '# Ignored\n'),
     ]);
     const config: AgentBundleConfig = {
-      plugin: { name: 'command-fixture', version: '1.0.0' },
+      plugin: { name: 'command-fixture' },
     };
 
     const discovered = await discoverProject(root, config);

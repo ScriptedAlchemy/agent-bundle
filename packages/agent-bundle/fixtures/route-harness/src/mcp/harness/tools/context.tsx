@@ -1,22 +1,6 @@
+import { defineTool } from 'agent-bundle/routes';
 import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
 import { z } from 'zod';
-
-export const config = {
-  inputJsonSchema: {
-    "additionalProperties": false,
-    "properties": {
-      "host": {
-        "type": "string"
-      },
-      "session": {
-        "type": "string"
-      }
-    },
-    "type": "object"
-  },
-  description: 'Returns the request identity axes observed by this route.',
-  title: 'Context',
-};
 
 export const inputSchema = z.object({
   host: z.string().optional(),
@@ -32,7 +16,7 @@ export const resultSchema = z.object({
   workspace: z.unknown(),
 }).strict();
 
-export default async function Context() {
+async function Context() {
   const context = await agent();
   const actor: JsonValue = context.actor.state === 'available'
     ? { source: context.actor.source, state: context.actor.state, value: { id: context.actor.value.id } }
@@ -66,3 +50,22 @@ export default async function Context() {
     </Agent.Result>
   );
 }
+
+export default defineTool({
+inputJsonSchema: {
+    "additionalProperties": false,
+    "properties": {
+      "host": {
+        "type": "string"
+      },
+      "session": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  description: 'Returns the request identity axes observed by this route.',
+  title: 'Context',
+  inputSchema,
+  resultSchema,
+}, async () => Context());

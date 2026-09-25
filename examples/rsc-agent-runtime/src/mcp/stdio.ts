@@ -8,7 +8,7 @@ const main = async (): Promise<void> => {
   const guard = redirectConsoleToStderr();
   const { createRuntimeMcpServer } = await import('./create-server.js');
   const server = createRuntimeMcpServer();
-  const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js');
+  const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
   guard.restoreProtocolStdout();
   await runStdioServer({
     server,

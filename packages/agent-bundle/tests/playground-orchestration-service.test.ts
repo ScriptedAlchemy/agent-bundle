@@ -28,7 +28,7 @@ import type {
   PlaygroundSubscription,
   PlaygroundTraceEvent,
 } from '../src/dev/playground/playground-store.ts';
-import { PlaygroundStore } from '../src/dev/playground/playground-store.ts';
+import { PlaygroundService } from '../src/dev/playground/playground-store.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
 import { eventuallyPasses } from './support/eventually.ts';
 import { deepFreeze } from '../src/core/freeze.ts';
@@ -554,7 +554,7 @@ it('exports and promotes the real durable response event reference from a native
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-durable-'));
   const projectRoot = join(root, 'project');
   await mkdir(projectRoot, { recursive: true });
-  const trace = new PlaygroundStore({
+  const trace = new PlaygroundService({
     projectId: 'native-durable-project',
     projectRoot,
     storageRoot: join(projectRoot, '.agent-bundle', 'playground'),

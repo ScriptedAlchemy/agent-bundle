@@ -88,8 +88,6 @@ export interface AgentDocument {
   readonly version: typeof AGENT_DOCUMENT_VERSION;
 }
 
-export type AgentDocumentSnapshot = AgentDocument;
-
 export interface AgentRenderError {
   readonly code: string;
   readonly data?: JsonValue;
@@ -97,7 +95,7 @@ export interface AgentRenderError {
 }
 
 export type AgentRenderEvent =
-  | { readonly document: AgentDocumentSnapshot; readonly sequence: number; readonly type: 'shell' }
+  | { readonly document: AgentDocument; readonly sequence: number; readonly type: 'shell' }
   | {
     readonly completed: number;
     readonly message?: string;
@@ -107,7 +105,7 @@ export type AgentRenderEvent =
   }
   | {
     readonly boundaryId: string;
-    readonly document: AgentDocumentSnapshot;
+    readonly document: AgentDocument;
     readonly sequence: number;
     readonly type: 'replace';
   }
@@ -117,7 +115,7 @@ export type AgentRenderEvent =
     readonly sequence: number;
     readonly type: 'error';
   }
-  | { readonly document: AgentDocumentSnapshot; readonly sequence: number; readonly type: 'complete' };
+  | { readonly document: AgentDocument; readonly sequence: number; readonly type: 'complete' };
 
 export type AgentRenderEventInput =
   | { readonly document: AgentDocument; readonly type: 'shell' }

@@ -7,7 +7,7 @@ import { expect, it } from '@rstest/core';
 
 import { timeScale } from './support/time-scale.ts';
 import {
-  PlaygroundStore as PlaygroundService,
+  PlaygroundService,
   PlaygroundServiceCloseError,
   PlaygroundSessionCloseError,
   type PlaygroundEventInput,

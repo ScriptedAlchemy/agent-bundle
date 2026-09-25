@@ -49,7 +49,7 @@ it('serves an exposed App and registers its opening call for page binding', asyn
         "    apps: { status: { entry: './views/status.ts', resourceUri: 'ui://fixture/status.html', template: './views/status.html' } },",
         "    entry: './src/server.ts',",
         '  } } },',
-        "  plugin: { name: 'dev-web-host-fixture', version: '1.0.0' },",
+        "  plugin: { name: 'dev-web-host-fixture' },",
         "  targets: ['portable'],",
         "  web: { apps: [{ app: 'status/status', input: { service: 'compiler' }, tool: 'show-status' }] },",
         '});',

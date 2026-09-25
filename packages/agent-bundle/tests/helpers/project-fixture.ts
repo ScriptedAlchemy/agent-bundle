@@ -31,6 +31,10 @@ const sourceEntryPoint = resolve(
   process.cwd(),
   'packages/agent-bundle/src/core/types.ts',
 );
+const routesEntryPoint = resolve(
+  process.cwd(),
+  'packages/agent-bundle/src/routes/definitions.ts',
+);
 
 export const createProjectFixture = async (
   options: ProjectFixtureOptions = {},
@@ -42,7 +46,22 @@ export const createProjectFixture = async (
   const configPath = join(root, 'agent-bundle.config.ts');
 
   if (options.config !== undefined || options.files !== undefined) {
-    const files = options.files ?? {};
+    const authoredPackage = options.files?.['package.json'];
+    let packageJson = authoredPackage ?? '{"type":"module"}\n';
+    if (typeof packageJson === 'string') {
+      try {
+        const document = JSON.parse(packageJson) as unknown;
+        if (document !== null && typeof document === 'object' && !Array.isArray(document) && !('version' in document)) {
+          packageJson = `${JSON.stringify({ ...document, version: '1.0.0' })}\n`;
+        }
+      } catch {
+        // Malformed package documents belong to the test that authored them.
+      }
+    }
+    const files: Readonly<Record<string, string | Uint8Array>> = {
+      ...options.files,
+      'package.json': packageJson,
+    };
     await Promise.all([configPath, ...Object.keys(files).map((relativePath) => join(root, relativePath))]
       .map((path) => mkdir(dirname(path), { recursive: true })));
     await Promise.all([
@@ -80,17 +99,25 @@ export const createProjectFixture = async (
 
   await Promise.all([
     writeFile(join(root, '.gitignore'), '*.log\n'),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(
       join(root, 'node_modules/agent-bundle/package.json'),
       JSON.stringify({
         name: 'agent-bundle',
         type: 'module',
-        exports: './index.ts',
+        exports: {
+          '.': './index.ts',
+          './routes': './routes.ts',
+        },
       }),
     ),
     writeFile(
       join(root, 'node_modules/agent-bundle/index.ts'),
       `export { defineConfig } from ${JSON.stringify(sourceEntryPoint)};\n`,
+    ),
+    writeFile(
+      join(root, 'node_modules/agent-bundle/routes.ts'),
+      `export { defineTool } from ${JSON.stringify(routesEntryPoint)};\n`,
     ),
     writeFile(
       configPath,
@@ -103,7 +130,7 @@ export const createProjectFixture = async (
         '  projectRoot,',
         '  selectedTargets,',
         '}) => ({',
-        "  plugin: { name: 'review', version: '1.0.0' },",
+        "  plugin: { name: 'review' },",
         `  skills: ${skills},`,
         '  fixtureContext: { command, mode, projectRoot, selectedTargets },',
         '}));',

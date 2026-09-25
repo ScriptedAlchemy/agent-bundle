@@ -75,7 +75,7 @@ interface McpPageCommonProps {
   readonly initialToolPrefill?: McpToolPrefill;
   /** Absent when the host has no Inspector launcher; the section then offers only the config download. */
   readonly inspectorLaunch?: McpPageInspectorLaunch;
-  readonly onDownloadConfig?: (download: McpConfigDownload) => void;
+  readonly onDownloadConfig?: (download: McpDownload) => void;
   readonly onDownloadTrace?: (download: McpDownload) => void;
   /** The shell router; a frame's lifted `correlationId` links to the unified Trace through it. */
   readonly onNavigate?: (location: WorkbenchLocation) => void;
@@ -158,10 +158,8 @@ export interface McpPageRuntimeProps extends McpPageCommonProps {
   readonly source: Extract<McpPageSource, { readonly kind: 'runtime' }>;
 }
 
-/** Legacy artifact props remain source-compatible; runtime callers supply only the discriminated source. */
+/** Artifact inspection and runtime sessions are separate Workbench product modes. */
 export type McpPageProps = McpPageArtifactProps | McpPageRuntimeProps;
-
-export type McpConfigDownload = McpDownload;
 
 export interface McpProtocolEvidenceProps {
   readonly ariaLabel: string;
@@ -988,7 +986,7 @@ const connectionSummary = (connection: McpBrowserSessionModel['connection']): st
     .join(' · ') || 'Connection negotiated.';
 };
 
-export const mcpConfigDownload = (config: McpSessionInspectorConfig, sessionId: string): McpConfigDownload => ({
+export const mcpConfigDownload = (config: McpSessionInspectorConfig, sessionId: string): McpDownload => ({
   blob: new Blob([`${JSON.stringify(config, null, 2)}\n`], { type: 'application/json' }),
   filename: `mcp-${sessionId}-inspector.json`,
 });

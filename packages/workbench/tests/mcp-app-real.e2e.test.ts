@@ -79,7 +79,7 @@ const writeRealAppProject = async (root: string): Promise<void> => {
     symlink(join(workbenchNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
   ]);
   await Promise.all([
-    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
       "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
@@ -104,7 +104,7 @@ const writeRealAppProject = async (root: string): Promise<void> => {
       '',
       'export default defineConfig({',
       "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
-      "  plugin: { name: 'real-app-e2e-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'real-app-e2e-fixture' },",
       "  skills: ['src/skills/review'],",
       "  targets: ['portable'],",
       '});',
@@ -121,7 +121,7 @@ const writeBundledAppProject = async (root: string): Promise<void> => {
     symlink(join(workbenchNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
   ]);
   await Promise.all([
-    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'views', 'dashboard.css'), '#view { color: rgb(18, 52, 86); font-weight: 700; }\n'),
     writeFile(join(root, 'views', 'dashboard.ts'), [
       "import { createAppClient } from 'agent-bundle/app';",
@@ -179,7 +179,7 @@ const writeBundledAppProject = async (root: string): Promise<void> => {
       "    apps: { dashboard: { entry: './views/dashboard.ts', resourceUri: 'ui://packed-release/dashboard.html', template: './views/shell.html' } },",
       "    entry: './src/server.ts',",
       '  } } },',
-      "  plugin: { name: 'bundled-app-e2e-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'bundled-app-e2e-fixture' },",
       "  skills: ['src/skills/review'],",
       "  targets: ['portable'],",
       '});',
@@ -217,19 +217,18 @@ const writeLifecycleServer = async (root: string): Promise<void> => {
     writeFile(join(server, 'tools', 'show-lifecycle.tsx'), [
       "import { Agent } from '@agent-bundle/runtime';",
       "import React from 'react';",
-      "import type { ToolConfig, ToolRouteProps } from 'agent-bundle';",
-      "import { appResourceUri } from 'agent-bundle/routes';",
+      "import { appResourceUri, defineTool } from 'agent-bundle/routes';",
       "import { z } from 'zod';",
-      '',
-      'export const config = {',
-      "  _meta: { ui: { resourceUri: appResourceUri('lifecycle') } },",
-      "  description: 'Waits as long as it is told, then succeeds or fails on request.',",
-      '} satisfies ToolConfig;',
       '',
       'export const inputSchema = z.object({ delayMs: z.number().int().min(0), fail: z.boolean().optional() });',
       'export const resultSchema = z.object({ waited: z.number() });',
       '',
-      'export default async function ShowLifecycle({ input }: ToolRouteProps<typeof inputSchema>) {',
+      'export default defineTool({',
+      "  _meta: { ui: { resourceUri: appResourceUri('lifecycle') } },",
+      "  description: 'Waits as long as it is told, then succeeds or fails on request.',",
+      '  inputSchema,',
+      '  resultSchema,',
+      '}, async (input) => {',
       '  await new Promise((resolve) => setTimeout(resolve, input.delayMs));',
       '  return (',
       '    <Agent.Result value={{ waited: input.delayMs }}>',
@@ -238,7 +237,7 @@ const writeLifecycleServer = async (root: string): Promise<void> => {
       '        : <Agent.Text>{`Lifecycle waited ${String(input.delayMs)}ms.`}</Agent.Text>}',
       '    </Agent.Result>',
       '  );',
-      '}',
+      '});',
       '',
     ].join('\n')),
   ]);

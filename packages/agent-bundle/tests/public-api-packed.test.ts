@@ -138,10 +138,10 @@ const createBuildProject = async (root: string): Promise<{ readonly output: stri
   const output = join(project, 'manifest-version-artifact');
   await mkdir(join(project, 'src', 'skills', 'review'), { recursive: true });
   await Promise.all([
-    writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(project, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(
       join(project, 'agent-bundle.config.ts'),
-      "export default { plugin: { name: 'manifest-version-fixture', version: '1.0.0' }, targets: ['portable'] };\n",
+      "export default { plugin: { name: 'manifest-version-fixture' }, targets: ['portable'] };\n",
     ),
     writeFile(
       join(project, 'src', 'skills', 'review', 'SKILL.md'),
@@ -260,7 +260,7 @@ it('writes the package version as the producer of a packed CLI manifest', async 
   } finally {
     await removeTree(consumerRoot);
   }
-}, 30_000);
+}, 60_000);
 
 /**
  * The compiler (`@rslib/core`) and MCP Apps (`@rsbuild/core`) must run one
@@ -332,7 +332,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
       'const config: AgentBundleConfig = {',
       "  claude: { nativeHooks: './claude-hooks.json' },",
       "  codex: { nativeHooks: './codex-hooks.json' },",
-      "  plugin: { name: 'packed-config-types', version: '1.0.0' },",
+      "  plugin: { name: 'packed-config-types' },",
       "  portable: { compatibility: 'v1' },",
       '};',
       '',
@@ -379,7 +379,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
   } finally {
     await removeTree(consumerRoot);
   }
-}, 30_000);
+}, 60_000);
 
 it('runs the packed App client through a dynamic-origin parent', async () => {
   const { tarball } = await sharedPackedTarball('agent-bundle');

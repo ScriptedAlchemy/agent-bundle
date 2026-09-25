@@ -98,7 +98,7 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
     })),
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
-      "export default defineConfig({ plugin: { name: 'hook-receipt-fixture', version: '1.0.0' }, targets: ['claude'] });",
+      "export default defineConfig({ plugin: { name: 'hook-receipt-fixture' }, targets: ['claude'] });",
       '',
     ].join('\n')),
     writeProjectFile(root, 'src/events/tool/before.ts', [

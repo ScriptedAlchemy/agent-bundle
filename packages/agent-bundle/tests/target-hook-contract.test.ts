@@ -572,7 +572,7 @@ it('keeps a mismatched native selector visible so normalized planning fails clos
   };
   const config = {
     hooks: { beforeTool: { handler: './hooks/guard.ts', tools: ['claude:WebSearch'] } },
-    plugin: { name: 'native-selector-fixture', version: '1.0.0' },
+    plugin: { name: 'native-selector-fixture' },
     targets: ['codex'],
   } satisfies AgentBundleConfig;
   const model = await normalizeProject({

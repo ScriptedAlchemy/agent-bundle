@@ -61,7 +61,7 @@ it('delegates selected native hook sources through registered adapters', async (
       config: {
         example: { nativeHooks: './example-hooks.json' },
         hooks: { stop: './hooks/stop.ts' },
-        plugin: { name: 'example-fixture', version: '1.0.0' },
+        plugin: { name: 'example-fixture' },
       },
       configPath: join(root, 'agent-bundle.config.ts'),
       context: {
@@ -159,7 +159,7 @@ it('normalizes malformed native hook source values into diagnostics without skip
   try {
     const loaded: LoadedConfig = {
       config: {
-        plugin: { name: 'invalid-source-fixture', version: '1.0.0' },
+        plugin: { name: 'invalid-source-fixture' },
         targets: ['invalid', 'valid'],
       },
       configPath: join(root, 'agent-bundle.config.ts'),
@@ -199,7 +199,7 @@ it('normalizes thrown native hook sources into diagnostics', async () => {
   });
   const loaded: LoadedConfig = {
     config: {
-      plugin: { name: 'throwing-source-fixture', version: '1.0.0' },
+      plugin: { name: 'throwing-source-fixture' },
       targets: ['throws'],
     },
     configPath: join(root, 'agent-bundle.config.ts'),

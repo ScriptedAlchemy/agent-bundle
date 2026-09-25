@@ -42,7 +42,7 @@ const projectFiles: Readonly<Record<string, string>> = {
   'agent-bundle.config.ts': [
     "import { defineConfig } from 'agent-bundle/config';",
     'export default defineConfig({',
-    "  plugin: { description: 'Handler graph fixture.', name: 'handler-graph-fixture', version: '1.0.0' },",
+    "  plugin: { description: 'Handler graph fixture.', name: 'handler-graph-fixture' },",
     "  targets: ['claude'],",
     '});',
     '',
@@ -223,7 +223,7 @@ describe('handler artifact graph (#595)', () => {
   });
 
   it('attaches the handler leaf to the event route node, and the leaf\'s source graph is cheap by construction', async () => {
-    const graph = await compileRouteGraph(root, { plugin: { name: 'handler-graph-fixture', version: '1.0.0' } });
+    const graph = await compileRouteGraph(root, { plugin: { name: 'handler-graph-fixture' } });
     expect(graph.diagnostics).toEqual([]);
     expect(graph.events.map((route) => route.id)).toEqual(['event:tool/before']);
     expect(graph.events[0]!.handler).toEqual({

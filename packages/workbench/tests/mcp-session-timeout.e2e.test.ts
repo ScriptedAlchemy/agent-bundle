@@ -19,7 +19,7 @@ const writeTimeoutProject = async (root: string): Promise<void> => {
     symlink(join(agentBundleNodeModules, '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
   ]);
   await Promise.all([
-    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'package.json'), '{"type":"module","version":"1.0.0"}\n'),
     writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
       "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
@@ -34,7 +34,7 @@ const writeTimeoutProject = async (root: string): Promise<void> => {
       '',
       'export default defineConfig({',
       "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
-      "  plugin: { name: 'timeout-e2e-fixture', version: '1.0.0' },",
+      "  plugin: { name: 'timeout-e2e-fixture' },",
       "  targets: ['portable'],",
       '});',
       '',

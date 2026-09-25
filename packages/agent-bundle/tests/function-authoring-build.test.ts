@@ -13,8 +13,8 @@ it('runs compiled function events, explicit JSX views, and CLI metadata and JSON
   try {
     await symlink(join(process.cwd(), 'examples/audiobook-curator/node_modules'), join(root, 'node_modules'), 'dir');
     const files = {
-      'package.json': JSON.stringify({ name: 'function-authoring', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', react: '19.2.8', zod: '4.5.4' } }),
-      'agent-bundle.config.ts': `import { defineConfig } from 'agent-bundle/config'; export default defineConfig({ plugin: { name: 'function-authoring', version: '1.0.0' }, targets: ['claude'] });`,
+      'package.json': JSON.stringify({ name: 'function-authoring', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', react: '19.2.8', zod: '4.6.4' } }),
+      'agent-bundle.config.ts': `import { defineConfig } from 'agent-bundle/config'; export default defineConfig({ plugin: { name: 'function-authoring' }, targets: ['claude'] });`,
       'src/providers/unused.ts': `throw new Error('unused provider evaluated'); export default () => 'unused';`,
       'src/providers/policy.ts': `export default () => 'Writes disabled';`,
       'src/events/tool/before.ts': `import { events } from 'agent-bundle/routes'; export default events.tool.before({}, async ({canonical, provider}) => { if (canonical.payload.toolName?.value === 'Write') return { outcome: 'deny', reason: await provider('policy') }; });`,
@@ -96,7 +96,7 @@ it('shares one deadline across a lightweight handler and its deferred view', asy
     await symlink(join(process.cwd(), 'examples/audiobook-curator/node_modules'), join(root, 'node_modules'), 'dir');
     const files = {
       'package.json': JSON.stringify({ name: 'event-deadline', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', react: '19.2.8' } }),
-      'agent-bundle.config.ts': `import { defineConfig } from 'agent-bundle/config'; export default defineConfig({ plugin: { name: 'event-deadline', version: '1.0.0' }, targets: ['claude'] });`,
+      'agent-bundle.config.ts': `import { defineConfig } from 'agent-bundle/config'; export default defineConfig({ plugin: { name: 'event-deadline' }, targets: ['claude'] });`,
       'src/events/tool/after.ts': `export const config = { timeoutMs: 1000 };
 export default async ({ render }) => {
   await new Promise((resolve) => setTimeout(resolve, 350));
@@ -157,8 +157,8 @@ it('mounts identities, state, notices, and provider observations in a compiled l
   try {
     await symlink(join(process.cwd(), 'examples/audiobook-curator/node_modules'), join(root, 'node_modules'), 'dir');
     const files = {
-      'package.json': JSON.stringify({ name: 'event-context', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', zod: '4.5.4' } }),
-      'agent-bundle.config.ts': `import { defineConfig } from 'agent-bundle/config'; export default defineConfig({ plugin: { name: 'event-context', version: '1.0.0' }, targets: ['claude'] });`,
+      'package.json': JSON.stringify({ name: 'event-context', type: 'module', version: '1.0.0', dependencies: { '@agent-bundle/runtime': 'workspace:*', zod: '4.6.4' } }),
+      'agent-bundle.config.ts': `import { defineConfig } from 'agent-bundle/config'; export default defineConfig({ plugin: { name: 'event-context' }, targets: ['claude'] });`,
       'src/state.ts': `import { defineState } from '@agent-bundle/runtime/state'; import { z } from 'zod';
 export default defineState({ id: 'event-context/state', lifetime: 'workspace-durable', initial: { count: 7 }, schema: z.object({ count: z.number() }), events: { tick: z.object({}) }, reduce: (state) => state });`,
       'src/providers/context.ts': `export default async (ctx) => JSON.stringify({ session: ctx.session, workspace: ctx.workspace, lineage: ctx.lineage, plugin: ctx.plugin, snapshot: await ctx.state.read(), notices: ctx.notices !== undefined });`,

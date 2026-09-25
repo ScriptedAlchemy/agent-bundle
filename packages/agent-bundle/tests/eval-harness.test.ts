@@ -122,7 +122,7 @@ it('validates and reads an explicit artifact exactly and builds one run-owned co
     try {
       const output = join(project.root, 'explicit-artifact');
       await writeFile(join(project.root, 'agent-bundle.config.ts'), `export default {
-        plugin: { name: 'eval-repository-fixture', version: '1.0.0' },
+        plugin: { name: 'eval-repository-fixture' },
         targets: ['cursor'], marketplace: true,
         output: { repositoryMarketplace: true },
       };`);
