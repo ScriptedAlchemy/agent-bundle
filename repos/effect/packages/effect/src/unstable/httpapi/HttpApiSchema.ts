@@ -15,7 +15,7 @@ import * as Schema from "../../Schema.ts"
 import * as SchemaAST from "../../SchemaAST.ts"
 import * as SchemaTransformation from "../../SchemaTransformation.ts"
 import * as Stream from "../../Stream.ts"
-import type * as Sse from "../encoding/Sse.ts"
+import * as Sse from "../encoding/Sse.ts"
 import { hasBody, type HttpMethod } from "../http/HttpMethod.ts"
 import * as HttpStatus from "../http/HttpStatus.ts"
 import type * as Multipart_ from "../http/Multipart.ts"
@@ -288,7 +288,7 @@ export interface StreamSse<
 export interface SseEventFromData<Data extends Schema.Constraint> extends
   Schema.ConstraintCodec<
     {
-      readonly id: string | undefined
+      readonly id?: string | undefined
       readonly event: string
       readonly data: Data["Type"]
     },
@@ -365,8 +365,7 @@ export const StreamSse: {
   readonly error?: Schema.Constraint | undefined
 }): StreamSse<Sse.EventCodec, Schema.Top, unknown> => {
   const events = options.events ?? (options.data === undefined ? undefined : Schema.Struct({
-    id: Schema.UndefinedOr(Schema.String),
-    event: Schema.String,
+    ...Sse.EventEncoded.fields,
     data: Schema.fromJsonString(options.data)
   }))
   if (events === undefined) {
@@ -735,8 +734,8 @@ export function encodeToWithHeaders<
       )
     ).annotate({
       "~httpApiWithHeaders": { body, headers, headersCodec: Schema.toEncoded(headers) },
-      ...(status !== undefined ? { httpApiStatus: status } : undefined),
-      ...(encoding !== undefined ? { "~httpApiEncoding": encoding } : undefined)
+      httpApiStatus: status,
+      "~httpApiEncoding": encoding
     })
   }
 }
@@ -994,11 +993,6 @@ export function getResponseEncodingSchema(schema: Schema.Constraint): ResponseEn
     return getResponseEncoding(schema.schema.ast)
   }
   return getResponseEncoding(schema.ast)
-}
-
-/** @internal */
-export function getStatusStream(self: StreamSchema): number {
-  return getStatusSuccess(self.ast)
 }
 
 /** @internal */

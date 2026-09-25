@@ -2,7 +2,7 @@ import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Effect, FileSystem, Layer, Option } from 'effect';
+import { ByteSize, Effect, FileSystem, Layer, Option } from 'effect';
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
@@ -58,7 +58,7 @@ const fileInfo = (size: number): FileSystem.File.Info => ({
   mtime: Option.none(),
   nlink: Option.none(),
   rdev: Option.none(),
-  size: FileSystem.Size(size),
+  size: ByteSize.bytes(size),
   type: 'File',
   uid: Option.none(),
 });

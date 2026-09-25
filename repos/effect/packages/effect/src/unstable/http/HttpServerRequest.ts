@@ -351,7 +351,7 @@ export const schemaBodyFormJson = <A, RD>(
 ) => {
   const parseMultipart = Multipart.schemaJson(schema, options)
   return (field: string) => {
-    const parseUrlParams = UrlParams.schemaJsonField(field, options).pipe(
+    const parseUrlParams = Schema.JsonFromUrlParamsField(field, options).pipe(
       Schema.decodeTo(schema),
       Schema.decodeEffect
     )
@@ -840,7 +840,11 @@ class ClientRequestImpl extends Inspectable.Class implements HttpServerRequest {
   }
 
   get arrayBuffer(): Effect.Effect<ArrayBuffer, HttpServerError> {
-    return Effect.map(this.bytes, (bytes) => bytes.slice().buffer)
+    return Effect.map(
+      this.bytes,
+      // Copy this view because Buffer views may share a larger ArrayBuffer.
+      (bytes) => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+    )
   }
 
   get upgrade(): Effect.Effect<Socket.Socket, HttpServerError> {

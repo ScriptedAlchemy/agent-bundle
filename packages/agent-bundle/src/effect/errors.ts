@@ -8,21 +8,21 @@ import { Data } from 'effect';
  * behaves as the plain `Error` subclass it replaces:
  *
  * - `instanceof Error` / `instanceof X`, `.name`, `.message`, `.code`,
- *   `.cause`, and `.stack` are unchanged (rc.112 `Data.Error` is
+ *   `.cause`, and `.stack` are unchanged (rc.117 `Data.Error` is
  *   `class extends globalThis.Error`).
  * - `JSON.stringify(error)`, `stableJson(error)`, and `{ ...error }` stay
- *   byte-identical to the plain-`Error` output. rc.112 `Data.Error#toJSON`
+ *   byte-identical to the plain-`Error` output. rc.117 `Data.Error#toJSON`
  *   would spread the constructor fields (`message`, `cause`) into the JSON
  *   and `stableJson` would then sort the keys; the base shadows `toJSON` so
  *   both serializers take their plain-object path ("own enumerable fields,
  *   insertion order").
- * - `util.inspect` / `console.error(error)` print the stack trace. rc.112
+ * - `util.inspect` / `console.error(error)` print the stack trace. rc.117
  *   installs `[nodejs.util.inspect.custom]` on the yieldable prototype
  *   (returning `toJSON()`), which would replace the stack with a field dump
  *   in CLI output; the base shadows it so Node's default `Error` formatting
  *   applies again.
  * - `cause` is installed exactly like `new Error(message, { cause })`: only
- *   when `options` carries the key, and never enumerable. rc.112 passes a
+ *   when `options` carries the key, and never enumerable. rc.117 passes a
  *   falsy `cause` through `Object.assign`-style property assignment, which
  *   would make it an enumerable own field.
  *

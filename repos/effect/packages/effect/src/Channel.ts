@@ -2035,7 +2035,7 @@ export const mapDoneEffect: {
 )
 
 const concurrencyIsSequential = (
-  concurrency: number | "unbounded" | undefined
+  concurrency: Types.Concurrency | undefined
 ) => concurrency === undefined || (concurrency !== "unbounded" && concurrency <= 1)
 
 /**
@@ -2074,7 +2074,7 @@ export const mapEffect: {
   <OutElem, OutElem1, OutErr1, Env1>(
     f: (d: OutElem, i: number) => Effect.Effect<OutElem1, OutErr1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly unordered?: boolean | undefined
     }
   ): <OutErr, OutDone, InElem, InErr, InDone, Env>(
@@ -2084,7 +2084,7 @@ export const mapEffect: {
     self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
     f: (d: OutElem, i: number) => Effect.Effect<OutElem1, OutErr1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly unordered?: boolean | undefined
     }
   ): Channel<OutElem1, OutErr | OutErr1, OutDone, InElem, InErr, InDone, Env | Env1>
@@ -2094,7 +2094,7 @@ export const mapEffect: {
     self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
     f: (d: OutElem, i: number) => Effect.Effect<OutElem1, OutErr1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly unordered?: boolean | undefined
     }
   ): Channel<OutElem1, OutErr | OutErr1, OutDone, InElem, InErr, InDone, Env | Env1> =>
@@ -2138,7 +2138,7 @@ const mapEffectConcurrent = <
   self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
   f: (o: OutElem, i: number) => Effect.Effect<OutElem2, EX, RX>,
   options: {
-    readonly concurrency: number | "unbounded"
+    readonly concurrency: Types.Concurrency
     readonly unordered?: boolean | undefined
   }
 ): Channel<OutElem2, OutErr | EX, OutDone, InElem, InErr, InDone, Env | RX> =>
@@ -2320,7 +2320,7 @@ export const tap: {
   <OutElem, X, OutErr1, Env1>(
     f: (d: Types.NoInfer<OutElem>) => Effect.Effect<X, OutErr1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
     }
   ): <OutErr, OutDone, InElem, InErr, InDone, Env>(
     self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>
@@ -2329,7 +2329,7 @@ export const tap: {
     self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
     f: (d: Types.NoInfer<OutElem>) => Effect.Effect<X, OutErr1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
     }
   ): Channel<OutElem, OutErr | OutErr1, OutDone, InElem, InErr, InDone, Env | Env1>
 } = dual(
@@ -2338,7 +2338,7 @@ export const tap: {
     self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
     f: (d: Types.NoInfer<OutElem>) => Effect.Effect<X, OutErr1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
     }
   ): Channel<OutElem, OutErr | OutErr1, OutDone, InElem, InErr, InDone, Env | Env1> =>
     mapEffect(self, (a) => Effect.as(f(a), a), options)
@@ -2384,7 +2384,7 @@ export const flatMap: {
   <OutElem, OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>(
     f: (d: OutElem) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly bufferSize?: number | undefined
     }
   ): <OutErr, OutDone, InElem, InErr, InDone, Env>(
@@ -2417,7 +2417,7 @@ export const flatMap: {
     self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
     f: (d: OutElem) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly bufferSize?: number | undefined
     }
   ): Channel<
@@ -2450,7 +2450,7 @@ export const flatMap: {
     self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
     f: (d: OutElem) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly bufferSize?: number | undefined
     }
   ): Channel<
@@ -2543,7 +2543,7 @@ const flatMapConcurrent = <
   self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
   f: (d: OutElem) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>,
   options: {
-    readonly concurrency: number | "unbounded"
+    readonly concurrency: Types.Concurrency
     readonly bufferSize?: number | undefined
   }
 ): Channel<
@@ -4142,6 +4142,97 @@ export const catchCause: {
       return Effect.suspend(() => currentPull)
     })
   }))
+
+/**
+ * Recovers from defects using the provided function.
+ *
+ * **Details**
+ *
+ * Typed failures and interruptions are not caught.
+ *
+ * **Example** (Recovering from a defect)
+ *
+ * ```ts import.meta.vitest
+ * import { Channel, Effect } from "effect"
+ *
+ * const channel = Channel.fromEffect(Effect.die("boom")).pipe(
+ *   Channel.catchDefect((defect) => Channel.succeed(`recovered: ${defect}`))
+ * )
+ *
+ * Effect.runSync(Channel.runCollect(channel)) // => ["recovered: boom"]
+ * ```
+ *
+ * @category error handling
+ * @since 4.0.0
+ */
+export const catchDefect: {
+  <OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>(
+    f: (defect: unknown) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>
+  ): <OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>(
+    self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>
+  ) => Channel<
+    OutElem | OutElem1,
+    OutErr | OutErr1,
+    OutDone | OutDone1,
+    InElem & InElem1,
+    InErr & InErr1,
+    InDone & InDone1,
+    Env | Env1
+  >
+  <
+    OutElem,
+    OutErr,
+    OutDone,
+    InElem,
+    InErr,
+    InDone,
+    Env,
+    OutElem1,
+    OutErr1,
+    OutDone1,
+    InElem1,
+    InErr1,
+    InDone1,
+    Env1
+  >(
+    self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
+    f: (defect: unknown) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>
+  ): Channel<
+    OutElem | OutElem1,
+    OutErr | OutErr1,
+    OutDone | OutDone1,
+    InElem & InElem1,
+    InErr & InErr1,
+    InDone & InDone1,
+    Env | Env1
+  >
+} = dual(2, <
+  OutElem,
+  OutErr,
+  OutDone,
+  InElem,
+  InErr,
+  InDone,
+  Env,
+  OutElem1,
+  OutErr1,
+  OutDone1,
+  InElem1,
+  InErr1,
+  InDone1,
+  Env1
+>(
+  self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
+  f: (defect: unknown) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>
+): Channel<
+  OutElem | OutElem1,
+  OutErr | OutErr1,
+  OutDone | OutDone1,
+  InElem & InElem1,
+  InErr & InErr1,
+  InDone & InDone1,
+  Env | Env1
+> => catchCauseFilter(self, Cause.findDefect, f))
 
 /**
  * Runs an effect with the full failure `Cause` when the channel fails, then
@@ -5983,7 +6074,7 @@ export const switchMap: {
   <OutElem, OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>(
     f: (d: OutElem) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly bufferSize?: number | undefined
     }
   ): <OutErr, OutDone, InElem, InErr, InDone, Env>(
@@ -6016,7 +6107,7 @@ export const switchMap: {
     self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
     f: (d: OutElem) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly bufferSize?: number | undefined
     }
   ): Channel<
@@ -6049,7 +6140,7 @@ export const switchMap: {
     self: Channel<OutElem, OutErr, OutDone, InElem, InErr, InDone, Env>,
     f: (d: OutElem) => Channel<OutElem1, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly bufferSize?: number | undefined
     }
   ): Channel<
@@ -6109,7 +6200,7 @@ export const switchMap: {
  */
 export const mergeAll: {
   (options: {
-    readonly concurrency: number | "unbounded"
+    readonly concurrency: Types.Concurrency
     readonly bufferSize?: number | undefined
     readonly switch?: boolean | undefined
   }): <OutElem, OutErr1, OutDone1, InElem1, InErr1, InDone1, Env1, OutErr, OutDone, InElem, InErr, InDone, Env>(
@@ -6142,7 +6233,7 @@ export const mergeAll: {
       Env
     >,
     options: {
-      readonly concurrency: number | "unbounded"
+      readonly concurrency: Types.Concurrency
       readonly bufferSize?: number | undefined
       readonly switch?: boolean | undefined
     }
@@ -6168,7 +6259,7 @@ export const mergeAll: {
       Env
     >,
     { bufferSize = 16, concurrency, switch: switch_ = false }: {
-      readonly concurrency: number | "unbounded"
+      readonly concurrency: Types.Concurrency
       readonly bufferSize?: number | undefined
       readonly switch?: boolean | undefined
     }
@@ -6515,9 +6606,8 @@ export const splitLines = <Err, Done>(): Channel<
       // Accumulates text that has not yet been terminated by a line break.
       // Content is carried across chunks until a terminator is found.
       let stringBuilder = ""
-      // Set when a chunk ends with \r so the next chunk can check whether
-      // the following character is \n (completing a \r\n pair) or not
-      // (standalone \r, which is itself a line terminator).
+      // A trailing \r completes the line immediately. Remember it only to
+      // suppress a leading \n in the next nonempty string.
       let midCRLF = false
       // Remembers the upstream Done value after the first time the upstream
       // signals completion, so subsequent pulls return Done immediately
@@ -6544,11 +6634,8 @@ export const splitLines = <Err, Done>(): Channel<
             let indexOfLF = str.indexOf("\n")
             if (midCRLF) {
               if (indexOfLF === 0) {
-                pushLine("")
                 from = 1
                 indexOfLF = str.indexOf("\n", from)
-              } else {
-                pushLine("")
               }
               midCRLF = false
             }
@@ -6558,18 +6645,19 @@ export const splitLines = <Err, Done>(): Channel<
                 from = indexOfLF + 1
                 indexOfLF = str.indexOf("\n", from)
               } else {
+                pushLine(str.substring(from, indexOfCR))
                 if (str.length === indexOfCR + 1) {
                   midCRLF = true
+                  from = str.length
                   indexOfCR = -1
                 } else {
-                  pushLine(str.substring(from, indexOfCR))
                   from = indexOfCR + (indexOfLF === indexOfCR + 1 ? 2 : 1)
                   indexOfCR = str.indexOf("\r", from)
                   indexOfLF = str.indexOf("\n", from)
                 }
               }
             }
-            stringBuilder = stringBuilder + str.substring(from, str.length - (midCRLF ? 1 : 0))
+            stringBuilder = stringBuilder + str.substring(from)
           }
         }
         return Arr.isReadonlyArrayNonEmpty(chunkBuilder) ? chunkBuilder : null
@@ -6584,7 +6672,7 @@ export const splitLines = <Err, Done>(): Channel<
           onFailure: Effect.failCause,
           onDone: (leftover) => {
             done = Option.some(leftover)
-            if (stringBuilder.length > 0 || midCRLF) {
+            if (stringBuilder.length > 0) {
               const last = stringBuilder
               stringBuilder = ""
               midCRLF = false
@@ -7699,7 +7787,7 @@ export const bind: {
     name: Exclude<N, keyof OutElem>,
     f: (a: NoInfer<OutElem>) => Channel<B, OutErr2, OutDone2, InElem2, InErr2, InDone2, Env2>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly bufferSize?: number | undefined
     }
   ): <OutErr, OutDone, InElem, InErr, InDone, Env>(
@@ -7734,7 +7822,7 @@ export const bind: {
     name: Exclude<N, keyof OutElem>,
     f: (a: NoInfer<OutElem>) => Channel<B, OutErr2, OutDone2, InElem2, InErr2, InDone2, Env2>,
     options?: {
-      readonly concurrency?: number | "unbounded" | undefined
+      readonly concurrency?: Types.Concurrency | undefined
       readonly bufferSize?: number | undefined
     }
   ): Channel<
@@ -7767,7 +7855,7 @@ export const bind: {
   name: Exclude<N, keyof OutElem>,
   f: (a: NoInfer<OutElem>) => Channel<B, OutErr2, OutDone2, InElem2, InErr2, InDone2, Env2>,
   options?: {
-    readonly concurrency?: number | "unbounded" | undefined
+    readonly concurrency?: Types.Concurrency | undefined
     readonly bufferSize?: number | undefined
   }
 ): Channel<
@@ -8067,16 +8155,6 @@ export const runCollect = <OutElem, OutErr, OutDone, Env>(
     acc.push(o)
     return acc
   })
-
-/**
- * Runs a channel and outputs the done value.
- *
- * @category running
- * @since 4.0.0
- */
-export const runDone = <OutElem, OutErr, OutDone, Env>(
-  self: Channel<OutElem, OutErr, OutDone, unknown, unknown, unknown, Env>
-): Effect.Effect<OutDone, OutErr, Env> => runWith(self, identity_, Effect.succeed)
 
 /**
  * Runs a channel until the first output element is available, returning it in
