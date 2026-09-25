@@ -15,7 +15,7 @@ import {
   responseDiagnostic,
   responseJson as writeJsonResponse,
 } from '../http.ts';
-import type { McpAppConsentChallenge } from './mcp-app-sandbox.ts';
+import type { McpAppConsentChallenge } from './mcp-app-sandbox-types.ts';
 
 // A force-close DELETE that lands after an accepted graceful close must stay
 // idempotent (200, not 404), so this window has to dominate the frame relay's

@@ -31,13 +31,15 @@ import {
   createMcpAppConsentActionDigest,
   createMcpAppDocumentPolicySnapshot,
   createMcpAppSandboxFrame,
-  type McpAppConsentAuthority,
-  type McpAppConsentChallenge,
-  type McpAppDocumentPolicySnapshot,
   type McpAppSandboxEndpoint,
   type McpAppSandboxFrame,
-  type McpAppSandboxPermissions,
 } from './mcp-app-sandbox.ts';
+import type {
+  McpAppConsentAuthority,
+  McpAppConsentChallenge,
+  McpAppDocumentPolicySnapshot,
+  McpAppSandboxPermissions,
+} from './mcp-app-sandbox-types.ts';
 
 export interface McpAppPreviewBindingAuthority extends McpAppBridgeBindingOperations {
   createBinding(options: {

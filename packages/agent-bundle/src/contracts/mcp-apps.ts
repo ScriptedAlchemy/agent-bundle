@@ -23,7 +23,7 @@ export type {
   McpAppConsentChallenge,
   McpAppConsentRequest,
   McpAppDocumentPolicySnapshot,
-} from '../dev/mcp-apps/mcp-app-sandbox.ts';
+} from '../dev/mcp-apps/mcp-app-sandbox-types.ts';
 
 export interface McpAppRelayFrame {
   readonly allow: string;
