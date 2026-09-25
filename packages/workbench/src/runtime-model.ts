@@ -102,8 +102,6 @@ export interface RuntimeModel {
   readonly history: readonly DevRuntimeRun[];
   readonly historyBootstrapPending?: boolean;
   readonly historyBootstrapTriggerSequence?: number;
-  readonly hmrClientCountBySurface: Readonly<Record<string, number>>;
-  readonly hmrClientCountKnownSurfaces: readonly string[];
   readonly lastConsumedEventSequence: number;
   readonly lastGoodRunId?: string;
   readonly nextEffectId: number;
@@ -160,7 +158,6 @@ const emptyAnnouncements = Object.freeze([]) as readonly RuntimeAnnouncement[];
 const emptyHistory = Object.freeze([]) as readonly DevRuntimeRun[];
 const emptySurfaces = Object.freeze([]) as readonly DevRuntimeSurface[];
 const emptyProfiles = Object.freeze([]) as readonly RuntimeProfileOption[];
-const emptyCounts = Object.freeze(Object.create(null)) as Readonly<Record<string, number>>;
 const runtimeTabs = new Set<RuntimeInspectorTab>(['tree', 'result', 'document', 'flight', 'protocol', 'state', 'diagnostics']);
 
 const isPlainRecord: (value: object) => value is Record<string, unknown> = sharedIsPlainRecord;
@@ -536,29 +533,10 @@ const resetFor = (model: RuntimeModel): DevRuntimeStateResetRequest | undefined 
   });
 };
 
-const replaceHmrCount = (model: RuntimeModel, surfaceId: string, count: number): RuntimeModel => {
-  const counts = Object.create(null) as Record<string, number>;
-  for (const [currentId, currentCount] of Object.entries(model.hmrClientCountBySurface)) counts[currentId] = currentCount;
-  counts[surfaceId] = count;
-  const frozen = Object.freeze(counts) as Readonly<Record<string, number>>;
-  return update(model, {
-    hmrClientCountBySurface: frozen,
-    hmrClientCountKnownSurfaces: Object.freeze(Object.keys(frozen).sort()),
-  });
-};
-
-const hmrCount = (details: Record<string, JsonValue> | undefined): Readonly<{ readonly count: number; readonly surfaceId: string }> | undefined => {
-  if (details === undefined || typeof details.surfaceId !== 'string' || details.surfaceId.length === 0 ||
-    typeof details.connectionCount !== 'number' || !Number.isSafeInteger(details.connectionCount) || details.connectionCount < 0) return undefined;
-  return Object.freeze({ count: details.connectionCount, surfaceId: details.surfaceId });
-};
-
 const bootstrapModel = (model: RuntimeModel, bootstrap: RuntimeBootstrap): RuntimeModel => {
   if (bootstrap.kind === 'unavailable') {
     return update(model, {
       history: emptyHistory,
-      hmrClientCountBySurface: emptyCounts,
-      hmrClientCountKnownSurfaces: emptyStrings,
       lastGoodRunId: undefined,
       providerSessionId: undefined,
       selectedFixtureId: undefined,
@@ -585,7 +563,6 @@ const bootstrapModel = (model: RuntimeModel, bootstrap: RuntimeBootstrap): Runti
   let next = update(model, {
     history: nextHistory,
     ...(providerRestarted && priorLastGood !== undefined ? { previousProviderLastGood: snapshot({ label: 'Previous provider session' as const, run: priorLastGood }) } : {}),
-    ...(providerRestarted ? { hmrClientCountBySurface: emptyCounts, hmrClientCountKnownSurfaces: emptyStrings } : {}),
     ...(nextLastGoodRunId === undefined ? { lastGoodRunId: undefined } : { lastGoodRunId: nextLastGoodRunId }),
     ...(nextLastGoodRunId !== undefined ? { previousProviderLastGood: undefined } : {}),
     providerSessionId: bootstrap.providerSessionId,
@@ -639,8 +616,6 @@ export const createRuntimeModel = ({ bootstrap, defaultProfileId, profiles }: Ru
     draft: runtimeDraftFor(undefined),
     expandedTraceSpanIds: emptyStrings,
     history: emptyHistory,
-    hmrClientCountBySurface: emptyCounts,
-    hmrClientCountKnownSurfaces: emptyStrings,
     lastConsumedEventSequence: 0,
     nextEffectId: 1,
     profiles: snapshots.length === 0 ? emptyProfiles : snapshots,
@@ -677,8 +652,6 @@ const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): Runti
   if (message.type === 'replay.gap') {
     if (message.latestDroppedSequence <= (model.replayDroppedThroughSequence ?? -1)) return model;
     const recovered = update(model, {
-      hmrClientCountBySurface: emptyCounts,
-      hmrClientCountKnownSurfaces: emptyStrings,
       replayGap: snapshot(message),
       replayDroppedThroughSequence: message.latestDroppedSequence,
     });
@@ -689,25 +662,7 @@ const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): Runti
   const advanced = update(model, { lastConsumedEventSequence: message.sequence });
   const event = message.payload;
   if (advanced.providerSessionId !== undefined && event.providerSessionId !== advanced.providerSessionId) {
-    return queueBootstrap(update(advanced, {
-      hmrClientCountBySurface: emptyCounts,
-      hmrClientCountKnownSurfaces: emptyStrings,
-      pendingActivationReplay: undefined,
-    }), message.sequence);
-  }
-  if (event.type === 'runtime.hmr.client-connected' || event.type === 'runtime.hmr.client-disconnected') {
-    const count = hmrCount(event.details);
-    if (count !== undefined) return replaceHmrCount(advanced, count.surfaceId, count.count);
-    const namedSurface = typeof event.details?.surfaceId === 'string' && event.details.surfaceId.length > 0
-      ? event.details.surfaceId
-      : undefined;
-    if (namedSurface === undefined) return update(advanced, { hmrClientCountBySurface: emptyCounts, hmrClientCountKnownSurfaces: emptyStrings });
-    const counts = Object.create(null) as Record<string, number>;
-    for (const [surfaceId, connectionCount] of Object.entries(advanced.hmrClientCountBySurface)) {
-      if (surfaceId !== namedSurface) counts[surfaceId] = connectionCount;
-    }
-    const frozen = Object.freeze(counts) as Readonly<Record<string, number>>;
-    return update(advanced, { hmrClientCountBySurface: frozen, hmrClientCountKnownSurfaces: Object.freeze(Object.keys(frozen).sort()) });
+    return queueBootstrap(update(advanced, { pendingActivationReplay: undefined }), message.sequence);
   }
   if ((event.type === 'runtime.run.started' || event.type === 'runtime.run.completed' || event.type === 'runtime.run.failed') && event.runId !== undefined) {
     return queueOperation(advanced, Object.freeze({ kind: 'read-run', runId: event.runId }));

@@ -22,7 +22,6 @@ import { McpProbeRoutes, type McpProbeRouteService } from './playground/mcp-prob
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session/mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session/mcp-session-service.ts';
-import { RuntimeMcpRoutes } from './runtime-mcp-routes.ts';
 import { RuntimeRoutes, type AgentDocumentRuntimeModule } from './runtime-routes.ts';
 import type { DevRuntimeSession } from './runtime-provider.ts';
 import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/playground-routes.ts';
@@ -426,7 +425,6 @@ export class ForegroundServer {
   readonly #mcpAppPreviews: McpAppRoutePreviewService | undefined;
   readonly #mcpAppRoutes: McpAppRoutes;
   readonly #mcpProbeRoutes: McpProbeRoutes;
-  readonly #runtimeMcpRoutes: RuntimeMcpRoutes;
   readonly #mcpSessionRoutes: McpSessionRoutes;
   readonly #runtimeRoutes: RuntimeRoutes;
   readonly #now: () => Date;
@@ -521,18 +519,6 @@ export class ForegroundServer {
     this.#mcpSessionRoutes = new McpSessionRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.mcpSessions === undefined ? {} : { service: options.mcpSessions }),
-    });
-    this.#runtimeMcpRoutes = new RuntimeMcpRoutes({
-      authorize: (request) => this.#assertMutationSession(request),
-      ...(options.mcpAppPreviews === undefined
-        ? {}
-        : {
-            awaitRegistryMutation: async () => { await options.mcpAppPreviews?.runtime?.flushRegistry?.(); },
-            awaitSessionClose: async ({ expectedSessionRevision, sessionId }) => {
-              await options.mcpAppPreviews?.runtime?.closeSession?.(sessionId, expectedSessionRevision);
-            },
-          }),
-      ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     });
     this.#runtimeRoutes = new RuntimeRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -715,7 +701,6 @@ export class ForegroundServer {
     this.#mcpAppRoutes.close();
     this.#hostMcpRoutes?.close();
     this.#mcpSessionRoutes.close();
-    this.#runtimeMcpRoutes.close();
     this.#runtimeRoutes.close();
     // Publish the hook playground drain before awaiting App tombstones. Its
     // abort callbacks may synchronously re-enter foreground shutdown, and
@@ -828,7 +813,6 @@ export class ForegroundServer {
     }
     if (await this.#mcpAppRoutes.handle(request, response)) return;
     if (await this.#mcpSessionRoutes.handle(request, response)) return;
-    if (await this.#runtimeMcpRoutes.handle(request, response)) return;
     if (await this.#runtimeRoutes.handle(request, response)) return;
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
     if (await this.#mcpProbeRoutes.handle(request, response)) return;

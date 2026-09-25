@@ -204,7 +204,6 @@ const Workbench = () => {
       } catch (reason) {
         setConnectionError(connectionFailure(reason));
       }
-      mcpAppClient.current?.resetRuntimeForForegroundReplacement();
       resetRuntimeInstance.current();
       runtimeController.current?.close();
       runtimeController.current = undefined;
@@ -214,7 +213,7 @@ const Workbench = () => {
     },
     foreground: clients.foreground,
   }));
-  const appClient = (mcpAppClient.current ??= new McpAppClient({ foreground: clients.foreground, projectClient }));
+  const appClient = (mcpAppClient.current ??= new McpAppClient({ foreground: clients.foreground }));
   if (mcpControllerRef.current !== mcpController) mcpControllerRef.current = mcpController;
 
   const buildId = status === undefined ? undefined : activeEpochFor(status)?.id;
@@ -338,7 +337,6 @@ const Workbench = () => {
         } catch {
           // Draining errors are surfaced by the owning controller while active.
         }
-        mcpAppClient.current?.disposeRuntime();
         next.close();
       })();
       runtimeController.current?.close();

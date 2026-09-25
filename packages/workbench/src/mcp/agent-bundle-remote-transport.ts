@@ -1,7 +1,6 @@
 import type { JSONRPCMessage, Transport, TransportSendOptions } from '@modelcontextprotocol/client';
 
 import { mcpCorrelationMetaKey } from '../../../agent-bundle/src/contracts/mcp-session.ts';
-import type { RuntimeVector } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isRecord, parseStrictResponseJson } from '../client-helpers.ts';
 import { readNdjsonResponseFrames } from '../ndjson.ts';
 import {
@@ -13,9 +12,9 @@ import {
 } from './mcp-route-client.ts';
 
 const maxEmptyStreamReconnects = 3;
-const browserRoutedMethods = new Set([
+const browserRoutedMethods: ReadonlySet<string> = new Set([
   'tools/list', 'resources/list', 'tools/call', 'resources/read', 'tasks/get', 'tasks/result', 'tasks/cancel', 'tasks/list',
-] as const);
+]);
 
 const taskCreation = (value: unknown): Readonly<{ readonly pollInterval?: number; readonly ttl?: number }> | 'invalid' => {
   if (!isRecord(value)) return 'invalid';
@@ -144,21 +143,11 @@ const errorMessage = (method: string): string =>
 const invalidParamsMessage = (method: string): string =>
   `MCP method ${JSON.stringify(method)} has invalid parameters.`;
 
-export interface AgentBundleMcpDispatchResult {
-  readonly value: unknown;
-  readonly vector?: RuntimeVector;
-}
-
-type AgentBundleMcpRoutedMethod =
-  | 'tools/list' | 'resources/list' | 'tools/call' | 'resources/read'
-  | 'tasks/get' | 'tasks/result' | 'tasks/cancel' | 'tasks/list';
-
-export const dispatchAgentBundleMcpRequest = async (
+const dispatchAgentBundleMcpRequest = async (
   message: JSONRPCMessage,
   options: Readonly<{
-    readonly allowedMethods: ReadonlySet<AgentBundleMcpRoutedMethod>;
     readonly connection: McpRouteConnection;
-    readonly execute: (operation: McpRouteOperation) => Promise<AgentBundleMcpDispatchResult>;
+    readonly execute: (operation: McpRouteOperation) => Promise<unknown>;
   }>,
 ): Promise<JSONRPCMessage | undefined> => {
   const nextRequest = request(message);
@@ -183,9 +172,9 @@ export const dispatchAgentBundleMcpRequest = async (
   }
   if (nextRequest.method === 'ping') return { id: nextRequest.id, jsonrpc: '2.0', result: {} } as JSONRPCMessage;
   const resolved = operationFor(nextRequest);
-  if (resolved === undefined || resolved.kind === 'invalid' || !options.allowedMethods.has(nextRequest.method as AgentBundleMcpRoutedMethod)) {
+  if (resolved === undefined || resolved.kind === 'invalid' || !browserRoutedMethods.has(nextRequest.method)) {
     return {
-      error: resolved === undefined || !options.allowedMethods.has(nextRequest.method as AgentBundleMcpRoutedMethod)
+      error: resolved === undefined || !browserRoutedMethods.has(nextRequest.method)
         ? { code: -32601, message: errorMessage(nextRequest.method) }
         : { code: -32602, message: invalidParamsMessage(nextRequest.method) },
       id: nextRequest.id,
@@ -194,7 +183,7 @@ export const dispatchAgentBundleMcpRequest = async (
   }
   try {
     const result = await options.execute(resolved.operation);
-    return { id: nextRequest.id, jsonrpc: '2.0', result: resultFor(nextRequest.method, result.value) } as JSONRPCMessage;
+    return { id: nextRequest.id, jsonrpc: '2.0', result: resultFor(nextRequest.method, result) } as JSONRPCMessage;
   } catch (error) {
     return {
       error: { code: -32603, message: error instanceof Error ? error.message : 'Foreground MCP operation failed.' },
@@ -323,13 +312,12 @@ export class AgentBundleRemoteTransport implements Transport {
       !['prompts/list', 'resources/templates/list', 'prompts/get'].includes(nextRequest.method)
     ) {
       const response = await dispatchAgentBundleMcpRequest(message, {
-        allowedMethods: browserRoutedMethods,
         connection: this.session.connection,
         execute: async (operation) => {
           const controller = new AbortController();
           this.#operationControllers.add(controller);
           try {
-            return { value: await this.#routes.operation(this.sessionId, operation, controller.signal) };
+            return await this.#routes.operation(this.sessionId, operation, controller.signal);
           } finally {
             this.#operationControllers.delete(controller);
           }

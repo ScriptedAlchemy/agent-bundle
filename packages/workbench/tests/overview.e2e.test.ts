@@ -91,7 +91,6 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
     const epochId = artifact.activeEpoch.id;
     const modelDigest = artifact.activeEpoch.modelDigest;
-    await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
     const manifest = JSON.parse(await readFile(join(project.root, '.agent-bundle', 'epochs', epochId, 'mcp.json'), 'utf8')) as {
       readonly mcpServers: Readonly<{
         readonly fixture: Readonly<{ readonly args?: readonly string[]; readonly command: string }>;
@@ -235,7 +234,6 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     if (changedArtifact.state === 'missing') throw new Error('Registered extension update removed the active artifact epoch.');
     expect(changedArtifact.activeEpoch.id).not.toBe(epochId);
     expect(changedArtifact.activeEpoch.modelDigest).not.toBe(modelDigest);
-    await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
     expect(await page.locator('body').textContent()).not.toContain(initialConfigValue);
     expect(await page.locator('body').textContent()).not.toContain(changedConfigValue);
     await expectHeading(page, 'MCP playground');

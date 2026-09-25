@@ -29,20 +29,10 @@ export interface DevRuntimeClientSurfaceEndpoint {
   /**
    * Provider-owned Runtime App reload authority. The provider invokes every
    * subscribed listener after a successful, changed App environment compile;
-   * the returned function detaches that listener. This is the only reload
-   * signal the core relay consumes — Rsbuild's private WebSocket frames are
-   * not part of the contract.
+   * the returned function detaches that listener.
    */
   readonly subscribeReload: (listener: () => void) => () => void;
   readonly surfaceId: string;
-}
-
-/** Core-owned, server-only proxy handle; the host plan may embed only bootstrapUrl. */
-export interface DevRuntimeClientSurfaceProxyBinding {
-  readonly bootstrapUrl: string;
-  readonly origin: string;
-  readonly surfaceId: string;
-  close(): Promise<void>;
 }
 
 /** Trusted normalized input from ProjectService; never serialize to the browser. */
@@ -97,10 +87,7 @@ export interface DevRuntimeEventInput {
     | 'runtime.run.failed'
     | 'runtime.mcp.restarting'
     | 'runtime.mcp.ready'
-    | 'runtime.mcp.failed'
-    | 'runtime.app.updated'
-    | 'runtime.hmr.client-connected'
-    | 'runtime.hmr.client-disconnected';
+    | 'runtime.mcp.failed';
 }
 
 export interface DevRuntimeStartContext {

@@ -44,7 +44,7 @@ const runtimeEvent: ProjectEventInput = {
     providerSessionId: 'provider-a',
     runId: 'run-1',
     runtimeGenerationId: 'generation-a',
-    type: 'runtime.hmr.client-connected',
+    type: 'runtime.run.started',
   },
   type: 'runtime.event',
 };

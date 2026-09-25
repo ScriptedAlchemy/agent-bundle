@@ -489,9 +489,8 @@ AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 \
 
 **哪些内容会被代理。** 只有 `/api`，每一条类型化的 Workbench 客户端路由，加上 `/api/project/events`
 SSE 流，会被转发到前台服务器。HTML 文档、JavaScript 与 CSS，以及 HMR websocket 都来自 Rsbuild 服务器。
-MCP App 预览与运行时客户端表面的 iframe 绑定在前台 origin 上：App 沙箱只与前台 URL 交换 `postMessage`
-帧，运行时客户端表面则把自己的 `frame-ancestors` CSP 设为前台 URL。它们不在这个循环的覆盖范围内，要开发
-那些页面，请直接打开前台 URL 本身（上例中为 `http://127.0.0.1:3100`）。
+MCP App 预览的 iframe 绑定在前台 origin 上：App 沙箱只与前台 URL 交换 `postMessage` 帧。它们不在这个
+循环的覆盖范围内，要开发那些页面，请直接打开前台 URL 本身（上例中为 `http://127.0.0.1:3100`）。
 
 **origin 规则。** 代理绝不会改写 `Origin`（Rsbuild 的 `changeOrigin` 只改写 `Host`），因此只要浏览器
 发送了 `Origin`，每一次变更请求都会，前台服务器看到的就是 `Origin: http://localhost:3000`，而不是它
