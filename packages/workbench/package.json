@@ -24,7 +24,7 @@
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
     "shiki": "4.4.3",
-    "zod": "4.5.4"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@rsbuild/core": "2.2.5",

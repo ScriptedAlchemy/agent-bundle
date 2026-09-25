@@ -139,7 +139,7 @@
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f",
     "react": "19.3.0",
     "typescript-5": "npm:typescript@5.9.3",
-    "zod": "4.5.4"
+    "zod": "4.6.5"
   },
   "peerDependencies": {
     "@agent-bundle/runtime": ">=0.0.0 <1",
