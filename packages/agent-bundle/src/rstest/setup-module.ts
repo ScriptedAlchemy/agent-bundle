@@ -1,9 +1,9 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 import { AGENT_TEST_REGISTRY_SYMBOL_KEY, AGENT_TEST_REGISTRY_VERSION } from '../test/registry.ts';
 import type { AgentBundleTestManifest, TestableRouteDescriptor } from '../test/manifest.ts';
 import type { RenderableRouteKind } from '../test/types.ts';
+import { writeGeneratedTestModule } from './generated-module.ts';
 
 const renderableKinds: ReadonlySet<string> = new Set<RenderableRouteKind>([
   'cli',
@@ -90,12 +90,7 @@ export const routeTestSetupSource = (manifest: AgentBundleTestManifest): string 
  * project's route modules, so it loads identically however the consumer
  * resolved `agent-bundle`.
  */
-export const writeRouteTestSetup = async (
+export const writeRouteTestSetup = (
   projectRoot: string,
   manifest: AgentBundleTestManifest,
-): Promise<string> => {
-  const target = resolve(projectRoot, '.agent-bundle', 'test', 'route-setup.mjs');
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, routeTestSetupSource(manifest), 'utf8');
-  return target;
-};
+): Promise<string> => writeGeneratedTestModule(projectRoot, 'route-setup.mjs', routeTestSetupSource(manifest));

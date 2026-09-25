@@ -1,12 +1,10 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-
 import { generatedMetaModuleSource, metaModuleSpecifier, projectMeta } from '../build/meta.ts';
 import {
   META_UNAVAILABLE_CODE,
   META_UNAVAILABLE_MESSAGE,
 } from '../meta-diagnostic.ts';
 import { type AgentBundleTestManifest, isFallbackPluginIdentity } from '../test/manifest.ts';
+import { writeGeneratedTestModule } from './generated-module.ts';
 
 /**
  * The `resolve.alias` key both Rstest presets set for `agent-bundle/meta`.
@@ -84,15 +82,10 @@ export const testMetaModuleSource = (manifest: AgentBundleTestManifest): string 
  * project's `.agent-bundle/test` directory, which Rstest bundles like
  * project source, and returns its path for the alias.
  */
-export const writeTestMetaModule = async (
+export const writeTestMetaModule = (
   projectRoot: string,
   manifest: AgentBundleTestManifest,
-): Promise<string> => {
-  const target = resolve(projectRoot, '.agent-bundle', 'test', 'meta.mjs');
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, testMetaModuleSource(manifest), 'utf8');
-  return target;
-};
+): Promise<string> => writeGeneratedTestModule(projectRoot, 'meta.mjs', testMetaModuleSource(manifest));
 
 /** The `resolve.alias` record routing the reserved specifier to a written identity module. */
 export const metaModuleAlias = (metaModulePath: string): { [specifier: string]: string } =>
