@@ -119,6 +119,7 @@ export interface State<A, E> {
   isShuttingDown: boolean
   usage: number
   readonly resizeSemaphore: Semaphore.Semaphore
+  // Insertion order determines usage-TTL retirement order; reclaimed items move to the back.
   readonly items: Set<PoolItem<A, E>>
   availableHead: PoolItem<A, E> | undefined
   availableTail: PoolItem<A, E> | undefined
@@ -673,9 +674,12 @@ const wakeAll = <A, E>(self: Pool<A, E>): Effect.Effect<void> =>
     return internal.void
   })
 
+// Reservations prevent reuse without extending the lifetime of borrowed items.
+const reservations = new WeakMap<PoolItem<unknown, unknown>, number>()
+
 /** Adds a freshly acquired item, which has no use behind it, at the back. */
 const addAvailable = <A, E>(self: Pool<A, E>, item: PoolItem<A, E>): void => {
-  if (item.isAvailable) return
+  if (item.isAvailable || reservations.has(item)) return
   item.isAvailable = true
   item.availablePrevious = self.state.availableTail
   item.availableNext = undefined
@@ -701,7 +705,7 @@ const addAvailable = <A, E>(self: Pool<A, E>, item: PoolItem<A, E>): void => {
  * item is checked out either way.
  */
 const addAvailableFront = <A, E>(self: Pool<A, E>, item: PoolItem<A, E>): void => {
-  if (item.isAvailable) return
+  if (item.isAvailable || reservations.has(item)) return
   item.isAvailable = true
   item.availablePrevious = undefined
   item.availableNext = self.state.availableHead
@@ -783,9 +787,12 @@ export const reserve: {
   <A, E>(self: Pool<A, E>, item: A): Effect.Effect<void, never, Scope.Scope> =>
     Effect.asVoid(Effect.acquireRelease(
       Effect.sync(() => {
+        if (self.config.concurrency === 1) return undefined
         for (const poolItem of self.state.items) {
           if (poolItem.exit._tag !== "Success" || poolItem.exit.value !== item) continue
-          self.state.usage += self.config.concurrency - 1
+          const existing = reservations.get(poolItem)
+          if (existing === undefined) self.state.usage += self.config.concurrency - 1
+          reservations.set(poolItem, (existing ?? 0) + 1)
           removeAvailable(self, poolItem)
           return poolItem
         }
@@ -794,15 +801,22 @@ export const reserve: {
       (poolItem) =>
         core.withFiber((fiber) => {
           if (poolItem === undefined) return internal.void
+          const remaining = (reservations.get(poolItem) ?? 1) - 1
+          if (remaining > 0) {
+            reservations.set(poolItem, remaining)
+            return internal.void
+          }
+          reservations.delete(poolItem)
           self.state.usage -= self.config.concurrency - 1
           if (
+            !self.state.isShuttingDown &&
             self.state.items.has(poolItem) &&
             !self.state.invalidated.has(poolItem) &&
             poolItem.refCount < self.config.concurrency
           ) {
-            addAvailable(self, poolItem)
+            addAvailableFront(self, poolItem)
+            wakeWaiters(self, fiber, self.config.concurrency - poolItem.refCount)
           }
-          wakeWaiters(self, fiber, self.config.concurrency - 1)
           return internal.void
         })
     ))
@@ -891,10 +905,12 @@ const allocate = <A, E>(self: Pool<A, E>): Effect.Effect<PoolItem<A, E>> =>
         if (self.config.strategy === strategyNoop) {
           return exit._tag === "Success" ? Effect.succeed(item) : Effect.as(item.finalizer, item)
         }
+        const onAcquire = Effect.suspend(() =>
+          // A borrower may have removed the item before the callback runs.
+          self.state.items.has(item) ? self.config.strategy.onAcquire(item) : Effect.void
+        )
         return Effect.as(
-          exit._tag === "Success"
-            ? self.config.strategy.onAcquire(item)
-            : Effect.flatMap(item.finalizer, () => self.config.strategy.onAcquire(item)),
+          exit._tag === "Success" ? onAcquire : Effect.flatMap(item.finalizer, () => onAcquire),
           item
         )
       })
@@ -964,44 +980,48 @@ const strategyCreationTTL = Effect.fnUntraced(function*<A, E>(ttl: Duration.Inpu
   })
 })
 
-const strategyUsageTTL = Effect.fnUntraced(function*<A, E>(ttl: Duration.Input) {
-  const queue = yield* Queue.unbounded<PoolItem<A, E>>()
-  return identity<Strategy<A, E>>({
+const strategyUsageTTL = <A, E>(ttl: Duration.Input): Effect.Effect<Strategy<A, E>> =>
+  Effect.succeed<Strategy<A, E>>({
     run: (pool) => {
+      // `state.items` iterates in insertion order, so its oldest live entry is
+      // the next to retire. Using it directly means an item stops being
+      // referenced by this strategy as soon as it leaves the pool.
       const process: Effect.Effect<void> = Effect.suspend(() => {
-        const excess = activeSize(pool) - targetSize(pool)
-        if (excess <= 0) return Effect.void
-        return Queue.take(queue).pipe(
-          Effect.tap((item) => invalidatePoolItem(pool, item)),
-          Effect.flatMap(() => process)
-        )
+        if (activeSize(pool) <= targetSize(pool)) return Effect.void
+        for (const item of pool.state.items) {
+          if (pool.state.invalidated.has(item)) continue
+          return Effect.flatMap(invalidatePoolItem(pool, item), () => process)
+        }
+        return Effect.void
       })
       return process.pipe(
         Effect.delay(ttl),
         Effect.forever({ disableYield: true })
       )
     },
-    onAcquire: (item) => Queue.offer(queue, item),
+    onAcquire: (_) => Effect.void,
     reclaim(pool) {
       return Effect.suspend((): Effect.Effect<PoolItem<A, E> | undefined> => {
         if (pool.state.invalidated.size === 0) {
           return Effect.undefined
         }
         const item = Iterable.head(
-          Iterable.filter(pool.state.invalidated, (item) => !item.disableReclaim)
+          Iterable.filter(pool.state.invalidated, (item) => !item.disableReclaim && !reservations.has(item))
         )
         if (item._tag === "None") {
           return Effect.undefined
         }
         pool.state.invalidated.delete(item.value)
+        // Re-adding moves the reclaimed item to the back of the retirement order.
+        pool.state.items.delete(item.value)
+        pool.state.items.add(item.value)
         if (item.value.refCount < pool.config.concurrency) {
           addAvailable(pool, item.value)
         }
-        return Effect.as(Queue.offer(queue, item.value), item.value)
+        return Effect.succeed(item.value)
       })
     }
   })
-})
 
 const reportUnhandledError = <E>(cause: Cause.Cause<E>) =>
   Effect.withFiber<void>((fiber) => {

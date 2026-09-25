@@ -4,7 +4,7 @@ import { access, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Effect, FileSystem, Option, PlatformError } from 'effect';
+import { ByteSize, Effect, FileSystem, Option, PlatformError } from 'effect';
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { runPromise } from '../src/effect/boundary.ts';
@@ -57,7 +57,7 @@ const fileInfo = (mode: number): FileSystem.File.Info => ({
   mtime: Option.none(),
   nlink: Option.none(),
   rdev: Option.none(),
-  size: FileSystem.Size(3),
+  size: ByteSize.bytes(3),
   type: 'File',
   uid: Option.none(),
 });

@@ -55,9 +55,10 @@ holds the transaction open for the next caller.
 
 ## Layers
 
-- `Layer.effect` for a service with no finalizer.
-- `Layer.scoped` when constructing the service needs `Scope` (open a handle,
-  register a lease, start a subscriber).
+- `Layer.effect` for a service, including one whose construction needs
+  `Scope` (open a handle, register a lease, start a subscriber): v4 has no
+  `Layer.scoped`; `Layer.effect` excludes `Scope` from the requirements and
+  closes it when the layer is released.
 - `Layer.effectDiscard` for a background fiber you do not expose as a
   service (pair with `Effect.forkScoped` / `Effect.forkChild` + scope).
 

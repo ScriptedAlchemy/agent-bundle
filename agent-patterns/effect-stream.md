@@ -1,7 +1,7 @@
 # Effect Stream patterns
 
 Source: `repos/effect/packages/effect/src/Stream.ts` (vendored v4, package
-`4.0.0-rc.112`). Refresh when the subtree moves. Read
+`4.0.0-rc.117`). Refresh when the subtree moves. Read
 `repos/effect/LLMS.md` § Working with Streams first.
 
 Stage 2 replaces the #145 pull-gated Flight `TransformStream` with Effect
