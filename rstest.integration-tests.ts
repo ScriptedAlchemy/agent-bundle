@@ -234,3 +234,13 @@ export const templateTestFiles: readonly string[] = [
 export const fixtureProjectTestFiles: readonly string[] = [
   'packages/agent-bundle/fixtures/**/tests/**',
 ];
+
+/**
+ * Files that mock a module with `rs.mock`. The unit pool shares one module
+ * cache per worker (`isolate: false`), so the mock never reaches a module
+ * another file in that worker loaded first. They run in the per-file isolated
+ * `test:host-filesystem` pool instead.
+ */
+export const moduleMockTestFiles: readonly string[] = [
+  'packages/agent-bundle/tests/rstest-generated-module-win32-rename.test.ts',
+];
