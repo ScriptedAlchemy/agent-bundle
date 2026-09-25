@@ -37,7 +37,10 @@ const suiteSummary = /Running active suite \((\d+) scenarios\)/u;
 
 const workspaceRoot = resolve(import.meta.dirname, '../../../..');
 const fixtureRoot = resolve(import.meta.dirname, '../../fixtures/route-harness');
-const packageNodeModules = resolve(import.meta.dirname, '../../node_modules');
+// The copied fixture imports `agent-bundle/routes`, which the package's own
+// node_modules cannot provide; host-test links it with the fixture's other
+// dependencies.
+const fixtureNodeModules = resolve(workspaceRoot, 'examples/host-test/node_modules');
 const defaultOutputRoot = resolve(workspaceRoot, 'artifacts/mcp-conformance');
 const expectedFailuresPath = resolve(
   import.meta.dirname,
@@ -353,7 +356,7 @@ export const runMcpConformance = async (): Promise<McpConformanceReport> => {
         version: '1.0.0',
       })),
     ]);
-    await symlink(packageNodeModules, join(project, 'node_modules'), 'dir');
+    await symlink(fixtureNodeModules, join(project, 'node_modules'), 'dir');
     const compiled = await build({ output: artifact, root: project, targets: ['claude'] });
     const entry = compiled.build.compiledMcpEntries.find((candidate) => candidate.id === 'mcp:harness');
     if (entry === undefined) {
