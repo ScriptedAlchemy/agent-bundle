@@ -1,7 +1,7 @@
 # Local CI gate
 
 `pnpm check:local-ci` proves what the hosted CI gate proves, on the
-development machine, in one command — including the full Node matrix. It
+development machine, in one command, including the full Node matrix. It
 exists because the hosted Verify work for one Node version takes ~13 minutes
 of runner time by current measurement (hosted CI splits it into a `fast` leg
 and two integration shards that run in parallel, see below). PR CI runs every
@@ -13,7 +13,7 @@ machine can run all three legs plus the release gates concurrently. The
 local-merge workflow it enables:
 
 1. Run `pnpm check:local-ci` on the branch's HEAD commit.
-2. If the gate is green, the branch is mergeable — merge it.
+2. If the gate is green, the branch is mergeable, merge it.
 3. Hosted CI still runs on the merged commit (push to `main`) and stays the
    asynchronous post-merge safety net; if it disagrees with the local run,
    the hosted result wins and the merge gets a follow-up fix.
@@ -33,7 +33,7 @@ and covered by `packages/agent-bundle/tests/classify-docs-only.test.ts`.
 ## What it runs
 
 Every leg is an isolated git worktree pinned to the HEAD commit (uncommitted
-changes are not covered — the runner warns), with its own `node_modules` and
+changes are not covered, the runner warns), with its own `node_modules` and
 its own `TMPDIR` (`<system tmp>/abci-<hash8>-<leg>`, where `<hash8>` is
 derived from the repo root path; recreated every run). The temp roots live
 under the short system temp directory rather than the repo worktree because
@@ -43,7 +43,7 @@ from colliding. The private temp root keeps concurrent legs from observing
 each other's temp traffic: suites that assert temp-root hygiene (for example
 `cli.test.ts` scans `os.tmpdir()` for leaked `agent-bundle-artifact-*`
 directories) only ever see their own leg's directories, so a sibling leg's
-in-flight work cannot fail them — while a directory the leg itself leaks
+in-flight work cannot fail them, while a directory the leg itself leaks
 still fails its own scan. Rstest re-hashes that leg directory, worker ID, and
 invocation identity to `/tmp/ab-rstest-<hash16>` before exposing its worker
 `TMPDIR`; this leaves headroom below Linux's 108-byte `sun_path` cap for nested
@@ -51,18 +51,18 @@ socket fixtures without sacrificing per-leg, per-worker, or concurrent-run
 isolation. Because those hashed roots live beside the leg directory rather
 than inside it, each one carries an owner marker (`.ab-rstest-owner.json`)
 naming the leg `TMPDIR` and process it was derived from; the runner removes
-the roots owned by a leg's `TMPDIR` — and only those, once their creating
-process has exited — before the leg starts (leftovers of an interrupted run)
+the roots owned by a leg's `TMPDIR`, and only those, once their creating
+process has exited, before the leg starts (leftovers of an interrupted run)
 and after it finishes (`scripts/rstest-worker-roots.mjs`), so reruns cannot
 accumulate worker caches or interrupted-test fixtures under `/tmp`. Legs live under
 `.worktrees/local-ci/` (gitignored), are reused across runs for warm caches,
 and can be recreated with `--fresh`.
 
 The three Verify legs below mirror the hosted `main`-push matrix. Hosted CI
-runs each Node version as three parallel jobs — `Verify (fast, Node N)`
+runs each Node version as three parallel jobs, `Verify (fast, Node N)`
 (build, typecheck, lint, unit, route-unit, projection) and
 `Verify (integration-1|2, Node N)` (build, then one `--shard N/2` of the
-integration pool) — fanned into the required `Verify gate` check; a local leg
+integration pool), fanned into the required `Verify gate` check; a local leg
 runs the same pools serially in one worktree, which proves the same union.
 On PRs, hosted CI runs every leg on Node 24 and the `fast` leg on Node 26.
 
@@ -100,7 +100,7 @@ That skip is what let #364 change the Codex `interface.logo` emission and
 break both proofs on `main` without CI noticing. Hosted CI therefore runs a
 dedicated `host-install-proofs` job (Node 22.19) on every PR and `main` push:
 
-1. `node scripts/host-cli-pins.mjs print` reads the pins — the `hostCli`
+1. `node scripts/host-cli-pins.mjs print` reads the pins, the `hostCli`
    block in `packages/agent-bundle/src/adapters/schemas/claude/PROVENANCE.json`
    (`@anthropic-ai/claude-code`) and `.../schemas/codex/PROVENANCE.json`
    (`@openai/codex`). Each pin must equal that file's `observedCliVersion`,
@@ -161,7 +161,7 @@ PR critical path.
 
 Hosted CI therefore adds one extra job, `host-filesystem`, on
 `ubuntu-latest`, `macos-latest`, and `windows-latest` (Node 22.19, engines
-floor — three cells, not a Node × OS product). It builds once and runs
+floor, three cells, not a Node × OS product). It builds once and runs
 `pnpm test:host-filesystem` (`rstest.host-filesystem.config.ts`, which does
 not build the Workbench e2e example payload):
 
@@ -187,7 +187,7 @@ To run the same slice locally after `pnpm build`:
 pnpm test:host-filesystem
 ```
 
-The local gate does not fan this across OSes — one machine can prove one OS.
+The local gate does not fan this across OSes, one machine can prove one OS.
 Hosted macOS and Windows results are the qualification for those runners.
 
 ## Node provisioning
@@ -195,7 +195,7 @@ Hosted macOS and Windows results are the qualification for those runners.
 The runner introduces no new tooling. For each hosted runtime line
 (22.19.x, 24.x, 26.x) it resolves a Node binary from, in order:
 
-1. `AGENT_BUNDLE_LOCAL_CI_NODE_22` / `_24` / `_26` — a Node binary or bin
+1. `AGENT_BUNDLE_LOCAL_CI_NODE_22` / `_24` / `_26`, a Node binary or bin
    directory, for machines with bespoke layouts;
 2. `mise where node@<line>`;
 3. `~/.nvm/versions/node/*`;
@@ -205,7 +205,7 @@ Every resolved binary is version-checked against the hosted line before use.
 If a line is missing, the runner fails with the exact install command (e.g.
 `mise install node@22.19`). pnpm itself is pinned by reusing the entrypoint
 that launched the runner, executed on each leg's own Node, so `pnpm`, its
-lifecycle children, and `pnpm exec node` all agree on the leg's runtime —
+lifecycle children, and `pnpm exec node` all agree on the leg's runtime,
 `node_modules` trees (native modules such as the rspack bindings) are never
 shared across Node ABIs, while the content-addressed pnpm store is shared
 safely.
@@ -217,8 +217,8 @@ The integration pool derives workers from cores
 runner instead slices the machine: with N concurrent Verify legs each leg
 gets `min(4, cores / (2 N))` integration workers
 (`AGENT_BUNDLE_INTEGRATION_MAX_WORKERS`) and `cores / N` unit workers
-(`--pool.maxWorkers`), and full runs pin `AGENT_BUNDLE_TEST_TIME_SCALE=4` —
-the same polling-budget scale hosted CI uses — because four legs sharing a
+(`--pool.maxWorkers`), and full runs pin `AGENT_BUNDLE_TEST_TIME_SCALE=4`,
+the same polling-budget scale hosted CI uses, because four legs sharing a
 machine is exactly the contention that scale exists for. Exporting
 `AGENT_BUNDLE_TEST_TIME_SCALE` yourself (e.g. when the machine is also
 running other heavy work) overrides the default; the integration config
@@ -286,10 +286,10 @@ then treat a repeat as a real signal.
   pinned-CLI host-install proofs stay on `ubuntu-latest`. The
   `host-filesystem` job is the exception: `ubuntu-latest`, `macos-latest`,
   and `windows-latest`. Hosted Workbench browser suites launch Playwright's
-  bundled Chromium — pinned by the
+  bundled Chromium, pinned by the
   Playwright version in the lockfile and selected with
   `AGENT_BUNDLE_PLAYWRIGHT_CHANNEL=chromium` (read by
-  `packages/workbench/tests/support/workbench-e2e.ts`) — so the browser under
+  `packages/workbench/tests/support/workbench-e2e.ts`), so the browser under
   test only changes with a commit. The local gate keeps the developer default,
   branded Google Chrome (`playwright install chrome` in its `browsers` step;
   the OS dependencies, `--with-deps`, are one-time machine setup and may need
@@ -299,7 +299,7 @@ then treat a repeat as a real signal.
   browser-app pool, because the shipped `agentBundleBrowserRstest` helper
   targets branded Chrome; the `examples-check` job records that Chrome
   version in its step summary. A green local run on a different distro,
-  glibc, or browser build is strong but not identical evidence — this is the
+  glibc, or browser build is strong but not identical evidence. This is the
   main reason hosted CI remains the post-merge safety net.
 - **Job isolation**: hosted gives every job a fresh VM; local legs reuse
   worktrees for speed. `--fresh` restores cold-start fidelity when staleness

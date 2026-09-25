@@ -11,7 +11,7 @@ content needs no MCP server, App route, state owner, or executable renderer.
 - **Package:** `@agent-bundle-example/skills-starter`
 - **Public dependencies:** `agent-bundle` (`workspace:*`)
 - **Targets:** `portable`, `codex`, `cursor`
-- **Credentials:** none — both eval suites are deterministic and read checked-in fixtures
+- **Credentials:** none: both eval suites are deterministic and read checked-in fixtures
 - **Source:** [`examples/skills-starter`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/skills-starter)
 
 ## What it proves
@@ -20,7 +20,7 @@ content needs no MCP server, App route, state owner, or executable renderer.
   Skills, commands, and rules under `src/` are found by convention. That is the authoring model described in
   [Skills](../guide/authoring/skills.mdx).
 - **One source, three host projections.** The same authored documents are lowered for the
-  portable, Codex, and Cursor projections of one composite plugin root — `skills/` is emitted once
+  portable, Codex, and Cursor projections of one composite plugin root, `skills/` is emitted once
   and every selected host reads it. The Workbench's Source and Generated views show whether a
   host copied a document or adapted it.
 - **No invented runtime.** The built artifact has no MCP executable, App runtime, Flight worker,
@@ -65,7 +65,7 @@ rollback and consumer checks; missing evidence is reported, not treated as succe
 5. To practice repair, make a reversible edit to the release policy, press **Rebuild**, and wait
    for a Failed or Idle result rather than a Building state. On failure, open **Problems** from
    the header count while Application keeps the last-good tree. Restore the checked-in policy
-   and rebuild. The earlier eval is now stale for the changed build — rerun `release-readiness`
+   and rebuild. The earlier eval is now stale for the changed build, rerun `release-readiness`
    to record current, repaired evidence.
 
 ## Noninteractive checks

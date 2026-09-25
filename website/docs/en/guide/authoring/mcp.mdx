@@ -110,7 +110,7 @@ export default async function Status(
 The compiler statically reads `config`, imports schemas and implementations only into generated
 entries, installs `runAgentRequest`, and derives the real MCP server from the route graph. Each
 call renders through a warm internal Flight dispatcher and lowers the final Agent Document to
-legal MCP output. Flight is an implementation transport inside the generated runtime — never a
+legal MCP output. Flight is an implementation transport inside the generated runtime, never a
 public host wire protocol, and raw Flight bytes never cross the MCP wire.
 
 The lowered value is an `McpCallToolResult` (exported from `@agent-bundle/runtime`, with
@@ -124,8 +124,8 @@ The schemas reach the host as JSON Schema: `tools/list` advertises `inputSchema`
 `resultSchema` that describes an object, `outputSchema` in the 2020-12 dialect, projected so that
 2020-12 validators and non-strict draft-07 validators both accept every valid value. A zod tuple
 (`z.tuple([...])`) is emitted as `prefixItems` plus `items` set to the union of the positional
-schemas, with `minItems` (and, for a closed tuple, `maxItems`) bounding the length — never
-`items: false` — so a host that checks `structuredContent` with draft-07 keyword semantics
+schemas, with `minItems` (and, for a closed tuple, `maxItems`) bounding the length, never
+`items: false`, so a host that checks `structuredContent` with draft-07 keyword semantics
 (Cursor, which otherwise rejects a valid tuple result with
 `MCP error -32602 … boolean schema is false`) accepts everything a 2020-12 validator accepts.
 `inputSchema` goes through the same projection, so a host that checks arguments the same way is
@@ -147,7 +147,7 @@ generated MCP server still passes `kind: 'tool'`. See
 [Project one tool as an idiomatic command](./package-entries.mdx#project-one-tool-as-an-idiomatic-command).
 
 A route may re-export its component and schemas from another module. This is how one tool is
-placed on two generated servers when only `config` differs between the placements — an MCP App
+placed on two generated servers when only `config` differs between the placements, an MCP App
 `tools/call`, for example, reaches the server that served the widget:
 
 ```tsx
@@ -185,23 +185,23 @@ a typed reason when it does not. Bare stdio supplies neither a session id nor HT
 authentication, so those axes stay honestly unavailable rather than being fabricated.
 
 The handle also carries `lineage`, the one answer to "who is my parent, what is the root
-conversation, and are we a subagent?" — `{ conversation, root, parent?, depth, generation?,
+conversation, and are we a subagent?", `{ conversation, root, parent?, depth, generation?,
 subagent?, resolution }`, resolved by the warm runtime's registry from the host's subagent
 start/stop and pre-tool hooks, or `unavailable` with a typed reason (`id-not-resolvable`,
 `no-subagent-events`, `no-shared-runtime`, `cloud-agent-no-user-hooks`, `unsupported-surface`,
 `not-provided`). `resolution` is the trust level of `parent`/`root`/`depth`: `native` (named on
-the payload — a Claude or Codex root, a Codex `_meta`), `registry` (the registry matched the
+the payload, a Claude or Codex root, a Codex `_meta`), `registry` (the registry matched the
 subagent's start to the newest unclaimed spawn call), `confirmed` (the host afterwards named
-that edge itself — Claude's `Agent` `PostToolUse` carries the spawn `tool_use_id` and
-`tool_response.agentId`, the child — for every edge up to the root), `transcript` (read from
-the host-written rollout the payload names — Codex records a subagent's parent thread and
+that edge itself, Claude's `Agent` `PostToolUse` carries the spawn `tool_use_id` and
+`tool_response.agentId`, the child, for every edge up to the root), `transcript` (read from
+the host-written rollout the payload names, Codex records a subagent's parent thread and
 depth there, which its hook payloads omit), or `inferred` (Cursor binds a child conversation
 to the single pending `subagentStart`). A confirmation also fills in `subagent.toolCallId` for
 siblings claimed blind, places a start no spawn window could, and moves a child the window
 filed under the wrong parent. There is deliberately no operator or user identity axis: the
 framework never reads or surfaces who the human behind a host session is.
 
-When the registry placed the request, the lineage also carries `tree` — who else is alive, read
+When the registry placed the request, the lineage also carries `tree`, who else is alive, read
 from the same registry and never invented:
 
 ```ts
@@ -216,7 +216,7 @@ if (lineage.state === 'available' && lineage.value.tree !== undefined) {
 }
 ```
 
-Each peer is `{ conversation, depth, parent?, startedAt, subagent?, resolution }` — the
+Each peer is `{ conversation, depth, parent?, startedAt, subagent?, resolution }`, the
 registry's facts about that node, with the trust level of *its* placement, judged exactly as on
 a request that node made itself. Stopped conversations are not listed; a Cursor child whose
 conversation has not spoken yet is listed under its `subagent_id`. The tree is absent when the
@@ -230,7 +230,7 @@ The handle's last axis is `terminal`, an `Observed<AgentTerminal>`: what the pro
 streams are, so a route that paints its own stderr or sizes its own table never probes
 `process.stdout.isTTY` or reads `FORCE_COLOR` itself. The framework shell computes it once per
 invocation with the same rules that select the CLI output mode, so plugin output and framework
-output agree. It is information only — never a writer — and it changes nothing about what
+output agree. It is information only, never a writer, and it changes nothing about what
 `Agent.*` components render.
 
 ```ts
@@ -260,12 +260,12 @@ advertise while a pipe renders none. `COLUMNS`/`LINES` override the reported siz
 
 | Where the route runs | `hostSurface` | `stdout` / `stderr` |
 | --- | --- | --- |
-| Routed CLI executable — plain, rendered, or projected MCP command | `cli` | Probed from the executable's own process. Machine output owns stdout, so `stdout` says where the document lands and `stderr` is the channel a route may write to. |
+| Routed CLI executable, plain, rendered, or projected MCP command | `cli` | Probed from the executable's own process. Machine output owns stdout, so `stdout` says where the document lands and `stderr` is the channel a route may write to. |
 | Rendered script (`src/scripts/<name>.tsx`) | `script` | Probed, as above. |
-| Generated MCP server | `mcp` | `none` on both — stdout is the protocol wire, stderr the host's log. Never probed, never guessed. |
-| Event route (shared runtime or standalone hook) | `hook` | `none` on both — stdout is the host's hook envelope. |
+| Generated MCP server | `mcp` | `none` on both, stdout is the protocol wire, stderr the host's log. Never probed, never guessed. |
+| Event route (shared runtime or standalone hook) | `hook` | `none` on both, stdout is the host's hook envelope. |
 | Workbench lifecycle replay | `workbench` | `none` on both. |
-| A custom host that mounts none | — | `unavailable` (`not-provided`). |
+| A custom host that mounts none | not applicable | `unavailable` (`not-provided`). |
 
 A plain `main`-exporting script or bin has no request scope; its envelope passes the same value
 as the second argument of `main` (see [Package entries](./package-entries.mdx#the-executable-envelope)).
@@ -277,11 +277,11 @@ and `context.terminal` injects any other one through the same seam as every iden
 A conventional `src/providers/<name>.ts` module default-exports a factory whose value is
 resolved through `await (await agent()).provider('<camelCaseName>')` on every generated surface. Beyond the
 surface-specific `invocation` and the request `signal`, the factory receives the request as the
-route will read it — `host`, `session`, `workspace`, `plugin`, and `lineage` (tree included), the
-same `Observed` values with the same provenance — plus read-only views of the mounted handles:
+route will read it, `host`, `session`, `workspace`, `plugin`, and `lineage` (tree included), the
+same `Observed` values with the same provenance, plus read-only views of the mounted handles:
 `state` (`read` only) when the project declares `src/state.ts`, `notices` (`inbox` and
 `published` only) when the scope mounts the notice ledger. A provider can therefore derive a view
-of shared state — a topology, a peers list, what became of the notices this agent published — but
+of shared state, a topology, a peers list, what became of the notices this agent published, but
 cannot dispatch a state event or publish a notice; those stay in routes.
 
 ```ts
@@ -304,8 +304,8 @@ source harness uses the same semantics; explicit test initialization `providers`
 
 ## Rich Markdown blocks as JSX
 
-`Agent.Markdown` carries one Markdown string, and hand-concatenating that string — one
-`- **${label}:** ${value}` per row — is where tables, nested lists, and escaping go wrong. The
+`Agent.Markdown` carries one Markdown string, and hand-concatenating that string, one
+`- **${label}:** ${value}` per row, is where tables, nested lists, and escaping go wrong. The
 async `MarkdownContent` component from `@agent-bundle/runtime` renders its JSX children to one
 GitHub Flavored Markdown string and lowers it into `Agent.Markdown`, so a route authors the block
 as markup:
@@ -339,7 +339,7 @@ Headings `h1`–`h6`, paragraphs, `strong`/`em`/`del`, `code` and `pre`, links a
 blockquotes, `ul`/`ol` (nested, and `start` on `ol`), GFM task lists (`<input type="checkbox">`
 inside `li`), `table` with `align` on its cells, `dt`/`dd`, `br`, and `hr` serialize to their
 Markdown forms; unknown elements pass their children through. Sync and async components anywhere
-in the children — including ones that call `React.use` — resolve before the block is emitted.
+in the children, including ones that call `React.use`, resolve before the block is emitted.
 Text is escaped, so literal `*stars*`, `[x]`, `<tag>`, `&amp;`, and a line-leading `-`, `#`,
 `1.`, or `>` survive as text when the document is parsed again. The rendered block carries no
 trailing newline: Agent Document projections own the blank-line joining between sibling blocks,
@@ -347,18 +347,18 @@ so `MarkdownContent` sits beside `Agent.Text` and other nodes exactly like a han
 `Agent.Markdown`.
 
 `components` maps extra host tag names to serializers, `(props, { inline, blocks }) => string`,
-when a custom element needs its own Markdown — `inline()` and `blocks()` render the element's
+when a custom element needs its own Markdown, `inline()` and `blocks()` render the element's
 children as inline text or as blank-line-joined blocks. The renderer is exported too:
 `renderToMarkdown(children, options?)` resolves to the string and
 `renderToMarkdownStream(children, options?)` yields a `ReadableStream<Uint8Array>` of UTF-8
-blocks in document order. Its output is pinned against micromark with the GFM extension — the
-parser under the Workbench's `react-markdown`/`remark-gfm` — so what a route authors is the
+blocks in document order. Its output is pinned against micromark with the GFM extension, the
+parser under the Workbench's `react-markdown`/`remark-gfm`, so what a route authors is the
 structure the consumer parses.
 
 ## Streaming and progress
 
 A route streams by rendering React `Suspense`: the shell goes out first with the fallback in
-place, and each resolved boundary replaces it. `Agent.Progress` is the fallback to use — it is the
+place, and each resolved boundary replaces it. `Agent.Progress` is the fallback to use. It is the
 framework's streaming progress surface on MCP, in the rendered CLI, and in the Workbench:
 
 ```tsx
@@ -382,8 +382,8 @@ export default async function Search(
 ```
 
 On MCP, the projector reads the `Agent.Progress` node out of each streamed `shell` and `replace`
-document and sends one `notifications/progress` — `progress` from `completed`, `message` and
-`total` when present — to a client whose request carried `_meta.progressToken`. A request without
+document and sends one `notifications/progress`, `progress` from `completed`, `message` and
+`total` when present, to a client whose request carried `_meta.progressToken`. A request without
 a token gets no notification. The fallback alone is enough: there is no need for an `announce()`
 helper that repeats the fallback's message through `(await agent()).progress.report()`, and doing
 both does not duplicate the notification. `progress.report()` remains the way to announce steps
@@ -411,7 +411,7 @@ that sets `_meta.progressToken` on `callTool` receives them over the real protoc
 
 Every call renders inside one render session bounded by the runtime's default limits, and the
 wall-clock one is 60 seconds (`DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs`). A route whose
-legitimate work outlives that — awaiting a build, long-polling a daemon — declares its own budget
+legitimate work outlives that, awaiting a build, long-polling a daemon, declares its own budget
 in `config.render` instead of clamping its waits and asking the caller to poll:
 
 ```ts twoslash
@@ -435,7 +435,7 @@ too, layered over the `limits` a test passes as the dispatcher's base. Omitting 
 the default, and the other limits (document size, event count, event rate) are unchanged.
 
 The budget bounds the framework's session only; the host's own tool-call deadline still applies,
-so keep progress flowing for the whole wait — every `progress.report()` and streamed
+so keep progress flowing for the whole wait, every `progress.report()` and streamed
 `Agent.Progress` fallback is forwarded as `notifications/progress` while the call runs. Claude
 Code's default per-call wall clock is about 28 hours (`MCP_TOOL_TIMEOUT`, or a per-server
 `timeout`), and its idle timer (30 minutes for stdio servers) is reset by exactly those
@@ -476,7 +476,7 @@ a `2025-11-25` session:
 | Request | Answer |
 | --- | --- |
 | `tools/call` with `params.task` (`{ ttl?, pollInterval? }`) on an opted-in tool | `CreateTaskResult` at once: `task.taskId`, `status: "working"`, `createdAt`, `lastUpdatedAt`, the honoured `ttl` (the client's request, capped at 24 hours; five minutes when omitted) and `pollInterval` (at least 100 ms; 1 s when omitted), plus `_meta["io.modelcontextprotocol/model-immediate-response"]`, a sentence a host may hand its model while the task runs. The render starts under the task. |
-| `tasks/get` | The task: `working` with `statusMessage` set to the latest progress message and `_meta["agent-bundle/progress"]` carrying `{ progress, total?, message? }` — the same `Agent.Progress` projection that feeds `notifications/progress`; `completed`; `failed` with the tool error's text as `statusMessage` (a result with `isError: true` is a failed task, as the spec requires); or `cancelled`. The last progress stays readable on a settled task. |
+| `tasks/get` | The task: `working` with `statusMessage` set to the latest progress message and `_meta["agent-bundle/progress"]` carrying `{ progress, total?, message? }`, the same `Agent.Progress` projection that feeds `notifications/progress`; `completed`; `failed` with the tool error's text as `statusMessage` (a result with `isError: true` is a failed task, as the spec requires); or `cancelled`. The last progress stays readable on a settled task. |
 | `tasks/result` | Blocks until the task settles, then returns exactly what the ordinary call would have: the same `content`, `structuredContent`, and layout `_meta`, plus `_meta["io.modelcontextprotocol/related-task"]`; a render that ended in a JSON-RPC error returns that error. |
 | `tasks/cancel` | Transitions the task to `cancelled` before answering and aborts the render through the same `AbortSignal` a cancelled request uses; the interrupted render settles as the SDK's tool error, which `tasks/result` then returns. Cancelling a settled task is `-32602`. |
 | `tasks/list` | Every task the session still retains, oldest first, paged by an opaque `cursor`. |
@@ -494,7 +494,7 @@ session closes.
 The render budget applies to the task's render, not to the client's request: a task's
 `tools/call` returns immediately whatever the budget, and the render behind it is still bounded
 by the route's `config.render` (or the 60-second default). Raise the budget only when the render
-itself needs longer, not to outlast a host's request deadline — that is what the task is for. The
+itself needs longer, not to outlast a host's request deadline, that is what the task is for. The
 `2026-07-28` protocol revision moves tasks out of the core into the `io.modelcontextprotocol/tasks`
 extension with a different shape (`resultType: "task"`, `tasks/update`, no `tasks/result`); the
 generated server's SDK release does not serve that extension, so a client on that revision keeps
@@ -524,7 +524,7 @@ const result = await session.client.request({
 
 ## Shared layouts
 
-`src/layout.tsx` is the composition point around every rendered route — the `layout.tsx` idea from
+`src/layout.tsx` is the composition point around every rendered route, the `layout.tsx` idea from
 page frameworks applied to Agent Documents. It default-exports one component receiving
 `{ children, route, signal }` and renders `Agent.Result` around `children`, the route's rendered
 element. `src/mcp/<server>/layout.tsx` nests inside it for one generated server; composition order
@@ -548,7 +548,7 @@ export default function Layout({ children, route }: AgentLayoutProps) {
 
 An `Agent.Result` without a `value` is a container: the runtime merges it with the route's own
 `<Agent.Result value={...}>` while decoding, so the route keeps its result value,
-`structuredContent`, and content, and the layout adds only the shared shell — a heading, a trailing
+`structuredContent`, and content, and the layout adds only the shared shell, a heading, a trailing
 `Agent.Context` note, document metadata. `metadata` objects merge key by key with the container
 winning; because the MCP projector exposes root metadata as the result's `_meta`, a layout that
 declares metadata changes `_meta`, and one that does not leaves it untouched. `route` is the
@@ -557,7 +557,7 @@ signal, and `await agent()` works inside a layout exactly as in a route.
 
 The route's element resolves **before** the layout chain renders, so a throwing route still fails
 the whole render (CLI exit `1`; on MCP the SDK's default `isError` result or a JSON-RPC error with
-no layout `_meta` — see [What happens when a route throws](#what-happens-when-a-route-throws))
+no layout `_meta`, see [What happens when a route throws](#what-happens-when-a-route-throws))
 rather than being downgraded to a boundary error beneath the layout's shell; the trade-off is that
 a layout cannot stream a `Suspense` fallback around `children`. A layout whose default export is not a function, or that exports the
 route-only `config`/`inputSchema`/`resultSchema`, is `AB4830`; `.ts` and `.tsx` siblings for one
@@ -587,16 +587,16 @@ export default async function Lookup({ input }: ToolRouteProps<typeof inputSchem
 }
 ```
 
-A route that **throws** instead is not projected by agent-bundle at all — there is no document to
-project — and each surface's own default applies. The layout shell never wraps it. Per surface:
+A route that **throws** instead is not projected by agent-bundle at all. There is no document to
+project, and each surface's own default applies. The layout shell never wraps it. Per surface:
 
 | Surface | The route's default export throws | A nested `Suspense` boundary rejects |
 | --- | --- | --- |
-| MCP `tools/call` | The MCP SDK's default tool error: `{ content: [{ type: 'text', text: <message> }], isError: true }` — no `_meta`, no `structuredContent`, no `[code]` prefix. The session stays usable. | A represented error: the reconciler folds the rejected boundary into the document as an error node with code `boundary`, so the result is what `<Agent.Error code="boundary">` would produce — layout `_meta` kept, `structuredContent` from the route's value, `isError: true`, and a `[boundary] <message>` text block beside the content that had already rendered. |
+| MCP `tools/call` | The MCP SDK's default tool error: `{ content: [{ type: 'text', text: <message> }], isError: true }`, no `_meta`, no `structuredContent`, no `[code]` prefix. The session stays usable. | A represented error: the reconciler folds the rejected boundary into the document as an error node with code `boundary`, so the result is what `<Agent.Error code="boundary">` would produce, layout `_meta` kept, `structuredContent` from the route's value, `isError: true`, and a `[boundary] <message>` text block beside the content that had already rendered. |
 | MCP `prompts/get`, `resources/read` | A JSON-RPC error response carrying the message; the client call rejects. These surfaces have no `isError` channel. | The generated server returns the route's `resultSchema`-parsed value from the same represented document. |
-| Rendered CLI command / rendered script | One `[render-failed] <message>` line on stderr; under `--json`, one canonical `{"error":{"code":"render-failed","message":"..."}}` line on stderr. Exit `1`; nothing on stdout; no React Flight stack. | `[boundary] message` on stderr as the event happens; then the document prints as usual — Markdown with `**[boundary]** message`, or under `--json` the route's value alone (the boundary message is not in the JSON; `--ndjson` carries the `error` event). Exit `1`, as for any non-`success` document. |
-| Plain CLI command / plain script | Routed command: message on stderr, exit `1` (usage and input errors exit `2`). Plain script: Node's top-level failure path — stack on stderr, exit `1`. | n/a |
-| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits `1`. A `runtime: 'standalone'` route or a config-declared handler writes the thrown message; a route in the **shared** runtime writes `Event route rendering failed.` — the runtime answers with the generic `runtime-failed` error and the original message stays inside the runtime process. Every supported host documents exit `1` as a **non-blocking** error, so the pending action proceeds exactly as a pass-through would — a thrown `tool/before` does **not** deny. Return `outcome: 'deny'` to block. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing. |
+| Rendered CLI command / rendered script | One `[render-failed] <message>` line on stderr; under `--json`, one canonical `{"error":{"code":"render-failed","message":"..."}}` line on stderr. Exit `1`; nothing on stdout; no React Flight stack. | `[boundary] message` on stderr as the event happens; then the document prints as usual, Markdown with `**[boundary]** message`, or under `--json` the route's value alone (the boundary message is not in the JSON; `--ndjson` carries the `error` event). Exit `1`, as for any non-`success` document. |
+| Plain CLI command / plain script | Routed command: message on stderr, exit `1` (usage and input errors exit `2`). Plain script: Node's top-level failure path, stack on stderr, exit `1`. | n/a |
+| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits `1`. A `runtime: 'standalone'` route or a config-declared handler writes the thrown message; a route in the **shared** runtime writes `Event route rendering failed.`, the runtime answers with the generic `runtime-failed` error and the original message stays inside the runtime process. Every supported host documents exit `1` as a **non-blocking** error, so the pending action proceeds exactly as a pass-through would, a thrown `tool/before` does **not** deny. Return `outcome: 'deny'` to block. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing. |
 | `renderRoute` / `renderRouteEvents` | `AgentTestError('render-failed')` naming the route and the cause; no document, no events. | Resolves with `document.status === 'represented-error'`, an `error` node with code `boundary`, and events `shell → error → complete`. |
 
 The projector deliberately does not wrap a root throw into the `Agent.Error` shape: the layout
@@ -627,8 +627,8 @@ sixty-second activity throttle, labeled with the server name).
 That guard matters because stdout carries JSON-RPC framing: one stray `console.log` from any
 imported module would corrupt the protocol stream.
 
-Self-connecting entries — modules that construct and connect a transport at top level without a
-default export — keep their existing behavior byte for byte: no lifecycle shell, and no operator
+Self-connecting entries, modules that construct and connect a transport at top level without a
+default export, keep their existing behavior byte for byte: no lifecycle shell, and no operator
 `.env` layer, since there is no shell to apply it before the module's own top-level code runs.
 Source validation reports the informational `AB4730` nudge suggesting the factory upgrade; it is
 never an error.
@@ -661,7 +661,7 @@ every variable the host set is kept, manifest defaults included.
 
 ## Declaring servers in config
 
-Declare a server when you need something the convention cannot express — a different entry path,
+Declare a server when you need something the convention cannot express, a different entry path,
 a target restriction, extra environment, or a command or remote server you do not compile:
 
 ```ts twoslash
@@ -693,7 +693,7 @@ export default defineConfig({
 
 Amp reads MCP from a registered skill, not one plugin-root document. With exactly one Amp skill,
 canonical remote servers become `{ url, headers? }` entries and external stdio commands become
-`{ command, args?, env? }` entries in that skill's flat `mcp.json` map — never under an
+`{ command, args?, env? }` entries in that skill's flat `mcp.json` map, never under an
 `mcpServers` wrapper. Native `mcpServers` frontmatter wins over the sibling file, and a
 same-named CLI, workspace, or user server wins over the skill.
 
@@ -717,8 +717,8 @@ servers always have one on every target.
 **Resolve persistent state and bundled assets against this anchor, not the process working
 directory.** Claude Code currently launches stdio servers from the host's own working directory
 and ignores any stdio `cwd` field (its placeholder table excludes `cwd`). The Claude adapter
-therefore **omits** `cwd` when the working directory is the canonical plugin root — the standard
-source-built `entry:` case — and instead makes the entry path absolute by prefixing the first
+therefore **omits** `cwd` when the working directory is the canonical plugin root, the standard
+source-built `entry:` case, and instead makes the entry path absolute by prefixing the first
 argument with `${CLAUDE_PLUGIN_ROOT}/`, alongside the environment anchor. That canonical
 plugin-root `cwd` is the one token-bearing value Claude accepts; any other `cwd` that carries a
 path token is rejected, and only a non-token, explicitly authored `cwd` is passed through verbatim.
@@ -734,8 +734,8 @@ const readPluginRoot = (env: Record<string, string | undefined>): string | undef
   env[pluginRootEnvAnchor];
 ```
 
-Inside a route there is no need to read the variable at all. Every generated shell — the MCP
-entry and its Flight worker, the routed CLI executable and its render worker, the hook wrappers —
+Inside a route there is no need to read the variable at all. Every generated shell, the MCP
+entry and its Flight worker, the routed CLI executable and its render worker, the hook wrappers,
 resolves its code and framework state roots once at startup with `resolvePluginRoot` from
 `@agent-bundle/runtime` and publishes them on every request it opens as
 `(await agent()).plugin`:
@@ -750,7 +750,7 @@ if (plugin.state === 'available') {
 ```
 
 `source: 'native'` means the host supplied an expanded `AGENT_BUNDLE_PLUGIN_ROOT`; `'derived'`
-means the shell fell back — to the artifact root (the parent of `mcp/`, `bin/`, or `hooks/`) inside
+means the shell fell back, to the artifact root (the parent of `mcp/`, `bin/`, or `hooks/`) inside
 a built artifact, or to `$PWD/.agent-bundle` for the npm package bin. A value still carrying an
 unexpanded `${…}` token (a host that passed its manifest through literally) is treated as unset,
 reported once on stderr, and never joined into a path. Artifact-hosted shells default
@@ -801,7 +801,7 @@ export default defineConfig({
 
 Compiled Apps are available to server code through `agent-bundle/mcp-apps`, which the compiler
 replaces for local MCP servers. Importing it outside an agent-bundle compilation throws rather
-than returning an empty registry — an unsupported boundary made explicit instead of failing
+than returning an empty registry, an unsupported boundary made explicit instead of failing
 silently at run time.
 
 An App declared on a *prebuilt* server stays a development surface: the Workbench compiles it
@@ -837,7 +837,7 @@ them is left alone.
 JSX compiles in every App build regardless of the entry's extension: `@rsbuild/plugin-react` with
 the automatic runtime (`react/jsx-runtime`, fast refresh off) is registered on every App
 environment, so the `<StatusPanel />` that `StatusPanel.tsx` renders compiles the same way behind
-a `.ts` entry as behind a `.tsx` one — never to a `React.createElement` call that would need a
+a `.ts` entry as behind a `.tsx` one, never to a `React.createElement` call that would need a
 `React` import in scope. JSX syntax itself still belongs in `.tsx`/`.jsx` files, because the
 bundler detects a module's syntax from its extension.
 
@@ -890,7 +890,7 @@ declare module 'agent-bundle/app' {
 ```
 
 whose members are the project's generated MCP **tool** routes (`AppToolRouteId` in the same
-file) — `input` inferred from each route's `inputSchema` **input** type (what a caller sends: a
+file), `input` inferred from each route's `inputSchema` **input** type (what a caller sends: a
 `.default()`ed field is optional, a `.transform()`ed field is spelled as the wire carries it; the
 route component receives the parsed output), `result` from its `resultSchema` output. Once
 that file is in the App's TypeScript program (the templates list `".agent-bundle/routes.d.ts"`
@@ -898,8 +898,8 @@ in `tsconfig.json` `include`; existing projects must include it and run their ow
 that route, and the result is that route's structured object. `onToolInput` delivers the host's
 opening payload with the same input type: it is the message before the server parses it, so a
 default the schema would fill is not promised to be present. The declaration imports the route modules type-only, so no route
-module, schema, or server code enters the App document. Without the augmentation — a handwritten
-server, or a program that omits the file — `call()` still works with `unknown` input and result,
+module, schema, or server code enters the App document. Without the augmentation, a handwritten
+server, or a program that omits the file, `call()` still works with `unknown` input and result,
 and a view may declare its own contract map through the same `AppRegister` seam. The
 [MCP App example](../../examples/mcp-app.mdx) relies on the generated file: its App calls
 `tool:status/show-status` with the input and result the route's schemas declare.
@@ -911,13 +911,13 @@ tool result carries `isError: true` (`code: 'rpc'`, the whole result on `error.d
 object `structuredContent`, or is not a well-formed result (`invalid-message`). Give a tool an App
 calls an object-rooted `resultSchema`: the generated MCP projection emits `structuredContent` for
 object-valued results only, while the contract map types every tool route whatever its root, so a
-tool whose `resultSchema` is a scalar or an array is typed but never resolves — `call()` on it
+tool whose `resultSchema` is a scalar or an array is typed but never resolves, `call()` on it
 rejects with `invalid-message` every time. `request(method, params?)` is the lower-level escape
 hatch for `resources/read` and the `ui/*` methods the host supports, resolving to the JSON-RPC
 result as is. Both connect first when `connect()` has not been awaited.
 
 **Timeouts and cancellation.** Every request takes `{ signal, timeoutMs }`. `signal` is an
-`AbortSignal` — the client reads `aborted` and listens for `abort`, nothing more — and the
+`AbortSignal`, the client reads `aborted` and listens for `abort`, nothing more, and the
 deadline defaults to the client's `timeoutMs` (15 seconds). A request that times out or is
 aborted rejects at once with `timeout` or `aborted` and, once the client is connected, sends
 `notifications/cancelled` naming the request id and the reason. The client does not wait to learn
@@ -933,7 +933,7 @@ handshake completes is ignored. Other hosts apply their own policy.
 that opened the App (`ui/notifications/tool-input` and `ui/notifications/tool-result`). Those
 notifications name no tool, so the client learns which tool opened it from the handshake:
 `hostContext.toolInfo.tool.name` in the initialize result. A listener fires only when the tool
-name of the route id it registered with — the final segment — is that opening tool's; listeners
+name of the route id it registered with, the final segment, is that opening tool's; listeners
 registered for other tools stay silent, and when the initialize result names no tool, `tool-input`
 and `tool-result` reach no listener at all. `onToolInput` receives the notification's `arguments`,
 `onToolResult` the decoded `structuredContent` of a successful result, not the envelope.
@@ -947,8 +947,8 @@ asynchronously, and an exception a listener throws is dropped.
 **Errors.** Two kinds. Everything that happens on the wire or in the lifecycle rejects with one
 class, `AppClientError`, with a discriminated `code`: `timeout`, `aborted`, `disposed`,
 `connection-rebound`, `invalid-message`, `rpc`, `capability-unavailable`, or `consent-required`.
-A JSON-RPC error from the host maps by its code — `-32601` to `capability-unavailable`, `-32001`
-to `consent-required`, anything else to `rpc` — with `rpcCode` and `data` preserved. Misusing the
+A JSON-RPC error from the host maps by its code, `-32601` to `capability-unavailable`, `-32001`
+to `consent-required`, anything else to `rpc`, with `rpcCode` and `data` preserved. Misusing the
 API is not an `AppClientError`: `createAppClient()` throws a `TypeError` synchronously for a
 `targetOrigin` that is not an exact `http:`/`https:` origin, for `appInfo` or `appCapabilities`
 that are not finite JSON objects, and when there is no `window` and none is injected, and a
@@ -968,7 +968,7 @@ also uses `'*'`; incoming `event.origin` values are not pinned or allowlisted. T
 `WindowProxy` identity is the load-bearing authentication control, so a foreign window is ignored
 even when it reports the same origin.
 
-A host that can supply a trusted origin passes `targetOrigin` — an exact `http:` or `https:`
+A host that can supply a trusted origin passes `targetOrigin`, an exact `http:` or `https:`
 origin; `'*'`, `"null"`, custom schemes, and non-origin strings are rejected. The client then uses
 that exact origin for every outgoing frame and requires every incoming `event.origin` to match it.
 The Workbench, `serve-app`, and their separate loopback HTTP sandbox proxy keep validating sources
@@ -976,8 +976,8 @@ and origins on the host side before relaying.
 
 `connect()` is idempotent: a connected client resolves the cached result, a connecting one returns
 the in-flight handshake. `rebind({ parent?, targetOrigin?, window? })` rejects the previous
-generation's pending requests with `connection-rebound` — a `connect()` still in flight included,
-which never becomes the live connection — keeps the configured `targetOrigin` unless the call
+generation's pending requests with `connection-rebound`, a `connect()` still in flight included,
+which never becomes the live connection, keeps the configured `targetOrigin` unless the call
 names one, adopts the new parent, and performs the handshake again. `dispose()`, also idempotent,
 removes the listener, rejects pending requests with `disposed`, and drops every registration. A
 host's `ui/resource-teardown` request must come from the exact current parent, is acknowledged,
@@ -988,7 +988,7 @@ before connection state is cleared. The transport is DOM-shaped rather than boun
 same client.
 
 **The host-side boundary.** The client is the App-inside-the-iframe half of the bridge. The other
-half — the frame relay, sandbox proxy, host page, `/api/mcp/...` routes, and consent authority —
+half, the frame relay, sandbox proxy, host page, `/api/mcp/...` routes, and consent authority,
 belongs to the host. The Workbench MCP page and `agent-bundle serve-app` run the framework's host
 bridge (`createMcpAppBridge`); an MCP host embedding the App runs its own. All of them speak the
 standard MCP Apps wire the client implements, and the standalone production host
@@ -1021,7 +1021,7 @@ MCP App "status" failed to compile: views/status.ts:1:10: Module build failed
   (from builtin:swc-loader): Syntax Error: Expression expected
 ```
 
-`agent-bundle build` exits `1` and writes those diagnostics to stderr — never the `AB5000`
+`agent-bundle build` exits `1` and writes those diagnostics to stderr, never the `AB5000`
 catch-all. Warnings that did not fail the build are `AB4771` in the same shape; they print as
 `AB4771 (warning): …` lines before `Built …` and ride `--json` as `diagnostics` and
 `build.diagnostics`. The
@@ -1040,7 +1040,7 @@ MCP App <name> (<target>): mcp-apps/<name>.html <size> (<gzip size> gzip)
 The figures are that build's own measurement, not a contract. A view that reaches its host
 through `agent-bundle/app` carries the framework's client and nothing else from the protocol
 stack; one that imports `@modelcontextprotocol/ext-apps` 2.x instead carries `zod` 4,
-`@modelcontextprotocol/client`, `@modelcontextprotocol/core`, and `ext-apps` itself — about
+`@modelcontextprotocol/client`, `@modelcontextprotocol/core`, and `ext-apps` itself, about
 249 kB (65 kB gzip) before the first line of your own code. An `ext-apps` 1.x view also carries
 `zod` 3, `@modelcontextprotocol/sdk`, and `zod-to-json-schema`, about 437 kB (104 kB gzip), and
 even that view sits well under 1 MiB. A
@@ -1063,8 +1063,8 @@ maps.
 
 Neither profile emits a source map by default: a map that carries the original sources is
 another ~7× on top (that same view would reach 4.2 MiB), past what the hosts accept. For a
-small view, opt in through the escape hatch —
-`tools.rsbuild = { output: { sourceMap: { js: 'inline-source-map' } } }` — which, like every
+small view, opt in through the escape hatch,
+`tools.rsbuild = { output: { sourceMap: { js: 'inline-source-map' } } }`, which, like every
 `tools` fragment, reaches every synthesized config. Only inline maps work: an external `.map`
 file beside the HTML fails the build with an error naming the stray file, because the artifact
 must stay one self-contained document per App. `agent-bundle inspect --bundler` prints the
@@ -1074,7 +1074,7 @@ resolved App configuration when a hatch value does not land where you expected.
 
 Outside an MCP host, an App is normally reached by selecting its leaf under
 **Application → MCP → &lt;server&gt; → Apps** in the Workbench. An App already declared under
-`mcp.servers.<id>.apps` can also be opened in a plain browser tab from the installed plugin — no framework on the machine — by listing it on the
+`mcp.servers.<id>.apps` can also be opened in a plain browser tab from the installed plugin, no framework on the machine, by listing it on the
 [`web`](../../reference/configuration.mdx#web) config key:
 
 ```ts
@@ -1097,7 +1097,7 @@ Invalid `web` is `AB4341` (error); the message shapes are in the
 
 When `web` is configured, the composite artifact's `agent-bundle.manifest.json` gains a `web`
 section and the build emits `bin/<plugin>.mjs` even without `src/cli/**` commands. The host page
-lives inside that bin — there is no `web/` directory in the artifact. Its compilation contributes
+lives inside that bin. There is no `web/` directory in the artifact. Its compilation contributes
 the same external-module evidence as every other executable, so `AB6005` rejects any external
 other than a Node built-in, `pnpapi`, or an emitted sibling.
 
@@ -1111,8 +1111,8 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 The default App is the only exposed one; several without a selector is a usage error (exit `2`)
 that lists them. Missing `agent-bundle.manifest.json` beside `bin/` exits `1`. The command
 launches the plugin's own MCP server from its `executables.mcpServers[]` `launch` record
-(`node <root>/<launch.entry> <args>` — `artifact` arguments resolve under `<root>`, literals have
-their path tokens expanded — with `AGENT_BUNDLE_PLUGIN_ROOT=<root>` and the declared static env,
+(`node <root>/<launch.entry> <args>`, `artifact` arguments resolve under `<root>`, literals have
+their path tokens expanded, with `AGENT_BUNDLE_PLUGIN_ROOT=<root>` and the declared static env,
 path tokens expanded; the plugin-data token resolves outside the artifact, under
 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches).
 The spawned server's own durable framework state likewise lives outside the artifact under
@@ -1133,7 +1133,7 @@ artifact manifest declares, never from the browser presentation profile: an expl
 `?target=<projection>` is validated against the declared projections that launch the server
 (invalid is an error, never a fallback), projections sharing one normalized launch descriptor
 (command, arguments, cwd, declared env, runtime binding) open unprompted, and materially
-different launches answer 409 naming the choices — a Claude- or Codex-only build opens its App
+different launches answer 409 naming the choices, a Claude- or Codex-only build opens its App
 without a portable projection or `mcp.json`. Web sessions are cached by epoch, server, and
 resolved launch identity; a successful rebuild retires unused sessions of older epochs (pages
 still leasing one keep it until their last lease releases), and a failed rebuild retires
@@ -1158,15 +1158,15 @@ npx agent-bundle serve-app status/status --artifact artifact \
 
 The same host is available programmatically as `serveApp` in `agent-bundle/api`. It returns
 `{ url, close, closed }`: `close()` tears down the host and the server, `closed` settles when the
-server connection ends for any reason — always `close()` when you are done, because `closed`
+server connection ends for any reason, always `close()` when you are done, because `closed`
 settling means the server connection ended, not that the host was torn down. `autoApprove` grants
 the listed consent capabilities on the operator's behalf as the App requests them (`call-tool`
 lets a polling dashboard refresh without a prompt); anything else waits for an Allow/Deny decision
 in the host page, as in the Workbench.
 
-`serveApp` is a **host-process API**. It belongs to processes the framework does not compile —
+`serveApp` is a **host-process API**. It belongs to processes the framework does not compile,
 the first-party CLI, the Workbench, tests, a plugin's own `package.json` scripts or a hand-written
-`.mjs` run from the checkout — and it needs `agent-bundle` resolvable where that process runs.
+`.mjs` run from the checkout, and it needs `agent-bundle` resolvable where that process runs.
 Never call it from the MCP server shell. A routed CLI command cannot import it either: that
 value import is `AB4837` (see the [diagnostics reference](../../reference/diagnostics.md)).
 Routed commands no longer spawn `agent-bundle serve-app`; the artifact's own
@@ -1176,7 +1176,7 @@ installed root. `AB4837` recovery text names that command.
 ## Server modes
 
 `routes.servers.<server>` opts a server out of route generation when the directory convention
-should not apply — `custom` for a handwritten server, `command` for an external process, and
+should not apply, `custom` for a handwritten server, `command` for an external process, and
 `remote` for a URL-reached server. The full mode contract, including collision recovery, is in
 [Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md).
 
@@ -1193,7 +1193,7 @@ npx agent-bundle mcp run --artifact artifact --target claude --server curator
 `mcp run` executes one built stdio server in the foreground: it resolves the compiled entry
 (named with a digest of the server name) from the artifact manifest's `executables.mcpServers[]`
 row, expands path tokens through the host adapter, loads the project-root `.env` set, and forwards
-the child's exit code. `--target` is optional — omit it and the manifest's `projections[]` must
+the child's exit code. `--target` is optional, omit it and the manifest's `projections[]` must
 name exactly one MCP-capable host; several are an error naming the choices. Without
 `--artifact`, a temporary artifact is built first.
 
@@ -1230,7 +1230,7 @@ loopback and is never exposed beyond the local machine.
 
 ## Next
 
-- [Scripts and assets](./scripts-assets.mdx) — the non-protocol executables in an artifact.
-- [Package entries](./package-entries.mdx) — `bin`, `lib`, and the routed CLI.
-- [Compiler architecture](../concepts/architecture.mdx) — how a generated
+- [Scripts and assets](./scripts-assets.mdx): the non-protocol executables in an artifact.
+- [Package entries](./package-entries.mdx): `bin`, `lib`, and the routed CLI.
+- [Compiler architecture](../concepts/architecture.mdx): how a generated
   route sits in the application graph, a host projection, and the artifact.

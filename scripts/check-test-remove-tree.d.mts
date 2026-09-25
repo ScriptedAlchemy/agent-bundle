@@ -8,7 +8,7 @@ export interface RecursiveRmCall {
 export interface RemovalBindings {
   /** Local names bound to `rm` from node:fs or node:fs/promises, including aliases. */
   readonly bareNames: ReadonlySet<string>;
-  /** Namespace and default import names whose `.rm` is node's. */
+  /** Namespace, default, and `promises` rebind names whose `.rm` is node's. */
   readonly namespaceNames: ReadonlySet<string>;
 }
 
