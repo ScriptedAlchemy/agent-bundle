@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 // node:sqlite emits an ExperimentalWarning on load (documented in the README):
 // the module is Node's built-in SQLite binding, stable enough for Node >= 22.13
@@ -312,6 +312,10 @@ const recordFromRow = (definitionId: string, row: JournalRow): AgentStateJournal
 // leading bytes would collide for ids sharing a prefix.
 const sanitizedFileName = (definitionId: string): string =>
   `${definitionId.replace(/[^a-zA-Z0-9._-]+/gu, '-')}-${createHash('sha256').update(definitionId, 'utf8').digest('hex').slice(0, 16)}.sqlite`;
+
+/** The pre-#201 root-mode name, detected only to refuse opening a fresh store beside it. */
+const pre201FileName = (definitionId: string): string =>
+  `${definitionId.replace(/[^a-zA-Z0-9._-]+/gu, '-')}-${Buffer.from(definitionId, 'utf8').toString('hex').slice(0, 12)}.sqlite`;
 
 class SqliteConnection extends Context.Service<SqliteConnection, DatabaseSync>()(
   '@agent-bundle/runtime/state/SqliteConnection',
@@ -1056,7 +1060,18 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
                 );
               }
               if (options.file !== undefined) return resolve(options.file);
-              return resolve(join(options.root as string, sanitizedFileName(definition.id)));
+              const current = resolve(join(options.root as string, sanitizedFileName(definition.id)));
+              const pre201 = resolve(join(options.root as string, pre201FileName(definition.id)));
+              if (!existsSync(current) && existsSync(pre201)) {
+                throw new AgentStateError(
+                  'corrupt',
+                  `State '${definition.id}' found a store at '${pre201}' under the pre-#201 file name, which this ` +
+                    `runtime no longer reads, and none at '${current}'. Move that file and its -wal/-shm sidecars ` +
+                    'out of the state root to keep a copy, or delete them; the next open then creates a fresh, ' +
+                    'empty store. It is not adopted or migrated.',
+                );
+              }
+              return current;
             }, true),
           );
           const connection = Effect.acquireRelease(
