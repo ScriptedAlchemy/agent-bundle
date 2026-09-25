@@ -15,6 +15,7 @@ import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 const configPath = '/workspace/agent-bundle.config.ts';
 
 const plugin = (): NormalizedPlugin => ({
+  projectRoot: '/workspace',
   extensions: {},
   hooks: [],
   metadata: {

@@ -24,6 +24,7 @@ import { removeTree } from './support/remove-tree.ts';
 const execFile = promisify(executeFile);
 
 const modelFor = (target: string): NormalizedPlugin => ({
+  projectRoot: '/project',
   extensions: {},
   hooks: [],
   mcpServers: [],

@@ -122,6 +122,7 @@ const routeHook = (
 };
 
 const model = (target: string, hooks: readonly NormalizedHook[]): NormalizedPlugin => ({
+  projectRoot: '/project',
   extensions: {},
   hooks,
   mcpServers: [],

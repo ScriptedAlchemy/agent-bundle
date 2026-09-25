@@ -143,7 +143,7 @@ export const planPackageEntries = async (
           // The envelope probes the terminal (#511) through the aliased
           // dependency-free runtime module, like the cli-entry shell.
           aliases: { [terminalCapabilityRuntimeSpecifier]: terminalCapabilityRuntimePath() },
-          virtualSource: generatedExecutableEntrySource({ entrySource: bin.source, exportName, hostSurface: 'cli' }),
+          virtualSource: generatedExecutableEntrySource({ projectRoot: model.projectRoot, entrySource: bin.source, exportName, hostSurface: 'cli' }),
         }),
     });
   }
