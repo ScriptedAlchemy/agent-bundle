@@ -109,7 +109,7 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/platform-node-shared": "4.0.0-rc.112",
+    "@effect/platform-node-shared": "4.0.0-rc.117",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
@@ -123,7 +123,7 @@
     "ajv-formats": "3.0.1",
     "chokidar": "5.0.0",
     "commander": "15.0.0",
-    "effect": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.117",
     "es-module-lexer": "3.0.2",
     "fast-glob": "3.3.3",
     "ignore": "7.0.9",
@@ -136,7 +136,7 @@
     "@types/npm-package-arg": "6.1.4",
     "@types/react": "19.3.0",
     "@types/ws": "8.18.1",
-    "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f",
+    "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e",
     "react": "19.3.0",
     "typescript-5": "npm:typescript@5.9.3",
     "zod": "4.6.4"

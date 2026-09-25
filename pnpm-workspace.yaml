@@ -20,7 +20,6 @@ overrides:
   'typedoc>typescript': npm:typescript@6.0.3
 allowBuilds:
   '@google/genai': false
-  msgpackr-extract: false
   protobufjs: false
 # LocalProvider.init() awaits FlexSearch addAsync so the first search query
 # cannot race the index build (#590; upstream web-infra-dev/rspress#3658).

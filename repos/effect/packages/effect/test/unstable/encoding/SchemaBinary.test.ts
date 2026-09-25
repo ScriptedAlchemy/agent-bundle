@@ -255,6 +255,12 @@ describe("SchemaBinary", () => {
     })
   })
 
+  describe("string content", () => {
+    it("preserves a leading U+FEFF in strings", () => {
+      assert.strictEqual(roundtrip(Schema.String, "\uFEFFreport"), "\uFEFFreport")
+    })
+  })
+
   describe("output arena", () => {
     it("keeps an earlier result stable through later encodes and arena rollover", () => {
       const codec = SchemaBinary.toCodec(Schema.String)
@@ -1577,12 +1583,12 @@ describe("SchemaBinary", () => {
       )
     })
 
-    it.effect("round-trips a yielding transformOrFail through SchemaParser Effect APIs", () =>
+    it.effect("round-trips a yielding transformEffect through SchemaParser Effect APIs", () =>
       Effect.gen(function*() {
         const schema = Schema.String.pipe(
           Schema.decodeTo(
             Schema.Number,
-            SchemaTransformation.transformOrFail({
+            SchemaTransformation.transformEffect({
               decode: (s) => Effect.yieldNow.pipe(Effect.as(Number(s))),
               encode: (n) => Effect.yieldNow.pipe(Effect.as(String(n)))
             })
@@ -1674,7 +1680,7 @@ describe("SchemaBinary", () => {
       assert.strictEqual(error.message.match(/Missing key/g)?.length, 2)
     })
 
-    it("ignores excess-property and property-order options at the binary boundary", () => {
+    it("ignores excess-property options at the binary boundary", () => {
       const Writer = Schema.Struct({ extra: Schema.String, known: Schema.Number })
       const Reader = Schema.Struct({ known: Schema.Number })
       const bytes = encode(Writer, { extra: "drop", known: 1 })
@@ -1684,7 +1690,7 @@ describe("SchemaBinary", () => {
         { known: 1 }
       )
       assert.deepStrictEqual(
-        SchemaBinary.parser(Reader, { onExcessProperty: "preserve", propertyOrder: "original" }).feedSync(bytes),
+        SchemaBinary.parser(Reader, { onExcessProperty: "error" }).feedSync(bytes),
         [{ known: 1 }]
       )
     })
@@ -3261,7 +3267,7 @@ describe("SchemaBinary", () => {
     const AsyncName = Schema.String.pipe(
       Schema.decodeTo(
         Schema.String,
-        SchemaTransformation.transformOrFail({
+        SchemaTransformation.transformEffect({
           decode: (value) => Effect.promise(() => Promise.resolve(value.toUpperCase())),
           encode: (value) => Effect.promise(() => Promise.resolve(value.toLowerCase()))
         })
@@ -3313,7 +3319,7 @@ describe("SchemaBinary", () => {
           name: Schema.String.pipe(
             Schema.decodeTo(
               Schema.String,
-              SchemaTransformation.transformOrFail({
+              SchemaTransformation.transformEffect({
                 decode: (value, options) =>
                   value === "bob"
                     ? Effect.fail(new SchemaIssue.InvalidValue({ expected: "not bob" }, value, options))
