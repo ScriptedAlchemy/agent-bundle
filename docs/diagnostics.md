@@ -609,6 +609,7 @@ development-only fallback can never produce a release artifact, so
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
+| `AB4008` | retired | The `plugin.version`/`package.json` version mismatch. `plugin.version` is rejected with `AB4001`; the code is never reused. |
 | `AB4009` | warning | `package.json` `name` is not a valid npm package name; the `packageName` axis is withheld. |
 | `AB4010` | warning | `package.json` `version` is not a valid semantic version; the `packageVersion` axis is withheld. |
 | `AB4011` | warning | `package.json` is unusable, unparsable, not a JSON object, or symlinked outside the project root. |
