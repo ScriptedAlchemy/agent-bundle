@@ -1,6 +1,7 @@
 import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
+import type { CompiledAgentRoute, CompiledEventHandler } from '../routes/types.ts';
 import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
 import type { DescriptiveMetadataResult } from './descriptive-metadata.ts';
 import { packageDescriptiveMetadata } from './descriptive-metadata.ts';
@@ -436,6 +437,20 @@ const canonicalProvenance = (root: string, provenance: SourceProvenance): Source
   sourcePath: canonicalCompilerPath(root, provenance.sourcePath, 'Model provenance path'),
 });
 
+const canonicalHandler = (root: string, handler: CompiledEventHandler): CompiledEventHandler => ({
+  ...handler,
+  source: canonicalCompilerPath(root, handler.source, 'Route handler source path'),
+  ...(handler.view === undefined
+    ? {}
+    : { view: canonicalCompilerPath(root, handler.view, 'Route view source path') }),
+});
+
+const canonicalRoute = (root: string, route: CompiledAgentRoute): CompiledAgentRoute => ({
+  ...route,
+  ...(route.handler === undefined ? {} : { handler: canonicalHandler(root, route.handler) }),
+  source: canonicalCompilerPath(root, route.source, 'Route source path'),
+});
+
 const canonicalDiagnostic = (root: string, diagnostic: Diagnostic): Diagnostic => ({
   ...diagnostic,
   ...(diagnostic.generatedPath === undefined
@@ -567,7 +582,7 @@ export const canonicalizeNormalizedModel = (
   root: string,
   model: NormalizedPlugin,
 ): Readonly<Record<string, unknown>> => {
-  const detached = snapshotStrictJsonValue(model) as unknown as NormalizedPlugin;
+  const { projectRoot: _projectRoot, ...detached } = snapshotStrictJsonValue(model) as unknown as NormalizedPlugin;
   return deepFreeze({
     ...detached,
     ...(detached.assets === undefined
@@ -651,6 +666,9 @@ export const canonicalizeNormalizedModel = (
       }),
     hooks: detached.hooks.map((hook) => ({
       ...hook,
+      ...(hook.eventRoute?.handler === undefined
+        ? {}
+        : { eventRoute: { ...hook.eventRoute, handler: canonicalHandler(root, hook.eventRoute.handler) } }),
       provenance: canonicalProvenance(root, hook.provenance),
       // Prebuilt hook `source` may not exist yet; identity is the enumerated
       // payload files, matching `modelPathReferences`. Relative sources stay
@@ -678,6 +696,9 @@ export const canonicalizeNormalizedModel = (
       ...(server.cwd === undefined
         ? {}
         : { cwd: canonicalCompilerPath(root, server.cwd, 'MCP server working directory') }),
+      ...(server.generatedRoutes === undefined
+        ? {}
+        : { generatedRoutes: server.generatedRoutes.map((route) => canonicalRoute(root, route)) }),
       provenance: canonicalProvenance(root, server.provenance),
       ...(server.source === undefined
         ? {}
@@ -728,6 +749,20 @@ export const canonicalizeNormalizedModel = (
           ...detached.packageBuild,
           bins: detached.packageBuild.bins.map((bin) => ({
             ...bin,
+            ...(bin.generatedCli === undefined
+              ? {}
+              : {
+                generatedCli: {
+                  ...bin.generatedCli,
+                  ...(bin.generatedCli.projectionSources === undefined
+                    ? {}
+                    : {
+                      projectionSources: Object.fromEntries(Object.entries(bin.generatedCli.projectionSources)
+                        .map(([routeId, source]) => [routeId, canonicalCompilerPath(root, source, 'CLI projection source path')])),
+                    }),
+                  routes: bin.generatedCli.routes.map((route) => canonicalRoute(root, route)),
+                },
+              }),
             provenance: canonicalProvenance(root, bin.provenance),
             source: canonicalCompilerPath(root, bin.source, 'Bin entry source path'),
           })),
@@ -770,10 +805,27 @@ export const canonicalizeNormalizedModel = (
       ...(skill.skillIr === undefined ? {} : { skillIr: canonicalSkillIr(root, skill.skillIr) }),
       source: canonicalCompilerPath(root, skill.source, 'Skill source path'),
     })),
+    ...(detached.state === undefined
+      ? {}
+      : {
+        state: {
+          ...detached.state,
+          provenance: canonicalProvenance(root, detached.state.provenance),
+          source: canonicalCompilerPath(root, detached.state.source, 'State source path'),
+        },
+      }),
     targets: detached.targets.map((target) => ({
       ...target,
       provenance: canonicalProvenance(root, target.provenance),
     })),
+    ...(detached.web === undefined
+      ? {}
+      : {
+        web: {
+          ...detached.web,
+          provenance: { sourcePath: canonicalCompilerPath(root, detached.web.provenance.sourcePath, 'Web provenance path') },
+        },
+      }),
   });
 };
 

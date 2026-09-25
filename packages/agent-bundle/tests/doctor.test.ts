@@ -369,6 +369,7 @@ it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the
     //    contract is checked against the bundle's document, so the absolute paths and §9.1 keys in the copy are no error.
     const bundle = join(fixture.root, 'portable-bundle');
     const installerSource = composeProjections({
+      projectRoot: '/project',
       extensions: {},
       hooks: [],
       mcpServers: [],

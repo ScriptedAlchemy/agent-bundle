@@ -344,6 +344,7 @@ it('inspects the per-host handler wrapper under the composite identity', async (
     tools: [],
   };
   const model: NormalizedPlugin = {
+    projectRoot: '/project',
     extensions: {},
     hooks: [hook],
     mcpServers: [],

@@ -24,8 +24,9 @@ const writeProjectFile = async (root: string, path: string, contents: string): P
 /**
  * A project with every surface whose generated wrapper imports a virtual
  * module as a namespace: a routed MCP server (its route registry module is
- * what Rspack names in a `// NAMESPACE OBJECT` comment), event routes for
- * three hosts, a routed CLI command, and a bundled script.
+ * what Rspack names in a `// NAMESPACE OBJECT` comment), an event-route
+ * handler and view for three hosts, a routed CLI command, and a bundled
+ * script.
  */
 const writeProject = async (root: string): Promise<void> => {
   // The audiobook example's installed tree supplies @agent-bundle/runtime, react, and zod.
@@ -64,9 +65,13 @@ const writeProject = async (root: string): Promise<void> => {
     "  return <Agent.Result value={{ message: input.message }}><Agent.Markdown>{`Lookup: ${input.message}`}</Agent.Markdown></Agent.Result>;",
     "});",
     ].join('\n')),
-    writeProjectFile(root, 'src/events/session/start.tsx', [
+    writeProjectFile(root, 'src/events/session/start.ts', [
+      "import { events } from 'agent-bundle/routes';",
+      "export default events.session.start({ targets: ['claude', 'codex', 'cursor'] }, (event) => event.render('./start.view.js', {}));",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/session/start.view.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
-      "export const config = { targets: ['claude', 'codex', 'cursor'] };",
       'export default async function SessionStart() {',
       '  return <Agent.Result value={{ started: true }}><Agent.Context>session started</Agent.Context></Agent.Result>;',
       '}',
@@ -108,28 +113,30 @@ const digestTree = async (root: string): Promise<ReadonlyMap<string, string>> =>
 };
 
 /**
- * Two builds of one unchanged source tree — into two different output
- * directories, each through its own per-build staging directory
- * (`.<output>.stage-XXXXXX`) — emit byte-identical artifacts: the same
- * manifest, the same file digests, the same bytes. Nothing in an emitted
- * bundle may name the staging directory, the output directory, or any
- * absolute path of the machine that built it; the generated-module
- * namespace Rspack names in its module comments derives from the project
- * root alone.
+ * Two builds of one unchanged source tree emit byte-identical artifacts: the
+ * same manifest, the same file digests, the same bytes. The builds run from
+ * two checkout paths into two output directories, each through its own
+ * per-build staging directory (`.<output>.stage-XXXXXX`). Nothing in an emitted bundle may name the checkout, the
+ * staging directory, the output directory, or any absolute path of the
+ * machine that built it; the generated-module namespace Rspack names in its
+ * module comments derives from the project root alone.
  */
-it('emits byte-identical artifacts from two builds of one source into two output directories', { timeout: 240_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-reproducible-'));
-  roots.push(root);
+it('emits byte-identical artifacts from two checkouts of one source into two output directories', { timeout: 240_000 }, async () => {
+  // Both checkouts sit at one depth: the fixture's node_modules symlink
+  // resolves outside the project, so its module ids climb out of the root.
+  const firstRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-reproducible-'));
+  const secondRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-other-checkout-'));
+  roots.push(firstRoot, secondRoot);
   // Completed outputs move out of the project between builds so the second
   // build's source snapshot (and so its project revision) is the first's.
   const parked = await mkdtemp(join(tmpdir(), 'agent-bundle-reproducible-outputs-'));
   roots.push(parked);
-  await writeProject(root);
+  await Promise.all([writeProject(firstRoot), writeProject(secondRoot)]);
 
   const outputs: string[] = [];
   const manifests: string[] = [];
   const stageTokens: string[] = [];
-  for (const name of ['first-output', 'second-output']) {
+  for (const [root, name] of [[firstRoot, 'first-output'], [secondRoot, 'second-output']] as const) {
     const output = join(root, name);
     const result = await build({ output, root });
     expect(result.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
@@ -144,14 +151,13 @@ it('emits byte-identical artifacts from two builds of one source into two output
 
   const [first, second] = outputs as [string, string];
   const [firstManifest, secondManifest] = manifests as [string, string];
-  expect(secondManifest).toBe(firstManifest);
-  const manifest = parseArtifactManifest(firstManifest);
-  expect(manifest.files.length).toBeGreaterThan(0);
-
   const [firstDigests, secondDigests] = await Promise.all([digestTree(first), digestTree(second)]);
   expect([...secondDigests.keys()].sort()).toEqual([...firstDigests.keys()].sort());
   const differing = [...firstDigests].filter(([path, digest]) => secondDigests.get(path) !== digest).map(([path]) => path);
   expect(differing).toEqual([]);
+  expect(secondManifest).toBe(firstManifest);
+  const manifest = parseArtifactManifest(firstManifest);
+  expect(manifest.files.length).toBeGreaterThan(0);
   // The manifest's own digests describe exactly these bytes.
   for (const file of manifest.files) {
     expect(firstDigests.get(file.path)).toBe(file.sha256);
@@ -171,7 +177,7 @@ it('emits byte-identical artifacts from two builds of one source into two output
     'hooks/event-route-session-start.cursor.mjs',
     'scripts/summarize.mjs',
   ]));
-  const forbidden = [root, parked, '.artifact.stage-', ...stageTokens];
+  const forbidden = [firstRoot, secondRoot, parked, '.artifact.stage-', ...stageTokens];
   for (const path of bundles) {
     const source = await readFile(join(first, path), 'utf8');
     for (const token of forbidden) {

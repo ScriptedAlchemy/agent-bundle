@@ -31,6 +31,7 @@ const metadata = Object.freeze({
 });
 
 const model = (source: string): NormalizedPlugin => ({
+  projectRoot: '/project',
   extensions: {},
   hooks: [],
   mcpServers: [],
