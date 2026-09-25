@@ -426,6 +426,15 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       ]));
       await expect(readTimelineAsset()).resolves.toMatchObject({ contentType: 'text/html' });
 
+      const definitionPath = join(runtimeStorageRoot, 'generation-store', 'generations', runtimeGenerationId, 'rsc', 'runtime-definition.json');
+      await rename(definitionPath, `${definitionPath}.hidden`);
+      await expect(session.reconcilePreparedRuntime({
+        ...prepared.devRuntime!,
+        sourceRevision: `${prepared.devRuntime!.sourceRevision}-unreadable-definition`,
+      })).rejects.toThrow();
+      expect(session.status()).toMatchObject({ state: 'degraded' });
+      await rename(`${definitionPath}.hidden`, definitionPath);
+
       await session.reconcilePreparedRuntime({
         ...prepared.devRuntime!,
         servers: prepared.devRuntime!.servers.map((server) => ({ ...server, targets: ['portable'] })),
@@ -435,6 +444,7 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
         expect.objectContaining({ id: 'mcp.render_edit_timeline', targets: ['portable'] }),
         expect.objectContaining({ id: 'mcp.edit-timeline', targets: ['portable'] }),
       ]));
+      expect(session.status()).toMatchObject({ diagnostics: [], state: 'active' });
       const timeline = await session.invoke({
         expectedGenerationId: runtimeGenerationId,
         input: {},

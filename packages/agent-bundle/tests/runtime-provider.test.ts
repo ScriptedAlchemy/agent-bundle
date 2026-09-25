@@ -916,6 +916,40 @@ it('reconciles the newest revision exactly once after a deferred provider start 
   await controller.close();
 });
 
+it('latches a provider path change on an active session and revokes its run capabilities', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async () => ({
+        close: async () => undefined,
+        runs: () => [],
+        status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+        surfaces: () => [],
+      }) as unknown as DevRuntimeSession,
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+  await controller.start();
+  expect(controller.runs(1)).toEqual([]);
+
+  await controller.reconcileDeclaration({
+    apps: [],
+    provider: './src/dev/replaced-provider.ts',
+    servers: [],
+    sourceRevision: 'source-2',
+  });
+
+  expect(controller.status()).toMatchObject({ state: 'failed' });
+  expect(() => controller.runs(1)).toThrow(DevRuntimeUnavailableError);
+  await controller.close();
+});
+
 it('latches every topology failure across a pending runtime start', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;

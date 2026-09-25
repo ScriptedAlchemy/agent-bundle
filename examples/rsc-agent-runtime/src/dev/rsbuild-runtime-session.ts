@@ -585,6 +585,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #generationSequence = 0;
   #failureTail: Promise<void> = Promise.resolve();
   #hmrReady = false;
+  #reconcileDegraded = false;
   #latestPreparedRuntime: DevRuntimePreparedProject;
   #latestRscCohortRevision = 0;
   #invocationReservations = 0;
@@ -2140,8 +2141,12 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           stateStoreId,
           store: this.#generationStore,
         }).then(async (next) => {
-          // ponytail: a throwing test seam leaks this prepared activation; the public provider never sets it.
-          await this.#testing.afterActivationPrepare?.(Object.freeze({ session: this }));
+          try {
+            await this.#testing.afterActivationPrepare?.(Object.freeze({ session: this }));
+          } catch (error) {
+            await this.#generationStore.abort(next).catch(() => undefined);
+            throw error;
+          }
           return next;
         }),
         (late) => this.#generationStore.abort(late),
@@ -2157,6 +2162,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       this.#active = generation;
       this.#updateSurfaces(snapshot, snapshot.preparedRuntime);
       this.#updateSurfaceAssetApps(snapshot.preparedRuntime);
+      this.#reconcileDegraded = false;
       this.#setStatus('active');
       this.#emit(Object.freeze({ runtimeGenerationId: generation.id, type: 'runtime.generation.activated' }));
       return 'activated';
@@ -2176,7 +2182,12 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       const definition = JSON.parse(await readFile(join(active.root, 'rsc', 'runtime-definition.json'), 'utf8')) as SerializedRuntimeDefinition;
       this.#updateSurfaces({ definition }, prepared);
       this.#updateSurfaceAssetApps(prepared);
+      if (this.#reconcileDegraded) {
+        this.#reconcileDegraded = false;
+        this.#setStatus('active');
+      }
     } catch (error) {
+      this.#reconcileDegraded = true;
       this.#setStatus('degraded', [lifecycleDiagnostic(error)]);
       throw error;
     }

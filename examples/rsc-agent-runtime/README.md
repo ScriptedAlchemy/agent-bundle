@@ -82,9 +82,10 @@ production RSC/runtime artifacts are built by its explicit Rsbuild production
 command (`pnpm --filter @agent-bundle/rsc-agent-runtime-demo build`); its provider
 uses a separate long-lived Rsbuild development session only when an
 `agent-bundle dev` project opts into `dev.runtime.provider`. That session
-compiles each change into a runtime generation and exposes the hook and MCP
-tool surfaces that Workbench routes invoke; it serves no browser client. The
-session uses development entries and output roots while compiling every
+compiles each change into a runtime generation, publishes its hook, MCP tool,
+resource, and App surfaces to the Workbench runtime routes, and serves
+generation assets through them; no browser connects to its loopback Rsbuild
+server. The session uses development entries and output roots while compiling every
 environment in production mode: production decoders cannot read development
 Flight payloads, and Rsbuild only inlines the App's scripts and styles in
 production mode. `@rsbuild/plugin-react` is configured as
