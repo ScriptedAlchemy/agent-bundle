@@ -1,6 +1,6 @@
 {
   "name": "agent-bundle",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Compile a typed Agent Bundle configuration into portable, Codex, Claude Code, and Cursor artifacts, plus experimental Amp.",
   "license": "Apache-2.0",
   "keywords": [
