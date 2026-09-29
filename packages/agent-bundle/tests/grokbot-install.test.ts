@@ -7,7 +7,7 @@ import { expect, it } from '@rstest/core';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { runDoctor } from '../src/install/doctor.ts';
 import { formatDoctorReport, formatInstallResult, formatUninstallResult } from '../src/install/format.ts';
-import { readGrokBotInventory } from '../src/install/grokbot.ts';
+import { grokBotRoot, grokBotStagingMessage, readGrokBotInventory } from '../src/install/grokbot.ts';
 import { installBundle } from '../src/install/install.ts';
 import { readInstallReceiptFile } from '../src/install/receipt.ts';
 import { uninstallBundle } from '../src/install/uninstall.ts';
@@ -279,4 +279,30 @@ it('package-bound installer bins accept grokbot for install, uninstall, and doct
     }
     await box.cleanup();
   }
+});
+
+it('resolves GROK_BOT_HOME from the process environment when no environment is passed', () => {
+  const previous = process.env['GROK_BOT_HOME'];
+  process.env['GROK_BOT_HOME'] = '/tmp/grokbot-home-from-env';
+  try {
+    expect(grokBotRoot({ home: '/home/someone' })).toBe('/tmp/grokbot-home-from-env');
+    expect(grokBotRoot({ environment: {}, home: '/home/someone' })).toBe(join('/home/someone', '.grokbot'));
+  } finally {
+    if (previous === undefined) delete process.env['GROK_BOT_HOME'];
+    else process.env['GROK_BOT_HOME'] = previous;
+  }
+});
+
+it('rewrites shared Cursor staging diagnostics without --mode recovery advice', () => {
+  const git = grokBotStagingMessage(
+    'git is required for `--mode marketplace` (Cursor imports marketplaces from Git repositories); install git or use `--mode local`.',
+  );
+  expect(git).toBe('git is required for the grokbot host (Grok Bot installs plugins from Git marketplaces); install git.');
+  const nested = grokBotStagingMessage(
+    '`--mode marketplace` refuses bundle-internal Git metadata at "a/.git": git would record it as an empty gitlink and ' +
+      'Cursor would import a plugin without files. Stage from a built bundle directory without `.git`, or use `--mode local`.',
+  );
+  expect(nested).not.toContain('--mode');
+  expect(nested).toContain('Grok Bot would import');
+  expect(grokBotStagingMessage('Cursor marketplace staging failed: git commit: boom')).toBe('Grok Bot marketplace staging failed: git commit: boom');
 });

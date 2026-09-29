@@ -41,7 +41,7 @@ export const grokBotHost = 'grokbot';
 
 /** Agent Bundle's own Grok Bot root: the marketplace staging repository and receipt store live under it. */
 export const grokBotRoot = (options: { readonly environment?: Readonly<NodeJS.ProcessEnv>; readonly home?: string }): string =>
-  options.environment?.['GROK_BOT_HOME'] ?? join(options.home ?? homedir(), '.grokbot');
+  (options.environment ?? process.env)['GROK_BOT_HOME'] ?? join(options.home ?? homedir(), '.grokbot');
 
 export const grokBotMarketplaceRoot = (root: string): string => cursorMarketplaceRoot(root);
 
@@ -57,6 +57,26 @@ export const grokBotNextSteps = (repoRoot: string, plugin: string, bin = 'agent-
   `Verify on the Grok Bot computer with \`${bin} doctor --host grokbot\`: it reports the plugin id and installed commit ` +
     'once Grok Bot has cloned the plugin.',
 ]);
+
+/**
+ * The shared stager words its diagnostics for Cursor's `--mode marketplace`; the grokbot host has no `--mode`, so
+ * recovery advice pointing at `--mode local` or Cursor would be wrong here.
+ */
+const grokBotStagingRewrites: readonly (readonly [string, string])[] = [
+  ['; install git or use `--mode local`.', '; install git.'],
+  [', or use `--mode local`.', '.'],
+  [' Agent Plugins (root `plugin.json`) packs install with `--mode local`.', ' List `cursor` in the bundle targets.'],
+  ['git is required for `--mode marketplace` (Cursor imports marketplaces from Git repositories)',
+    'git is required for the grokbot host (Grok Bot installs plugins from Git marketplaces)'],
+  ['`--mode marketplace` requires', 'The grokbot host requires'],
+  ['`--mode marketplace` refuses', 'The grokbot host refuses'],
+  ['Cursor marketplace staging', 'Grok Bot marketplace staging'],
+  ['Cursor marketplaces resolve', 'Grok Bot marketplaces resolve'],
+  ['Cursor would import', 'Grok Bot would import'],
+];
+
+export const grokBotStagingMessage = (message: string): string =>
+  grokBotStagingRewrites.reduce((text, [from, to]) => text.split(from).join(to), message);
 
 const failure = (code: string, message: string): DiagnosticError =>
   new DiagnosticError([{ code, message, severity: 'error', target: grokBotHost }]);
@@ -132,7 +152,11 @@ export const installGrokBot = async (
     };
   } catch (error) {
     if (error instanceof DiagnosticError) {
-      throw new DiagnosticError(error.diagnostics.map((entry) => ({ ...entry, target: grokBotHost })));
+      throw new DiagnosticError(error.diagnostics.map((entry) => ({
+        ...entry,
+        message: grokBotStagingMessage(entry.message),
+        target: grokBotHost,
+      })));
     }
     throw failure('AB7004', errorMessage(error));
   }
