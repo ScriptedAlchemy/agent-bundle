@@ -312,3 +312,57 @@ it('rewrites shared Cursor staging diagnostics without --mode recovery advice', 
   expect(nested).toContain('Grok Bot would import');
   expect(grokBotStagingMessage('Cursor marketplace staging failed: git commit: boom')).toBe('Grok Bot marketplace staging failed: git commit: boom');
 });
+
+/** Rewrites the fixture bundle in place, as a rebuild would. */
+const rebuild = async (box: Sandbox, version: string, payload: string): Promise<void> => {
+  await writeFile(join(box.from, 'payload.txt'), payload);
+  await writeJson(join(box.from, '.cursor-plugin/plugin.json'), { name: 'grok-fixture', version });
+  await writeInstallFixtureManifest(box.from, { name: 'grok-fixture', version }, [{ host: 'cursor' }]);
+};
+
+it('restages a receipt-owned Grok Bot marketplace on same-version drift and on --replace for a new version', async () => {
+  const box = await sandbox();
+  try {
+    const install = (replace?: boolean) => installBundle({
+      environment: box.environment, from: box.from, home: box.home, host: 'grokbot', ...(replace === undefined ? {} : { replace }),
+    });
+    const repo = join(box.home, '.grokbot', 'agent-bundle', 'marketplaces', 'grok-fixture');
+    const first = await install();
+
+    await rebuild(box, '1.2.3', 'drifted\n');
+    const drift = await install();
+    expect(drift).toMatchObject({ previousContentHash: first.contentHash, state: 'replaced', version: '1.2.3' });
+    expect(drift.commit).not.toBe(first.commit);
+    expect(await readFile(join(repo, 'plugins', 'grok-fixture', 'payload.txt'), 'utf8')).toBe('drifted\n');
+
+    await rebuild(box, '1.3.0', 'next\n');
+    const refused = await install().catch((error: unknown) => error);
+    expect((refused as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7005', target: 'grokbot' }]);
+    expect((refused as DiagnosticError).diagnostics[0]?.message).toContain('--replace');
+    expect(await readFile(join(repo, 'plugins', 'grok-fixture', 'payload.txt'), 'utf8')).toBe('drifted\n');
+
+    const replaced = await install(true);
+    expect(replaced).toMatchObject({ previousContentHash: drift.contentHash, state: 'replaced', version: '1.3.0' });
+    expect(await readFile(join(repo, 'plugins', 'grok-fixture', 'payload.txt'), 'utf8')).toBe('next\n');
+    const receipt = await readInstallReceiptFile(grokBotReceiptPath(join(box.home, '.grokbot'), 'grok-fixture'));
+    expect(receipt).toMatchObject({ registrations: [{ commit: replaced.commit }], version: '1.3.0' });
+  } finally {
+    await box.cleanup();
+  }
+});
+
+it('leaves a dirty staged repository for the stager to refuse instead of replacing it', async () => {
+  const box = await sandbox();
+  try {
+    await installBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' });
+    const repo = join(box.home, '.grokbot', 'agent-bundle', 'marketplaces', 'grok-fixture');
+    await writeFile(join(repo, 'local-edit.txt'), 'mine\n');
+    await rebuild(box, '1.2.3', 'drifted\n');
+    const refused = await installBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot', replace: true })
+      .catch((error: unknown) => error);
+    expect((refused as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7005', target: 'grokbot' }]);
+    expect(await readFile(join(repo, 'local-edit.txt'), 'utf8')).toBe('mine\n');
+  } finally {
+    await box.cleanup();
+  }
+});

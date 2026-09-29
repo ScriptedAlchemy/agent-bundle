@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { exists } from '../core/paths.ts';
 import { cursorMarketplaceRoot, stageCursorMarketplace } from './cursor-marketplace.ts';
 import { bundleInventory, readBundleIdentity } from './identity.ts';
 import {
+  type InstallReceipt,
   createInstallReceipt,
   installReceiptStorePath,
   readInstallReceiptFile,
@@ -81,6 +82,48 @@ export const grokBotStagingMessage = (message: string): string =>
 const failure = (code: string, message: string): DiagnosticError =>
   new DiagnosticError([{ code, message, severity: 'error', target: grokBotHost }]);
 
+const gitOutput = async (runner: InstallCommandRunner, cwd: string, args: readonly string[]): Promise<string | undefined> => {
+  const result = await runner.run('git', args, { cwd }).catch(() => undefined);
+  return result === undefined || result.code !== 0 ? undefined : result.stdout.trim();
+};
+
+/**
+ * Moves a receipt-owned staging repository aside when this install supersedes it: same-version content drift is
+ * restaged automatically, a different version only with `--replace`. Ownership means the receipt names this plugin
+ * and host and its commit is the clean HEAD; anything else is left for the stager to refuse (`AB7005`).
+ * Returns the aside path so a failed restage can be rolled back.
+ */
+const supersedeOwnedStaging = async (options: {
+  readonly artifact: { readonly hash: string };
+  readonly identity: { readonly plugin: string; readonly version: string };
+  readonly options: InstallBundleOptions;
+  readonly previousReceipt: InstallReceipt | undefined;
+  readonly repoRoot: string;
+  readonly runner: InstallCommandRunner;
+}): Promise<string | undefined> => {
+  const { identity, previousReceipt, repoRoot, runner } = options;
+  if (previousReceipt === undefined || !(await exists(repoRoot))) return undefined;
+  const sameVersion = previousReceipt.version === identity.version;
+  if (sameVersion && previousReceipt.contentHash === options.artifact.hash) return undefined;
+  const commit = previousReceipt.registrations[0]?.commit;
+  const owned = previousReceipt.host === grokBotHost &&
+    previousReceipt.plugin === identity.plugin &&
+    commit !== undefined &&
+    await gitOutput(runner, repoRoot, ['rev-parse', 'HEAD']) === commit &&
+    await gitOutput(runner, repoRoot, ['status', '--porcelain', '--untracked-files=all', '--ignored=matching']) === '';
+  if (!owned) return undefined;
+  if (!sameVersion && options.options.replace !== true) {
+    throw failure(
+      'AB7005',
+      `Refusing version collision at ${repoRoot}: found ${previousReceipt.version}, requested ${identity.version}. ` +
+        'Re-run with --replace to restage it.',
+    );
+  }
+  const aside = join(repoRoot, '..', `.${identity.plugin}.superseded-${process.pid}-${Date.now()}`);
+  await rename(repoRoot, aside);
+  return aside;
+};
+
 /**
  * Stages the Cursor projection as a committed marketplace repository under
  * `<grokbot root>/agent-bundle/marketplaces/<plugin>` and writes a store
@@ -111,9 +154,18 @@ export const installGrokBot = async (
   const root = grokBotRoot(options);
   try {
     const artifact = await bundleInventory(identity, { restoreModes: true });
-    const staged = await stageCursorMarketplace({ artifact, cursorRoot: root, identity, runner, treeHash });
     const receiptPath = grokBotReceiptPath(root, identity.plugin);
     const previousReceipt = await readInstallReceiptFile(receiptPath);
+    const repoRoot = join(grokBotMarketplaceRoot(root), identity.plugin);
+    const superseded = await supersedeOwnedStaging({ artifact, identity, options, previousReceipt, repoRoot, runner });
+    let staged: Awaited<ReturnType<typeof stageCursorMarketplace>>;
+    try {
+      staged = await stageCursorMarketplace({ artifact, cursorRoot: root, identity, runner, treeHash });
+    } catch (error) {
+      if (superseded !== undefined) await rename(superseded, repoRoot);
+      throw error;
+    }
+    if (superseded !== undefined) await rm(superseded, { force: true, recursive: true });
     if (
       staged.state === 'staged' ||
       previousReceipt === undefined ||
@@ -146,8 +198,9 @@ export const installGrokBot = async (
       mode: 'marketplace',
       nextSteps: grokBotNextSteps(staged.destination, identity.plugin),
       plugin: identity.plugin,
+      ...(superseded === undefined || previousReceipt === undefined ? {} : { previousContentHash: previousReceipt.contentHash }),
       receipt: receiptPath,
-      state: staged.state,
+      state: superseded === undefined ? staged.state : 'replaced',
       version: identity.version,
     };
   } catch (error) {
