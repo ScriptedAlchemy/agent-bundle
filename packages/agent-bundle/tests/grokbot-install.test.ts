@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -8,7 +8,7 @@ import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { runDoctor } from '../src/install/doctor.ts';
 import { formatDoctorReport, formatInstallResult, formatUninstallResult } from '../src/install/format.ts';
 import { grokBotReceiptPath, grokBotRoot, grokBotStagingMessage, readGrokBotInventory } from '../src/install/grokbot.ts';
-import { installBundle } from '../src/install/install.ts';
+import { defaultCommandRunner, installBundle } from '../src/install/install.ts';
 import { readInstallReceiptFile } from '../src/install/receipt.ts';
 import { uninstallBundle } from '../src/install/uninstall.ts';
 import { runInstallCli } from '../src/install/index.ts';
@@ -362,6 +362,40 @@ it('leaves a dirty staged repository for the stager to refuse instead of replaci
       .catch((error: unknown) => error);
     expect((refused as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7005', target: 'grokbot' }]);
     expect(await readFile(join(repo, 'local-edit.txt'), 'utf8')).toBe('mine\n');
+  } finally {
+    await box.cleanup();
+  }
+});
+
+it('rolls a restage back to the superseded repository when the receipt cannot be written', async () => {
+  const box = await sandbox();
+  try {
+    const grokHome = join(box.home, '.grokbot');
+    const repo = join(grokHome, 'agent-bundle', 'marketplaces', 'grok-fixture');
+    const receipts = join(grokHome, 'agent-bundle', 'receipts');
+    const first = await installBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' });
+    await rebuild(box, '1.2.3', 'drifted\n');
+    // Once the replacement commit exists, turn the receipt store into a file so the receipt write fails.
+    const commandRunner = {
+      run: async (command: string, args: readonly string[], options: { readonly cwd: string }) => {
+        const result = await defaultCommandRunner.run(command, args, options);
+        if (args.includes('commit')) {
+          await rename(receipts, `${receipts}.aside`);
+          await writeFile(receipts, 'not a directory\n');
+        }
+        return result;
+      },
+    };
+    const failed = await installBundle({ commandRunner, environment: box.environment, from: box.from, home: box.home, host: 'grokbot' })
+      .catch((error: unknown) => error);
+    expect(failed).toBeInstanceOf(Error);
+    await removeTree(receipts);
+    await rename(`${receipts}.aside`, receipts);
+    expect(await readFile(join(repo, 'plugins', 'grok-fixture', 'payload.txt'), 'utf8')).toBe('payload\n');
+    const head = await defaultCommandRunner.run('git', ['rev-parse', 'HEAD'], { cwd: repo });
+    expect(head.stdout.trim()).toBe(first.commit);
+    const receipt = await readInstallReceiptFile(grokBotReceiptPath(grokHome, 'grok-fixture'));
+    expect(receipt).toMatchObject({ contentHash: first.contentHash, registrations: [{ commit: first.commit }] });
   } finally {
     await box.cleanup();
   }

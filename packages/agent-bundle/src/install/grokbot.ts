@@ -165,29 +165,38 @@ export const installGrokBot = async (
       if (superseded !== undefined) await rename(superseded, repoRoot);
       throw error;
     }
-    if (superseded !== undefined) await rm(superseded, { force: true, recursive: true });
-    if (
-      staged.state === 'staged' ||
-      previousReceipt === undefined ||
-      previousReceipt.contentHash !== artifact.hash ||
-      previousReceipt.registrations[0]?.commit !== staged.commit
-    ) {
-      await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
-        host: grokBotHost,
-        ...(previousReceipt === undefined ? {} : { installedAt: previousReceipt.installedAt }),
-        inventory: { files: [], hash: artifact.hash },
-        mode: 'marketplace',
-        plugin: identity.plugin,
-        registrations: [{
-          ...(staged.commit === undefined ? {} : { commit: staged.commit }),
-          kind: 'grokbot-marketplace-staging',
-          name: staged.marketplace,
-        }],
-        scope: 'user',
-        updatedAt: new Date().toISOString(),
-        version: identity.version,
-      }));
+    try {
+      if (
+        staged.state === 'staged' ||
+        previousReceipt === undefined ||
+        previousReceipt.contentHash !== artifact.hash ||
+        previousReceipt.registrations[0]?.commit !== staged.commit
+      ) {
+        await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
+          host: grokBotHost,
+          ...(previousReceipt === undefined ? {} : { installedAt: previousReceipt.installedAt }),
+          inventory: { files: [], hash: artifact.hash },
+          mode: 'marketplace',
+          plugin: identity.plugin,
+          registrations: [{
+            ...(staged.commit === undefined ? {} : { commit: staged.commit }),
+            kind: 'grokbot-marketplace-staging',
+            name: staged.marketplace,
+          }],
+          scope: 'user',
+          updatedAt: new Date().toISOString(),
+          version: identity.version,
+        }));
+      }
+    } catch (error) {
+      // Keep the receipt and the repository it names consistent: put the superseded staging back.
+      if (superseded !== undefined) {
+        await rm(staged.destination, { force: true, recursive: true });
+        await rename(superseded, repoRoot);
+      }
+      throw error;
     }
+    if (superseded !== undefined) await rm(superseded, { force: true, recursive: true });
     return {
       bundleRoot: identity.bundleRoot,
       ...(staged.commit === undefined ? {} : { commit: staged.commit }),
