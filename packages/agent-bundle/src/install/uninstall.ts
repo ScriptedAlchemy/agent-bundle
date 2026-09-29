@@ -12,6 +12,7 @@ import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { cacheHasPlugin, readHeadCommit } from './cursor-hooks-registration.ts';
 import { cursorMarketplaceName, cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
+import { grokBotRoot, readGrokBotInventory } from './grokbot.ts';
 import {
   ampInstallLocation,
   cursorMarketplaceReceiptPath,
@@ -745,36 +746,96 @@ const stagedWorkingTreeDirt = async (runner: InstallCommandRunner, repoRoot: str
     `${entries.length === 1 ? 'entry' : 'entries'}: ${shown}${entries.length > 5 ? ', …' : ''}) that the receipt does not own.`;
 };
 
-const uninstallCursorMarketplace = async (
+/**
+ * The host a staged marketplace repository was built for: Cursor's Customize import (`install cursor --mode
+ * marketplace`) or a hosted Grok Bot marketplace (`install grokbot`). Both stage the same committed repository
+ * under `<root>/agent-bundle/marketplaces/<plugin>`; they differ in the root, the receipt's registration kind,
+ * and how an imported copy is detected and removed.
+ */
+interface MarketplaceStagingHost {
+  readonly host: 'cursor' | 'grokbot';
+  readonly imported: (marketplace: string, receipt: InstallReceipt | undefined, commit: string | undefined) =>
+    Promise<{ readonly detail: string; readonly nextStep: string } | undefined>;
+  readonly installCommand: string;
+  readonly kind: 'cursor-marketplace-staging' | 'grokbot-marketplace-staging';
+  readonly label: string;
+  readonly root: string;
+}
+
+const cursorStagingHost = (options: UninstallBundleOptions, identity: PluginIdentity): MarketplaceStagingHost => ({
+  host: 'cursor',
+  // A completed copy Cursor imported from the recorded staging commit is Cursor-owned, whether or not the
+  // staged repository itself still exists: the receipt's commit — and the version the receipt recorded, not the
+  // version the bundle has been rebuilt to since — is what identifies it.
+  imported: async (marketplace, receipt, commit) =>
+    commit !== undefined &&
+      await cacheHasPlugin(options.home ?? homedir(), marketplace, identity.plugin, receipt?.version ?? identity.version, commit)
+      ? {
+        detail: `Cursor imported this marketplace (a completed copy exists under ~/.cursor/plugins/cache/${marketplace}); ` +
+          'its installed-plugin registry is server-assigned and exposes no non-interactive removal verb.',
+        nextStep: `Open Cursor, then Customize -> Plugins, and uninstall "${identity.plugin}" (marketplace ${marketplace}) there.`,
+      }
+      : undefined,
+  installCommand: '`agent-bundle install cursor --mode marketplace`',
+  kind: 'cursor-marketplace-staging',
+  label: 'Cursor',
+  root: join(options.home ?? homedir(), '.cursor'),
+});
+
+const grokBotStagingHost = (options: UninstallBundleOptions, identity: PluginIdentity): MarketplaceStagingHost => ({
+  host: 'grokbot',
+  // Grok Bot clones installed plugins from the hosted marketplace, never from the staged repository, so any
+  // completed copy in its cache is the account install the user made; it is reported, never removed.
+  imported: async () => {
+    const inventory = await readGrokBotInventory(identity.plugin, options);
+    if (inventory.status !== 'available' || inventory.entries.length === 0) return undefined;
+    const ids = [...new Set(inventory.entries.map((entry) => entry.pluginId).filter((id) => id !== undefined))];
+    const copies = inventory.entries.map((entry) =>
+      `${entry.marketplace}@${entry.pluginVersion}${entry.pluginId === undefined ? '' : ` (plugin id ${entry.pluginId})`}`);
+    return {
+      detail: `Grok Bot has ${identity.plugin} installed on this account (${copies.join(', ')}); ` +
+        'the account install is server-side and exposes no non-interactive removal verb.',
+      nextStep: `In Grok Bot, open Settings -> Plugins and uninstall "${identity.plugin}"` +
+        `${ids.length === 0 ? '' : ` (plugin id ${ids.join(', ')})`}, or ask a Grok Bot agent to uninstall that plugin id.`,
+    };
+  },
+  installCommand: '`agent-bundle install grokbot`',
+  kind: 'grokbot-marketplace-staging',
+  label: 'Grok Bot',
+  root: grokBotRoot(options),
+});
+
+const uninstallStagedMarketplace = async (
   options: UninstallBundleOptions,
   identity: PluginIdentity,
   policy: UninstallDataPolicy,
+  target: MarketplaceStagingHost,
 ): Promise<UninstallResult> => {
   const force = options.force === true;
   const marketplace = cursorMarketplaceName(identity.plugin);
   const base = {
     bundleRoot: identity.bundleRoot,
     forced: force,
-    host: 'cursor',
+    host: target.host,
     marketplace,
     mode: 'marketplace',
     plugin: identity.plugin,
     scope: 'user',
     version: identity.version,
   } as const;
-  const cursorRoot = join(options.home ?? homedir(), '.cursor');
-  const marketplacesRoot = cursorMarketplaceRoot(cursorRoot);
+  const hostRoot = target.root;
+  const marketplacesRoot = cursorMarketplaceRoot(hostRoot);
   const repoRoot = join(marketplacesRoot, identity.plugin);
-  const receiptPath = cursorMarketplaceReceiptPath(cursorRoot, identity.plugin);
+  const receiptPath = cursorMarketplaceReceiptPath(hostRoot, identity.plugin);
   const data: UninstallDataReport = Object.freeze({
-    detail: 'A staged marketplace repository holds no runtime state; a copy Cursor imported from it is Cursor-owned and is not touched.',
+    detail: `A staged marketplace repository holds no runtime state; a copy ${target.label} imported from it is ${target.label}-owned and is not touched.`,
     outcome: 'unavailable',
     paths: Object.freeze([]),
     policy,
   });
-  const cursorHome = await realDirectory(cursorRoot, 'cursor');
-  const repo = cursorHome === undefined ? undefined : await realDirectory(repoRoot, 'cursor');
-  const receipt = cursorHome === undefined ? undefined : await readInstallReceiptFile(receiptPath);
+  const home = await realDirectory(hostRoot, target.host);
+  const repo = home === undefined ? undefined : await realDirectory(repoRoot, target.host);
+  const receipt = home === undefined ? undefined : await readInstallReceiptFile(receiptPath);
   if (repo === undefined && receipt === undefined) {
     return Object.freeze({
       ...base,
@@ -783,7 +844,7 @@ const uninstallCursorMarketplace = async (
       receipt: receiptReport(receiptPath, undefined, 'missing'),
       registrations: Object.freeze([Object.freeze({
         action: 'already-absent' as const,
-        kind: 'cursor-marketplace-staging' as const,
+        kind: target.kind,
         name: marketplace,
       })]),
       removed: Object.freeze({ directories: Object.freeze([]), files: Object.freeze([]) }),
@@ -792,16 +853,16 @@ const uninstallCursorMarketplace = async (
     });
   }
   let status: UninstallReceiptStatus = receipt === undefined ? 'forced-missing' : 'consumed';
-  const recorded = receipt?.registrations.find((registration) => registration.kind === 'cursor-marketplace-staging');
+  const recorded = receipt?.registrations.find((registration) => registration.kind === target.kind);
   if (repo !== undefined) {
     if (receipt === undefined) {
       if (!force) {
         throw failure(
           'AB7009',
-          `Refusing to remove staged Cursor marketplace ${repoRoot} without an install receipt at ${receiptPath}. ` +
+          `Refusing to remove staged ${target.label} marketplace ${repoRoot} without an install receipt at ${receiptPath}. ` +
             'Re-run with --force to remove it after verifying it is this plugin\'s staging, or rerun ' +
-            '`agent-bundle install cursor --mode marketplace` to record a receipt first.',
-          'cursor',
+            `${target.installCommand} to record a receipt first.`,
+          target.host,
         );
       }
       if (!await readMarketplaceStagingIdentity(repoRoot, identity.plugin)) {
@@ -809,14 +870,14 @@ const uninstallCursorMarketplace = async (
           'AB7007',
           `Refusing to remove ${repoRoot}: it is not a staged Agent Bundle marketplace for ${identity.plugin} ` +
             `(expected .cursor-plugin/marketplace.json naming ${marketplace} and plugins/${identity.plugin}). --force does not apply.`,
-          'cursor',
+          target.host,
         );
       }
     } else if (receipt.plugin !== identity.plugin) {
       throw failure(
         'AB7007',
         `Refusing to remove ${repoRoot}: the receipt at ${receiptPath} names plugin ${JSON.stringify(receipt.plugin)}.`,
-        'cursor',
+        target.host,
       );
     } else {
       const head = await readHeadCommit(repoRoot);
@@ -826,7 +887,7 @@ const uninstallCursorMarketplace = async (
             'AB7007',
             `Refusing to remove ${repoRoot}: its HEAD is ${head ?? 'unresolvable'} but the receipt recorded commit ` +
               `${recorded.commit}, so the staged repository changed after staging. Re-run with --force to remove it anyway.`,
-            'cursor',
+            target.host,
           );
         }
         status = 'forced-mismatch';
@@ -839,8 +900,8 @@ const uninstallCursorMarketplace = async (
             throw failure(
               'AB7007',
               `Refusing to remove ${repoRoot}: ${dirty} Move those entries out (or commit them and rerun ` +
-                '`agent-bundle install cursor --mode marketplace`), or re-run with --force to remove them anyway.',
-              'cursor',
+                `${target.installCommand}), or re-run with --force to remove them anyway.`,
+              target.host,
             );
           }
           status = 'forced-mismatch';
@@ -848,29 +909,23 @@ const uninstallCursorMarketplace = async (
       }
     }
   }
-  // A completed copy Cursor imported from the recorded staging commit is Cursor-owned, whether or not the
-  // staged repository itself still exists: the receipt's commit — and the version the receipt recorded, not the
-  // version the bundle has been rebuilt to since — is what identifies it.
-  const imported = recorded?.commit !== undefined
-    ? await cacheHasPlugin(options.home ?? homedir(), marketplace, identity.plugin, receipt?.version ?? identity.version, recorded.commit)
-    : false;
+  const imported = await target.imported(marketplace, receipt, recorded?.commit);
   const planned = options.plan === true;
   const registrations: UninstallRegistrationReport[] = [Object.freeze({
     action: repo === undefined ? 'already-absent' as const : planned ? 'planned' as const : 'removed' as const,
     ...(recorded?.commit === undefined ? {} : { commit: recorded.commit }),
-    kind: 'cursor-marketplace-staging' as const,
+    kind: target.kind,
     name: marketplace,
   })];
   const nextSteps: string[] = [];
-  if (imported) {
+  if (imported !== undefined) {
     registrations.push(Object.freeze({
       action: 'manual',
-      detail: `Cursor imported this marketplace (a completed copy exists under ~/.cursor/plugins/cache/${marketplace}); ` +
-        'its installed-plugin registry is server-assigned and exposes no non-interactive removal verb.',
-      kind: 'cursor-marketplace-staging',
+      detail: imported.detail,
+      kind: target.kind,
       name: marketplace,
     }));
-    nextSteps.push(`Open Cursor, then Customize -> Plugins, and uninstall "${identity.plugin}" (marketplace ${marketplace}) there.`);
+    nextSteps.push(imported.nextStep);
   }
   const files = receipt === undefined && !await exists(receiptPath) ? [] : [receiptPath];
   const directories = repo === undefined ? [] : [repoRoot];
@@ -878,8 +933,8 @@ const uninstallCursorMarketplace = async (
     // Exactly the directories the run below would prune, in its order: the receipt store, the staging root, then
     // the Agent Bundle namespace once both are gone.
     const gone = new Set([...files, ...directories]);
-    const namespace = join(cursorRoot, 'agent-bundle');
-    const wouldPruneStore = await wouldPrune(installReceiptStoreDirectory(cursorRoot), gone) ? [installReceiptStoreDirectory(cursorRoot)] : [];
+    const namespace = join(hostRoot, 'agent-bundle');
+    const wouldPruneStore = await wouldPrune(installReceiptStoreDirectory(hostRoot), gone) ? [installReceiptStoreDirectory(hostRoot)] : [];
     const wouldPruneMarketplaces = await wouldPrune(marketplacesRoot, gone) ? [marketplacesRoot] : [];
     const wouldPruneNamespace = await wouldPrune(namespace, gone) ? [namespace] : [];
     return Object.freeze({
@@ -900,9 +955,9 @@ const uninstallCursorMarketplace = async (
   // The whole repository is installer-created (mkdtemp + rename), and the receipt just proved HEAD is
   // the commit that staging wrote (or --force accepted the difference): removing it wholesale is bounded.
   if (repo !== undefined) await rm(repoRoot, { force: true, recursive: true });
-  const removedReceipt = await removeStoredInstallReceipt(receiptPath, cursorRoot);
+  const removedReceipt = await removeStoredInstallReceipt(receiptPath, hostRoot);
   const prunedMarketplaces = await pruneEmptyDirectory(marketplacesRoot) ? [marketplacesRoot] : [];
-  const prunedNamespace = await pruneEmptyDirectory(join(cursorRoot, 'agent-bundle')) ? [join(cursorRoot, 'agent-bundle')] : [];
+  const prunedNamespace = await pruneEmptyDirectory(join(hostRoot, 'agent-bundle')) ? [join(hostRoot, 'agent-bundle')] : [];
   return Object.freeze({
     ...base,
     data,
@@ -1621,7 +1676,17 @@ const uninstallProgram = Effect.fnUntraced(function*(
     ));
   }
   const policy = resolveDataPolicy(options);
-  const identity = yield* liftPromise(() => readBundleIdentity(options.from, options.host));
+  if (options.host === 'grokbot') {
+    if (scope !== 'user') {
+      return yield* Effect.fail(failure('AB7003', `Grok Bot plugin uninstallation supports only user scope, not ${scope}.`, 'grokbot'));
+    }
+    // The grokbot host stages the Cursor projection, so the Cursor projection identifies the plugin.
+    const cursorIdentity = yield* liftPromise(() => readBundleIdentity(options.from, 'cursor'));
+    return yield* liftPromise(() =>
+      uninstallStagedMarketplace(options, cursorIdentity, policy, grokBotStagingHost(options, cursorIdentity)));
+  }
+  const host = options.host;
+  const identity = yield* liftPromise(() => readBundleIdentity(options.from, host));
   switch (options.host) {
     case 'amp':
       return yield* liftPromise(() => uninstallAmp(options, identity, scope, policy));
@@ -1635,7 +1700,7 @@ const uninstallProgram = Effect.fnUntraced(function*(
       }
       // Cursor requires an existing home for install; uninstalling from a missing home is simply nothing to do.
       return yield* liftPromise(() => options.mode === 'marketplace'
-        ? uninstallCursorMarketplace(options, identity, policy)
+        ? uninstallStagedMarketplace(options, identity, policy, cursorStagingHost(options, identity))
         : uninstallCursorLocal(options, identity, policy));
     }
     default: {

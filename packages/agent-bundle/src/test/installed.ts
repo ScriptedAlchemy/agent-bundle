@@ -19,7 +19,7 @@ import {
   type AgentTestProofLevel,
 } from './manifest.ts';
 
-type InstalledMcpHost = Exclude<InstallHost, 'amp'>;
+type InstalledMcpHost = Exclude<InstallHost, 'amp' | 'grokbot'>;
 
 export type InstalledHostCheckName =
   | 'component-paths'

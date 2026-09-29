@@ -26,7 +26,7 @@ export interface PluginIdentity {
 export const failure = (
   code: string,
   message: string,
-  target: BundleIdentityHost,
+  target: BundleIdentityHost | 'grokbot',
 ): DiagnosticError => new DiagnosticError([{
   code,
   message,

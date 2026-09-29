@@ -1298,7 +1298,7 @@ it('reports invalid CLI arguments as Commander usage errors', async () => {
   const invalidInstallHost = await runSourceCliWithOutput(['install', 'windsurf']);
   expect(invalidInstallHost.code).toBe(2);
   expect(invalidInstallHost.stderr).toContain(
-    "error: command-argument value 'windsurf' is invalid for argument 'host'. Install host must be amp, claude, codex, or cursor.",
+    "error: command-argument value 'windsurf' is invalid for argument 'host'. Install host must be amp, claude, codex, cursor, or grokbot.",
   );
   expect(invalidInstallHost.stderr).not.toContain('AB5000');
 });

@@ -191,9 +191,9 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `<host>` | **required** | `amp`, `claude`, `codex`, or `cursor`. |
+| `<host>` | **required** | `amp`, `claude`, `codex`, `cursor`, or `grokbot`. `grokbot` installs the Cursor projection: it stages a committed marketplace repository under `~/.grokbot/agent-bundle/marketplaces/<name>` (`$GROK_BOT_HOME` overrides `~/.grokbot`), writes a receipt, and prints the remaining Grok Bot steps. A clean, receipt-owned staging repository is restaged on same-version content drift, or for a new version with `--replace`. Grok Bot registers plugins server-side from hosted Git marketplaces, so nothing is registered locally. |
 | `--from <root>` | `process.cwd()` | The composite root holding `agent-bundle.manifest.json`. Identity comes from `application` and `projections[host]`; other hosts use `documents.plugin`, while Amp copies only the directory containing `documents.entry`. `AB7001` covers a missing/invalid manifest, projection, required host file, unsafe local name, or missing Claude/Codex marketplace identity. |
-| `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Amp accepts `project` and `user` (its system root); Codex and Cursor are user-scoped. Run Amp project-scope installation from the destination project root. |
+| `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Amp accepts `project` and `user` (its system root); Codex, Cursor, and Grok Bot are user-scoped. Run Amp project-scope installation from the destination project root. |
 | `--mode <mode>` | `local` | Cursor only. `local` copies the bundle into `~/.cursor/plugins/local/<name>`; `marketplace` stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step that makes Cursor manage the plugin as a marketplace install. |
 | `--replace` | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
 
@@ -222,7 +222,7 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `<host>` | **required** | `amp`, `claude`, `codex`, or `cursor`. |
+| `<host>` | **required** | `amp`, `claude`, `codex`, `cursor`, or `grokbot` (removes the staged repository and receipt, and names the Grok Bot plugin id to uninstall in Grok Bot). |
 | `--from <root>` | `process.cwd()` | The composite root whose `agent-bundle.manifest.json` identifies the plugin (name, version, marketplace), read exactly as `install` reads it (`AB7001` on the same conditions). |
 | `--scope <scope>` | `user` | The scope the plugin was installed at (Claude or Amp). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
@@ -267,7 +267,7 @@ environment or home a source of purge authority: Doctor and uninstall report the
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, or `cursor`. |
+| `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, `cursor`, or the opt-in `grokbot` (reports receipts plus the plugin id, version, and installed commit from the Grok Bot computer's plugin cache, `AB7334`). |
 | `--from <root>` | none | The composite root to compare against, read through its `agent-bundle.manifest.json` as `install` reads it: identity from `application`, each inspected host from its `projections[]` row (`AB7001` when the manifest does not describe the host). |
 | `--json` | off | Write one machine-readable JSON document. |
 

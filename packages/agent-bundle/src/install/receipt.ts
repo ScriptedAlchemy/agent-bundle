@@ -69,7 +69,8 @@ export type InstallRegistrationKind =
   | 'codex-marketplace'
   | 'codex-plugin'
   | 'cursor-local-plugin'
-  | 'cursor-marketplace-staging';
+  | 'cursor-marketplace-staging'
+  | 'grokbot-marketplace-staging';
 
 export const installRegistrationKinds: readonly InstallRegistrationKind[] = Object.freeze([
   'amp-project-plugin',
@@ -80,10 +81,11 @@ export const installRegistrationKinds: readonly InstallRegistrationKind[] = Obje
   'codex-plugin',
   'cursor-local-plugin',
   'cursor-marketplace-staging',
+  'grokbot-marketplace-staging',
 ]);
 
 export interface InstallRegistration {
-  /** Staged marketplace HEAD commit (`cursor-marketplace-staging`). */
+  /** Staged marketplace HEAD commit (`cursor-marketplace-staging`, `grokbot-marketplace-staging`). */
   readonly commit?: string;
   /** `<plugin>@<marketplace>` for plugin registrations. */
   readonly id?: string;
