@@ -39,7 +39,7 @@ export const formatInstallResult = (result: InstallResult): string => {
   const lines = [
     `${installVerb(result.state, result.mode)} ${result.plugin}@${result.version} for ${result.host}${mode} at ${destination}${content}`,
   ];
-  if (result.marketplace !== undefined && result.host === 'cursor') {
+  if (result.marketplace !== undefined && (result.host === 'cursor' || result.host === 'grokbot')) {
     lines.push(`Marketplace: ${result.marketplace}${result.commit === undefined ? '' : ` @ ${result.commit}`}`);
   }
   if (result.nextSteps !== undefined && result.nextSteps.length > 0) {
@@ -163,6 +163,7 @@ export const formatDoctorReport = (result: DoctorReport): string => {
         ? ''
         : ` ${host.bundle.name}${host.bundle.version === undefined ? '' : `@${host.bundle.version}`}`;
       out.push(`  bundle:${identity} ${host.bundle.state}\n`);
+      if (host.bundle.pluginId !== undefined) out.push(`  plugin id: ${host.bundle.pluginId}\n`);
       if (host.bundle.comparison !== undefined) {
         out.push(`  installed copy: ${describeInstallComparison(host.bundle.comparison)}\n`);
       }
@@ -175,6 +176,13 @@ export const formatDoctorReport = (result: DoctorReport): string => {
       if (host.bundle.lifecycle !== undefined) {
         out.push(`  lifecycle: ${describeLifecycle(host.bundle.lifecycle)}\n`);
       }
+    }
+    for (const finding of host.host === 'grokbot' ? host.inventory.findings : []) {
+      out.push(
+        `  installed: ${finding.name ?? 'unknown'}@${finding.version ?? 'unknown'} ` +
+        `(plugin id ${finding.pluginId ?? 'not assigned yet'}, commit ${finding.commit ?? 'unknown'}, ` +
+        `marketplace ${finding.marketplace ?? 'unknown'}) at ${finding.path ?? 'unknown path'}\n`,
+      );
     }
     if (host.receipts.length > 0) {
       out.push(`  receipts: ${host.receipts.length} store receipt(s)\n`);

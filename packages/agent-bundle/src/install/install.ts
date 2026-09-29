@@ -12,6 +12,7 @@ import { runPromise } from '../effect/boundary.ts';
 import { liftPromise, type LiftedRejection } from '../effect/lift.ts';
 import { claudePluginRowErrors } from '../host-contracts/claude-plugin-validation.ts';
 import { stageCursorMarketplace } from './cursor-marketplace.ts';
+import { installGrokBot } from './grokbot.ts';
 import {
   bundleInventory,
   failure,
@@ -45,9 +46,10 @@ import {
 } from './receipt.ts';
 import { recordInstalledState } from './state-root.ts';
 
-export type InstallHost = BundleIdentityHost;
-export type DevInstallHost = Exclude<InstallHost, 'amp'>;
-export type PublicInstallHost = Exclude<InstallHost, 'amp' | 'cursor'>;
+/** `grokbot` installs the Cursor projection through a Grok Bot marketplace; see install/grokbot.ts. */
+export type InstallHost = BundleIdentityHost | 'grokbot';
+export type DevInstallHost = Exclude<InstallHost, 'amp' | 'grokbot'>;
+export type PublicInstallHost = Exclude<InstallHost, 'amp' | 'cursor' | 'grokbot'>;
 export type InstallScope = 'local' | 'project' | 'user';
 export type InstallResultState = 'already-installed' | 'installed' | 'replaced' | 'staged';
 
@@ -1255,6 +1257,9 @@ const installProgram = Effect.fnUntraced(function*(
   options: InstallBundleOptions,
 ): Effect.fn.Return<InstallResult, DiagnosticError | LiftedRejection> {
   const scope = options.scope ?? 'user';
+  if (options.host === 'grokbot') {
+    return yield* liftPromise(() => installGrokBot(options, options.commandRunner ?? defaultCommandRunner, treeHash));
+  }
   if (options.mode !== undefined && options.host !== 'cursor') {
     return yield* Effect.fail(failure(
       'AB7003',
@@ -1262,7 +1267,8 @@ const installProgram = Effect.fnUntraced(function*(
       options.host,
     ));
   }
-  const identity = yield* liftPromise(() => readBundleIdentity(options.from, options.host));
+  const host = options.host;
+  const identity = yield* liftPromise(() => readBundleIdentity(options.from, host));
   switch (options.host) {
     case 'amp':
       return yield* liftPromise(() => installAmp(options, identity, scope));

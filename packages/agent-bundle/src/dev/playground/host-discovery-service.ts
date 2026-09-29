@@ -117,8 +117,11 @@ const discoveryMcpServer = (value: ModernMcpServerEntry): DiscoveryMcpServer => 
   transport: value.server.kind,
 });
 
+/** Workbench discovery covers the hosts with a full Doctor report; the opt-in `grokbot` report is not one of them. */
+type DiscoverableHostReport = DoctorHostReport & { readonly host: Exclude<DoctorHostReport['host'], 'grokbot'> };
+
 const enumerateMcpServers = async (
-  value: DoctorHostReport,
+  value: DiscoverableHostReport,
   registry: TargetRegistry,
   run: PlatformRun,
 ): Promise<readonly DiscoveryMcpServer[] | undefined> => {
@@ -142,7 +145,7 @@ const enumerateMcpServers = async (
 };
 
 const hostReport = async (
-  value: DoctorHostReport,
+  value: DiscoverableHostReport,
   registry: TargetRegistry,
   run: PlatformRun,
 ): Promise<DiscoveryHostReport> => Object.freeze({
@@ -208,7 +211,9 @@ export class HostDiscoveryService implements HostDiscoveryRouteService {
       ...(bundleSource ? { from: bundleSource } : {}),
     });
     const hosts: readonly DiscoveryHostReport[] = Object.freeze(
-      await Promise.all(report.hosts.map((value) => hostReport(value, this.#registry, this.#run))),
+      await Promise.all(report.hosts
+        .filter((value): value is DiscoverableHostReport => value.host !== 'grokbot')
+        .map((value) => hostReport(value, this.#registry, this.#run))),
     );
     const endpoints: DiscoveryEndpointReport = endpointReport(report.endpoints);
     const diagnostics: readonly DiscoveryDiagnostic[] = Object.freeze(

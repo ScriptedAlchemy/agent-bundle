@@ -221,6 +221,16 @@ Cursor manage the plugin as a marketplace install; `agent-bundle doctor --host
 cursor` reports hook registration (`AB7322`), duplicate user-level delivery
 (`AB7323`), and marketplace import state (`AB7324`).
 
+`agent-bundle install grokbot` (or `<bin> install grokbot` from a package-bound
+installer) stages the same Cursor projection as a committed marketplace
+repository at `~/.grokbot/agent-bundle/marketplaces/<name>` and prints the
+steps Grok Bot needs: host the repository on GitHub, add it as a plugin
+marketplace, and install the plugin from Grok Bot's Marketplace. Grok Bot
+assigns the plugin id server-side, so nothing is registered locally;
+`agent-bundle doctor --host grokbot` reports that id and the installed commit
+from the Grok Bot computer's plugin cache (`AB7334`), and `uninstall grokbot`
+removes the staging and names the id to uninstall in Grok Bot.
+
 For a root whose only Cursor-loadable format is the `portable` projection,
 `install.mjs` copies the Agent Plugins package to the same
 `~/.cursor/plugins/local/<name>` location and, because Cursor 3.18.25

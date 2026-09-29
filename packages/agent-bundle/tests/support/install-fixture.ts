@@ -13,7 +13,7 @@ import {
 } from '../../src/build/manifest.ts';
 import type { WebManifest } from '../../src/web-host/manifest.ts';
 import { digest, sha256Hex } from '../../src/core/digest.ts';
-import type { InstallHost } from '../../src/install/install.ts';
+import type { BundleIdentityHost as InstallHost } from '../../src/install/identity.ts';
 
 const pluginDocuments: Readonly<Record<Exclude<InstallHost, 'amp'>, string>> = Object.freeze({
   claude: '.claude-plugin/plugin.json',

@@ -73,11 +73,13 @@ import {
   inspectCursorMarketplaceStaging,
   inspectCursorPluginHooks,
 } from './cursor-hooks-registration.ts';
-import { cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
+import { cursorMarketplaceName, cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
+import { grokBotMarketplaceRoot, grokBotRoot, readGrokBotInventory, type GrokBotInventory } from './grokbot.ts';
 import { bundleInventory, installedBundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
 import { inspectInstalledStateOwnership, resolveInstalledStateRoots } from './state-root.ts';
 
-export type DoctorHost = Exclude<InstallHost, 'amp'>;
+/** Hosts with a full Doctor report; `grokbot` has its own read-only report (install/grokbot.ts). */
+export type DoctorHost = Exclude<InstallHost, 'amp' | 'grokbot'>;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
 export type DoctorInventoryStatus = 'known' | 'skipped' | 'unknown';
 export type DoctorFindingState =
@@ -110,7 +112,7 @@ export interface DoctorOptions {
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
   readonly from?: string;
   readonly home?: string;
-  readonly hosts?: readonly DoctorHost[];
+  readonly hosts?: readonly (DoctorHost | 'grokbot')[];
   readonly platform?: NodeJS.Platform;
 }
 
@@ -159,6 +161,8 @@ export interface DoctorFinding {
   readonly manifest?: string;
   readonly name?: string;
   readonly path?: string;
+  /** Grok Bot only: the server-assigned plugin id from Grok Bot's skill index. */
+  readonly pluginId?: string;
   /** The in-tree install receipt of a Cursor local copy, when it carries one. */
   readonly receipt?: DoctorReceiptSummary;
   readonly runtime?: DoctorRuntimeStatus;
@@ -322,7 +326,7 @@ export interface DoctorHostReport {
     readonly marketplace?: string;
   };
   readonly diagnostics: readonly Diagnostic[];
-  readonly host: DoctorHost;
+  readonly host: DoctorHost | 'grokbot';
   readonly inventory: DoctorInventory;
   readonly probe: DoctorHostProbe;
   /** Agent Bundle store receipts under the host root, cross-checked against the host's inventory. */
@@ -385,7 +389,7 @@ const diagnostic = (
   message: string,
   recovery: string,
   severity: DiagnosticSeverity,
-  target?: DoctorHost,
+  target?: DoctorHost | 'grokbot',
 ): Diagnostic => Object.freeze({
   code,
   message,
@@ -1584,7 +1588,7 @@ const receiptFinding = (path: string, receipt: InstallReceipt, state: DoctorRece
  * thrown.
  */
 const inspectStoreReceipts = async (
-  host: DoctorHost,
+  host: DoctorHost | 'grokbot',
   hostRoot: string,
   stateOf: (receipt: InstallReceipt) => Promise<DoctorReceiptFinding['state']>,
 ): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly receipts: readonly DoctorReceiptFinding[] }> => {
@@ -1639,7 +1643,7 @@ const inspectStoreReceipts = async (
         'AB7328',
         `Agent Bundle receipt ${JSON.stringify(path)} records ${receipt.plugin}@${receipt.version} (${receipt.mode}, scope ${receipt.scope}) ` +
           `but ${host} no longer holds the registration it describes.`,
-        `Run \`agent-bundle uninstall ${host} --from <bundle-dir>${receipt.mode === 'marketplace' ? ' --mode marketplace' : ''}\` to consume the ` +
+        `Run \`agent-bundle uninstall ${host} --from <bundle-dir>${receipt.mode === 'marketplace' && host === 'cursor' ? ' --mode marketplace' : ''}\` to consume the ` +
           'orphaned receipt, or reinstall the plugin.',
         'warning',
         host,
@@ -2765,13 +2769,104 @@ const doctorHost = async (
   });
 };
 
+/**
+ * Read-only Grok Bot report: the staged-marketplace receipts Agent Bundle wrote under `~/.grokbot`, and every
+ * completed copy of the plugin in the Grok Bot computer's plugin cache with the server-assigned plugin id and
+ * the commit Grok Bot installed (`AB7334`). Nothing here can see or change the account-level install itself.
+ */
+const doctorGrokBot = async (options: DoctorOptions, home: string): Promise<DoctorHostReport> => {
+  const environment = options.environment ?? process.env;
+  const root = grokBotRoot({ environment, home });
+  const diagnostics: Diagnostic[] = [];
+  const receipts = await inspectStoreReceipts('grokbot', root, async (receipt) =>
+    receipt.mode === 'marketplace' && await exists(join(grokBotMarketplaceRoot(root), receipt.plugin)) ? 'consistent' : 'orphaned');
+  diagnostics.push(...receipts.diagnostics);
+  let identity: PluginIdentity | undefined;
+  let bundleError: unknown;
+  if (options.from !== undefined) {
+    try {
+      identity = await readBundleIdentity(options.from, 'cursor');
+    } catch (error) {
+      bundleError = error;
+    }
+  }
+  const plugins = [...new Set([
+    ...(identity === undefined ? [] : [identity.plugin]),
+    ...receipts.receipts.map((receipt) => receipt.plugin),
+  ])].sort();
+  const inventories = new Map<string, GrokBotInventory>();
+  for (const plugin of plugins) inventories.set(plugin, await readGrokBotInventory(plugin, { environment, home }));
+  const firstInventory = [...inventories.values()][0] ?? await readGrokBotInventory('', { environment, home });
+  const available = firstInventory.status === 'available';
+  const findings: DoctorFinding[] = [...inventories.values()].flatMap((inventory, index) => inventory.status !== 'available'
+    ? []
+    : inventory.entries.map((entry) => Object.freeze({
+      commit: entry.pluginVersion,
+      marketplace: entry.marketplace,
+      name: plugins[index] ?? '',
+      path: entry.installPath,
+      ...(entry.pluginId === undefined ? {} : { pluginId: entry.pluginId }),
+      state: entry.pluginId === undefined ? 'installed' as const : 'registered' as const,
+      ...(entry.manifestVersion === undefined ? {} : { version: entry.manifestVersion }),
+    })));
+  let bundle: DoctorHostReport['bundle'];
+  if (identity !== undefined) {
+    const copies = findings.filter((finding) => finding.name === identity.plugin);
+    const staged = await exists(join(grokBotMarketplaceRoot(root), identity.plugin));
+    const registered = copies.find((finding) => finding.pluginId !== undefined);
+    const current = copies.find((finding) => finding.version === identity.version);
+    bundle = Object.freeze({
+      bundleRoot: identity.bundleRoot,
+      marketplace: cursorMarketplaceName(identity.plugin),
+      name: identity.plugin,
+      ...(registered?.pluginId === undefined ? {} : { pluginId: registered.pluginId }),
+      state: registered !== undefined ? 'registered' : copies.length > 0 ? 'installed' : staged ? 'unregistered' : 'missing',
+      version: identity.version,
+    });
+    const described = copies.map((finding) =>
+      `${finding.pluginId === undefined ? 'no plugin id yet' : `plugin id ${finding.pluginId}`}, version ${finding.version ?? 'unknown'}, ` +
+      `commit ${finding.commit ?? 'unknown'} from ${finding.marketplace ?? 'unknown marketplace'}`);
+    diagnostics.push(diagnostic(
+      'AB7334',
+      !available
+        ? `${identity.plugin}@${identity.version} on grokbot: ${firstInventory.status === 'unavailable' ? firstInventory.reason : ''}` +
+          `${staged ? ` Staged marketplace: ${join(grokBotMarketplaceRoot(root), identity.plugin)}.` : ''}`
+        : copies.length === 0
+          ? `${identity.plugin}@${identity.version} is not installed in Grok Bot` +
+            `${staged ? ` (staged at ${join(grokBotMarketplaceRoot(root), identity.plugin)}, not yet imported)` : ''}.`
+          : `${identity.plugin}@${identity.version} on grokbot: installed (${described.join('; ')}).`,
+      copies.length > 0 && current === undefined
+        ? 'Grok Bot installed a different version: push the rebuilt marketplace and update the plugin in Grok Bot, then rerun Doctor.'
+        : copies.length > 0
+          ? 'No action needed.'
+          : 'Run `agent-bundle install grokbot`, host the staged marketplace, and install the plugin from Grok Bot\'s Marketplace.',
+      copies.length > 0 && current === undefined ? 'warning' : 'info',
+      'grokbot',
+    ));
+  } else if (bundleError !== undefined) {
+    const malformed = malformedBundle('cursor', bundleError);
+    diagnostics.push(...malformed.diagnostics.map((entry) => Object.freeze({ ...entry, target: 'grokbot' })));
+    bundle = malformed.finding;
+  }
+  return Object.freeze({
+    diagnostics: freezeDiagnostics(diagnostics),
+    host: 'grokbot',
+    inventory: freezeInventory(available ? 'known' : 'unknown', findings),
+    probe: Object.freeze(available ? { evidence: 'directory' as const, status: 'available' as const } : { status: 'unavailable' as const }),
+    receipts: receipts.receipts,
+    ...(bundle === undefined ? {} : { bundle }),
+  });
+};
+
 export const runDoctor = async (options: DoctorOptions = {}): Promise<DoctorReport> => {
   const home = options.home ?? homedir();
   const run = options.commandRunner ?? defaultCommandRunner;
   const hosts = options.hosts ?? Object.freeze(['claude', 'codex', 'cursor'] as const);
   const uniqueHosts = [...new Set(hosts)];
   const hostReports: DoctorHostReport[] = [];
-  for (const host of uniqueHosts) hostReports.push(await doctorHost(host, options, home, run));
+  for (const host of uniqueHosts) {
+    hostReports.push(host === 'grokbot' ? await doctorGrokBot(options, home) : await doctorHost(host, options, home, run));
+  }
   const endpoints = await scanEndpoints(
     options.endpointDirectory ?? doctorEndpointDirectory(),
     options.platform ?? process.platform,
