@@ -7,7 +7,7 @@ import { expect, it } from '@rstest/core';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { runDoctor } from '../src/install/doctor.ts';
 import { formatDoctorReport, formatInstallResult, formatUninstallResult } from '../src/install/format.ts';
-import { grokBotRoot, grokBotStagingMessage, readGrokBotInventory } from '../src/install/grokbot.ts';
+import { grokBotReceiptPath, grokBotRoot, grokBotStagingMessage, readGrokBotInventory } from '../src/install/grokbot.ts';
 import { installBundle } from '../src/install/install.ts';
 import { readInstallReceiptFile } from '../src/install/receipt.ts';
 import { uninstallBundle } from '../src/install/uninstall.ts';
@@ -259,19 +259,25 @@ it('package-bound installer bins accept grokbot for install, uninstall, and doct
   const box = await sandbox();
   const previous = { data: process.env['GROK_BOT_AGENT_DATA_DIR'], home: process.env['GROK_BOT_HOME'] };
   process.env['GROK_BOT_AGENT_DATA_DIR'] = box.agentData;
-  process.env['GROK_BOT_HOME'] = join(box.home, '.grokbot');
+  const grokHome = join(box.home, 'custom-grokbot');
+  process.env['GROK_BOT_HOME'] = grokHome;
   try {
     let stdout = '';
     const run = (argv: readonly string[]): Promise<number> =>
       runInstallCli(argv, { from: box.from, name: 'fixture-install', stderr: () => undefined, stdout: (text) => { stdout += text; } });
     expect(await run(['install', 'grokbot'])).toBe(0);
     expect(stdout).toContain('Staged grok-fixture@1.2.3 for grokbot (marketplace mode)');
+    // GROK_BOT_HOME from the process environment decides where install stages and receipts, and uninstall removes them there.
+    const receipt = grokBotReceiptPath(grokHome, 'grok-fixture');
+    await access(receipt);
+    await access(join(grokHome, 'agent-bundle', 'marketplaces', 'grok-fixture'));
     stdout = '';
     expect(await run(['doctor', '--host', 'grokbot'])).toBe(0);
     expect(stdout).toContain('grokbot: available (directory)');
     stdout = '';
     expect(await run(['uninstall', 'grokbot'])).toBe(0);
     expect(stdout).toContain('Uninstalled grok-fixture@1.2.3 for grokbot');
+    await expect(access(receipt)).rejects.toThrow();
   } finally {
     for (const [key, value] of [['GROK_BOT_AGENT_DATA_DIR', previous.data], ['GROK_BOT_HOME', previous.home]] as const) {
       if (value === undefined) delete process.env[key];
