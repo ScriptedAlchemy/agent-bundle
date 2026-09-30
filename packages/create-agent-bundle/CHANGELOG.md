@@ -1,5 +1,12 @@
 # create-agent-bundle
 
+## 0.1.4
+
+### Patch Changes
+
+- Updated dependencies [854e79f]
+  - agent-bundle@0.3.2
+
 ## 0.1.3
 
 ### Patch Changes
