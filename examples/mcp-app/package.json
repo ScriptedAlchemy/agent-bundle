@@ -14,7 +14,7 @@
   },
   "devDependencies": {
     "@agent-bundle/runtime": "workspace:*",
-    "@rstest/browser": "0.11.12",
+    "@rstest/browser": "0.12.2",
     "@rstest/core": "0.11.12",
     "@rstest/playwright": "0.11.12",
     "@types/react": "19.3.0",

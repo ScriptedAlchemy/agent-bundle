@@ -142,8 +142,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/rsc-runtime
       '@rstest/browser':
-        specifier: 0.11.12
-        version: 0.11.12(@rstest/core@0.11.12)(playwright@1.63.0)
+        specifier: 0.12.2
+        version: 0.12.2(@rstest/core@0.11.12)(playwright@1.63.0)
       '@rstest/core':
         specifier: 0.11.12
         version: 0.11.12
@@ -1274,11 +1274,11 @@ packages:
       typescript:
         optional: true
 
-  '@rstest/browser@0.11.12':
-    resolution: {integrity: sha512-mCrRj8pXvdGeYpouUrFkV/GVLAbq5mOIx94+5jRCSLSgJNBMU1+OGu+aav3kFgyajORKEI+cKWT35hkPMj6+dQ==}
+  '@rstest/browser@0.12.2':
+    resolution: {integrity: sha512-K+S2P18Z2N8HQz4vHGwsn2Bvh0FWvpqO97y1Qmwm67IeZsmtIphbRNcC0xMzu+VzPnrVfnU/QjgBmh5hGpssXw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
-      '@rstest/core': 0.11.12
+      '@rstest/core': 0.12.2
       playwright: ^1.49.1
     peerDependenciesMeta:
       playwright:
@@ -4045,7 +4045,7 @@ snapshots:
     optionalDependencies:
       typescript: 7.0.2
 
-  '@rstest/browser@0.11.12(@rstest/core@0.11.12)(playwright@1.63.0)':
+  '@rstest/browser@0.12.2(@rstest/core@0.11.12)(playwright@1.63.0)':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@rstest/core': 0.11.12
