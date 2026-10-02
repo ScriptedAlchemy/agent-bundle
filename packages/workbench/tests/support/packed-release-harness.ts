@@ -3,18 +3,21 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { relative, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { timeScale } from '../../../agent-bundle/tests/support/time-scale.ts';
+
 export { installedEnvironment } from '../../../agent-bundle/tests/support/shared-pack.ts';
 
 export const execFile = promisify(executeFile);
 export const workspaceRoot = process.cwd();
 const packedServerStartupBudget = 45_000;
+const hasExited = (child: ChildProcess): boolean => child.exitCode !== null || child.signalCode !== null;
 
 export const awaitReady = async (origin: string, child: ChildProcess, output: () => string): Promise<void> => {
   const startedAt = Date.now();
   const diagnostics = (): string =>
     `after ${String(Date.now() - startedAt)}ms (PID ${String(child.pid ?? 'unknown')}): ${output()}`;
   while (Date.now() - startedAt < packedServerStartupBudget) {
-    if (child.exitCode !== null) throw new Error(`The packed dev server exited before readiness ${diagnostics()}`);
+    if (hasExited(child)) throw new Error(`The packed dev server exited before readiness ${diagnostics()}`);
     try {
       if ((await fetch(origin)).ok) return;
     } catch {
@@ -26,7 +29,7 @@ export const awaitReady = async (origin: string, child: ChildProcess, output: ()
 };
 
 const childExitedWithin = (child: ChildProcess, timeoutMs: number): Promise<boolean> => {
-  if (child.exitCode !== null) return Promise.resolve(true);
+  if (hasExited(child)) return Promise.resolve(true);
   return new Promise((resolvePromise, rejectPromise) => {
     const finish = (exited: boolean): void => {
       clearTimeout(timeout);
@@ -43,19 +46,19 @@ const childExitedWithin = (child: ChildProcess, timeoutMs: number): Promise<bool
     child.once('exit', onExit);
     child.once('error', onError);
     const timeout = setTimeout(() => { finish(false); }, timeoutMs);
-    if (child.exitCode !== null) finish(true);
+    if (hasExited(child)) finish(true);
   });
 };
 
 export const closeChild = async (child: ChildProcess): Promise<void> => {
-  if (child.exitCode !== null) return;
+  if (hasExited(child)) return;
   const signalAndWait = async (signal: NodeJS.Signals): Promise<boolean> => {
-    if (child.exitCode !== null) return true;
+    if (hasExited(child)) return true;
     if (!child.kill(signal)) {
-      if (child.exitCode !== null) return true;
+      if (hasExited(child)) return true;
       throw new Error(`The packed dev server could not receive ${signal}.`);
     }
-    return childExitedWithin(child, 5_000);
+    return childExitedWithin(child, 5_000 * timeScale);
   };
   const closeFailures: unknown[] = [];
   try {

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -69,6 +70,17 @@ const e2e = test.extend({
 
 const isAppRoute = (url: URL): boolean =>
   url.pathname.startsWith('/api/mcp/apps/') || /^\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(url.pathname);
+
+test('treats a signal-terminated packed server as already closed', async () => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1_000)'], { stdio: 'ignore' });
+  await once(child, 'spawn');
+  const exited = once(child, 'exit');
+  child.kill('SIGTERM');
+  await exited;
+  expect(child.signalCode).toBe('SIGTERM');
+  await expect(closeChild(child)).resolves.toBeUndefined();
+  await expect(awaitReady('http://127.0.0.1:0', child, () => '')).rejects.toThrow('exited before readiness');
+});
 
 e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 * timeScale }, async ({ page }) => {
   const { packOutput, tarball } = await sharedPackedTarball('agent-bundle');
@@ -722,18 +734,20 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         for (const processId of await descendantProcessIds(stoppedChild.pid)) trackedProcessIds.add(processId);
       }
       const outageStartedAt = Date.now();
-      const recoveredBrowserSession = page.waitForResponse((response) =>
-        response.url() === `${origin}/api/project/session` && response.request().method() === 'GET' && response.ok(),
-      );
       await closeChild(stoppedChild);
       phase = 'foreground restart/reconnect disconnected state';
       await expectHeading(page, 'Foreground connection unavailable');
       await expect(page.getByText('Waiting for the foreground server to recover.')).toBeVisible({ timeout: browserTimeout });
       phase = 'foreground restart/reconnect browser recovery';
+      const recoveredBrowserSession = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/project/session` && response.request().method() === 'GET' && response.ok(),
+      );
       child = startInstalledServer(port);
-      await awaitReady(origin, child, () => commandOutput);
-      await expect(page.getByTestId('shell-connection')).toContainText('Foreground server connected', { timeout: browserTimeout });
-      const recoveredBrowserSessionResponse = await recoveredBrowserSession;
+      const [recoveredBrowserSessionResponse] = await Promise.all([
+        recoveredBrowserSession,
+        awaitReady(origin, child, () => commandOutput),
+        expect(page.getByTestId('shell-connection')).toContainText('Foreground server connected', { timeout: browserTimeout }),
+      ]);
       const recoveredBrowserSessionPayload = record(await recoveredBrowserSessionResponse.json(), 'recovered browser session');
       const browserGenerationBToken = string(recoveredBrowserSessionPayload.token, 'recovered browser session token');
       const recoveredBrowserSessionRequest = browserRequestByPlaywrightRequest.get(recoveredBrowserSessionResponse.request());
