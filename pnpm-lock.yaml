@@ -504,20 +504,20 @@ importers:
         specifier: 2.0.21
         version: 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)
       '@rspress/plugin-llms':
-        specifier: 2.0.21
-        version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)
+        specifier: 2.0.22
+        version: 2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)
       '@rspress/plugin-sitemap':
-        specifier: 2.0.21
-        version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))
+        specifier: 2.0.22
+        version: 2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/plugin-twoslash':
-        specifier: 2.0.21
-        version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)
+        specifier: 2.0.22
+        version: 2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)
       '@rspress/plugin-typedoc':
-        specifier: 2.0.21
-        version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))
+        specifier: 2.0.22
+        version: 2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/shared':
-        specifier: 2.0.21
-        version: 2.0.21(supports-color@7.2.0)
+        specifier: 2.0.22
+        version: 2.0.22(supports-color@7.2.0)
       '@shikijs/transformers':
         specifier: 4.4.3
         version: 4.4.3
@@ -1228,33 +1228,36 @@ packages:
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
 
-  '@rspress/plugin-llms@2.0.21':
-    resolution: {integrity: sha512-Uc+3TLqgJU43X3ryC6Aw+rzvGe2O3feYJ9eyoDYFKbcIRKezcq1nW1axiaHNXDbr3g584myslDF+gYjg7/9RHw==}
+  '@rspress/plugin-llms@2.0.22':
+    resolution: {integrity: sha512-jMC+Q0NFD6PN0J6Apmcl2/UBuw8l6paUGLRd0EDOl9diBHcbshcTUAGRaihMKGZ02ED7Mfb7mgJ+CwJClYM04w==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rspress/core': ^2.0.10
 
-  '@rspress/plugin-sitemap@2.0.21':
-    resolution: {integrity: sha512-PldjjLDFqtQZ3yPHHsWxmxGNlmoNH7nSx76ww7QkPzkO9rPrlr71sBLZR3MMc1s6cd5Csyd+gHjfIJiP7o77XQ==}
+  '@rspress/plugin-sitemap@2.0.22':
+    resolution: {integrity: sha512-2SNLW8Oh4osCyqnzea1WDVA9469Luwu0piNuh5HNjlzcgjguzynA3447WRFpqBL1Z/B7H5IB5SMcwYaMsgFhvQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rspress/core': ^2.0.10
 
-  '@rspress/plugin-twoslash@2.0.21':
-    resolution: {integrity: sha512-CiWy+HdNnhz4unMJPveGOGEzYEsdZJJ6LVAWpTsM+zh8sIgOdm045BVmBJbWvCnuHVfZIIFLBNC8ZI6323OoOQ==}
+  '@rspress/plugin-twoslash@2.0.22':
+    resolution: {integrity: sha512-gqWAhazd6zDPKBLeXE/NYnJtjDGCnpPf9YOWF7qBmRjvfLwdPld7p16sb+TEgHjeipze6I4t16krOdX7OUE3iA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rspress/core': ^2.0.10
       react: '>=18.0.0'
 
-  '@rspress/plugin-typedoc@2.0.21':
-    resolution: {integrity: sha512-xM53g9wI9vl1mDirYn1wfTnh0Q+Fb+zkp0VxHYVQV8lJf/sHvxerf5CHlVSznBdd4Q1BMC5g/kIqdWGs7mqNYQ==}
+  '@rspress/plugin-typedoc@2.0.22':
+    resolution: {integrity: sha512-iJka1VC3xh7W/qSC+DStxRoK83BS2oOQ9Kb80QDwOBwgRBPbMPMbXhVdotG/NpBZV2tADqrowrWf7IA8Xv39WA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rspress/core': ^2.0.10
 
   '@rspress/shared@2.0.21':
     resolution: {integrity: sha512-siCWkv1a4n6y7JdVRII+fwCRZGZtG5KGFfKi2w/Tt33UnIgh4XGqozZ5F/K0iZ/QUwg0wi93SoVdOQm2Q+wf8w==}
+
+  '@rspress/shared@2.0.22':
+    resolution: {integrity: sha512-1UXwG6gAhWBw5vClv3wb2Oy8hPXYNgQwQ5zWXEG8auY5ZcMywvHCBi6pFJtYNOgXe5327lNgiOG0S1R8l0OLeg==}
 
   '@rstackjs/load-config@1.0.0':
     resolution: {integrity: sha512-eLp6lGEngk43kU6Z0iQNlGwgy4lLx/wtKdaBgoewHmWN0HHJRgQypewagqGxo+iNP4Yyf7pOXxAbsbH+L9Ay6A==}
@@ -3064,8 +3067,8 @@ packages:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
     engines: {node: '>= 18'}
 
-  typedoc-plugin-markdown@4.12.0:
-    resolution: {integrity: sha512-eJDEMAfxCmede22c/Jw7d0FA13ggAQv+KkwQYKYCdqI02cin6Rc9QRwbG/7XvvHWinuFejySnZVUWDtvGk3Vbg==}
+  typedoc-plugin-markdown@4.13.0:
+    resolution: {integrity: sha512-OHaOLoMTS0wL2ud73WXvxv486mrUEtgXxW4iKiTOGJVipT/VBWY76rlVRMQGes7aVonoIf5roWRe1UvHbufLlQ==}
     engines: {node: '>= 18'}
     peerDependencies:
       typedoc: 0.28.x
@@ -3993,7 +3996,7 @@ snapshots:
       - micromark-util-types
       - supports-color
 
-  '@rspress/plugin-llms@2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)':
+  '@rspress/plugin-llms@2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)':
     dependencies:
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)
       remark-mdx: 3.1.1(supports-color@7.2.0)
@@ -4004,11 +4007,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@rspress/plugin-sitemap@2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))':
+  '@rspress/plugin-sitemap@2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))':
     dependencies:
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)
 
-  '@rspress/plugin-twoslash@2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)':
+  '@rspress/plugin-twoslash@2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)':
     dependencies:
       '@floating-ui/dom': 1.8.0
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)
@@ -4023,14 +4026,26 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@rspress/plugin-typedoc@2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))':
+  '@rspress/plugin-typedoc@2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))':
     dependencies:
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.3(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)
       typedoc: 0.28.20
-      typedoc-plugin-markdown: 4.12.0(typedoc@0.28.20)
+      typedoc-plugin-markdown: 4.13.0(typedoc@0.28.20)
       typescript: 6.0.3
 
   '@rspress/shared@2.0.21(supports-color@7.2.0)':
+    dependencies:
+      '@rsbuild/core': 2.2.5
+      '@shikijs/rehype': 4.4.3
+      '@types/react': 19.3.0
+      mdast-util-mdx-jsx: 3.2.0(supports-color@7.2.0)
+      unified: 11.0.5
+    transitivePeerDependencies:
+      - '@module-federation/runtime-tools'
+      - core-js
+      - supports-color
+
+  '@rspress/shared@2.0.22(supports-color@7.2.0)':
     dependencies:
       '@rsbuild/core': 2.2.5
       '@shikijs/rehype': 4.4.3
@@ -6162,7 +6177,7 @@ snapshots:
       media-typer: 1.1.1
       mime-types: 3.0.2
 
-  typedoc-plugin-markdown@4.12.0(typedoc@0.28.20):
+  typedoc-plugin-markdown@4.13.0(typedoc@0.28.20):
     dependencies:
       typedoc: 0.28.20
 
