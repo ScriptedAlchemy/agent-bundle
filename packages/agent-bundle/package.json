@@ -143,7 +143,7 @@
   },
   "peerDependencies": {
     "@agent-bundle/runtime": ">=0.0.0 <1",
-    "@rstest/core": "^0.11.10",
+    "@rstest/core": "^0.11.10 || ^0.12.0",
     "react": "^19.2.0"
   },
   "peerDependenciesMeta": {
