@@ -12,6 +12,10 @@ generated entries import it the same way.
 
 ## The configuration helper
 
+`agent-bundle/rstest` supports `@rstest/core` versions `^0.11.10 || ^0.12.0`.
+For browser tests, keep `@rstest/browser` and `@rstest/core` on the same release;
+the MCP App example uses 0.12.2 with `playwright` as its browser provider.
+
 `agent-bundle/rstest` compiles the project once, the same route-graph compilation the build
 performs, with no artifact build, and returns a plain Rstest configuration object carrying the
 test manifest, the route loaders, React's `react-server` resolution, and the automatic JSX

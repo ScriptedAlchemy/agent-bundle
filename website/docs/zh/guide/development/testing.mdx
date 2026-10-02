@@ -10,6 +10,10 @@ description: '通过框架 harness 测试 agent-bundle 路由：rstest 配置辅
 
 ## 配置辅助函数
 
+`agent-bundle/rstest` 支持 `@rstest/core` 版本 `^0.11.10 || ^0.12.0`。
+运行浏览器测试时，请让 `@rstest/browser` 和 `@rstest/core` 使用相同的版本；
+MCP App 示例使用 0.12.2，并用 `playwright` 提供浏览器。
+
 `agent-bundle/rstest` 会编译项目一次，与构建执行的路由图编译完全相同，但不构建产物，并返回一个普通的
 Rstest 配置对象，其中携带测试清单、路由加载器、React 的 `react-server` 解析条件以及自动 JSX 运行时：
 
