@@ -1,14 +1,18 @@
 import { settleBeforeAbort } from '../core/abort.ts';
-import { isRecord, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
+import { isJsonRecord, isRecord, snapshotStrictJsonValue, type JsonObject, type JsonValue } from '../core/strict-json.ts';
 import { eventContracts, type CanonicalAgentEvent } from '../routes/events.ts';
 import type { AgentEventCanonicalIdentity } from '../routes/public.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
 import type { EventTracer } from './trace.ts';
 
-export type EventHandlerResult<Data extends JsonValue = JsonValue> =
+export type EventHandlerResult<
+  Data extends JsonValue = JsonValue,
+  Event extends CanonicalAgentEvent = CanonicalAgentEvent,
+> =
   | { readonly outcome: 'render'; readonly module: string; readonly data: Data }
-  | { readonly outcome: 'continue' }
-  | { readonly outcome: 'deny'; readonly reason: string };
+  | ({ readonly outcome: 'continue'; readonly additionalContext?: string } &
+      (Event extends 'tool/before' ? { readonly updatedInput?: JsonObject } : { readonly updatedInput?: never }))
+  | { readonly outcome: 'deny'; readonly reason: string; readonly additionalContext?: string };
 
 export interface EventHandlerContext<E extends CanonicalAgentEvent = CanonicalAgentEvent> {
   readonly render: (module: string, data: JsonValue) => Extract<EventHandlerResult, { outcome: 'render' }>;
@@ -43,6 +47,14 @@ const unexpectedFields = (record: Readonly<Record<string, unknown>>, allowed: Re
   }
 };
 
+const handlerContext = (value: Readonly<Record<string, unknown>>): { readonly additionalContext?: string } => {
+  if (value.additionalContext === undefined) return {};
+  if (typeof value.additionalContext !== 'string') {
+    throw new TypeError('Event handler additionalContext must be a string.');
+  }
+  return { additionalContext: value.additionalContext };
+};
+
 /**
  * Validates a runtime handler return into {@link EventHandlerResult}.
  * Unknown outcomes, extra fields, an empty denial reason, and deny on a
@@ -66,18 +78,27 @@ export const validateEventHandlerResult = (
       unexpectedFields(value, new Set(['outcome', 'module', 'data']));
       if (view === undefined || value.module !== view) throw new TypeError('ctx.render() must name the event handler’s sibling .view.js module.');
       return Object.freeze({ data: snapshotStrictJsonValue(value.data), module: view, outcome: 'render' });
-    case 'continue':
-      unexpectedFields(value, new Set(['outcome']));
-      return Object.freeze({ outcome: 'continue' });
+    case 'continue': {
+      unexpectedFields(value, new Set(['outcome', 'additionalContext', ...(event === 'tool/before' ? ['updatedInput'] : [])]));
+      const updatedInput = value.updatedInput === undefined ? undefined : snapshotStrictJsonValue(value.updatedInput);
+      if (updatedInput !== undefined && !isJsonRecord(updatedInput)) {
+        throw new TypeError('Event handler updatedInput must be an object on tool/before.');
+      }
+      return Object.freeze({
+        outcome: 'continue',
+        ...(updatedInput === undefined ? {} : { updatedInput }),
+        ...handlerContext(value),
+      });
+    }
     case 'deny': {
-      unexpectedFields(value, new Set(['outcome', 'reason']));
+      unexpectedFields(value, new Set(['outcome', 'reason', 'additionalContext']));
       if (!eventContracts[event].deny) {
         throw new TypeError(`${event} cannot deny from handler.`);
       }
       if (typeof value.reason !== 'string' || value.reason.trim() === '') {
         throw new TypeError(`${event} requires a nonempty reason when outcome is deny.`);
       }
-      return Object.freeze({ outcome: 'deny', reason: value.reason });
+      return Object.freeze({ outcome: 'deny', reason: value.reason, ...handlerContext(value) });
     }
     default: {
       const exhaustive: never = outcome;

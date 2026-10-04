@@ -5,7 +5,7 @@ import {
   validateEventHandlerResult,
   type EventHandlerContext,
 } from '../src/events/handler.ts';
-import { projectEventHandlerResult } from '../src/events/projection.ts';
+import { projectEventDocument, projectEventHandlerResult } from '../src/events/projection.ts';
 import { eventContracts } from '../src/routes/events.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from '../src/routes/public.ts';
 
@@ -164,4 +164,55 @@ it('projects a gate decision through the rendered event outcome rules', () => {
       permissionDecisionReason: 'blocked',
     },
   });
+});
+
+
+it('snapshots strict JSON rewrites and rejects invalid direct-result fields', () => {
+  const updatedInput = { command: 'cargo check --locked', nested: { args: ['--locked'] } };
+  const result = validateEventHandlerResult({ outcome: 'continue', updatedInput, additionalContext: 'Checking.' }, 'tool/before');
+  updatedInput.nested.args.push('--release');
+  expect(result).toEqual({ outcome: 'continue', updatedInput: { command: 'cargo check --locked', nested: { args: ['--locked'] } }, additionalContext: 'Checking.' });
+  if (result.outcome !== 'continue') throw new Error('Expected continue.');
+  expect(Object.isFrozen(result.updatedInput)).toBe(true);
+  for (const invalid of [[], null, 'command', new Date(), { command: undefined }, { command: NaN }]) {
+    expect(() => validateEventHandlerResult({ outcome: 'continue', updatedInput: invalid }, 'tool/before')).toThrow();
+  }
+  for (const updatedInput of [{}, undefined]) {
+    expect(() => validateEventHandlerResult({ outcome: 'continue', updatedInput }, 'tool/after')).toThrow(/unsupported field/u);
+  }
+  expect(() => validateEventHandlerResult({ outcome: 'continue', additionalContext: {} }, 'tool/after')).toThrow(/must be a string/u);
+  expect(() => validateEventHandlerResult({ outcome: 'deny', reason: 'blocked', additionalContext: 1 }, 'tool/before')).toThrow(/must be a string/u);
+});
+
+it('projects direct rewrites and context exactly like rendered results on each host', () => {
+  for (const [event, nativeEvent] of [['tool/before', 'PreToolUse'], ['tool/after', 'PostToolUse']] as const) {
+    const result = validateEventHandlerResult({ outcome: 'continue', additionalContext: 'Notice.', ...(event === 'tool/before' ? { updatedInput: { command: 'cargo check --locked' } } : {}) }, event);
+    if (result.outcome === 'render') throw new Error('Unexpected render.');
+    for (const target of ['claude', 'codex', 'cursor']) {
+      const rendered = projectEventDocument({
+        root: { kind: 'result', children: [{ kind: 'context', text: 'Notice.' }] },
+        value: event === 'tool/before'
+          ? { outcome: 'continue', updatedInput: { command: 'cargo check --locked' } }
+          : { outcome: 'continue' },
+        status: 'success',
+        version: 1,
+      }, event, target, nativeEvent);
+      expect(projectEventHandlerResult(result, event, target, nativeEvent)).toEqual(rendered);
+    }
+  }
+  expect(projectEventHandlerResult({ outcome: 'continue', updatedInput: { command: 'cargo check' } }, 'tool/before', 'cursor', 'preToolUse'))
+    .toEqual({ permission: 'allow', updated_input: { command: 'cargo check' } });
+  expect(projectEventHandlerResult({ outcome: 'continue', additionalContext: 'Notice.' }, 'tool/after', 'claude', 'PostToolUse'))
+    .toEqual({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'Notice.' } });
+  const denial = validateEventHandlerResult({ outcome: 'deny', reason: 'Blocked.', additionalContext: 'Notice.' }, 'tool/before');
+  if (denial.outcome !== 'deny') throw new Error('Expected denial.');
+  for (const target of ['claude', 'codex']) {
+    expect(projectEventHandlerResult(denial, 'tool/before', target, 'PreToolUse')).toEqual({ hookSpecificOutput: {
+      hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Blocked.', additionalContext: 'Notice.',
+    } });
+  }
+  expect(projectEventHandlerResult({ outcome: 'continue', updatedInput: { command: 'cargo check' } }, 'tool/before', 'amp', 'tool.call'))
+    .toEqual({ action: 'modify', input: { command: 'cargo check' } });
+  expect(() => projectEventHandlerResult({ outcome: 'continue', additionalContext: 'Notice.' }, 'agent/start', 'cursor', 'subagentStart'))
+    .toThrow(/no additional-context channel/u);
 });

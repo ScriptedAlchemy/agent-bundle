@@ -80,6 +80,23 @@ The helper infers the canonical payload and family-specific outcomes; its event 
 the file path. A plain default function with the same context and result is also supported.
 Use `EventHandler<'tool/before'>` when annotating that function.
 
+Return `updatedInput` directly on a continuing `tool/before` handler to rewrite the pending
+input. Return `additionalContext` on a continuing or denying handler for a short context
+message. These results use the same host projection as JSX and start no render worker;
+`updatedInput` must be a strict JSON object and cannot accompany a denial. Context channels
+remain host-specific: Cursor drops context on `tool/before` but accepts it on `tool/after`;
+Claude and Codex accept context on both. Use `requires` or `targets` for other event families
+whose hosts differ. A rewrite preserves the host permission flow on Claude and Codex; Cursor
+requires `permission: 'allow'` alongside `updated_input`.
+
+```ts
+export default events.tool.before({}, () => ({
+  outcome: 'continue',
+  updatedInput: { command: 'cargo check --locked' },
+  additionalContext: 'Checking with the lockfile.',
+}));
+```
+
 For a cheap gate followed by JSX, put the view in a separate sibling module:
 
 ```ts
