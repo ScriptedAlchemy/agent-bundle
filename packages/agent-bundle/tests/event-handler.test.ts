@@ -211,7 +211,7 @@ it('projects direct rewrites and context exactly like rendered results on each h
       hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Blocked.', additionalContext: 'Notice.',
     } });
   }
-  expect(projectEventHandlerResult({ outcome: 'continue', updatedInput: { command: 'cargo check' } }, 'tool/before', 'amp', 'tool.before'))
+  expect(projectEventHandlerResult({ outcome: 'continue', updatedInput: { command: 'cargo check' } }, 'tool/before', 'amp', 'tool.call'))
     .toEqual({ action: 'modify', input: { command: 'cargo check' } });
   expect(() => projectEventHandlerResult({ outcome: 'continue', additionalContext: 'Notice.' }, 'agent/start', 'cursor', 'subagentStart'))
     .toThrow(/no additional-context channel/u);
