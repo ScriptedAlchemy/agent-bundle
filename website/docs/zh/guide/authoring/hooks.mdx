@@ -73,6 +73,22 @@ export default events.tool.before({}, async ({ canonical, provider }) => {
 辅助函数推断该事件的载荷与允许的结果，事件名称必须与文件路径一致。也可使用普通默认函数，并用
 `EventHandler<'tool/before'>` 标注类型。
 
+在 `tool/before` 处理器的继续结果中直接返回 `updatedInput`，即可改写待执行的输入。
+继续或拒绝结果可以带 `additionalContext`，用于简短的上下文消息。这些结果与 JSX 使用相同的
+宿主投影，不启动渲染工作进程。`updatedInput` 必须是严格 JSON 对象，且不能与拒绝结果一起返回。
+上下文通道仍取决于宿主：Cursor 忽略 `tool/before` 的上下文，但接受 `tool/after` 的上下文；
+Claude 和 Codex 在两者上都接受上下文。其他存在宿主差异的事件可使用 `requires` 或 `targets`。
+改写在 Claude 和 Codex 上保留宿主权限流程；Cursor 要求 `updated_input` 同时携带
+`permission: 'allow'`。
+
+```ts
+export default events.tool.before({}, () => ({
+  outcome: 'continue',
+  updatedInput: { command: 'cargo check --locked' },
+  additionalContext: 'Checking with the lockfile.',
+}));
+```
+
 需要先判断再渲染时，将 JSX 放入独立的同级模块：
 
 ```ts

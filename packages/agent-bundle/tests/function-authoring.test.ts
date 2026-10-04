@@ -7,11 +7,21 @@ import { validateRouteModuleContract } from '../src/routes/contract.ts';
 import { defineTool, normalizeRouteModule } from '../src/routes/definitions.ts';
 import { parseModule } from '../src/routes/syntax.ts';
 import { readRouteDefinition } from '../src/routes/definition-syntax.ts';
-import { events } from '../src/routes/event-definitions.ts';
+import { events, type EventResult } from '../src/routes/event-definitions.ts';
 import { executeEventHandler } from '../src/events/handler.ts';
 import { createCanonicalEventProps, projectEventHandlerResult } from '../src/events/projection.ts';
 
 const path = '/project/src/mcp/runtime/tools/status.tsx';
+
+it('types direct event results according to the event family and outcome', () => {
+  const rewrite = { outcome: 'continue', updatedInput: { command: 'cargo check' }, additionalContext: 'Checking.' } satisfies EventResult<'tool/before'>;
+  const context = { outcome: 'continue', additionalContext: 'Finished.' } satisfies EventResult<'tool/after'>;
+  // @ts-expect-error Only tool/before can rewrite pending input.
+  const afterRewrite: EventResult<'tool/after'> = { outcome: 'continue', updatedInput: {} };
+  // @ts-expect-error A denial cannot also rewrite input.
+  const deniedRewrite: EventResult<'tool/before'> = { outcome: 'deny', reason: 'Blocked.', updatedInput: {} };
+  expect([rewrite, context, afterRewrite, deniedRewrite]).toHaveLength(4);
+});
 const source = `
 import { defineTool as tool } from 'agent-bundle/routes';
 import { z } from 'zod';

@@ -8,8 +8,8 @@ import type { JsonValue } from '../core/strict-json.ts';
 export type EventResult<Event extends CanonicalAgentEvent = CanonicalAgentEvent> =
   | Extract<EventHandlerResult, { outcome: 'render' }>
   | void
-  | { readonly outcome: 'continue' }
-  | (Event extends DenyingEvent ? { readonly outcome: 'deny'; readonly reason: string } : never);
+  | Extract<EventHandlerResult<JsonValue, Event>, { outcome: 'continue' }>
+  | (Event extends DenyingEvent ? Extract<EventHandlerResult, { outcome: 'deny' }> : never);
 
 export type EventContext<Event extends CanonicalAgentEvent = CanonicalAgentEvent> = AgentEventRouteProps<Event> & Pick<AgentRequestContext, 'provider' | 'process'> & {
   readonly render: (module: string, data: JsonValue) => Extract<EventHandlerResult, { outcome: 'render' }>;

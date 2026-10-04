@@ -1137,15 +1137,22 @@ export const projectEventHandlerResult = (
   target: string,
   nativeEvent: string,
   nativeInput?: Readonly<Record<string, unknown>>,
-): Readonly<Record<string, unknown>> | undefined => projectEventDocument(
-  {
-    root: { children: [], kind: 'result' },
-    status: 'success',
-    value: result,
-    version: 1,
-  },
-  event,
-  target,
-  nativeEvent,
-  nativeInput,
-);
+): Readonly<Record<string, unknown>> | undefined => {
+  const { additionalContext } = result;
+  return projectEventDocument(
+    {
+      root: { children: additionalContext === undefined ? [] : [{ kind: 'context', text: additionalContext }], kind: 'result' },
+      status: 'success',
+      value: result.outcome === 'deny'
+        ? { outcome: result.outcome, reason: result.reason }
+        : result.updatedInput === undefined
+          ? { outcome: result.outcome }
+          : { outcome: result.outcome, updatedInput: result.updatedInput },
+      version: 1,
+    },
+    event,
+    target,
+    nativeEvent,
+    nativeInput,
+  );
+};

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, symlink, writeFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -64,6 +64,7 @@ const projectFiles: Readonly<Record<string, string>> = {
     'export default ({ canonical, render }) => {',
     "  const tool = canonical.payload?.['toolInput'] as { readonly value?: { readonly command?: unknown } } | undefined;",
     "  const command = typeof tool?.value?.command === 'string' ? tool.value.command : '';",
+    "  if (command === 'rewrite') return { outcome: 'continue', updatedInput: { command: 'cargo check --locked' }, additionalContext: 'Checking.' };",
     "  if (mentionsCargo(command)) return render('./before.view.js', { ticket: 'cc-7' });",
     "  return command === 'blocked' ? { outcome: 'deny', reason: HANDLER_LEAF_SENTINEL } : { outcome: 'continue' };",
     '};',
@@ -296,6 +297,21 @@ describe('handler artifact graph (#595)', () => {
         permissionDecisionReason: sentinels.handlerLeaf,
       },
     });
+  });
+
+  it('returns rewrites and context even when the deferred executor is unavailable', async () => {
+    const executor = join(artifactRoot, entryPath.replace(/\.mjs$/u, '.execute.mjs'));
+    await rename(executor, `${executor}.disabled`);
+    try {
+      const rewritten = await invoke('rewrite');
+      expect(rewritten.code).toBe(0);
+      expect(rewritten.stderr).toBe('');
+      expect(JSON.parse(rewritten.stdout)).toEqual({ hookSpecificOutput: {
+        hookEventName: 'PreToolUse', updatedInput: { command: 'cargo check --locked' }, additionalContext: 'Checking.',
+      } });
+    } finally {
+      await rename(`${executor}.disabled`, executor);
+    }
   });
 
   it('passes computed handler data to the deferred route', async () => {
