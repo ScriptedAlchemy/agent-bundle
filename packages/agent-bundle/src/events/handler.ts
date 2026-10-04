@@ -79,9 +79,9 @@ export const validateEventHandlerResult = (
       if (view === undefined || value.module !== view) throw new TypeError('ctx.render() must name the event handler’s sibling .view.js module.');
       return Object.freeze({ data: snapshotStrictJsonValue(value.data), module: view, outcome: 'render' });
     case 'continue': {
-      unexpectedFields(value, new Set(['outcome', 'updatedInput', 'additionalContext']));
+      unexpectedFields(value, new Set(['outcome', 'additionalContext', ...(event === 'tool/before' ? ['updatedInput'] : [])]));
       const updatedInput = value.updatedInput === undefined ? undefined : snapshotStrictJsonValue(value.updatedInput);
-      if (updatedInput !== undefined && (event !== 'tool/before' || !isJsonRecord(updatedInput))) {
+      if (updatedInput !== undefined && !isJsonRecord(updatedInput)) {
         throw new TypeError('Event handler updatedInput must be an object on tool/before.');
       }
       return Object.freeze({
