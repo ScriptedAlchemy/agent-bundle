@@ -42,6 +42,11 @@ export const formatInstallResult = (result: InstallResult): string => {
   if (result.marketplace !== undefined && (result.host === 'cursor' || result.host === 'grokbot')) {
     lines.push(`Marketplace: ${result.marketplace}${result.commit === undefined ? '' : ` @ ${result.commit}`}`);
   }
+  if (result.sideload !== undefined) {
+    lines.push(result.sideload.state === 'skipped'
+      ? `Grok Bot sideload: skipped — ${result.sideload.reason}`
+      : `Grok Bot sideload: ${result.sideload.state} (${result.sideload.repo} @ ${result.sideload.commit}, cache ${result.sideload.slug})`);
+  }
   if (result.nextSteps !== undefined && result.nextSteps.length > 0) {
     lines.push('Next steps:');
     lines.push(...result.nextSteps.map((step, index) => `  ${index + 1}. ${step}`));

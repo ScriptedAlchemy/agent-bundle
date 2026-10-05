@@ -12,7 +12,8 @@ import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { cacheHasPlugin, readHeadCommit } from './cursor-hooks-registration.ts';
 import { cursorMarketplaceName, cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
-import { grokBotRoot, readGrokBotInventory, removeGrokBotSideload } from './grokbot.ts';
+import { grokBotReceiptPath, grokBotRoot, readGrokBotInventory } from './grokbot.ts';
+import { legacyGrokBotSideloadRecordPath, removeGrokBotSideload, removeLegacyGrokBotSideload } from './grokbot-sideload.ts';
 import {
   ampInstallLocation,
   cursorMarketplaceReceiptPath,
@@ -804,6 +805,61 @@ const grokBotStagingHost = (options: UninstallBundleOptions, identity: PluginIde
   label: 'Grok Bot',
   root: grokBotRoot(options),
 });
+
+/**
+ * `uninstall grokbot`: the staged marketplace and receipt, plus whatever the receipt records `install grokbot`
+ * sideloaded into Grok Bot's marketplace clone and plugin cache. The staging checks run (as a plan) before the
+ * sideload is touched, so a refusal leaves everything in place.
+ */
+const uninstallGrokBot = async (
+  options: UninstallBundleOptions,
+  identity: PluginIdentity,
+  policy: UninstallDataPolicy,
+): Promise<UninstallResult> => {
+  const target = grokBotStagingHost(options, identity);
+  const receipt = await readInstallReceiptFile(grokBotReceiptPath(target.root, identity.plugin));
+  const sideload = receipt?.plugin === identity.plugin ? receipt.grokBotSideload : undefined;
+  const legacy = await exists(legacyGrokBotSideloadRecordPath(target.root, identity.plugin));
+  if (sideload === undefined && !legacy) return uninstallStagedMarketplace(options, identity, policy, target);
+  const planned = options.plan === true;
+  if (!planned) await uninstallStagedMarketplace({ ...options, plan: true }, identity, policy, target);
+  const removals = [
+    ...(sideload === undefined ? [] : [await removeGrokBotSideload(sideload, identity.plugin, { plan: planned })]),
+    // A record the first sideload release (#875) kept beside the receipt.
+    ...(legacy ? [await removeLegacyGrokBotSideload(target.root, identity.plugin, { plan: planned })] : []),
+  ];
+  const staged = await uninstallStagedMarketplace(options, identity, policy, target);
+  const directories = removals.flatMap((removal) => removal.directories);
+  const retained = removals.flatMap((removal) => removal.retained);
+  const manifests = removals.flatMap((removal) => removal.manifest === undefined ? [] : [removal.manifest]);
+  const touched = directories.length > 0 || manifests.length > 0;
+  const where = sideload === undefined ? "Grok Bot's marketplace clone" : `Grok Bot's ${sideload.repo} clone @ ${sideload.commit}`;
+  const detail = [
+    touched
+      ? `${planned ? 'would remove' : 'removed'} the sideload from ${where}` +
+        `${manifests.length === 0 ? '' : ` and its entry in ${manifests.join(', ')}`}`
+      : 'nothing sideloaded remains (Grok Bot pruned it, or it was removed by hand)',
+    ...(retained.length === 0 ? [] : [`kept ${retained.join(', ')}: no longer this plugin's sideload`]),
+  ].join('; ');
+  return Object.freeze({
+    ...staged,
+    registrations: Object.freeze([
+      ...staged.registrations,
+      Object.freeze({
+        action: touched ? planned ? 'planned' as const : 'removed' as const : 'already-absent' as const,
+        ...(sideload === undefined ? {} : { commit: sideload.commit }),
+        detail,
+        kind: 'grokbot-sideload' as const,
+        name: sideload?.slug ?? 'legacy-sideload',
+      }),
+    ]),
+    removed: Object.freeze({
+      directories: Object.freeze([...staged.removed.directories, ...directories]),
+      files: staged.removed.files,
+    }),
+    retained: Object.freeze([...staged.retained, ...retained]),
+  });
+};
 
 const uninstallStagedMarketplace = async (
   options: UninstallBundleOptions,
@@ -1682,13 +1738,7 @@ const uninstallProgram = Effect.fnUntraced(function*(
     }
     // The grokbot host stages the Cursor projection, so the Cursor projection identifies the plugin.
     const cursorIdentity = yield* liftPromise(() => readBundleIdentity(options.from, 'cursor'));
-    const staged = yield* liftPromise(() =>
-      uninstallStagedMarketplace(options, cursorIdentity, policy, grokBotStagingHost(options, cursorIdentity)));
-    if (staged.state !== 'uninstalled') return staged;
-    const sideloaded = yield* liftPromise(() => removeGrokBotSideload(grokBotRoot(options), cursorIdentity.plugin));
-    return sideloaded.length === 0
-      ? staged
-      : { ...staged, removed: { ...staged.removed, directories: [...staged.removed.directories, ...sideloaded] } };
+    return yield* liftPromise(() => uninstallGrokBot(options, cursorIdentity, policy));
   }
   const host = options.host;
   const identity = yield* liftPromise(() => readBundleIdentity(options.from, host));

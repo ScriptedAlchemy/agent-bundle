@@ -12,7 +12,8 @@ import { runPromise } from '../effect/boundary.ts';
 import { liftPromise, type LiftedRejection } from '../effect/lift.ts';
 import { claudePluginRowErrors } from '../host-contracts/claude-plugin-validation.ts';
 import { stageCursorMarketplace } from './cursor-marketplace.ts';
-import { type GrokBotSideloadEntry, installGrokBot } from './grokbot.ts';
+import { installGrokBot } from './grokbot.ts';
+import type { GrokBotSideloadOptions, GrokBotSideloadResult } from './grokbot-sideload.ts';
 import {
   bundleInventory,
   failure,
@@ -75,7 +76,8 @@ export interface InstallCommandRunner {
   ): Promise<InstallCommandResult>;
 }
 
-export interface InstallBundleOptions {
+/** `sideload`, `sideloadRepo`, and `sideloadSlug` apply to the grokbot host only (install/grokbot-sideload.ts). */
+export interface InstallBundleOptions extends GrokBotSideloadOptions {
   readonly commandRunner?: InstallCommandRunner;
   /** Process environment consulted for host cache roots (`CODEX_HOME`); defaults to `process.env`. */
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
@@ -115,8 +117,8 @@ export interface InstallResult {
    * in the host root's `agent-bundle/receipts` store for host-CLI and marketplace deliveries (#101).
    */
   readonly receipt?: string;
-  /** grokbot only: copies mirrored into Grok Bot's own marketplace snapshot and plugin cache (see install/grokbot.ts). */
-  readonly sideload?: readonly GrokBotSideloadEntry[];
+  /** grokbot only: what was sideloaded into Grok Bot's marketplace clone and plugin cache, or why it was skipped. */
+  readonly sideload?: GrokBotSideloadResult;
   /**
    * `staged` means the marketplace repository is ready and Cursor's import step is still pending
    * (`mode: 'marketplace'`).
@@ -1268,6 +1270,9 @@ const installProgram = Effect.fnUntraced(function*(
       `Install mode ${JSON.stringify(options.mode)} applies to the cursor host only.`,
       options.host,
     ));
+  }
+  if (options.sideload !== undefined || options.sideloadRepo !== undefined || options.sideloadSlug !== undefined) {
+    return yield* Effect.fail(failure('AB7003', 'Sideload options apply to the grokbot host only.', options.host));
   }
   const host = options.host;
   const identity = yield* liftPromise(() => readBundleIdentity(options.from, host));

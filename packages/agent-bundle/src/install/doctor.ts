@@ -57,6 +57,7 @@ import {
   type InstalledTreeComparison,
   type InstalledTreeOwnership,
   type InstallReceipt,
+  type InstallReceiptGrokBotSideload,
   type InstallReceiptMode,
   type InstallReceiptScope,
   type InstallRegistration,
@@ -75,6 +76,7 @@ import {
 } from './cursor-hooks-registration.ts';
 import { cursorMarketplaceName, cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
 import { grokBotMarketplaceRoot, grokBotRoot, readGrokBotInventory, type GrokBotInventory } from './grokbot.ts';
+import { type GrokBotSideloadInspection, inspectGrokBotSideload } from './grokbot-sideload.ts';
 import { bundleInventory, installedBundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
 import { inspectInstalledStateOwnership, resolveInstalledStateRoots } from './state-root.ts';
 
@@ -202,6 +204,16 @@ export interface DoctorLifecycle {
  * host no longer lists the plugin or the staged repository is gone), or
  * `unknown` (the host inventory was unusable).
  */
+/** grokbot receipts: what `install grokbot` sideloaded and which parts Grok Bot still has (`AB7335`). */
+export interface DoctorGrokBotSideload extends GrokBotSideloadInspection {
+  readonly cachePath: string;
+  readonly commit: string;
+  readonly manifest: string;
+  readonly pluginPath: string;
+  readonly repo: string;
+  readonly slug: string;
+}
+
 export interface DoctorReceiptFinding {
   readonly contentHash: string;
   readonly format: string;
@@ -211,6 +223,7 @@ export interface DoctorReceiptFinding {
   readonly plugin: string;
   readonly registrations: readonly InstallRegistration[];
   readonly scope: InstallReceiptScope;
+  readonly sideload?: DoctorGrokBotSideload;
   readonly state: 'consistent' | 'orphaned' | 'unknown';
   readonly updatedAt: string;
   readonly version: string;
@@ -2769,6 +2782,48 @@ const doctorHost = async (
   });
 };
 
+/** `AB7335`: which parts of a receipted Grok Bot sideload remain, and whether Grok Bot loaded it. */
+const grokBotSideloadDiagnostic = (plugin: string, sideload: DoctorGrokBotSideload): Diagnostic => {
+  const where = `${sideload.repo} @ ${sideload.commit}, cache ${sideload.slug}`;
+  const missing = [
+    ...(sideload.cacheCopy ? [] : [`the cache copy ${sideload.cachePath} (removed by Grok Bot's plugin sync)`]),
+    ...(sideload.cloneActive
+      ? [
+        ...(sideload.pluginFolder ? [] : [`the clone folder ${sideload.pluginPath}`]),
+        ...(sideload.listed ? [] : [`the entry in ${sideload.manifest}`]),
+      ]
+      : [`the clone @ ${sideload.commit} (Grok Bot moved the marketplace to a new commit and deleted it)`]),
+  ];
+  if (missing.length > 0) {
+    return diagnostic(
+      'AB7335',
+      `${plugin} sideload on grokbot: incomplete (${where}); missing ${missing.join(', ')}` +
+        `${sideload.loaded ? ", though Grok Bot's plugin index still names the cache copy" : ''}.`,
+      'Rerun `agent-bundle install grokbot` to restore the sideload in the clone Grok Bot is using now.',
+      'warning',
+      'grokbot',
+    );
+  }
+  return sideload.loaded
+    ? diagnostic(
+      'AB7335',
+      `${plugin} sideload on grokbot: loaded — Grok Bot's plugin index names the cache copy ${sideload.cachePath} (${where}).`,
+      'No action needed.',
+      'info',
+      'grokbot',
+    )
+    : diagnostic(
+      'AB7335',
+      `${plugin} sideload on grokbot: written (${where}), not loaded. Grok Bot loads only plugins its account plugin listing ` +
+        `returns; its next plugin sync (startup, sign-in change, or every 24 hours) removes the cache copy unless the account ` +
+        `lists ${plugin} from ${sideload.slug}.`,
+      `For a durable install, publish ${plugin} to ${sideload.repo} and install it from Grok Bot's Marketplace; rerun ` +
+        '`agent-bundle install grokbot` to restore a pruned sideload.',
+      'info',
+      'grokbot',
+    );
+};
+
 /**
  * Read-only Grok Bot report: the staged-marketplace receipts Agent Bundle wrote under `~/.grokbot`, and every
  * completed copy of the plugin in the Grok Bot computer's plugin cache with the server-assigned plugin id and
@@ -2778,9 +2833,31 @@ const doctorGrokBot = async (options: DoctorOptions, home: string): Promise<Doct
   const environment = options.environment ?? process.env;
   const root = grokBotRoot({ environment, home });
   const diagnostics: Diagnostic[] = [];
-  const receipts = await inspectStoreReceipts('grokbot', root, async (receipt) =>
-    receipt.mode === 'marketplace' && await exists(join(grokBotMarketplaceRoot(root), receipt.plugin)) ? 'consistent' : 'orphaned');
+  const sideloads = new Map<string, InstallReceiptGrokBotSideload>();
+  const receipts = await inspectStoreReceipts('grokbot', root, async (receipt) => {
+    if (receipt.grokBotSideload !== undefined) sideloads.set(receipt.plugin, receipt.grokBotSideload);
+    return receipt.mode === 'marketplace' && await exists(join(grokBotMarketplaceRoot(root), receipt.plugin)) ? 'consistent' : 'orphaned';
+  });
   diagnostics.push(...receipts.diagnostics);
+  const receiptFindings: DoctorReceiptFinding[] = [];
+  for (const finding of receipts.receipts) {
+    const record = sideloads.get(finding.plugin);
+    if (record === undefined) {
+      receiptFindings.push(finding);
+      continue;
+    }
+    const sideload: DoctorGrokBotSideload = Object.freeze({
+      ...await inspectGrokBotSideload(record, finding.plugin),
+      cachePath: record.cachePath,
+      commit: record.commit,
+      manifest: record.manifest,
+      pluginPath: record.pluginPath,
+      repo: record.repo,
+      slug: record.slug,
+    });
+    receiptFindings.push(Object.freeze({ ...finding, sideload }));
+    diagnostics.push(grokBotSideloadDiagnostic(finding.plugin, sideload));
+  }
   let identity: PluginIdentity | undefined;
   let bundleError: unknown;
   if (options.from !== undefined) {
@@ -2853,7 +2930,7 @@ const doctorGrokBot = async (options: DoctorOptions, home: string): Promise<Doct
     host: 'grokbot',
     inventory: freezeInventory(available ? 'known' : 'unknown', findings),
     probe: Object.freeze(available ? { evidence: 'directory' as const, status: 'available' as const } : { status: 'unavailable' as const }),
-    receipts: receipts.receipts,
+    receipts: Object.freeze(receiptFindings),
     ...(bundle === undefined ? {} : { bundle }),
   });
 };
