@@ -1,5 +1,15 @@
 # agent-bundle
 
+## 0.4.0
+
+### Minor Changes
+
+- 0bbc7c3: `install grokbot` now also sideloads the plugin into a marketplace snapshot Grok Bot already syncs: on a Grok Bot computer it mirrors the Cursor projection into `<agent-data>/plugins/marketplaces/github.com/<owner>/<repo>/<commit>/<plugin>/`, lists it in that snapshot's `.cursor-plugin/marketplace.json`, and writes `<agent-data>/plugins/cache/<owner>-<repo>/<plugin>/<commit>/` with `.cache-complete`, the same layout as official plugins. The target is the bundle repository owner's marketplace (or `GROK_BOT_SIDELOAD_MARKETPLACE=owner/repo`); plugins the hosted marketplace already ships are left alone, `GROK_BOT_SIDELOAD=0` disables it, and `uninstall grokbot` removes exactly what was sideloaded.
+
+### Patch Changes
+
+- 81628fd: Sideload the plugin into Grok Bot's synced marketplace on `install grokbot` when Grok Bot agent-data is found: add the plugin folder and a `marketplace.json` entry to the one active `scriptedalchemy/plugins` clone, and write a `.cache-complete` copy under `plugins/cache/scriptedalchemy-plugins`. Folders and entries the installer did not write are never touched, and every write is atomic. Every written path is recorded in the install receipt, and `uninstall grokbot` removes exactly those paths. Change or turn off the target with `--sideload-repo`, `--sideload-slug`, or `--no-sideload` (or `GROK_BOT_SIDELOAD_REPO`, `GROK_BOT_SIDELOAD_SLUG`, `GROK_BOT_SIDELOAD=0`). `GROK_BOT_SIDELOAD_MARKETPLACE` is still read but must name one repository. The next install or uninstall retires the first sideload's `agent-bundle/sideload/<plugin>.json` record under `~/.grokbot` (or `GROK_BOT_HOME`). `doctor` reports the sideload state as AB7335. (#876)
+
 ## 0.3.4
 
 ### Patch Changes
