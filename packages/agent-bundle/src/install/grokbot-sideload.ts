@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 
 import { Predicate } from 'effect';
 
@@ -724,7 +724,8 @@ export const removeLegacyGrokBotSideload = async (
 ): Promise<GrokBotSideloadRemoval & { readonly record?: string }> => {
   const recordPath = legacyGrokBotSideloadRecordPath(root, plugin);
   const record = await readJsonFile(recordPath);
-  if (!Predicate.isObject(record) || !Array.isArray(record['entries'])) {
+  // Exactly the schema #875 wrote, for this plugin: anything else authorizes nothing.
+  if (!Predicate.isObject(record) || record['plugin'] !== plugin || !Array.isArray(record['entries'])) {
     return Object.freeze({ directories: Object.freeze([]), retained: Object.freeze([]) });
   }
   const directories: string[] = [];
@@ -733,9 +734,16 @@ export const removeLegacyGrokBotSideload = async (
   for (const entry of record['entries'] as unknown[]) {
     if (!Predicate.isObject(entry)) continue;
     const { addedEntry, cachePath, commit, marketplace, pluginPath } = entry;
-    if (typeof cachePath !== 'string' || typeof pluginPath !== 'string' || typeof commit !== 'string' || typeof marketplace !== 'string') continue;
-    const [owner = '', repo = ''] = marketplace.split('/');
-    if (!commitPattern.test(commit) || !repoSegmentPattern.test(owner) || !repoSegmentPattern.test(repo) || !isAbsolute(cachePath)) continue;
+    if (
+      typeof cachePath !== 'string' || typeof pluginPath !== 'string' || typeof commit !== 'string' ||
+      typeof marketplace !== 'string' || typeof addedEntry !== 'boolean'
+    ) {
+      continue;
+    }
+    const segments = marketplace.split('/');
+    if (segments.length !== 2 || segments.some((segment) => !repoSegmentPattern.test(segment) || /^\.+$/u.test(segment))) continue;
+    const [owner, repo] = segments as [string, string];
+    if (!commitPattern.test(commit) || !isAbsolute(cachePath) || normalize(cachePath) !== cachePath) continue;
     // `<agent-data>/plugins/cache/<owner>-<repo>/<plugin>/<commit>`, so agent-data is five levels up.
     const agentData = dirname(dirname(dirname(dirname(dirname(cachePath)))));
     const clone = join(agentData, 'plugins', 'marketplaces', 'github.com', owner, repo, commit);

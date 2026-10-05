@@ -543,6 +543,21 @@ it('retires the first sideload release record: its folders and entry are replace
     const entries = [{ addedEntry: true, cachePath, commit, marketplace: 'scriptedalchemy/plugins', pluginPath }];
     await writeJson(record, { entries, plugin: 'grok-fixture', version: '1.0.0' });
 
+    // Records #875 could not have written authorize nothing: another plugin's, or a marketplace with extra segments.
+    const untouched = async (document: unknown): Promise<void> => {
+      await writeJson(record, document);
+      const skipped = await installBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' });
+      expect(skipped.sideload).toMatchObject({ state: 'skipped' });
+      await access(join(pluginPath, '.cursor-plugin', 'plugin.json'));
+      await access(join(cachePath, '.cursor-plugin', 'plugin.json'));
+      expect(JSON.parse(await readFile(manifestPath, 'utf8')).plugins).toContainEqual(legacyEntry);
+    };
+    await untouched({ entries, plugin: 'other-plugin', version: '1.0.0' });
+    await untouched({ entries: [{ ...entries[0], marketplace: 'scriptedalchemy/plugins/extra' }], plugin: 'grok-fixture', version: '1.0.0' });
+    await untouched({ entries: [{ ...entries[0], addedEntry: 'yes' }], plugin: 'grok-fixture', version: '1.0.0' });
+    await uninstallBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' });
+    await writeJson(record, { entries, plugin: 'grok-fixture', version: '1.0.0' });
+
     // The old env var still names the marketplace (one repository only).
     const environment = { ...box.environment, GROK_BOT_SIDELOAD_MARKETPLACE: 'scriptedalchemy/plugins' };
     const result = await installBundle({ environment, from: box.from, home: box.home, host: 'grokbot' });
