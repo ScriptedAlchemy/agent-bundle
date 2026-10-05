@@ -1,6 +1,6 @@
-import { readdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { Predicate } from 'effect';
 
@@ -11,6 +11,8 @@ import { cursorMarketplaceRoot, stageCursorMarketplace } from './cursor-marketpl
 import { bundleInventory, readBundleIdentity } from './identity.ts';
 import {
   type InstallReceipt,
+  type TreeInventory,
+  copyInventoryFiles,
   createInstallReceipt,
   installReceiptStorePath,
   readInstallReceiptFile,
@@ -32,8 +34,10 @@ import type { InstallBundleOptions, InstallCommandRunner, InstallResult } from '
  * Bot's Marketplace UI, the in-chat InstallPlugin tool, or a
  * `grokbot://app/v1/plugin/add?id=<plugin id>` link, all keyed by that
  * server-assigned id. There is no local-folder import and no CLI verb, so the
- * installer only stages a committed marketplace repository built from the
- * Cursor projection, records a receipt, and prints the exact remaining steps.
+ * installer stages a committed marketplace repository built from the Cursor
+ * projection, records a receipt, prints the exact remaining steps, and (on a
+ * Grok Bot computer) sideloads the plugin into a marketplace snapshot Grok Bot
+ * already syncs; see `sideloadGrokBot` below.
  * Doctor reads the cache and skill index read-only to report the plugin id
  * and the commit Grok Bot installed.
  */
@@ -197,6 +201,7 @@ export const installGrokBot = async (
       throw error;
     }
     if (superseded !== undefined) await rm(superseded, { force: true, recursive: true });
+    const sideload = await sideloadGrokBot({ artifact, identity, options, root });
     return {
       bundleRoot: identity.bundleRoot,
       ...(staged.commit === undefined ? {} : { commit: staged.commit }),
@@ -205,7 +210,10 @@ export const installGrokBot = async (
       host: grokBotHost,
       marketplace: staged.marketplace,
       mode: 'marketplace',
-      nextSteps: grokBotNextSteps(staged.destination, identity.plugin),
+      nextSteps: sideload.length === 0
+        ? grokBotNextSteps(staged.destination, identity.plugin)
+        : [...sideload.map(sideloadStep), ...grokBotNextSteps(staged.destination, identity.plugin)],
+      ...(sideload.length === 0 ? {} : { sideload }),
       plugin: identity.plugin,
       ...(superseded === undefined || previousReceipt === undefined ? {} : { previousContentHash: previousReceipt.contentHash }),
       receipt: receiptPath,
@@ -341,4 +349,188 @@ export const readGrokBotInventory = async (
     }
   }
   return Object.freeze({ agentData, entries: Object.freeze(entries), status: 'available' });
+};
+
+/**
+ * Unofficial sideload into a marketplace Grok Bot already syncs.
+ *
+ * Grok Bot keeps a sparse snapshot of each account marketplace under
+ * `<agent-data>/plugins/marketplaces/github.com/<owner>/<repo>/<commit>/` and a
+ * completed copy of every installed plugin under
+ * `<agent-data>/plugins/cache/<owner>-<repo>/<plugin>/<commit>/`. When the bundle's
+ * repository owner (or `GROK_BOT_SIDELOAD_MARKETPLACE=owner/repo[,owner/repo]`)
+ * names a marketplace that snapshot exists for, the installer mirrors the
+ * plugin into it exactly as Grok Bot lays out its official plugins: the plugin
+ * folder beside its siblings, an entry in that snapshot's
+ * `.cursor-plugin/marketplace.json`, and a cache copy with `.cache-complete`.
+ * The plugin id stays server-assigned: until the hosted marketplace lists the
+ * plugin and the account installs it, Grok Bot's sync may prune these files,
+ * and re-running the installer restores them. `GROK_BOT_SIDELOAD=0` disables it.
+ * A record under `<grokbot root>/agent-bundle/sideload/<plugin>.json` lets
+ * uninstall remove exactly what was written.
+ */
+export interface GrokBotSideloadEntry {
+  /** `<owner>/<repo>` of the Grok Bot marketplace snapshot. */
+  readonly marketplace: string;
+  /** Snapshot commit the plugin was mirrored under. */
+  readonly commit: string;
+  /** `<snapshot>/<plugin>`. */
+  readonly pluginPath: string;
+  /** `<agent-data>/plugins/cache/<owner>-<repo>/<plugin>/<commit>`. */
+  readonly cachePath: string;
+  /** Whether this install added the plugin to the snapshot's marketplace.json (false when already listed). */
+  readonly addedEntry: boolean;
+}
+
+interface GrokBotSideloadRecord {
+  readonly entries: readonly GrokBotSideloadEntry[];
+  readonly plugin: string;
+  readonly version: string;
+}
+
+export const grokBotSideloadRecordPath = (root: string, plugin: string): string =>
+  join(root, 'agent-bundle', 'sideload', `${plugin}.json`);
+
+const sideloadStep = (entry: GrokBotSideloadEntry): string =>
+  `Sideloaded into Grok Bot's ${entry.marketplace} marketplace snapshot @ ${entry.commit}: ${entry.pluginPath} ` +
+  `and ${entry.cachePath} (unofficial; Grok Bot assigns the plugin id once the hosted marketplace lists the plugin).`;
+
+const repositoryOwner = (repository: unknown): string | undefined => {
+  const url = typeof repository === 'string'
+    ? repository
+    : Predicate.isObject(repository) && typeof repository['url'] === 'string' ? repository['url'] : undefined;
+  return url?.match(/github\.com[/:]([^/]+)\//iu)?.[1]?.toLowerCase();
+};
+
+const readSideloadRecord = async (path: string): Promise<GrokBotSideloadRecord | undefined> => {
+  const document = await readJsonFile(path);
+  if (!Predicate.isObject(document) || !Array.isArray(document['entries'])) return undefined;
+  return document as unknown as GrokBotSideloadRecord;
+};
+
+const grokBotAgentData = async (
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+): Promise<string | undefined> => {
+  for (const candidate of grokBotAgentDataCandidates(environment, home)) {
+    if (await directoryExists(join(candidate, 'plugins'))) return candidate;
+  }
+  return undefined;
+};
+
+/** `[owner, repo]` marketplace snapshots to sideload into, from the override or the bundle's repository owner. */
+const sideloadTargets = async (
+  marketplacesRoot: string,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  bundleRoot: string,
+): Promise<readonly (readonly [string, string])[]> => {
+  const override = environment['GROK_BOT_SIDELOAD_MARKETPLACE'];
+  if (override !== undefined && override.trim() !== '') {
+    return override.split(',').map((value) => value.trim().toLowerCase().split('/'))
+      .filter((parts): parts is [string, string] => parts.length === 2 && parts[0] !== '' && parts[1] !== '')
+      .map(([owner, repo]) => [owner, repo] as const);
+  }
+  const manifest = await readJsonFile(join(bundleRoot, '.cursor-plugin', 'plugin.json'));
+  const owner = Predicate.isObject(manifest) ? repositoryOwner(manifest['repository']) : undefined;
+  if (owner === undefined) return [];
+  return (await listDirectory(join(marketplacesRoot, owner))).map((repo) => [owner, repo] as const);
+};
+
+const marketplaceManifestFile = (snapshot: string): string => join(snapshot, '.cursor-plugin', 'marketplace.json');
+
+const writeTree = async (bundleRoot: string, destination: string, artifact: TreeInventory): Promise<void> => {
+  const stage = `${destination}.agent-bundle-stage-${process.pid}`;
+  await rm(stage, { force: true, recursive: true });
+  await copyInventoryFiles(bundleRoot, stage, artifact);
+  await rm(destination, { force: true, recursive: true });
+  await mkdir(dirname(destination), { recursive: true });
+  await rename(stage, destination);
+};
+
+const sideloadGrokBot = async (options: {
+  readonly artifact: TreeInventory;
+  readonly identity: { readonly bundleRoot: string; readonly plugin: string; readonly version: string };
+  readonly options: InstallBundleOptions;
+  readonly root: string;
+}): Promise<readonly GrokBotSideloadEntry[]> => {
+  const environment = options.options.environment ?? process.env;
+  if (environment['GROK_BOT_SIDELOAD'] === '0') return [];
+  const agentData = await grokBotAgentData(environment, options.options.home ?? homedir());
+  if (agentData === undefined) return [];
+  const { artifact, identity } = options;
+  const marketplacesRoot = join(agentData, 'plugins', 'marketplaces', 'github.com');
+  const recordPath = grokBotSideloadRecordPath(options.root, identity.plugin);
+  const previous = await readSideloadRecord(recordPath);
+  const owned = new Set(previous?.entries.flatMap((entry) => [entry.pluginPath, entry.cachePath]) ?? []);
+  const previouslyAdded = new Set(previous?.entries.filter((entry) => entry.addedEntry).map((entry) => entry.pluginPath) ?? []);
+  const description = await readManifestDescription(identity.bundleRoot);
+  const entries: GrokBotSideloadEntry[] = [];
+  for (const [owner, repo] of await sideloadTargets(marketplacesRoot, environment, identity.bundleRoot)) {
+    for (const commit of await listDirectory(join(marketplacesRoot, owner, repo))) {
+      const snapshot = join(marketplacesRoot, owner, repo, commit);
+      const manifestPath = marketplaceManifestFile(snapshot);
+      const manifest = await readJsonFile(manifestPath);
+      if (!Predicate.isObject(manifest) || !Array.isArray(manifest['plugins'])) continue;
+      const plugins = manifest['plugins'] as unknown[];
+      const pluginPath = join(snapshot, identity.plugin);
+      const listed = plugins.some((entry) => Predicate.isObject(entry) && entry['name'] === identity.plugin);
+      // The hosted marketplace already ships this plugin at this commit: Grok Bot owns it, leave it alone.
+      if (listed && !owned.has(pluginPath) && await exists(pluginPath)) continue;
+      const cachePath = join(agentData, 'plugins', 'cache', `${owner}-${repo}`, identity.plugin, commit);
+      if (!owned.has(cachePath) && await exists(join(cachePath, '.cache-complete'))) continue;
+      await writeTree(identity.bundleRoot, pluginPath, artifact);
+      if (!listed) {
+        plugins.push({ name: identity.plugin, source: identity.plugin, ...(description === undefined ? {} : { description }) });
+        await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      }
+      await writeTree(identity.bundleRoot, cachePath, artifact);
+      await writeFile(join(cachePath, '.cache-complete'), '');
+      entries.push(Object.freeze({
+        addedEntry: !listed || previouslyAdded.has(pluginPath),
+        cachePath,
+        commit,
+        marketplace: `${owner}/${repo}`,
+        pluginPath,
+      }));
+    }
+  }
+  if (entries.length > 0 || previous !== undefined) {
+    await mkdir(dirname(recordPath), { recursive: true });
+    await writeFile(recordPath, `${JSON.stringify({ entries, plugin: identity.plugin, version: identity.version }, null, 2)}\n`);
+  }
+  return Object.freeze(entries);
+};
+
+const readManifestDescription = async (bundleRoot: string): Promise<string | undefined> => {
+  const manifest = await readJsonFile(join(bundleRoot, '.cursor-plugin', 'plugin.json'));
+  return Predicate.isObject(manifest) && typeof manifest['description'] === 'string' ? manifest['description'] : undefined;
+};
+
+/** Removes what `install grokbot` sideloaded (plugin folders, marketplace entries it added, cache copies) and its record. */
+export const removeGrokBotSideload = async (root: string, plugin: string): Promise<readonly string[]> => {
+  const recordPath = grokBotSideloadRecordPath(root, plugin);
+  const record = await readSideloadRecord(recordPath);
+  if (record === undefined) return [];
+  const removed: string[] = [];
+  for (const entry of record.entries) {
+    if (entry.addedEntry) {
+      const manifestPath = marketplaceManifestFile(dirname(entry.pluginPath));
+      const manifest = await readJsonFile(manifestPath);
+      if (Predicate.isObject(manifest) && Array.isArray(manifest['plugins'])) {
+        const plugins = manifest['plugins'] as unknown[];
+        const kept = plugins.filter((item) => !(Predicate.isObject(item) && item['name'] === plugin));
+        if (kept.length !== plugins.length) {
+          await writeFile(manifestPath, `${JSON.stringify({ ...manifest, plugins: kept }, null, 2)}\n`);
+        }
+      }
+    }
+    for (const path of [entry.pluginPath, entry.cachePath]) {
+      if (await exists(path)) {
+        await rm(path, { force: true, recursive: true });
+        removed.push(path);
+      }
+    }
+  }
+  await rm(recordPath, { force: true });
+  return Object.freeze(removed);
 };
