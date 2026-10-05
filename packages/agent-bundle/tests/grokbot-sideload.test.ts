@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -8,9 +8,15 @@ import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { runDoctor } from '../src/install/doctor.ts';
 import { formatInstallResult, formatUninstallResult } from '../src/install/format.ts';
 import { grokBotReceiptPath, readGrokBotInventory } from '../src/install/grokbot.ts';
-import { grokBotSideloadMarkerFile, resolveGrokBotSideloadSettings } from '../src/install/grokbot-sideload.ts';
+import {
+  applyGrokBotSideload,
+  grokBotSideloadMarkerFile,
+  planGrokBotSideload,
+  resolveGrokBotSideloadSettings,
+} from '../src/install/grokbot-sideload.ts';
+import { bundleInventory, readBundleIdentity } from '../src/install/identity.ts';
 import { installBundle, type InstallResult } from '../src/install/install.ts';
-import { readInstallReceiptFile } from '../src/install/receipt.ts';
+import { readGrokBotSideload, readInstallReceiptFile } from '../src/install/receipt.ts';
 import { uninstallBundle } from '../src/install/uninstall.ts';
 import { runInstallCli } from '../src/install/index.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
@@ -25,7 +31,7 @@ const writeJson = async (path: string, value: unknown): Promise<void> => {
 };
 
 const missing = async (path: string): Promise<void> => {
-  await expect(access(path)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(access(path), path).rejects.toMatchObject({ code: 'ENOENT' });
 };
 
 interface Sandbox {
@@ -104,6 +110,7 @@ it('install grokbot sideloads into the active marketplace clone and plugin cache
       cachePath,
       commit,
       createdDirectories: [join(cacheSlug(box), 'grok-fixture')],
+      entry: { description: 'Grok fixture.', name: 'grok-fixture', source: 'grok-fixture' },
       manifest: manifestPath,
       pluginPath,
       repo: 'scriptedalchemy/plugins',
@@ -133,6 +140,7 @@ it('install grokbot sideloads into the active marketplace clone and plugin cache
       cachePath,
       commit,
       createdDirectories: [join(cacheSlug(box), 'grok-fixture')],
+      entry: { description: 'Grok fixture.', name: 'grok-fixture', source: 'grok-fixture' },
       manifest: manifestPath,
       pluginPath,
       repo: 'scriptedalchemy/plugins',
@@ -308,6 +316,175 @@ it('follows Grok Bot to a new marketplace commit, picks the live clone mid-reclo
     expect(removed.registrations.at(-1)).toMatchObject({ action: 'removed', commit: nextCommit, kind: 'grokbot-sideload' });
     await missing(moved.pluginPath);
     await missing(join(cacheSlug(box), 'grok-fixture'));
+  } finally {
+    await box.cleanup();
+  }
+});
+
+it('accepts a receipt sideload record only when every path derives from its own fields', () => {
+  const agentData = join(tmpdir(), 'grok-agent-data');
+  const clone = join(agentData, 'plugins', 'marketplaces', 'github.com', 'scriptedalchemy', 'plugins', commit);
+  const cacheRoot = join(agentData, 'plugins', 'cache');
+  const valid = {
+    agentData,
+    cachePath: join(cacheRoot, 'scriptedalchemy-plugins', 'grok-fixture', commit),
+    commit,
+    createdDirectories: [join(cacheRoot, 'scriptedalchemy-plugins', 'grok-fixture')],
+    entry: { name: 'grok-fixture', source: 'grok-fixture' },
+    manifest: join(clone, '.cursor-plugin', 'marketplace.json'),
+    pluginPath: join(clone, 'grok-fixture'),
+    repo: 'scriptedalchemy/plugins',
+    slug: 'scriptedalchemy-plugins',
+  };
+  expect(readGrokBotSideload(valid, 'grok-fixture')).toEqual(valid);
+  expect(readGrokBotSideload({ ...valid, manifest: join(clone, '.claude-plugin', 'marketplace.json') }, 'grok-fixture')).toBeDefined();
+  expect(readGrokBotSideload({ ...valid, pluginPath: join(clone, 'plugins', 'grok-fixture') }, 'grok-fixture')).toBeDefined();
+  for (const corrupt of [
+    { cachePath: join(cacheRoot, 'scriptedalchemy-plugins', 'pstack', commit) },
+    { cachePath: join(tmpdir(), 'elsewhere') },
+    { pluginPath: join(clone, 'pstack') },
+    { pluginPath: join(clone, '.git', 'grok-fixture') },
+    { pluginPath: join(dirname(clone), nextCommit, 'grok-fixture') },
+    { manifest: join(clone, 'pstack', 'marketplace.json') },
+    { createdDirectories: [join(cacheRoot, 'scriptedalchemy-plugins', 'pstack')] },
+    { createdDirectories: [cacheRoot] },
+    { createdDirectories: [clone] },
+    { commit: 'main' },
+    { repo: 'scriptedalchemy/../etc' },
+    { slug: '../x' },
+    { entry: { name: 'pstack', source: 'pstack' } },
+    { entry: { name: 'grok-fixture', source: { path: 'x' } } },
+    { agentData: `${agentData}${'/'}` },
+  ]) {
+    expect(readGrokBotSideload({ ...valid, ...corrupt }, 'grok-fixture')).toBeUndefined();
+  }
+  expect(readGrokBotSideload(valid, 'pstack')).toBeUndefined();
+});
+
+it('leaves a replaced manifest entry alone and never reports a pruned sideload as loaded from a stale index', async () => {
+  const box = await sandbox();
+  try {
+    const clone = await simulateGrokBotMarketplace(box);
+    const sideload = sideloadOf(await installBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' }));
+    // The clone folder disappears and the same name comes back as an entry agent-bundle did not write.
+    await removeTree(sideload.pluginPath);
+    const replaced = { ...upstreamManifest, plugins: [...upstreamManifest.plugins, { name: 'grok-fixture', source: './upstream/grok-fixture' }] };
+    await writeJson(sideload.manifest, replaced);
+    await writeJson(join(box.agentData, 'plugin-skills', 'cache.json'), {
+      installFolders: [{ installPath: sideload.cachePath, pluginId: '9' }],
+      skills: [],
+    });
+    const doctor = await runDoctor({ environment: box.environment, from: box.from, home: box.home, hosts: ['grokbot'] });
+    expect(doctor.hosts[0]?.diagnostics.find((entry) => entry.code === 'AB7335')).toMatchObject({
+      message: expect.stringMatching(/incomplete.*the clone folder.*the entry in.*still names the cache copy/u),
+      severity: 'warning',
+    });
+    // A rerun does not claim the foreign entry either.
+    const rerun = await installBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' });
+    expect(rerun.sideload).toMatchObject({ reason: expect.stringContaining('did not add'), state: 'skipped' });
+    const removed = await uninstallBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' });
+    expect(removed.retained).toContain(sideload.manifest);
+    expect(JSON.parse(await readFile(sideload.manifest, 'utf8'))).toEqual(replaced);
+    await missing(join(cacheSlug(box), 'grok-fixture'));
+    expect(await readdir(clone)).toEqual(['.cursor-plugin', '.git', 'pstack']);
+  } finally {
+    await box.cleanup();
+  }
+});
+
+it('re-reads the manifest before writing: keeps entries Grok Bot added meanwhile and refuses a foreign same-name entry', async () => {
+  const box = await sandbox();
+  try {
+    const clone = await simulateGrokBotMarketplace(box);
+    const manifestPath = join(clone, '.cursor-plugin', 'marketplace.json');
+    const identity = await readBundleIdentity(box.from, 'cursor');
+    const artifact = await bundleInventory(identity);
+    const settings = resolveGrokBotSideloadSettings({}, box.environment);
+    const plan = async () => {
+      const planned = await planGrokBotSideload({ environment: box.environment, home: box.home, plugin: 'grok-fixture', settings });
+      if (planned.state !== 'ready') throw new Error(planned.reason);
+      return planned.target;
+    };
+
+    let target = await plan();
+    const foreign = { ...upstreamManifest, plugins: [...upstreamManifest.plugins, { name: 'grok-fixture', source: 'theirs' }] };
+    await writeJson(manifestPath, foreign);
+    const progress = { started: false };
+    await expect(applyGrokBotSideload({ artifact, bundleRoot: identity.bundleRoot, plugin: 'grok-fixture', progress, target }))
+      .rejects.toThrow(/did not add/u);
+    expect(progress.started).toBe(false);
+    await missing(join(cacheSlug(box), 'grok-fixture'));
+    expect(JSON.parse(await readFile(manifestPath, 'utf8'))).toEqual(foreign);
+
+    await writeJson(manifestPath, upstreamManifest);
+    target = await plan();
+    const grown = { ...upstreamManifest, plugins: [...upstreamManifest.plugins, { name: 'advisor', source: 'advisor' }] };
+    await writeJson(manifestPath, grown);
+    await applyGrokBotSideload({ artifact, bundleRoot: identity.bundleRoot, plugin: 'grok-fixture', progress, target });
+    expect(JSON.parse(await readFile(manifestPath, 'utf8'))).toEqual({
+      ...grown,
+      plugins: [...grown.plugins, { name: 'grok-fixture', source: 'grok-fixture' }],
+    });
+  } finally {
+    await box.cleanup();
+  }
+});
+
+const permissionsApply = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+it.skipIf(!permissionsApply)('rolls a sideload back when the manifest or the receipt cannot be written, leaving nothing unrecorded', async () => {
+  const box = await sandbox();
+  const locked: string[] = [];
+  const lock = async (path: string): Promise<void> => {
+    await chmod(path, 0o555);
+    locked.push(path);
+  };
+  try {
+    const clone = await simulateGrokBotMarketplace(box);
+    const manifestPath = join(clone, '.cursor-plugin', 'marketplace.json');
+    const originalManifest = await readFile(manifestPath, 'utf8');
+    const install = () => installBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' });
+
+    // The manifest rename fails after both folders landed: they are removed again, the manifest is untouched.
+    await lock(dirname(manifestPath));
+    await expect(install()).rejects.toThrow();
+    await missing(join(clone, 'grok-fixture'));
+    await missing(join(cacheSlug(box), 'grok-fixture'));
+    expect(await readFile(manifestPath, 'utf8')).toBe(originalManifest);
+    expect((await readInstallReceiptFile(grokBotReceiptPath(join(box.home, '.grokbot'), 'grok-fixture')))?.grokBotSideload).toBeUndefined();
+    await chmod(locked.pop() as string, 0o755);
+
+    // The receipt write fails after the sideload landed: it is rolled back, and the earlier receipt stays valid.
+    const first = sideloadOf(await install());
+    const receiptPath = grokBotReceiptPath(join(box.home, '.grokbot'), 'grok-fixture');
+    const before = await readFile(receiptPath, 'utf8');
+    await writeFile(join(box.from, 'skills', 'talk', 'SKILL.md'), '---\nname: talk\ndescription: Talk more.\n---\nTalk.\n');
+    await writeInstallFixtureManifest(box.from, { name: 'grok-fixture', version: '1.2.3' }, [{ host: 'cursor' }]);
+    await lock(dirname(receiptPath));
+    await expect(install()).rejects.toThrow();
+    expect(await readFile(receiptPath, 'utf8')).toBe(before);
+    await missing(first.pluginPath);
+    await missing(first.cachePath);
+    expect(await readFile(manifestPath, 'utf8')).toBe(originalManifest);
+    await chmod(locked.pop() as string, 0o755);
+    const doctor = await runDoctor({ environment: box.environment, from: box.from, home: box.home, hosts: ['grokbot'] });
+    expect(doctor.hosts[0]?.diagnostics.find((entry) => entry.code === 'AB7335')).toMatchObject({ severity: 'warning' });
+    expect(sideloadOf(await install()).state).toBe('written');
+  } finally {
+    for (const path of locked) await chmod(path, 0o755);
+    await box.cleanup();
+  }
+});
+
+it.skipIf(process.platform === 'win32')('skips a target reached through a symbolic link', async () => {
+  const box = await sandbox();
+  try {
+    await simulateGrokBotMarketplace(box);
+    const elsewhere = await mkdirp(join(box.home, 'elsewhere'));
+    await symlink(elsewhere, join(cacheSlug(box), 'grok-fixture'));
+    const result = await installBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' });
+    expect(result.sideload).toMatchObject({ state: 'skipped' });
+    expect(await readdir(elsewhere)).toEqual([]);
   } finally {
     await box.cleanup();
   }

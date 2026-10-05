@@ -12,9 +12,11 @@ import { findGrokBotAgentData, listDirectory, pluginCacheKey, readJsonFile } fro
 import {
   type GrokBotSideloadResult,
   applyGrokBotSideload,
+  finishGrokBotSideload,
   ownsGrokBotSideloadPath,
   planGrokBotSideload,
   resolveGrokBotSideloadSettings,
+  rollbackGrokBotSideload,
 } from './grokbot-sideload.ts';
 import { bundleInventory, readBundleIdentity } from './identity.ts';
 import {
@@ -203,6 +205,7 @@ export const installGrokBot = async (
       throw error;
     }
     let sideload: GrokBotSideloadResult;
+    const progress = { started: false };
     try {
       sideload = plan.state === 'ready'
         ? await applyGrokBotSideload({
@@ -211,6 +214,7 @@ export const installGrokBot = async (
           plugin: identity.plugin,
           ...(previousSideload === undefined ? {} : { previous: previousSideload }),
           ...(previousReceipt === undefined ? {} : { previousContentHash: previousReceipt.contentHash }),
+          progress,
           target: plan.target,
         })
         : plan;
@@ -246,6 +250,14 @@ export const installGrokBot = async (
         }));
       }
     } catch (error) {
+      // Nothing the receipt does not name stays behind: undo a sideload written before the failure.
+      if (plan.state === 'ready' && progress.started) {
+        await rollbackGrokBotSideload({
+          plugin: identity.plugin,
+          ...(previousSideload === undefined ? {} : { previous: previousSideload }),
+          target: plan.target,
+        });
+      }
       // Keep the receipt and the repository it names consistent: put the superseded staging back.
       if (superseded !== undefined) {
         await rm(staged.destination, { force: true, recursive: true });
@@ -254,6 +266,18 @@ export const installGrokBot = async (
       throw error;
     }
     if (superseded !== undefined) await rm(superseded, { force: true, recursive: true });
+    const cleanup: string[] = [];
+    if (plan.state === 'ready' && sideload.state === 'written') {
+      // The receipt now names the new sideload, so the copies it supersedes can go; a failure here strands only
+      // marked copies the next install or Grok Bot's own pruning removes.
+      await finishGrokBotSideload({
+        plugin: identity.plugin,
+        ...(previousSideload === undefined ? {} : { previous: previousSideload }),
+        target: plan.target,
+      }).catch((error: unknown) => {
+        cleanup.push(`Could not remove the superseded Grok Bot sideload copies (${errorMessage(error)}); rerun this install to retry.`);
+      });
+    }
     return {
       bundleRoot: identity.bundleRoot,
       ...(staged.commit === undefined ? {} : { commit: staged.commit }),
@@ -262,9 +286,11 @@ export const installGrokBot = async (
       host: grokBotHost,
       marketplace: staged.marketplace,
       mode: 'marketplace',
-      nextSteps: sideload.state === 'skipped'
-        ? grokBotNextSteps(staged.destination, identity.plugin)
-        : [grokBotSideloadStep(identity.plugin, sideload), ...grokBotNextSteps(staged.destination, identity.plugin)],
+      nextSteps: [
+        ...(sideload.state === 'skipped' ? [] : [grokBotSideloadStep(identity.plugin, sideload)]),
+        ...cleanup,
+        ...grokBotNextSteps(staged.destination, identity.plugin),
+      ],
       plugin: identity.plugin,
       ...(superseded === undefined || previousReceipt === undefined ? {} : { previousContentHash: previousReceipt.contentHash }),
       receipt: receiptPath,

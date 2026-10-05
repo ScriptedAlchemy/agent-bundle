@@ -2785,15 +2785,6 @@ const doctorHost = async (
 /** `AB7335`: which parts of a receipted Grok Bot sideload remain, and whether Grok Bot loaded it. */
 const grokBotSideloadDiagnostic = (plugin: string, sideload: DoctorGrokBotSideload): Diagnostic => {
   const where = `${sideload.repo} @ ${sideload.commit}, cache ${sideload.slug}`;
-  if (sideload.loaded) {
-    return diagnostic(
-      'AB7335',
-      `${plugin} sideload on grokbot: loaded — Grok Bot's plugin index names the cache copy ${sideload.cachePath} (${where}).`,
-      'No action needed.',
-      'info',
-      'grokbot',
-    );
-  }
   const missing = [
     ...(sideload.cacheCopy ? [] : [`the cache copy ${sideload.cachePath} (removed by Grok Bot's plugin sync)`]),
     ...(sideload.cloneActive
@@ -2803,8 +2794,25 @@ const grokBotSideloadDiagnostic = (plugin: string, sideload: DoctorGrokBotSidelo
       ]
       : [`the clone @ ${sideload.commit} (Grok Bot moved the marketplace to a new commit and deleted it)`]),
   ];
-  return missing.length === 0
+  if (missing.length > 0) {
+    return diagnostic(
+      'AB7335',
+      `${plugin} sideload on grokbot: incomplete (${where}); missing ${missing.join(', ')}` +
+        `${sideload.loaded ? ", though Grok Bot's plugin index still names the cache copy" : ''}.`,
+      'Rerun `agent-bundle install grokbot` to restore the sideload in the clone Grok Bot is using now.',
+      'warning',
+      'grokbot',
+    );
+  }
+  return sideload.loaded
     ? diagnostic(
+      'AB7335',
+      `${plugin} sideload on grokbot: loaded — Grok Bot's plugin index names the cache copy ${sideload.cachePath} (${where}).`,
+      'No action needed.',
+      'info',
+      'grokbot',
+    )
+    : diagnostic(
       'AB7335',
       `${plugin} sideload on grokbot: written (${where}), not loaded. Grok Bot loads only plugins its account plugin listing ` +
         `returns; its next plugin sync (startup, sign-in change, or every 24 hours) removes the cache copy unless the account ` +
@@ -2812,13 +2820,6 @@ const grokBotSideloadDiagnostic = (plugin: string, sideload: DoctorGrokBotSidelo
       `For a durable install, publish ${plugin} to ${sideload.repo} and install it from Grok Bot's Marketplace; rerun ` +
         '`agent-bundle install grokbot` to restore a pruned sideload.',
       'info',
-      'grokbot',
-    )
-    : diagnostic(
-      'AB7335',
-      `${plugin} sideload on grokbot: incomplete (${where}); missing ${missing.join(', ')}.`,
-      'Rerun `agent-bundle install grokbot` to restore the sideload in the clone Grok Bot is using now.',
-      'warning',
       'grokbot',
     );
 };

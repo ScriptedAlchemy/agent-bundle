@@ -15,7 +15,7 @@ import {
   rmdir,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
@@ -116,6 +116,8 @@ export interface InstallReceiptGrokBotSideload {
   readonly commit: string;
   /** Directories the sideload created (deepest last); uninstall removes them only when empty. */
   readonly createdDirectories: readonly string[];
+  /** The exact `plugins` entry the sideload wrote; uninstall removes an entry only while it still equals this. */
+  readonly entry: Readonly<Record<string, string>>;
   /** The clone's marketplace manifest the sideload added a `plugins` entry to. */
   readonly manifest: string;
   /** `<agent-data>/plugins/marketplaces/github.com/<owner>/<repo>/<commit>/<plugin>`. */
@@ -670,33 +672,73 @@ const readReceiptState = (value: unknown): InstallReceiptState | undefined => {
   });
 };
 
-const isAbsolutePath = (value: unknown): value is string => typeof value === 'string' && isAbsolute(value);
+const grokBotCommitPattern = /^[0-9a-f]{40}$/u;
+const grokBotRepoSegmentPattern = /^[a-z0-9_.-]+$/u;
+const grokBotCacheSegmentPattern = /^[A-Za-z0-9_-]+$/u;
 
-const readGrokBotSideload = (value: unknown): InstallReceiptGrokBotSideload | undefined => {
+/** `path` is `root` or strictly below it (both already normalized). */
+const isAtOrBelow = (root: string, path: string): boolean => path === root || path.startsWith(`${root}${sep}`);
+
+const isNormalAbsolute = (value: unknown): value is string =>
+  typeof value === 'string' && isAbsolute(value) && normalize(value) === value && !value.endsWith(sep);
+
+/**
+ * A sideload record authorizes recursive deletion, so it is accepted only when every path is exactly the one the
+ * installer derives from `agentData`, `repo`, `slug`, `commit`, and the receipt plugin: the cache copy
+ * `<agent-data>/plugins/cache/<slug>/<plugin>/<commit>`, a `<plugin>` folder inside the clone
+ * `<agent-data>/plugins/marketplaces/github.com/<owner>/<repo>/<commit>`, that clone's Cursor or Claude marketplace
+ * manifest, and created directories that are ancestors of those two folders inside the cache or the clone.
+ */
+export const readGrokBotSideload = (value: unknown, plugin: string): InstallReceiptGrokBotSideload | undefined => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
+  const { agentData, cachePath, commit, createdDirectories, entry, manifest, pluginPath, repo, slug } = record;
   if (
-    !isAbsolutePath(record['agentData']) ||
-    !isAbsolutePath(record['cachePath']) ||
-    !isAbsolutePath(record['manifest']) ||
-    !isAbsolutePath(record['pluginPath']) ||
-    typeof record['commit'] !== 'string' ||
-    typeof record['repo'] !== 'string' ||
-    typeof record['slug'] !== 'string' ||
-    !Array.isArray(record['createdDirectories']) ||
-    !record['createdDirectories'].every(isAbsolutePath)
+    !grokBotCacheSegmentPattern.test(plugin) ||
+    !isNormalAbsolute(agentData) ||
+    !isNormalAbsolute(cachePath) ||
+    !isNormalAbsolute(manifest) ||
+    !isNormalAbsolute(pluginPath) ||
+    typeof commit !== 'string' || !grokBotCommitPattern.test(commit) ||
+    typeof slug !== 'string' || !grokBotCacheSegmentPattern.test(slug) ||
+    typeof repo !== 'string' ||
+    !Array.isArray(createdDirectories) ||
+    !createdDirectories.every(isNormalAbsolute) ||
+    entry === null || typeof entry !== 'object' || Array.isArray(entry) ||
+    !Object.values(entry).every((field) => typeof field === 'string') ||
+    (entry as Record<string, unknown>)['name'] !== plugin
+  ) {
+    return undefined;
+  }
+  const segments = repo.split('/');
+  if (segments.length !== 2 || segments.some((segment) => !grokBotRepoSegmentPattern.test(segment) || /^\.+$/u.test(segment))) {
+    return undefined;
+  }
+  const [owner, name] = segments as [string, string];
+  const cacheRoot = join(agentData, 'plugins', 'cache');
+  const clone = join(agentData, 'plugins', 'marketplaces', 'github.com', owner, name, commit);
+  const pluginTail = pluginPath.startsWith(`${clone}${sep}`) ? pluginPath.slice(clone.length + 1).split(sep) : [];
+  if (
+    cachePath !== join(cacheRoot, slug, plugin, commit) ||
+    pluginTail.length === 0 || pluginTail.at(-1) !== plugin ||
+    pluginTail.some((segment) => segment === '' || segment === '.' || segment === '..' || segment === '.git') ||
+    (manifest !== join(clone, '.cursor-plugin', 'marketplace.json') && manifest !== join(clone, '.claude-plugin', 'marketplace.json')) ||
+    !createdDirectories.every((directory) =>
+      (isAtOrBelow(directory, cachePath) && directory.startsWith(`${cacheRoot}${sep}`)) ||
+      (isAtOrBelow(directory, pluginPath) && directory.startsWith(`${clone}${sep}`)))
   ) {
     return undefined;
   }
   return Object.freeze({
-    agentData: record['agentData'],
-    cachePath: record['cachePath'],
-    commit: record['commit'],
-    createdDirectories: Object.freeze([...record['createdDirectories']]),
-    manifest: record['manifest'],
-    pluginPath: record['pluginPath'],
-    repo: record['repo'],
-    slug: record['slug'],
+    agentData,
+    cachePath,
+    commit,
+    createdDirectories: Object.freeze([...createdDirectories]),
+    entry: Object.freeze({ ...(entry as Record<string, string>) }),
+    manifest,
+    pluginPath,
+    repo,
+    slug,
   });
 };
 
@@ -741,7 +783,9 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     return undefined;
   }
   const cursorExpansion = readCursorExpansion(record['cursorExpansion']);
-  const grokBotSideload = readGrokBotSideload(record['grokBotSideload']);
+  const grokBotSideload = typeof record['plugin'] === 'string'
+    ? readGrokBotSideload(record['grokBotSideload'], record['plugin'])
+    : undefined;
   if (record['grokBotSideload'] !== undefined && grokBotSideload === undefined) return undefined;
   const state = readReceiptState(record['state']);
   if (record['state'] !== undefined && state === undefined) return undefined;
@@ -839,6 +883,7 @@ export const createInstallReceipt = (options: InstallReceiptIdentity & {
           grokBotSideload: Object.freeze({
             ...options.grokBotSideload,
             createdDirectories: Object.freeze([...options.grokBotSideload.createdDirectories]),
+            entry: Object.freeze({ ...options.grokBotSideload.entry }),
           }),
         }),
     host: options.host,
