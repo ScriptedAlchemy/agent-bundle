@@ -12,7 +12,7 @@ import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { cacheHasPlugin, readHeadCommit } from './cursor-hooks-registration.ts';
 import { cursorMarketplaceName, cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
-import { grokBotRoot, readGrokBotInventory } from './grokbot.ts';
+import { grokBotRoot, readGrokBotInventory, removeGrokBotSideload } from './grokbot.ts';
 import {
   ampInstallLocation,
   cursorMarketplaceReceiptPath,
@@ -1682,8 +1682,13 @@ const uninstallProgram = Effect.fnUntraced(function*(
     }
     // The grokbot host stages the Cursor projection, so the Cursor projection identifies the plugin.
     const cursorIdentity = yield* liftPromise(() => readBundleIdentity(options.from, 'cursor'));
-    return yield* liftPromise(() =>
+    const staged = yield* liftPromise(() =>
       uninstallStagedMarketplace(options, cursorIdentity, policy, grokBotStagingHost(options, cursorIdentity)));
+    if (staged.state !== 'uninstalled') return staged;
+    const sideloaded = yield* liftPromise(() => removeGrokBotSideload(grokBotRoot(options), cursorIdentity.plugin));
+    return sideloaded.length === 0
+      ? staged
+      : { ...staged, removed: { ...staged.removed, directories: [...staged.removed.directories, ...sideloaded] } };
   }
   const host = options.host;
   const identity = yield* liftPromise(() => readBundleIdentity(options.from, host));

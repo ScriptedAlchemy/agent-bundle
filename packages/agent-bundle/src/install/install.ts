@@ -12,7 +12,7 @@ import { runPromise } from '../effect/boundary.ts';
 import { liftPromise, type LiftedRejection } from '../effect/lift.ts';
 import { claudePluginRowErrors } from '../host-contracts/claude-plugin-validation.ts';
 import { stageCursorMarketplace } from './cursor-marketplace.ts';
-import { installGrokBot } from './grokbot.ts';
+import { type GrokBotSideloadEntry, installGrokBot } from './grokbot.ts';
 import {
   bundleInventory,
   failure,
@@ -115,6 +115,8 @@ export interface InstallResult {
    * in the host root's `agent-bundle/receipts` store for host-CLI and marketplace deliveries (#101).
    */
   readonly receipt?: string;
+  /** grokbot only: copies mirrored into Grok Bot's own marketplace snapshot and plugin cache (see install/grokbot.ts). */
+  readonly sideload?: readonly GrokBotSideloadEntry[];
   /**
    * `staged` means the marketplace repository is ready and Cursor's import step is still pending
    * (`mode: 'marketplace'`).
