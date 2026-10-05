@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { isErrno } from '../core/errors.ts';
 
@@ -13,11 +13,14 @@ export const grokBotAgentDataCandidates = (
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
 ): readonly string[] => Object.freeze([
-  ...(environment['GROK_BOT_AGENT_DATA_DIR'] === undefined ? [] : [environment['GROK_BOT_AGENT_DATA_DIR']]),
+  ...(environment['GROK_BOT_AGENT_DATA_DIR'] === undefined || environment['GROK_BOT_AGENT_DATA_DIR'] === ''
+    ? []
+    : [environment['GROK_BOT_AGENT_DATA_DIR']]),
   '/home/box/agent-data',
   join(home, '.grokbot', 'agent-data'),
   join(home, 'Library', 'Application Support', 'Grok Bot', 'agent-data'),
-]);
+  // Absolute and normalized (no `..`, no trailing separator): receipts record paths derived from it verbatim.
+].map((candidate) => resolve(candidate)));
 
 export const directoryExists = async (path: string): Promise<boolean> => {
   try {

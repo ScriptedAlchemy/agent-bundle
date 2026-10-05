@@ -225,25 +225,56 @@ const resolvesInPlace = async (agentData: string, path: string): Promise<boolean
 
 const indentOf = (text: string): string => /^\{\r?\n([ \t]+)"/u.exec(text)?.[1] ?? '  ';
 
-/** Replaces the manifest atomically (exclusive temporary sibling, then rename), keeping its mode and indentation. */
-const writeManifest = async (manifest: ManifestDocument, plugins: readonly unknown[]): Promise<boolean> => {
-  const text = `${JSON.stringify({ ...manifest.document, plugins }, null, indentOf(manifest.text))}` +
-    `${manifest.text.endsWith('\n') ? '\n' : ''}`;
-  if (text === manifest.text) return false;
-  const mode = (await stat(manifest.path)).mode & 0o777;
-  const temporary = join(dirname(manifest.path), `.${basename(manifest.path)}.${randomUUID()}.tmp`);
+/** Serializes `plugins` into `manifest`, keeping its other fields, indentation, and trailing newline. */
+const manifestText = (manifest: ManifestDocument, plugins: readonly unknown[]): string =>
+  `${JSON.stringify({ ...manifest.document, plugins }, null, indentOf(manifest.text))}${manifest.text.endsWith('\n') ? '\n' : ''}`;
+
+const readText = async (path: string): Promise<string | undefined> => {
   try {
-    const handle = await open(temporary, 'wx', mode);
-    try {
-      await handle.writeFile(text, 'utf8');
-    } finally {
-      await handle.close();
-    }
-    await rename(temporary, manifest.path);
-  } finally {
-    await rm(temporary, { force: true });
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    if (isErrno(error, 'ENOENT') || isErrno(error, 'ENOTDIR')) return undefined;
+    throw error;
   }
-  return true;
+};
+
+const manifestAttempts = 5;
+
+/**
+ * Applies `update` to the manifest and replaces it atomically (exclusive temporary sibling, then rename), keeping
+ * its mode and layout. Optimistic: the file is read again right before the rename and, when Grok Bot changed it
+ * meanwhile, `update` runs again on the new contents, so a concurrent write is not overwritten with stale JSON
+ * (only the instant between that last read and the rename is unguarded; Grok Bot takes no lock to share).
+ * `update` returns the new `plugins` array, `undefined` to leave the file alone, or throws to refuse.
+ */
+const updateManifest = async (
+  path: string,
+  update: (manifest: ManifestDocument) => readonly unknown[] | undefined,
+): Promise<boolean> => {
+  for (let attempt = 0; attempt < manifestAttempts; attempt += 1) {
+    const manifest = await readManifest(path);
+    if (manifest === undefined) throw failure(`${path} is no longer a readable marketplace manifest; left untouched.`);
+    const plugins = update(manifest);
+    if (plugins === undefined) return false;
+    const text = manifestText(manifest, plugins);
+    if (text === manifest.text) return false;
+    const mode = (await stat(path)).mode & 0o777;
+    const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+    try {
+      const handle = await open(temporary, 'wx', mode);
+      try {
+        await handle.writeFile(text, 'utf8');
+      } finally {
+        await handle.close();
+      }
+      if (await readText(path) !== manifest.text) continue;
+      await rename(temporary, path);
+      return true;
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  }
+  throw failure(`${path} kept changing while agent-bundle updated it; rerun once Grok Bot's plugin sync settles.`);
 };
 
 /** Scratch siblings `writeTree` names `.<basename>.agent-bundle-<uuid>[.replaced]`; only this installer makes them. */
@@ -252,11 +283,21 @@ const scratchPattern = (destination: string): RegExp => {
   return new RegExp(`^\\.${name}\\.agent-bundle-[0-9a-f-]{36}(?:\\.replaced)?$`, 'u');
 };
 
-/** Deletes scratch siblings an interrupted `writeTree` left beside `destination` (never kept as copies). */
-const removeScratch = async (destination: string): Promise<void> => {
+/**
+ * Clears what an interrupted `writeTree` left beside `destination`: half-written stages (only this installer names
+ * them so) are deleted, and an aside copy is deleted only when it carries this plugin's marker. An unmarked aside
+ * is someone else's folder caught mid-swap: it goes back to `destination` when that is free and is otherwise kept.
+ */
+const removeScratch = async (destination: string, plugin: string): Promise<void> => {
   const pattern = scratchPattern(destination);
   for (const name of await listDirectory(dirname(destination))) {
-    if (pattern.test(name)) await rm(join(dirname(destination), name), { force: true, recursive: true });
+    if (!pattern.test(name)) continue;
+    const path = join(dirname(destination), name);
+    if (!name.endsWith('.replaced') || await ownsGrokBotSideloadPath(path, plugin)) {
+      await rm(path, { force: true, recursive: true });
+    } else if (!(await exists(destination))) {
+      await rename(path, destination);
+    }
   }
 };
 
@@ -279,11 +320,13 @@ const writeTree = async (options: {
   const { destination, plugin } = options;
   if (!(await resolvesInPlace(options.agentData, destination))) throw failure(`${destination} resolves through a symbolic link; sideload refused.`);
   await mkdir(dirname(destination), { recursive: true });
-  await removeScratch(destination);
+  await removeScratch(destination, plugin);
   const stage = join(dirname(destination), `.${basename(destination)}.agent-bundle-${randomUUID()}`);
   const aside = `${stage}.replaced`;
   const foreign = (): DiagnosticError =>
     failure(`${destination} appeared without agent-bundle's sideload marker while installing; left untouched.`);
+  // Set only once the folder moved aside is proven to be this plugin's sideload: nothing else is ever deleted.
+  let asideOwned = false;
   try {
     await copyInventoryFiles(options.bundleRoot, stage, options.artifact);
     await writeFile(join(stage, grokBotSideloadMarkerFile), markerDocument(plugin));
@@ -295,6 +338,7 @@ const writeTree = async (options: {
         await rename(aside, destination);
         throw foreign();
       }
+      asideOwned = true;
       try {
         await rename(stage, destination);
       } catch (error) {
@@ -306,7 +350,7 @@ const writeTree = async (options: {
     }
   } finally {
     await rm(stage, { force: true, recursive: true });
-    await rm(aside, { force: true, recursive: true });
+    if (asideOwned) await rm(aside, { force: true, recursive: true });
   }
 };
 
@@ -338,7 +382,7 @@ export const removeGrokBotSideload = async (
   let pluginFolderOurs = true;
   for (const path of [record.cachePath, record.pluginPath]) {
     if (keep.has(path)) continue;
-    if (options.plan !== true && await resolvesInPlace(record.agentData, path)) await removeScratch(path);
+    if (options.plan !== true && await resolvesInPlace(record.agentData, path)) await removeScratch(path, plugin);
     if (!(await exists(path))) continue;
     if (await ownsGrokBotSideloadPath(path, plugin) && await resolvesInPlace(record.agentData, path)) {
       if (options.plan !== true) await rm(path, { force: true, recursive: true });
@@ -352,11 +396,13 @@ export const removeGrokBotSideload = async (
   if (!keep.has(record.manifest) && pluginFolderOurs && await resolvesInPlace(record.agentData, record.manifest)) {
     const document = await readManifest(record.manifest);
     if (document !== undefined && sameEntry(listedEntry(document, plugin), record.entry)) {
-      if (options.plan !== true) {
-        const index = entryIndex(document, plugin);
-        await writeManifest(document, document.document.plugins.filter((_, position) => position !== index));
-      }
-      manifest = record.manifest;
+      // Re-validated on every attempt, against the manifest as it is right before the rename.
+      const removed = options.plan === true || await updateManifest(record.manifest, (latest) =>
+        sameEntry(listedEntry(latest, plugin), record.entry)
+          ? latest.document.plugins.filter((_, position) => position !== entryIndex(latest, plugin))
+          : undefined);
+      if (removed) manifest = record.manifest;
+      else retained.push(record.manifest);
     } else if (document !== undefined && entryIndex(document, plugin) >= 0) {
       retained.push(record.manifest);
     }
@@ -535,13 +581,15 @@ export const applyGrokBotSideload = async (options: {
   const write = { agentData: target.agentData, artifact, bundleRoot: options.bundleRoot, plugin };
   await writeTree({ ...write, cacheComplete: true, destination: target.cachePath });
   await writeTree({ ...write, cacheComplete: false, destination: target.pluginPath });
-  // And once more right before the rename, so only the instant between read and rename can race Grok Bot.
-  const latest = await currentManifest(target, plugin, previous);
-  const plugins = [...latest.document.plugins];
-  const listedAt = entryIndex(latest, plugin);
-  if (listedAt >= 0) plugins[listedAt] = target.entry;
-  else plugins.push(target.entry);
-  await writeManifest(latest, plugins);
+  // Validated again on every attempt against the manifest as it is right before the rename.
+  await updateManifest(target.manifest, (latest) => {
+    assertEntryOwnable(latest, target, plugin, previous);
+    const plugins = [...latest.document.plugins];
+    const listedAt = entryIndex(latest, plugin);
+    if (listedAt >= 0) plugins[listedAt] = target.entry;
+    else plugins.push(target.entry);
+    return plugins;
+  });
   return Object.freeze({ ...record, state: 'written' });
 };
 
@@ -556,11 +604,21 @@ const currentManifest = async (
   }
   const manifest = await readManifest(target.manifest);
   if (manifest === undefined) throw failure(`${target.manifest} is no longer a readable marketplace manifest; sideload refused.`);
+  assertEntryOwnable(manifest, target, plugin, previous);
+  return manifest;
+};
+
+/** Refuses when the manifest's `plugin` entry is neither absent, the one about to be written, nor the recorded one. */
+const assertEntryOwnable = (
+  manifest: ManifestDocument,
+  target: SideloadTarget,
+  plugin: string,
+  previous: InstallReceiptGrokBotSideload | undefined,
+): void => {
   const listed = listedEntry(manifest, plugin);
   if (listed !== undefined && !sameEntry(listed, target.entry) && !ownsManifestEntry(manifest, plugin, previous)) {
     throw failure(`${target.manifest} gained a plugin named ${plugin} that agent-bundle did not add; left untouched.`);
   }
-  return manifest;
 };
 
 /**

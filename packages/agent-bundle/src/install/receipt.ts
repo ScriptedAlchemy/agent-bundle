@@ -676,8 +676,8 @@ const grokBotCommitPattern = /^[0-9a-f]{40}$/u;
 const grokBotRepoSegmentPattern = /^[a-z0-9_.-]+$/u;
 const grokBotCacheSegmentPattern = /^[A-Za-z0-9_-]+$/u;
 
-/** `path` is `root` or strictly below it (both already normalized). */
-const isAtOrBelow = (root: string, path: string): boolean => path === root || path.startsWith(`${root}${sep}`);
+/** `path` is strictly below `root` (both already normalized). */
+const isStrictlyAbove = (root: string, path: string): boolean => path.startsWith(`${root}${sep}`);
 
 const isNormalAbsolute = (value: unknown): value is string =>
   typeof value === 'string' && isAbsolute(value) && normalize(value) === value && !value.endsWith(sep);
@@ -687,7 +687,7 @@ const isNormalAbsolute = (value: unknown): value is string =>
  * installer derives from `agentData`, `repo`, `slug`, `commit`, and the receipt plugin: the cache copy
  * `<agent-data>/plugins/cache/<slug>/<plugin>/<commit>`, a `<plugin>` folder inside the clone
  * `<agent-data>/plugins/marketplaces/github.com/<owner>/<repo>/<commit>`, that clone's Cursor or Claude marketplace
- * manifest, and created directories that are ancestors of those two folders inside the cache or the clone.
+ * manifest, and created directories that are strict ancestors of those two folders inside the cache or the clone.
  */
 export const readGrokBotSideload = (value: unknown, plugin: string): InstallReceiptGrokBotSideload | undefined => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -724,8 +724,8 @@ export const readGrokBotSideload = (value: unknown, plugin: string): InstallRece
     pluginTail.some((segment) => segment === '' || segment === '.' || segment === '..' || segment === '.git') ||
     (manifest !== join(clone, '.cursor-plugin', 'marketplace.json') && manifest !== join(clone, '.claude-plugin', 'marketplace.json')) ||
     !createdDirectories.every((directory) =>
-      (isAtOrBelow(directory, cachePath) && directory.startsWith(`${cacheRoot}${sep}`)) ||
-      (isAtOrBelow(directory, pluginPath) && directory.startsWith(`${clone}${sep}`)))
+      (isStrictlyAbove(directory, cachePath) && directory.startsWith(`${cacheRoot}${sep}`)) ||
+      (isStrictlyAbove(directory, pluginPath) && directory.startsWith(`${clone}${sep}`)))
   ) {
     return undefined;
   }

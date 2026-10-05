@@ -349,6 +349,8 @@ it('accepts a receipt sideload record only when every path derives from its own 
     { createdDirectories: [join(cacheRoot, 'scriptedalchemy-plugins', 'pstack')] },
     { createdDirectories: [cacheRoot] },
     { createdDirectories: [clone] },
+    { createdDirectories: [join(cacheRoot, 'scriptedalchemy-plugins', 'grok-fixture', commit)] },
+    { createdDirectories: [join(clone, 'grok-fixture')] },
     { commit: 'main' },
     { repo: 'scriptedalchemy/../etc' },
     { slug: '../x' },
@@ -485,6 +487,39 @@ it.skipIf(process.platform === 'win32')('skips a target reached through a symbol
     const result = await installBundle({ environment: box.environment, from: box.from, home: box.home, host: 'grokbot' });
     expect(result.sideload).toMatchObject({ state: 'skipped' });
     expect(await readdir(elsewhere)).toEqual([]);
+  } finally {
+    await box.cleanup();
+  }
+});
+
+it('normalizes GROK_BOT_AGENT_DATA_DIR and clears interrupted swaps without deleting a folder it cannot prove is its own', async () => {
+  const box = await sandbox();
+  try {
+    const clone = await simulateGrokBotMarketplace(box);
+    const environment = { GROK_BOT_AGENT_DATA_DIR: `${box.agentData}/plugins/../` };
+    const install = () => installBundle({ environment, from: box.from, home: box.home, host: 'grokbot' });
+    const first = sideloadOf(await install());
+    expect(first.agentData).toBe(box.agentData);
+    const receiptPath = grokBotReceiptPath(join(box.home, '.grokbot'), 'grok-fixture');
+    expect((await readInstallReceiptFile(receiptPath))?.grokBotSideload).toMatchObject({ agentData: box.agentData });
+
+    // A marked aside left by an interrupted swap is deleted by the next write.
+    const scratch = (name: string): string => join(clone, `.grok-fixture.agent-bundle-${name}.replaced`);
+    const ownAside = scratch('00000000-0000-4000-8000-000000000000');
+    await writeJson(join(ownAside, grokBotSideloadMarkerFile), { format: 'agent-bundle-grokbot-sideload@1', plugin: 'grok-fixture' });
+    await writeFile(join(box.from, 'skills', 'talk', 'SKILL.md'), '---\nname: talk\ndescription: Talk again.\n---\nTalk.\n');
+    await writeInstallFixtureManifest(box.from, { name: 'grok-fixture', version: '1.2.3' }, [{ host: 'cursor' }]);
+    expect(sideloadOf(await install()).state).toBe('written');
+    await missing(ownAside);
+
+    // An unmarked aside is someone else's folder caught mid-swap: it is put back where it was, never deleted.
+    await uninstallBundle({ environment, from: box.from, home: box.home, host: 'grokbot' });
+    const foreignAside = scratch('11111111-1111-4111-8111-111111111111');
+    await writeFile(join(await mkdirp(foreignAside), 'theirs.txt'), 'theirs\n');
+    await expect(install()).rejects.toThrow(/without agent-bundle's sideload marker/u);
+    expect(await readFile(join(clone, 'grok-fixture', 'theirs.txt'), 'utf8')).toBe('theirs\n');
+    await missing(foreignAside);
+    await missing(join(cacheSlug(box), 'grok-fixture'));
   } finally {
     await box.cleanup();
   }
