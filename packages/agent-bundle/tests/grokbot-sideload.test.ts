@@ -524,3 +524,55 @@ it('normalizes GROK_BOT_AGENT_DATA_DIR and clears interrupted swaps without dele
     await box.cleanup();
   }
 });
+
+it('retires the first sideload release record: its folders and entry are replaced by marked, receipted ones', async () => {
+  const box = await sandbox();
+  try {
+    const clone = await simulateGrokBotMarketplace(box);
+    const manifestPath = join(clone, '.cursor-plugin', 'marketplace.json');
+    // What #875 left: unmarked copies, its `{ name, source, description }` entry, and a record beside the receipts.
+    const pluginPath = join(clone, 'grok-fixture');
+    const cachePath = join(cacheSlug(box), 'grok-fixture', commit);
+    for (const path of [pluginPath, cachePath]) {
+      await writeJson(join(path, '.cursor-plugin', 'plugin.json'), { name: 'grok-fixture', version: '1.0.0' });
+    }
+    await writeFile(join(cachePath, '.cache-complete'), '');
+    const legacyEntry = { description: 'Old.', name: 'grok-fixture', source: 'grok-fixture' };
+    await writeJson(manifestPath, { ...upstreamManifest, plugins: [...upstreamManifest.plugins, legacyEntry] });
+    const record = join(box.home, '.grokbot', 'agent-bundle', 'sideload', 'grok-fixture.json');
+    const entries = [{ addedEntry: true, cachePath, commit, marketplace: 'scriptedalchemy/plugins', pluginPath }];
+    await writeJson(record, { entries, plugin: 'grok-fixture', version: '1.0.0' });
+
+    // The old env var still names the marketplace (one repository only).
+    const environment = { ...box.environment, GROK_BOT_SIDELOAD_MARKETPLACE: 'scriptedalchemy/plugins' };
+    const result = await installBundle({ environment, from: box.from, home: box.home, host: 'grokbot' });
+    expect(sideloadOf(result)).toMatchObject({ cachePath, pluginPath, state: 'written' });
+    expect(result.nextSteps).toContainEqual(expect.stringContaining(`Retired the earlier sideload record ${record}`));
+    await missing(record);
+    expect(JSON.parse(await readFile(join(pluginPath, grokBotSideloadMarkerFile), 'utf8'))).toMatchObject({ plugin: 'grok-fixture' });
+    expect(JSON.parse(await readFile(manifestPath, 'utf8')).plugins).toEqual([
+      ...upstreamManifest.plugins,
+      { description: 'Grok fixture.', name: 'grok-fixture', source: 'grok-fixture' },
+    ]);
+    expect(() => resolveGrokBotSideloadSettings({}, { GROK_BOT_SIDELOAD_MARKETPLACE: 'a/b,c/d' })).toThrow(/several repositories/u);
+
+    // Uninstall with only a legacy record (no receipt sideload) removes what it names, nothing else.
+    await uninstallBundle({ environment, from: box.from, home: box.home, host: 'grokbot' });
+    for (const path of [pluginPath, cachePath]) {
+      await writeJson(join(path, '.cursor-plugin', 'plugin.json'), { name: 'grok-fixture', version: '1.0.0' });
+    }
+    await writeJson(manifestPath, { ...upstreamManifest, plugins: [...upstreamManifest.plugins, legacyEntry] });
+    await writeJson(record, { entries, plugin: 'grok-fixture', version: '1.0.0' });
+    await installBundle({ environment: { ...environment, GROK_BOT_SIDELOAD: '0' }, from: box.from, home: box.home, host: 'grokbot' });
+    await access(record);
+    const removed = await uninstallBundle({ environment, from: box.from, home: box.home, host: 'grokbot' });
+    expect(removed.registrations.at(-1)).toMatchObject({ action: 'removed', kind: 'grokbot-sideload' });
+    await missing(record);
+    await missing(pluginPath);
+    await missing(cachePath);
+    expect(JSON.parse(await readFile(manifestPath, 'utf8'))).toEqual(upstreamManifest);
+    await access(join(clone, 'pstack', 'README.md'));
+  } finally {
+    await box.cleanup();
+  }
+});

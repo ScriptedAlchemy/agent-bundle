@@ -13,7 +13,7 @@ import { liftPromise } from '../effect/lift.ts';
 import { cacheHasPlugin, readHeadCommit } from './cursor-hooks-registration.ts';
 import { cursorMarketplaceName, cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
 import { grokBotReceiptPath, grokBotRoot, readGrokBotInventory } from './grokbot.ts';
-import { removeGrokBotSideload } from './grokbot-sideload.ts';
+import { legacyGrokBotSideloadRecordPath, removeGrokBotSideload, removeLegacyGrokBotSideload } from './grokbot-sideload.ts';
 import {
   ampInstallLocation,
   cursorMarketplaceReceiptPath,
@@ -819,20 +819,27 @@ const uninstallGrokBot = async (
   const target = grokBotStagingHost(options, identity);
   const receipt = await readInstallReceiptFile(grokBotReceiptPath(target.root, identity.plugin));
   const sideload = receipt?.plugin === identity.plugin ? receipt.grokBotSideload : undefined;
-  if (sideload === undefined) return uninstallStagedMarketplace(options, identity, policy, target);
+  const legacy = await exists(legacyGrokBotSideloadRecordPath(target.root, identity.plugin));
+  if (sideload === undefined && !legacy) return uninstallStagedMarketplace(options, identity, policy, target);
   const planned = options.plan === true;
   if (!planned) await uninstallStagedMarketplace({ ...options, plan: true }, identity, policy, target);
-  const removal = await removeGrokBotSideload(sideload, identity.plugin, { plan: planned });
+  const removals = [
+    ...(sideload === undefined ? [] : [await removeGrokBotSideload(sideload, identity.plugin, { plan: planned })]),
+    // A record the first sideload release (#875) kept beside the receipt.
+    ...(legacy ? [await removeLegacyGrokBotSideload(target.root, identity.plugin, { plan: planned })] : []),
+  ];
   const staged = await uninstallStagedMarketplace(options, identity, policy, target);
-  const touched = removal.directories.length > 0 || removal.manifest !== undefined;
+  const directories = removals.flatMap((removal) => removal.directories);
+  const retained = removals.flatMap((removal) => removal.retained);
+  const manifests = removals.flatMap((removal) => removal.manifest === undefined ? [] : [removal.manifest]);
+  const touched = directories.length > 0 || manifests.length > 0;
+  const where = sideload === undefined ? "Grok Bot's marketplace clone" : `Grok Bot's ${sideload.repo} clone @ ${sideload.commit}`;
   const detail = [
     touched
-      ? `${planned ? 'would remove' : 'removed'} the sideload from Grok Bot's ${sideload.repo} clone @ ${sideload.commit}` +
-        `${removal.manifest === undefined ? '' : ` and its entry in ${removal.manifest}`}`
+      ? `${planned ? 'would remove' : 'removed'} the sideload from ${where}` +
+        `${manifests.length === 0 ? '' : ` and its entry in ${manifests.join(', ')}`}`
       : 'nothing sideloaded remains (Grok Bot pruned it, or it was removed by hand)',
-    ...(removal.retained.length === 0
-      ? []
-      : [`kept ${removal.retained.join(', ')}: no longer marked as this plugin's sideload`]),
+    ...(retained.length === 0 ? [] : [`kept ${retained.join(', ')}: no longer this plugin's sideload`]),
   ].join('; ');
   return Object.freeze({
     ...staged,
@@ -840,17 +847,17 @@ const uninstallGrokBot = async (
       ...staged.registrations,
       Object.freeze({
         action: touched ? planned ? 'planned' as const : 'removed' as const : 'already-absent' as const,
-        commit: sideload.commit,
+        ...(sideload === undefined ? {} : { commit: sideload.commit }),
         detail,
         kind: 'grokbot-sideload' as const,
-        name: sideload.slug,
+        name: sideload?.slug ?? 'legacy-sideload',
       }),
     ]),
     removed: Object.freeze({
-      directories: Object.freeze([...staged.removed.directories, ...removal.directories]),
+      directories: Object.freeze([...staged.removed.directories, ...directories]),
       files: staged.removed.files,
     }),
-    retained: Object.freeze([...staged.retained, ...removal.retained]),
+    retained: Object.freeze([...staged.retained, ...retained]),
   });
 };
 

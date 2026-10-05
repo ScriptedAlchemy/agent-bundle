@@ -75,7 +75,12 @@ export const resolveGrokBotSideloadSettings = (
   options: GrokBotSideloadOptions,
   environment: Readonly<NodeJS.ProcessEnv>,
 ): GrokBotSideloadSettings => {
-  const repo = (options.sideloadRepo ?? environment['GROK_BOT_SIDELOAD_REPO'] ?? defaultGrokBotSideloadRepo)
+  // `GROK_BOT_SIDELOAD_MARKETPLACE` is the name the first sideload release read; it now names exactly one repository.
+  const legacy = environment['GROK_BOT_SIDELOAD_MARKETPLACE']?.trim() || undefined;
+  if (legacy?.includes(',') === true && options.sideloadRepo === undefined && environment['GROK_BOT_SIDELOAD_REPO'] === undefined) {
+    throw failure(`GROK_BOT_SIDELOAD_MARKETPLACE ${JSON.stringify(legacy)} names several repositories; set GROK_BOT_SIDELOAD_REPO to one <owner>/<repo>.`);
+  }
+  const repo = (options.sideloadRepo ?? environment['GROK_BOT_SIDELOAD_REPO'] ?? legacy ?? defaultGrokBotSideloadRepo)
     .trim().toLowerCase().replace(/^(?:https?:\/\/)?github\.com\//u, '').replace(/(?:\.git)?\/?$/u, '');
   const segments = repo.split('/');
   if (segments.length !== 2 || segments.some((segment) => !repoSegmentPattern.test(segment) || /^\.+$/u.test(segment))) {
@@ -689,5 +694,81 @@ export const inspectGrokBotSideload = async (
     loaded: key !== undefined && folders.some((folder) =>
       Predicate.isObject(folder) && typeof folder['installPath'] === 'string' && pluginCacheKey(folder['installPath']) === key),
     pluginFolder: await ownsGrokBotSideloadPath(record.pluginPath, plugin),
+  });
+};
+
+/**
+ * The first sideload release (#875) kept its own record at `<grokbot root>/agent-bundle/sideload/<plugin>.json`
+ * and wrote unmarked folders. That record is the only proof those folders are agent-bundle's, so install and
+ * uninstall retire it: each recorded folder is removed when its path is exactly the layout that release wrote and it
+ * still holds this plugin's Cursor manifest, and a recorded `addedEntry` is removed only while it is still the
+ * `{ name, source, description }` entry that release wrote. Then the record itself goes.
+ */
+export const legacyGrokBotSideloadRecordPath = (root: string, plugin: string): string =>
+  join(root, 'agent-bundle', 'sideload', `${plugin}.json`);
+
+const legacyEntryShape = (entry: unknown, plugin: string): boolean =>
+  Predicate.isObject(entry) && entry['name'] === plugin && entry['source'] === plugin &&
+  Object.keys(entry).every((key) => key === 'name' || key === 'source' || (key === 'description' && typeof entry[key] === 'string'));
+
+const holdsPlugin = async (path: string, plugin: string): Promise<boolean> => {
+  if (!(await isDirectory(path))) return false;
+  const manifest = await readJsonFile(join(path, '.cursor-plugin', 'plugin.json'));
+  return Predicate.isObject(manifest) && manifest['name'] === plugin;
+};
+
+export const removeLegacyGrokBotSideload = async (
+  root: string,
+  plugin: string,
+  options: { readonly plan?: boolean } = {},
+): Promise<GrokBotSideloadRemoval & { readonly record?: string }> => {
+  const recordPath = legacyGrokBotSideloadRecordPath(root, plugin);
+  const record = await readJsonFile(recordPath);
+  if (!Predicate.isObject(record) || !Array.isArray(record['entries'])) {
+    return Object.freeze({ directories: Object.freeze([]), retained: Object.freeze([]) });
+  }
+  const directories: string[] = [];
+  const retained: string[] = [];
+  let manifest: string | undefined;
+  for (const entry of record['entries'] as unknown[]) {
+    if (!Predicate.isObject(entry)) continue;
+    const { addedEntry, cachePath, commit, marketplace, pluginPath } = entry;
+    if (typeof cachePath !== 'string' || typeof pluginPath !== 'string' || typeof commit !== 'string' || typeof marketplace !== 'string') continue;
+    const [owner = '', repo = ''] = marketplace.split('/');
+    if (!commitPattern.test(commit) || !repoSegmentPattern.test(owner) || !repoSegmentPattern.test(repo) || !isAbsolute(cachePath)) continue;
+    // `<agent-data>/plugins/cache/<owner>-<repo>/<plugin>/<commit>`, so agent-data is five levels up.
+    const agentData = dirname(dirname(dirname(dirname(dirname(cachePath)))));
+    const clone = join(agentData, 'plugins', 'marketplaces', 'github.com', owner, repo, commit);
+    if (
+      cachePath !== join(agentData, 'plugins', 'cache', `${owner}-${repo}`, plugin, commit) ||
+      pluginPath !== join(clone, plugin)
+    ) {
+      continue;
+    }
+    for (const path of [cachePath, pluginPath]) {
+      if (!(await exists(path))) continue;
+      if (await holdsPlugin(path, plugin) && await resolvesInPlace(agentData, path)) {
+        if (options.plan !== true) await rm(path, { force: true, recursive: true });
+        directories.push(path);
+      } else {
+        retained.push(path);
+      }
+    }
+    const manifestPath = join(clone, '.cursor-plugin', 'marketplace.json');
+    if (addedEntry !== true || !(await resolvesInPlace(agentData, manifestPath))) continue;
+    const document = await readManifest(manifestPath);
+    if (document === undefined || !legacyEntryShape(listedEntry(document, plugin), plugin)) continue;
+    const removed = options.plan === true || await updateManifest(manifestPath, (latest) =>
+      legacyEntryShape(listedEntry(latest, plugin), plugin)
+        ? latest.document.plugins.filter((_, position) => position !== entryIndex(latest, plugin))
+        : undefined);
+    if (removed) manifest = manifestPath;
+  }
+  if (options.plan !== true) await rm(recordPath, { force: true });
+  return Object.freeze({
+    directories: Object.freeze(directories),
+    ...(manifest === undefined ? {} : { manifest }),
+    record: recordPath,
+    retained: Object.freeze(retained),
   });
 };

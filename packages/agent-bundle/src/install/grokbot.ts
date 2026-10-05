@@ -15,6 +15,7 @@ import {
   finishGrokBotSideload,
   ownsGrokBotSideloadPath,
   planGrokBotSideload,
+  removeLegacyGrokBotSideload,
   resolveGrokBotSideloadSettings,
   rollbackGrokBotSideload,
 } from './grokbot-sideload.ts';
@@ -186,6 +187,9 @@ export const installGrokBot = async (
     const previousSideload = previousReceipt?.plugin === identity.plugin ? previousReceipt.grokBotSideload : undefined;
     const manifest = await readJsonFile(join(identity.bundleRoot, '.cursor-plugin', 'plugin.json'));
     const description = Predicate.isObject(manifest) && typeof manifest['description'] === 'string' ? manifest['description'] : undefined;
+    // The first sideload release kept a separate record and wrote unmarked folders: retire them so this sideload can
+    // take their place under its own markers and receipt.
+    const retired = settings.enabled ? await removeLegacyGrokBotSideload(root, identity.plugin) : undefined;
     // Read-only, before anything is staged: where the sideload will write, or why it is skipped.
     const plan = await planGrokBotSideload({
       ...(description === undefined ? {} : { description }),
@@ -288,6 +292,11 @@ export const installGrokBot = async (
       mode: 'marketplace',
       nextSteps: [
         ...(sideload.state === 'skipped' ? [] : [grokBotSideloadStep(identity.plugin, sideload)]),
+        ...(retired?.record === undefined
+          ? []
+          : [`Retired the earlier sideload record ${retired.record}` +
+            `${retired.directories.length === 0 ? '' : ` and removed ${retired.directories.join(', ')}`}` +
+            `${retired.retained.length === 0 ? '' : `; kept ${retired.retained.join(', ')} (no longer this plugin's copy)`}.`]),
         ...cleanup,
         ...grokBotNextSteps(staged.destination, identity.plugin),
       ],
