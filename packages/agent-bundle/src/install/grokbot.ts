@@ -1,16 +1,25 @@
-import { readdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { Predicate } from 'effect';
 
 import { DiagnosticError } from '../core/diagnostics.ts';
-import { errorMessage, isErrno } from '../core/errors.ts';
+import { errorMessage } from '../core/errors.ts';
 import { exists } from '../core/paths.ts';
 import { cursorMarketplaceRoot, stageCursorMarketplace } from './cursor-marketplace.ts';
+import { findGrokBotAgentData, listDirectory, pluginCacheKey, readJsonFile } from './grokbot-agent-data.ts';
+import {
+  type GrokBotSideloadResult,
+  applyGrokBotSideload,
+  ownsGrokBotSideloadPath,
+  planGrokBotSideload,
+  resolveGrokBotSideloadSettings,
+} from './grokbot-sideload.ts';
 import { bundleInventory, readBundleIdentity } from './identity.ts';
 import {
   type InstallReceipt,
+  type InstallReceiptGrokBotSideload,
   createInstallReceipt,
   installReceiptStorePath,
   readInstallReceiptFile,
@@ -32,8 +41,11 @@ import type { InstallBundleOptions, InstallCommandRunner, InstallResult } from '
  * Bot's Marketplace UI, the in-chat InstallPlugin tool, or a
  * `grokbot://app/v1/plugin/add?id=<plugin id>` link, all keyed by that
  * server-assigned id. There is no local-folder import and no CLI verb, so the
- * installer only stages a committed marketplace repository built from the
- * Cursor projection, records a receipt, and prints the exact remaining steps.
+ * installer stages a committed marketplace repository built from the Cursor
+ * projection, records a receipt, and prints the exact remaining steps. When
+ * this computer has Grok Bot data and a clone of the configured marketplace,
+ * it also sideloads the plugin into that clone and Grok Bot's plugin cache
+ * (install/grokbot-sideload.ts, which documents what Grok Bot's sync keeps).
  * Doctor reads the cache and skill index read-only to report the plugin id
  * and the commit Grok Bot installed.
  */
@@ -124,6 +136,17 @@ const supersedeOwnedStaging = async (options: {
   return aside;
 };
 
+const withoutState = (result: InstallReceiptGrokBotSideload & { readonly state: string }): InstallReceiptGrokBotSideload => {
+  const { state: _state, ...record } = result;
+  return record;
+};
+
+export const grokBotSideloadStep = (plugin: string, sideload: InstallReceiptGrokBotSideload): string =>
+  `Sideloaded into Grok Bot's ${sideload.repo} marketplace clone @ ${sideload.commit} (${sideload.pluginPath}, listed in ` +
+  `${sideload.manifest}) and its plugin cache (${sideload.cachePath}). Grok Bot loads plugins only from its account ` +
+  `plugin listing: until that lists "${plugin}" from ${sideload.slug}, its next plugin sync removes the cache copy, and a ` +
+  'new marketplace commit replaces the clone folder. Rerun this install to restore both; `doctor --host grokbot` reports which remain.';
+
 /**
  * Stages the Cursor projection as a committed marketplace repository under
  * `<grokbot root>/agent-bundle/marketplaces/<plugin>` and writes a store
@@ -152,10 +175,24 @@ export const installGrokBot = async (
     throw error;
   });
   const root = grokBotRoot(options);
+  const environment = options.environment ?? process.env;
+  const settings = resolveGrokBotSideloadSettings(options, environment);
   try {
     const artifact = await bundleInventory(identity, { restoreModes: true });
     const receiptPath = grokBotReceiptPath(root, identity.plugin);
     const previousReceipt = await readInstallReceiptFile(receiptPath);
+    const previousSideload = previousReceipt?.plugin === identity.plugin ? previousReceipt.grokBotSideload : undefined;
+    const manifest = await readJsonFile(join(identity.bundleRoot, '.cursor-plugin', 'plugin.json'));
+    const description = Predicate.isObject(manifest) && typeof manifest['description'] === 'string' ? manifest['description'] : undefined;
+    // Read-only, before anything is staged: where the sideload will write, or why it is skipped.
+    const plan = await planGrokBotSideload({
+      ...(description === undefined ? {} : { description }),
+      environment,
+      home: options.home ?? homedir(),
+      plugin: identity.plugin,
+      ...(previousSideload === undefined ? {} : { previous: previousSideload }),
+      settings,
+    });
     const repoRoot = join(grokBotMarketplaceRoot(root), identity.plugin);
     const superseded = await supersedeOwnedStaging({ artifact, identity, options, previousReceipt, repoRoot, runner });
     let staged: Awaited<ReturnType<typeof stageCursorMarketplace>>;
@@ -165,24 +202,44 @@ export const installGrokBot = async (
       if (superseded !== undefined) await rename(superseded, repoRoot);
       throw error;
     }
+    let sideload: GrokBotSideloadResult;
     try {
+      sideload = plan.state === 'ready'
+        ? await applyGrokBotSideload({
+          artifact,
+          bundleRoot: identity.bundleRoot,
+          plugin: identity.plugin,
+          ...(previousSideload === undefined ? {} : { previous: previousSideload }),
+          ...(previousReceipt === undefined ? {} : { previousContentHash: previousReceipt.contentHash }),
+          target: plan.target,
+        })
+        : plan;
+      // A skipped sideload keeps the previous record: whatever it wrote may still exist, and uninstall must find it.
+      const sideloadRecord = sideload.state === 'skipped' ? previousSideload : withoutState(sideload);
       if (
         staged.state === 'staged' ||
         previousReceipt === undefined ||
         previousReceipt.contentHash !== artifact.hash ||
-        previousReceipt.registrations[0]?.commit !== staged.commit
+        previousReceipt.registrations[0]?.commit !== staged.commit ||
+        JSON.stringify(previousReceipt.grokBotSideload) !== JSON.stringify(sideloadRecord)
       ) {
         await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
+          ...(sideloadRecord === undefined ? {} : { grokBotSideload: sideloadRecord }),
           host: grokBotHost,
           ...(previousReceipt === undefined ? {} : { installedAt: previousReceipt.installedAt }),
           inventory: { files: [], hash: artifact.hash },
           mode: 'marketplace',
           plugin: identity.plugin,
-          registrations: [{
-            ...(staged.commit === undefined ? {} : { commit: staged.commit }),
-            kind: 'grokbot-marketplace-staging',
-            name: staged.marketplace,
-          }],
+          registrations: [
+            {
+              ...(staged.commit === undefined ? {} : { commit: staged.commit }),
+              kind: 'grokbot-marketplace-staging',
+              name: staged.marketplace,
+            },
+            ...(sideloadRecord === undefined
+              ? []
+              : [{ commit: sideloadRecord.commit, kind: 'grokbot-sideload' as const, name: sideloadRecord.slug }]),
+          ],
           scope: 'user',
           updatedAt: new Date().toISOString(),
           version: identity.version,
@@ -205,10 +262,13 @@ export const installGrokBot = async (
       host: grokBotHost,
       marketplace: staged.marketplace,
       mode: 'marketplace',
-      nextSteps: grokBotNextSteps(staged.destination, identity.plugin),
+      nextSteps: sideload.state === 'skipped'
+        ? grokBotNextSteps(staged.destination, identity.plugin)
+        : [grokBotSideloadStep(identity.plugin, sideload), ...grokBotNextSteps(staged.destination, identity.plugin)],
       plugin: identity.plugin,
       ...(superseded === undefined || previousReceipt === undefined ? {} : { previousContentHash: previousReceipt.contentHash }),
       receipt: receiptPath,
+      sideload,
       state: superseded === undefined ? staged.state : 'replaced',
       version: identity.version,
     };
@@ -223,17 +283,6 @@ export const installGrokBot = async (
     throw failure('AB7004', errorMessage(error));
   }
 };
-
-/** Where a Grok Bot computer keeps its data, most specific first (`GROK_BOT_AGENT_DATA_DIR` overrides). */
-export const grokBotAgentDataCandidates = (
-  environment: Readonly<NodeJS.ProcessEnv>,
-  home: string,
-): readonly string[] => Object.freeze([
-  ...(environment['GROK_BOT_AGENT_DATA_DIR'] === undefined ? [] : [environment['GROK_BOT_AGENT_DATA_DIR']]),
-  '/home/box/agent-data',
-  join(home, '.grokbot', 'agent-data'),
-  join(home, 'Library', 'Application Support', 'Grok Bot', 'agent-data'),
-]);
 
 /** One copy of the plugin Grok Bot cloned, and the server-assigned id when its skill index names it. */
 export interface GrokBotInstalledPlugin {
@@ -253,33 +302,6 @@ export type GrokBotInventory =
   | Readonly<{ readonly agentData: string; readonly entries: readonly GrokBotInstalledPlugin[]; readonly status: 'available' }>
   | Readonly<{ readonly reason: string; readonly status: 'unavailable' }>;
 
-const directoryExists = async (path: string): Promise<boolean> => {
-  try {
-    return (await stat(path)).isDirectory();
-  } catch (error) {
-    if (isErrno(error, 'ENOENT') || isErrno(error, 'ENOTDIR') || isErrno(error, 'EACCES')) return false;
-    throw error;
-  }
-};
-
-const readJsonFile = async (path: string): Promise<unknown> => {
-  try {
-    return JSON.parse(await readFile(path, 'utf8')) as unknown;
-  } catch (error) {
-    if (isErrno(error, 'ENOENT') || isErrno(error, 'EACCES') || error instanceof SyntaxError) return undefined;
-    throw error;
-  }
-};
-
-const listDirectory = async (path: string): Promise<readonly string[]> => {
-  try {
-    return (await readdir(path)).sort();
-  } catch (error) {
-    if (isErrno(error, 'ENOENT') || isErrno(error, 'ENOTDIR') || isErrno(error, 'EACCES')) return [];
-    throw error;
-  }
-};
-
 /** `<marketplace>/<plugin>/<version>` -> plugin id, from the skill index Grok Bot keeps for installed plugins. */
 const skillIndexIds = (document: unknown): ReadonlyMap<string, string> => {
   const ids = new Map<string, string>();
@@ -288,32 +310,22 @@ const skillIndexIds = (document: unknown): ReadonlyMap<string, string> => {
     if (!Predicate.isObject(skill)) continue;
     const { installPath, pluginId } = skill;
     if (typeof installPath !== 'string' || typeof pluginId !== 'string') continue;
-    // The index may record the legacy `sand-data` root, so only the cache-relative tail identifies the copy.
-    const segments = installPath.split(/[\\/]/u).filter((segment) => segment !== '');
-    const cache = segments.lastIndexOf('cache');
-    if (cache < 1 || segments[cache - 1] !== 'plugins' || segments.length !== cache + 4) continue;
-    ids.set(segments.slice(cache + 1).join('/'), pluginId);
+    const key = pluginCacheKey(installPath);
+    if (key !== undefined) ids.set(key, pluginId);
   }
   return ids;
 };
 
 /**
  * Every completed copy of `plugin` in Grok Bot's plugin cache, from any
- * marketplace, with the plugin id the skill index assigns it. Read-only.
+ * marketplace, with the plugin id the skill index assigns it. A sideload copy
+ * counts only once Grok Bot's index names it. Read-only.
  */
 export const readGrokBotInventory = async (
   plugin: string,
   options: { readonly environment?: Readonly<NodeJS.ProcessEnv>; readonly home?: string } = {},
 ): Promise<GrokBotInventory> => {
-  const environment = options.environment ?? process.env;
-  const home = options.home ?? homedir();
-  let agentData: string | undefined;
-  for (const candidate of grokBotAgentDataCandidates(environment, home)) {
-    if (await directoryExists(join(candidate, 'plugins'))) {
-      agentData = candidate;
-      break;
-    }
-  }
+  const agentData = await findGrokBotAgentData(options.environment ?? process.env, options.home ?? homedir());
   if (agentData === undefined) {
     return Object.freeze({
       reason: 'No Grok Bot plugin cache on this computer (set GROK_BOT_AGENT_DATA_DIR, or run doctor on the Grok Bot computer).',
@@ -331,6 +343,8 @@ export const readGrokBotInventory = async (
       const manifest = await readJsonFile(join(installPath, '.cursor-plugin', 'plugin.json'));
       if (!Predicate.isObject(manifest) || manifest['name'] !== plugin) continue;
       const pluginId = ids.get(`${marketplace}/${plugin}/${version}`);
+      // `install grokbot`'s own sideload copy is not an install Grok Bot made, until Grok Bot indexes it.
+      if (pluginId === undefined && await ownsGrokBotSideloadPath(installPath, plugin)) continue;
       entries.push(Object.freeze({
         installPath,
         marketplace,

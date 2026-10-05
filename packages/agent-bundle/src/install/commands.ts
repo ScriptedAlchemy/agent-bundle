@@ -36,6 +36,10 @@ interface InstallCommandOptions {
   readonly replace?: boolean;
   readonly mode?: InstallMode;
   readonly scope: string;
+  /** Commander sets `true` unless `--no-sideload` is given. */
+  readonly sideload?: boolean;
+  readonly sideloadRepo?: string;
+  readonly sideloadSlug?: string;
 }
 
 interface UninstallCommandOptions {
@@ -110,6 +114,18 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
         'same-version content drift is replaced automatically and foreign installs are always refused',
     )
     .option('--mode <mode>', 'Cursor delivery mode: local (default) or marketplace', installMode)
+    .option(
+      '--no-sideload',
+      'grokbot: skip sideloading into Grok Bot\'s marketplace clone and plugin cache (also GROK_BOT_SIDELOAD=0)',
+    )
+    .option(
+      '--sideload-repo <owner/repo>',
+      'grokbot: GitHub marketplace whose Grok Bot clone receives the sideload (default scriptedalchemy/plugins; GROK_BOT_SIDELOAD_REPO)',
+    )
+    .option(
+      '--sideload-slug <slug>',
+      'grokbot: Grok Bot plugin-cache partition for that marketplace (default <owner>-<repo>; GROK_BOT_SIDELOAD_SLUG)',
+    )
     .option('--json', 'Write one machine-readable JSON document');
   installCommand.action(async (host: InstallHost, commandOptions: InstallCommandOptions) => {
     const { installBundle: install } = await lifecycle();
@@ -119,6 +135,9 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
       replace: commandOptions.replace === true,
       ...(commandOptions.mode === undefined ? {} : { mode: commandOptions.mode }),
       scope: installScope(commandOptions.scope),
+      ...(commandOptions.sideload === false ? { sideload: false } : {}),
+      ...(commandOptions.sideloadRepo === undefined ? {} : { sideloadRepo: commandOptions.sideloadRepo }),
+      ...(commandOptions.sideloadSlug === undefined ? {} : { sideloadSlug: commandOptions.sideloadSlug }),
     });
     await (commandOptions.json === true ? machine(result) : show(formatInstallResult(result)));
   });

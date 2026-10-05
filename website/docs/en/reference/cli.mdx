@@ -186,7 +186,7 @@ already on disk.
 
 ```sh
 agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
-  [--replace] [--json]
+  [--replace] [--no-sideload] [--sideload-repo <owner/repo>] [--sideload-slug <slug>] [--json]
 ```
 
 | Option | Default | Meaning |
@@ -196,6 +196,9 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 | `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Amp accepts `project` and `user` (its system root); Codex, Cursor, and Grok Bot are user-scoped. Run Amp project-scope installation from the destination project root. |
 | `--mode <mode>` | `local` | Cursor only. `local` copies the bundle into `~/.cursor/plugins/local/<name>`; `marketplace` stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step that makes Cursor manage the plugin as a marketplace install. |
 | `--replace` | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
+| `--no-sideload` | sideload on | `grokbot` only. On a computer with Grok Bot agent-data (`GROK_BOT_AGENT_DATA_DIR`, then `/home/box/agent-data`, `~/.grokbot/agent-data`, the macOS application-support root), `install grokbot` also writes the plugin into Grok Bot's own clone of the marketplace, `<agent-data>/plugins/marketplaces/github.com/<owner>/<repo>/<sha>/<name>`, adds it to that clone's `.cursor-plugin/marketplace.json` (or `.claude-plugin/marketplace.json`), and writes the cache copy `<agent-data>/plugins/cache/<slug>/<name>/<sha>` with `.cache-complete`. `<sha>` is the clone folder Grok Bot already has. Each folder carries `.agent-bundle-sideload.json`; folders and manifest entries without it are never touched, and a conflict, a missing clone, or missing agent-data skips the sideload instead of failing. The receipt records every path, reruns are idempotent, and `uninstall grokbot` removes exactly them. Grok Bot loads only plugins its account plugin listing returns: until that lists the plugin, its next plugin sync removes the cache copy, and a new marketplace commit replaces the clone folder. `--no-sideload` or `GROK_BOT_SIDELOAD=0` turns it off. |
+| `--sideload-repo <owner/repo>` | `scriptedalchemy/plugins` | `grokbot` only. GitHub marketplace whose Grok Bot clone receives the sideload; `GROK_BOT_SIDELOAD_REPO` sets it from the environment. |
+| `--sideload-slug <slug>` | `<owner>-<repo>` | `grokbot` only. Grok Bot's plugin-cache partition for that marketplace (`scriptedalchemy-plugins` by default); `GROK_BOT_SIDELOAD_SLUG` sets it from the environment. |
 
 The emitted standalone `install.mjs` accepts the same `--replace`. Cursor copies carry an install
 receipt (`.agent-bundle-install.json`), replacement
@@ -222,7 +225,7 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `<host>` | **required** | `amp`, `claude`, `codex`, `cursor`, or `grokbot` (removes the staged repository and receipt, and names the Grok Bot plugin id to uninstall in Grok Bot). |
+| `<host>` | **required** | `amp`, `claude`, `codex`, `cursor`, or `grokbot` (removes the staged repository and receipt, plus the receipted sideload folders, cache copy, and manifest entry that still carry this plugin's marker, and names the Grok Bot plugin id to uninstall in Grok Bot). |
 | `--from <root>` | `process.cwd()` | The composite root whose `agent-bundle.manifest.json` identifies the plugin (name, version, marketplace), read exactly as `install` reads it (`AB7001` on the same conditions). |
 | `--scope <scope>` | `user` | The scope the plugin was installed at (Claude or Amp). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
@@ -267,7 +270,7 @@ environment or home a source of purge authority: Doctor and uninstall report the
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, `cursor`, or the opt-in `grokbot` (reports receipts plus the plugin id, version, and installed commit from the Grok Bot computer's plugin cache, `AB7334`). |
+| `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, `cursor`, or the opt-in `grokbot` (reports receipts plus the plugin id, version, and installed commit from the Grok Bot computer's plugin cache, `AB7334`, and which parts of a receipted sideload remain and whether Grok Bot loaded it, `AB7335`). |
 | `--from <root>` | none | The composite root to compare against, read through its `agent-bundle.manifest.json` as `install` reads it: identity from `application`, each inspected host from its `projections[]` row (`AB7001` when the manifest does not describe the host). |
 | `--json` | off | Write one machine-readable JSON document. |
 
