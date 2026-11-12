@@ -573,7 +573,7 @@ place of the script's outcome.
 Re-verified on 4.0.0: the Node terminal and stdio adapters are unchanged
 from rc.117. `Terminal.display` writes stdout, EOF maps to `QuitError`,
 and the separate `Stdio` sinks retain byte-exact machine output. The
-scaffolder production bundle is 500.3 kB (rsbuild/Rslib size table).
+scaffolder production bundle is 500.6 kB (rsbuild/Rslib size table).
 
 Adopted 2026-09-03 for the first-party `agent-bundle` CLI (`src/cli.ts`); the
 Node implementations come from `@effect/platform-node-shared@4.0.0`,
@@ -745,7 +745,7 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
-| `effect/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement (4.0.0: 2843.6 kB / 628.7 kB gzip total); stream-backed derived atoms allowed since rc.117 (Effect-TS/effect#7535) |
+| `effect/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement (4.0.0: 2843.2 kB / 628.1 kB gzip total); stream-backed derived atoms allowed since rc.117 (Effect-TS/effect#7535) |
 | `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O, `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); host-contracts validators, `services/*`, `eval/*`, and the post-build readers (phase 2, ordinary-I/O modules, 2026-09-03); the dev server's services on one session-scoped runtime created in `startDevServer` (phase 2, dev server, 2026-09-03); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` interruption exit contract (4.0.0 maps both SIGINT and SIGTERM interruption to 130) |
 | `@effect/platform-node-shared` (`NodeTerminal` / `NodeStdio`) + `effect/Terminal`, `effect/Stdio` | first-party CLI command output, diagnostics, and machine output (`src/cli.ts`, `src/effect/terminal.ts`, `src/effect/cli-runtime.ts`), loaded lazily on the first command write (2026-09-03); Commander's help/version/argv-error text and the scaffolder's `--help` / flag-error text stay on synchronous process writes for the cold-start budget | re-pin re-checks `Terminal.display` stays stdout-only, `readLine` EOF → `QuitError`, the `Stdio` sink contract, and re-measures `agent-bundle --version` startup against the recorded ≈60 ms (`cli.test.ts` fails the build if the trivial invocations resolve an `effect` module) |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
