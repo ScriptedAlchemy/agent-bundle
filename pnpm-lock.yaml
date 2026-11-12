@@ -44,11 +44,11 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       '@rsbuild/core':
-        specifier: 2.2.5
-        version: 2.2.5
+        specifier: 2.2.11
+        version: 2.2.11
       '@rsbuild/plugin-react':
         specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@rslib/core':
         specifier: 1.0.0
         version: 1.0.0(typescript@7.0.2)
@@ -81,7 +81,7 @@ importers:
         version: 1.63.0
       rsbuild-plugin-publint:
         specifier: 1.0.0
-        version: 1.0.0(@rsbuild/core@2.2.5)
+        version: 1.0.0(@rsbuild/core@2.2.11)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -198,11 +198,11 @@ importers:
         version: 4.6.4
     devDependencies:
       '@rsbuild/core':
-        specifier: 2.2.5
-        version: 2.2.5
+        specifier: 2.2.11
+        version: 2.2.11
       '@rsbuild/plugin-react':
         specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@rstest/core':
         specifier: 0.11.12
         version: 0.11.12
@@ -220,7 +220,7 @@ importers:
         version: 1.63.0
       rsbuild-plugin-rsc:
         specifier: 0.1.1
-        version: 0.1.1(@rsbuild/core@2.2.5)(react-server-dom-rspack@0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
+        version: 0.1.1(@rsbuild/core@2.2.11)(react-server-dom-rspack@0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
 
   examples/skills-starter:
     devDependencies:
@@ -267,11 +267,11 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       '@rsbuild/core':
-        specifier: 2.2.5
-        version: 2.2.5
+        specifier: 2.2.11
+        version: 2.2.11
       '@rsbuild/plugin-react':
         specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@rslib/core':
         specifier: 1.0.0
         version: 1.0.0(typescript@7.0.2)
@@ -481,11 +481,11 @@ importers:
         version: 4.6.4
     devDependencies:
       '@rsbuild/core':
-        specifier: 2.2.5
-        version: 2.2.5
+        specifier: 2.2.11
+        version: 2.2.11
       '@rsbuild/plugin-react':
         specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@types/react':
         specifier: 19.3.0
         version: 19.3.0
@@ -514,8 +514,8 @@ importers:
         specifier: 2.0.23
         version: 2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/shared':
-        specifier: 2.0.23
-        version: 2.0.23(supports-color@7.2.0)
+        specifier: 2.0.21
+        version: 2.0.21(supports-color@7.2.0)
       '@shikijs/transformers':
         specifier: 4.4.3
         version: 4.4.3
@@ -1050,16 +1050,6 @@ packages:
       core-js:
         optional: true
 
-  '@rsbuild/core@2.2.5':
-    resolution: {integrity: sha512-nf34ri1iZduYhHUr5Vc79L7Eml+IlN0nFIaF/g3OW4WR/gShxuf5wVXS69/H8FTHJYN4SdYlNcefSZQluEMKgA==}
-    engines: {node: ^20.19.0 || >=22.12.0}
-    hasBin: true
-    peerDependencies:
-      core-js: '>= 3.0.0'
-    peerDependenciesMeta:
-      core-js:
-        optional: true
-
   '@rsbuild/plugin-react@2.1.0':
     resolution: {integrity: sha512-RQTIAWB/CwPjoWt9iAl+8HixeQVgZ7kEIBrWPCixfITyHdiD84h0YpUTpEUuz6kGHw1KXT9mHZ3Rwy6WG7aRDA==}
     peerDependencies:
@@ -1359,9 +1349,6 @@ packages:
 
   '@rspress/shared@2.0.21':
     resolution: {integrity: sha512-siCWkv1a4n6y7JdVRII+fwCRZGZtG5KGFfKi2w/Tt33UnIgh4XGqozZ5F/K0iZ/QUwg0wi93SoVdOQm2Q+wf8w==}
-
-  '@rspress/shared@2.0.23':
-    resolution: {integrity: sha512-kE2GXRCQ7GAl2wll1JBWRHEkZICKcWv3V86m8TkjiWb0eEdjACl3kns7j00KTq4UbE35kUPOs+0Lx8vGqK7q9w==}
 
   '@rstackjs/load-config@1.0.0':
     resolution: {integrity: sha512-eLp6lGEngk43kU6Z0iQNlGwgy4lLx/wtKdaBgoewHmWN0HHJRgQypewagqGxo+iNP4Yyf7pOXxAbsbH+L9Ay6A==}
@@ -3955,26 +3942,19 @@ snapshots:
     transitivePeerDependencies:
       - '@module-federation/runtime-tools'
 
-  '@rsbuild/core@2.2.5':
-    dependencies:
-      '@rspack/core': 2.2.3(@swc/helpers@0.5.23)
-      '@swc/helpers': 0.5.23
-    transitivePeerDependencies:
-      - '@module-federation/runtime-tools'
-
-  '@rsbuild/plugin-react@2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))':
+  '@rsbuild/plugin-react@2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))':
     dependencies:
       '@rspack/plugin-react-refresh': 2.0.2(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-refresh@0.18.0)
       react-refresh: 0.18.0
     optionalDependencies:
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
     transitivePeerDependencies:
       - '@rspack/core'
 
   '@rslib/core@1.0.0(typescript@7.0.2)':
     dependencies:
-      '@rsbuild/core': 2.2.5
-      rsbuild-plugin-dts: 1.0.0(@rsbuild/core@2.2.5)(typescript@7.0.2)
+      '@rsbuild/core': 2.2.11
+      rsbuild-plugin-dts: 1.0.0(@rsbuild/core@2.2.11)(typescript@7.0.2)
     optionalDependencies:
       typescript: 7.0.2
     transitivePeerDependencies:
@@ -4167,8 +4147,8 @@ snapshots:
     dependencies:
       '@mdx-js/mdx': 3.1.1(supports-color@7.2.0)
       '@mdx-js/react': 3.1.1(@types/react@19.3.0)(react@19.3.0)
-      '@rsbuild/core': 2.2.5
-      '@rsbuild/plugin-react': 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+      '@rsbuild/core': 2.2.11
+      '@rsbuild/plugin-react': 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@rspress/shared': 2.0.21(supports-color@7.2.0)
       '@shikijs/rehype': 4.4.3
       '@types/mdast': 4.0.4
@@ -4250,18 +4230,6 @@ snapshots:
 
   '@rspress/shared@2.0.21(supports-color@7.2.0)':
     dependencies:
-      '@rsbuild/core': 2.2.5
-      '@shikijs/rehype': 4.4.3
-      '@types/react': 19.3.0
-      mdast-util-mdx-jsx: 3.2.0(supports-color@7.2.0)
-      unified: 11.0.5
-    transitivePeerDependencies:
-      - '@module-federation/runtime-tools'
-      - core-js
-      - supports-color
-
-  '@rspress/shared@2.0.23(supports-color@7.2.0)':
-    dependencies:
       '@rsbuild/core': 2.2.11
       '@shikijs/rehype': 4.4.3
       '@types/react': 19.3.0
@@ -4300,7 +4268,7 @@ snapshots:
 
   '@rstest/core@0.11.12':
     dependencies:
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
       '@types/chai': 5.2.3
     transitivePeerDependencies:
       - '@module-federation/runtime-tools'
@@ -6195,22 +6163,22 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  rsbuild-plugin-dts@1.0.0(@rsbuild/core@2.2.5)(typescript@7.0.2):
+  rsbuild-plugin-dts@1.0.0(@rsbuild/core@2.2.11)(typescript@7.0.2):
     dependencies:
       '@ast-grep/napi': 0.45.2
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
     optionalDependencies:
       typescript: 7.0.2
 
-  rsbuild-plugin-publint@1.0.0(@rsbuild/core@2.2.5):
+  rsbuild-plugin-publint@1.0.0(@rsbuild/core@2.2.11):
     dependencies:
       publint: 0.3.24
     optionalDependencies:
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
 
-  rsbuild-plugin-rsc@0.1.1(@rsbuild/core@2.2.5)(react-server-dom-rspack@0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)):
+  rsbuild-plugin-rsc@0.1.1(@rsbuild/core@2.2.11)(react-server-dom-rspack@0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)):
     dependencies:
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
       react-server-dom-rspack: 0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
 
   run-applescript@7.1.0: {}
