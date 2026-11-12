@@ -109,3 +109,7 @@ Callers of `runPromise` see the same types they see today.
   `Cause` is the assertion you want, still only through the boundary.
 - New public error codes without updating the authoring docs and the mapping
   table in `docs/effect-conventions.md`.
+
+Effect 4.0.0 keeps the flat `Cause` contract. Concurrent cleanup failures
+can accompany interruption, so use the package boundary's cause handling
+instead of treating every cause containing an interrupt as interrupt-only.

@@ -5,6 +5,12 @@ updates:
     schedule:
       interval: weekly
     groups:
+      effect-runtime:
+        patterns:
+          - effect
+          - '@effect/atom-react'
+          - '@effect/platform-node'
+          - '@effect/platform-node-shared'
       # website/ pins @rspress/core and @rspress/shared to the same exact
       # version: plugins/mirror-api-locale.ts imports the slugger Rspress runs
       # from @rspress/shared/github-slugger so heading ids match byte for byte,
