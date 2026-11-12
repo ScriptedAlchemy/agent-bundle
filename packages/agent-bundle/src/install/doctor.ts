@@ -2400,7 +2400,7 @@ const probeEndpoint = (path: string): Promise<EndpointProbe> => new Promise((res
       finish('missing');
       return;
     }
-    if (error.code === 'ECONNREFUSED') {
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTSOCK') {
       finish('stale');
       return;
     }
