@@ -1,7 +1,0 @@
-{
-  // TypeDoc documents the declarations users consume, not package sources.
-  // Run the package build before the documentation build so this tree is
-  // present and current.
-  "extends": "../tsconfig.base.json",
-  "include": ["../packages/agent-bundle/dist/**/*.d.ts"]
-}

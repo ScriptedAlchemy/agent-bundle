@@ -1,3 +1,0 @@
-Commands:
-  add   Add a local marketplace snapshot
-  list  List configured marketplace snapshots

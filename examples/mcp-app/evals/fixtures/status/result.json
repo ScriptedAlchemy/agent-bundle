@@ -1,9 +1,0 @@
-{
-  "service": "compiler",
-  "status": "healthy",
-  "summary": "Compiler service is ready for release.",
-  "checks": [
-    { "label": "Availability", "status": "passing" },
-    { "label": "Build queue", "status": "passing" }
-  ]
-}

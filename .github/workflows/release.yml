@@ -1,113 +1,50 @@
-name: Release packages
-
+name: Release
 on:
   push:
-    branches:
-      - main
-
-# contents: write and pull-requests: write let changesets/action push the
-# changeset-release/main branch and open/update the "Version Packages" PR.
-# actions: write lets the built-in token dispatch CI for that generated branch
-# when no external Changesets token is configured. workflow_dispatch is one of
-# the explicit recursion exceptions for GITHUB_TOKEN-created events.
-# The repository setting "Allow GitHub Actions to create and approve pull
-# requests" must also be on, or the PR step fails after the branch is pushed.
-permissions:
-  actions: write
-  contents: write
-  pull-requests: write
+    branches: [main]
 
 concurrency:
-  group: package-release
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # Prevent newer push from interrupting active release
+
+permissions: {}
 
 jobs:
-  preview:
-    name: Publish and verify pkg.pr.new
-    permissions: {}
-    uses: ./.github/workflows/package-preview.yml
-
   release:
-    name: Version Packages / verify release
-    needs: preview
+    if: github.repository_owner == 'Effect-Ts'
+    name: Release
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      # pkg.pr.new is the distribution channel. The reusable preview job
-      # publishes and resolves all four commit-addressed package URLs before
-      # this job maintains or verifies a Version Packages commit.
-      CHANGESETS_TOKEN_CONFIGURED: ${{ secrets.CHANGESETS_GITHUB_TOKEN != '' }}
-      AGENT_BUNDLE_PLAYWRIGHT_CHANNEL: chromium
-      # Packed qualification writes package/digest evidence here when
-      # `pnpm check:release` runs. `github.workspace` is valid at job env;
-      # `runner.temp` is not (no runner assigned yet).
-      AGENT_BUNDLE_RELEASE_EVIDENCE: ${{ github.workspace }}/.release-qualification.json
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
     steps:
-      # The action pushes and opens the PR through the GitHub API with the
-      # token passed below, so the checkout must not persist GITHUB_TOKEN.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          # This is required to ensure the `GITHUB_TOKEN` we provide below is
+          # **always** used when pushing updates to the changesets release branch.
+          # Otherwise the default token will be used, and actions on that versioned
+          # release branch will not be triggered.
           persist-credentials: false
-      # The release gates run the packed pool, whose packed-release.e2e is a
-      # Workbench browser suite: same pinned Playwright Chromium as ci.yml and
-      # nightly.yml (AGENT_BUNDLE_PLAYWRIGHT_CHANNEL below), so the tree that
-      # ships is proven on the build the nightly packed matrix proved.
-      - uses: ./.github/actions/setup-workspace
+      - name: Install dependencies
+        uses: ./.github/actions/setup
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@11
+      - name: Create Release Pull Request or Publish
+        id: changesets
+        uses: changesets/action@d0ee272882939fa35f22d979828acb7e61e0bd47 # v2.0.0-next.4
         with:
-          node-version: 22.19.0
-          playwright-browser: chromium
-      - id: changesets
-        uses: changesets/action@v2
+          version-script: pnpm changeset-version
+          publish-script: pnpm changeset-publish
+          # Use a personal access token instead of the one that GitHub generates
+          # automatically to ensure workflows get triggered on the changesets
+          # release branch.
+          github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN }}
+      - name: Deploy website
+        if: steps.changesets.outputs.published == 'true'
+        uses: ./.github/actions/deploy-website
         with:
-          version-script: pnpm version-packages
-          # No publish-script: Changesets only opens or refreshes the Version
-          # Packages PR. Distribution is the commit-addressed preview above.
-          commit-message: Version Packages
-          pr-title: Version Packages
-          # An external PAT/App token makes the generated PR's native
-          # pull_request event run CI directly. With only GITHUB_TOKEN, the
-          # step below dispatches CI explicitly so the candidate still gets
-          # pre-merge qualification without a manual close/reopen.
-          github-token: ${{ secrets.CHANGESETS_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
-      # GITHUB_TOKEN-created pushes do not recursively start workflows, but
-      # workflow_dispatch is an explicit GitHub exception. ci.yml documents
-      # manual dispatch as the full main-push matrix on any ref, including the
-      # Node floor and per-PR release-gates job (`pnpm check:release:ci`).
-      # release-candidate.yml is the packed-release boundary
-      # (`pnpm check:release`) for this same candidate. Skip both when an
-      # external Changesets token is configured: that token's pull_request
-      # event already starts CI, and its push to changeset-release/main
-      # starts release-candidate.yml.
-      - name: Dispatch qualification for Version Packages candidate
-        if: >-
-          steps.changesets.outputs.has-changesets == 'true' &&
-          steps.changesets.outputs.pr-number != '' &&
-          env.CHANGESETS_TOKEN_CONFIGURED != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          gh workflow run ci.yml --ref changeset-release/main
-          gh workflow run release-candidate.yml --ref changeset-release/main
-
-      # When the Version Packages PR lands, prove the versioned tree still
-      # passes the packed release gates. `needs: preview` separately proves
-      # that every package resolves from pkg.pr.new at this exact commit.
-      - name: Release gates for Version Packages merge
-        id: qualify
-        if: >-
-          steps.changesets.outputs.has-changesets == 'false' &&
-          startsWith(github.event.head_commit.message, 'Version Packages')
-        run: pnpm check:release
-      - name: Release outcome summary
-        if: always()
-        env:
-          HAS_CHANGESETS: ${{ steps.changesets.outputs.has-changesets }}
-          QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
-          CHANGESETS_OUTCOME: ${{ steps.changesets.outcome }}
-          PREVIEW_OUTCOME: ${{ needs.preview.result }}
-          JOB_STATUS: ${{ job.status }}
-          CANDIDATE_SHA: ${{ github.sha }}
-          EVIDENCE_FILE: ${{ env.AGENT_BUNDLE_RELEASE_EVIDENCE }}
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/release-outcome-summary.sh >> "$GITHUB_STEP_SUMMARY"
+          channel: v4
+          dispatch-token: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+          revision: ${{ github.sha }}

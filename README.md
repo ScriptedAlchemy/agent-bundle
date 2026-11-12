@@ -1,109 +1,96 @@
-# agent-bundle
+<!-- Use a static Shields badge because pkg.pr.new's dynamic badge times out while counting this repository's releases. -->
 
-agent-bundle compiles an agent plugin (skills, hooks, MCP servers, and scripts, described by one typed config) into installable output for Claude Code, Codex, Cursor, portable Agent Plugins clients, and experimental Amp. You write the plugin once; the compiler emits each selected host's entry, manifests, and wrappers into one composite root. Amp is contract-verified against the pinned PluginAPI and install layout; live activation, tools, and events are runtime-unverified (no Amp account in CI).
+[![pkg.pr.new](https://img.shields.io/badge/pkg.pr.new-Effect--TS%2Feffect-black)](https://pkg.pr.new/~/Effect-TS/effect)
 
-Documentation: [scriptedalchemy.github.io/agent-bundle](https://scriptedalchemy.github.io/agent-bundle/) (English and 简体中文; guide, reference, generated type API, host capability matrices).
+# Effect
 
-Requires Node.js 22.19 or later.
+Effect is a library for building robust, maintainable, type-safe, and production grade applications in TypeScript. It helps you handle the hard problems at scale: typed errors, dependency injection, structured concurrency, scheduling, tracing, and unified schema validation.
 
-## Install
+> **Effect 4.x is a long-term support (LTS) release.** If you are upgrading from Effect 3.x, follow the [migration guide](MIGRATION.md).
 
-Packages are distributed through pkg.pr.new, not the npm registry. Install the
-preview tarballs CI publishes for every commit and pull request:
-
-```sh
-npm i -D https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@<sha-or-pr>
-```
-
-Use a PR number or the SHA of a commit whose package-preview run succeeded (every green `main` commit has one). See [Preview packages](docs/preview-packages.md) for pinning and details.
-
-## Quick start
-
-The fastest start is the scaffolder. It prompts for a name, a template
-(`minimal`, `mcp-server`, or `cli-tool`), and the host targets, then emits a
-project that already passes its own `check`:
+## Installation
 
 ```sh
-npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
+npm install effect
 ```
 
-See the [create-agent-bundle README](packages/create-agent-bundle/README.md)
-for templates and flags.
+## Requirements
 
-Or describe the plugin by hand in `agent-bundle.config.ts` at the project root:
+- **TypeScript 5.9 or newer.** TypeScript 7 is recommended for the best performance and compatibility with [Effect's TypeScript tooling](https://github.com/Effect-TS/tsgo#installation).
+- **Node.js 18 or newer** is the general minimum for running Effect on Node.js. Some integration packages require newer runtimes; for example, `@effect/sql-sqlite-node` requires Node.js 22.16 or newer.
+- **Strict type-checking:** the `strict` flag must be enabled in your `tsconfig.json`.
 
-```ts
-import { defineConfig } from 'agent-bundle/config';
+## Links
 
-export default defineConfig({
-  plugin: { name: 'my-plugin', description: 'What it does.' }, // version comes from package.json
-  targets: ['claude', 'codex', 'cursor'],
-  skills: ['src/skills/*'],
-  hooks: { sessionStart: { handler: './src/session-start.ts' } },
-  mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
-});
-```
+- [Website](https://effect.website): documentation, guides, and news
+- [Discord](https://discord.gg/effect-ts): ask questions, share what you're building, and talk to the core team
+- [Community](https://effect.website/community-hub): meetups and events, or bring Effect to your own
+- [Issues](https://github.com/Effect-TS/effect/issues): bug reports and feature requests
+- [Jobs](https://effect.website/effect-jobs): companies hiring Effect developers
+- Follow us on [X](https://x.com/EffectTS_), [Bluesky](https://bsky.app/profile/effect-ts.bsky.social), and [LinkedIn](https://www.linkedin.com/company/effect-ts)
 
-Then build, or work interactively:
+## Let's talk
 
-```sh
-npx agent-bundle build --root .                 # write the plugin root to artifact/
-npx agent-bundle dev --root .                   # local workbench with live rebuilds
-```
+Whether your team is considering Effect, rolling it out, or already running it in production, we'd love to hear from you: what you're building, what works, and what you need from Effect next.
 
-`agent-bundle build` writes one composite root (`artifact/` by default; `--output` or `output.distPath` relocates it), and `targets` selects which host projections it carries: Amp's `.amp/plugins/<name>/index.js`, the `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests, and the portable `plugin.json`. Amp installs its nested directory; the other hosts install the composite root, and the generated `INSTALL.md` explains how. Omitting `targets` emits only the `portable` projection. The `amp` target is experimental: contract-verified, runtime-unverified.
+- **Talk to the maintainers.** Introduce your team on [Discord](https://discord.gg/effect-ts) or email [contact@effectful.co](mailto:contact@effectful.co). We're happy to connect privately on Slack or Discord for feedback and help with adoption.
+- **Production support.** We're exploring how to better support teams running Effect in production. If your organization has specific support needs, let's discuss them.
+- **Adoption help.** Our [adoption partners](https://effect.website/adoption-partners) offer implementation, consulting, team extension, training, and commercial support.
 
-The `portable` target is the [Agent Plugins open standard](https://agent-plugins.org/specification) (specification 1.0.0) adapter, the default projection, and the layout Cursor loads natively (Claude Code consumes it only through CLI translation). Every other client that reads this artifact is recorded with its tier, install command, and dated evidence in the `clients` section of that same capability table, rendered as the [hosts reference](https://scriptedalchemy.github.io/agent-bundle/reference/hosts). It emits the closed root `plugin.json` (canonical `$schema`, `name`, `version`, `description`, plus `author`, `homepage`, `repository`, `license`, `keywords`, and reverse-domain `extensions` authored under the `portable` config key), `skills/<name>/SKILL.md`, and `mcp.json` with stdio and Streamable HTTP servers whose `args`, `env` values, and `cwd` use the standard's `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` placeholders. Rules, commands, hooks, marketplaces, and client extension directories are honestly unavailable there because the v1 standard packages only skills and MCP servers. Both documents are validated against the vendored, hash-pinned 1.0.0 schemas and the normative text at plan time (`portable.mcp.*.standard`), after every ordinary build and `validate --artifact` (`AB6011`/`AB6012` plus the Agent Plugins byte lane `AB6035`–`AB6037`), under `validate --artifact --host-validation` (same lane with the `AB6038` provenance note), and by `agent-bundle doctor` for installed Cursor local plugins that declare the standard's `$schema` (`AB7320`); see [Diagnostics](docs/diagnostics.md#agent-plugins-portable-validation-ab6035ab6038). Pins live in `packages/agent-bundle/src/adapters/schemas/portable/PROVENANCE.json`; the capability table `packages/agent-bundle/src/adapters/capabilities/portable-1.0.0.json` carries a dated row for every standard feature.
+Feedback from teams using and evaluating Effect directly shapes what we stabilize and build next.
 
-Claude Code language servers are declared under `claude.lspServers`; the `claude` projection emits the record as plugin-root `.lsp.json`. Agent Bundle expands path tokens only in `command`, `args`, `env`, and `workspaceFolder`, and it does not include the language-server binary, install that separately so the declared command is available on `PATH`. Codex, Cursor, and the portable format do not currently receive this host-scoped configuration.
+## Long-term support
 
-Claude Code plugin defaults are declared under `claude.settings` and emitted as plugin-root `settings.json`, which Claude Code applies when the plugin is enabled. The pinned contract supports only `agent` and `subagentStatusLine`; Agent Bundle rejects any other key rather than shipping a default Claude Code would silently ignore, and it expands no path tokens here because `settings.json` is absent from the host's placeholder-substitution table. Because the plugin `agents/` component is still deferred, declaring `agent` also raises a warning: the referenced agent has to reach the plugin root some other way, such as a prebuilt payload.
+Teams depend on Effect for systems they expect to run for years. Effect 4.x is a long-term support (LTS) release with the following guarantees:
 
-Cursor Plugin manifest metadata is declared under `cursor.*` and emitted verbatim into `.cursor-plugin/plugin.json` by the `cursor` projection: `author` (`name`, optional `email`), `homepage`, `repository`, `license`, `keywords`, plus the schema-admitted `publisher`, `category`, `tags`, and `minClientVersions` (for example `{ cursor: '3.13.0' }`). Every field is validated against the pinned `cursor/plugins` manifest schema before emission, `author.url`, non-HTTP URLs, empty strings, and loose semver are rejected with `cursor.manifest.*` errors, and an invalid block emits no partial metadata. The Cursor Plugin documents never mix Agent Plugin (`plugin.json`, `${PLUGIN_ROOT}`) paths or tokens into the Cursor Plugin format; the portable projection owns that format, even when both share one root. The full documented-surface contract matrix (every Cursor hook event, cloud availability, hook options, marketplace and team-distribution surfaces, canvases, agents) lives as dated `supported` / `unavailable` rows in `packages/agent-bundle/src/adapters/capabilities/cursor-2026-08-28.json`.
+- At least three years of support, including bug and security fixes.
+- Bug fixes for one year after the next major version is released.
+- Security fixes for two years after the next major version is released.
 
-The same config also owns the npm package build, no second bundler config, bin shims, or hand-rolled stdio lifecycles. `bin` and `lib` entries (or the conventions `src/cli.ts`, `src/index.ts`, and `src/mcp/<server-id>.ts`) emit executable `dist/bin/<name>.js` bundles and a library output alongside the plugin root; an MCP entry that default-exports a server factory runs under a framework-owned stdio lifecycle; `tools.rsbuild` / `tools.rspack` is the one bundler escape hatch. [Entry conventions](docs/entry-conventions.md) is the full contract, and [Framework mode](docs/framework-mode.md) is the whole authoring model on one screen: structure in config and conventions (`src/skills/<name>/SKILL.md` ships with no declaration at all), JSX only where something is rendered.
+Stable APIs reserve breaking changes for major releases. APIs marked unstable may change in minor releases, and experimental APIs may change in patch releases.
 
-## Commands
+## Effect v3
 
-- `build`: validate the project and write the plugin root (plus the `bin`/`lib` package build when declared)
-- `validate`: check project source, or a built artifact with `--artifact <dir>`
-- `inspect`: show the normalized configuration and each selected host's projection plan; `--bundler` dumps the lowered Rspack config of every compiled output (post-`tools`-hatch merge, as Rslib/Rsbuild hand it to the compiler)
-- `dev`: serve the local development workbench and rebuild the `dist/` package build when its inputs change; `--install-host <claude|codex|cursor>` installs a development variant whose stable `dev proxy` MCP command hot-swaps epochs behind the host's open connection and re-syncs hooks and Skills on every adopted rebuild (see [Framework mode › Live development into hosts](docs/framework-mode.md#live-development-into-hosts))
-- `mcp list` / `mcp invoke` / `mcp run`: list, invoke, or run an artifact's MCP servers locally
-- `hooks list` / `hooks simulate`: inspect and simulate generated hooks
-- `eval`: run eval suites against a built artifact
+The Effect v3 source code is available on the [`v3`](https://github.com/Effect-TS/effect/tree/v3) branch, which is also where issues and pull requests meant for Effect v3 should be targeted. To upgrade, see the [migration guide](MIGRATION.md).
 
-When the `claude` projection is selected, validating the built root also runs the installed
-Claude Code developer toolchain in addition to the pinned schemas. Use
-`agent-bundle validate --artifact artifact --strict` in CI; Claude's `--strict` findings remain
-warnings locally unless Agent Bundle strict mode is requested. If `claude` is absent, validation
-reports an explicit informational skip. For the install-free development loop, run
-`claude --plugin-dir artifact plugin list --json` after building.
+## Packages
 
-The [package README](packages/agent-bundle/README.md) is the full reference: configuration semantics, the workbench, the optional Agent API, evals, and limitations.
+This monorepo contains the core `effect` package alongside integration packages that extend it. All packages listed below are released together with synchronized versions.
 
-## Examples
-
-| Example | What it shows | Run |
-| --- | --- | --- |
-| [Skills Starter](examples/skills-starter) | author a release-review skill with deterministic evidence | `pnpm example:skills` |
-| [Hooks and Scripts](examples/hooks-and-scripts) | simulate a hook and inspect script traces | `pnpm example:hooks` |
-| [MCP App](examples/mcp-app) | an interactive MCP App with a deterministic eval | `pnpm example:mcp-app` |
-| [Audiobook Curator](examples/audiobook-curator) | a real media-management plugin for Claude or Codex | `pnpm example:audiobook` |
-| [Host Test](examples/host-test) | probe what Claude, Codex, and Cursor send to hooks and MCP calls | `pnpm example:host-test` |
-
-Run these from the repository root. `pnpm examples:check` validates and builds every example noninteractively.
-
-## Development
-
-`pnpm check` runs the local delivery gate (build, unit and integration tests, lint, typecheck); `pnpm check:release` adds the packaging gates. `pnpm check:local-ci` mirrors the full hosted CI gate, the three-Node verify matrix plus the examples, release, and micro-eval jobs, in parallel local worktrees, and is the merge gate for the local-merge workflow described in [docs/local-ci.md](docs/local-ci.md). Versioning goes through Changesets. Native Claude/Codex host smokes are opt-in and intentionally skipped in CI. The Workbench architecture and the optional RSC runtime are documented in [docs/architecture/rsc-runtime-workbench.md](docs/architecture/rsc-runtime-workbench.md).
-
-## Status
-
-Pre-release. The final npm package name is not yet chosen; pkg.pr.new previews are the release channel until then.
+| Package                                                               | Description                                              | API Reference                                                      |
+| --------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------ |
+| [`effect`](packages/effect)                                           | The core package                                         | [docs](https://effect.website/docs/v4/api/effect)                  |
+| [`@effect/platform-browser`](packages/platform/browser)               | Platform services for the browser                        | [docs](https://effect.website/docs/v4/api/platform-browser)        |
+| [`@effect/platform-bun`](packages/platform/bun)                       | Platform services for [Bun](https://bun.sh)              | [docs](https://effect.website/docs/v4/api/platform-bun)            |
+| [`@effect/platform-deno`](packages/platform/deno)                     | Platform services for [Deno](https://deno.com)           | [docs](https://effect.website/docs/v4/api/platform-deno)           |
+| [`@effect/platform-node`](packages/platform/node)                     | Platform services for [Node.js](https://nodejs.org)      | [docs](https://effect.website/docs/v4/api/platform-node)           |
+| [`@effect/platform-node-shared`](packages/platform/node-shared)       | Shared services for Node.js-compatible runtimes          | [docs](https://effect.website/docs/v4/api/platform-node-shared)    |
+| [`@effect/sql-clickhouse`](packages/sql/clickhouse)                   | SQL client for [ClickHouse](https://clickhouse.com)      | [docs](https://effect.website/docs/v4/api/sql-clickhouse)          |
+| [`@effect/sql-d1`](packages/sql/d1)                                   | SQL client for Cloudflare D1                             | [docs](https://effect.website/docs/v4/api/sql-d1)                  |
+| [`@effect/sql-libsql`](packages/sql/libsql)                           | SQL client for libSQL                                    | [docs](https://effect.website/docs/v4/api/sql-libsql)              |
+| [`@effect/sql-mssql`](packages/sql/mssql)                             | SQL client for Microsoft SQL Server                      | [docs](https://effect.website/docs/v4/api/sql-mssql)               |
+| [`@effect/sql-mysql2`](packages/sql/mysql2)                           | SQL client for MySQL                                     | [docs](https://effect.website/docs/v4/api/sql-mysql2)              |
+| [`@effect/sql-pg`](packages/sql/pg)                                   | SQL client for PostgreSQL                                | [docs](https://effect.website/docs/v4/api/sql-pg)                  |
+| [`@effect/sql-pglite`](packages/sql/pglite)                           | SQL client for [PGlite](https://pglite.dev)              | [docs](https://effect.website/docs/v4/api/sql-pglite)              |
+| [`@effect/sql-sqlite-bun`](packages/sql/sqlite-bun)                   | SQL client for SQLite via `bun:sqlite`                   | [docs](https://effect.website/docs/v4/api/sql-sqlite-bun)          |
+| [`@effect/sql-sqlite-do`](packages/sql/sqlite-do)                     | SQL client for Cloudflare Durable Objects SQLite         | [docs](https://effect.website/docs/v4/api/sql-sqlite-do)           |
+| [`@effect/sql-sqlite-node`](packages/sql/sqlite-node)                 | SQL client for SQLite via `node:sqlite`                  | [docs](https://effect.website/docs/v4/api/sql-sqlite-node)         |
+| [`@effect/sql-sqlite-react-native`](packages/sql/sqlite-react-native) | SQL client for SQLite in React Native                    | [docs](https://effect.website/docs/v4/api/sql-sqlite-react-native) |
+| [`@effect/sql-sqlite-wasm`](packages/sql/sqlite-wasm)                 | SQL client for SQLite compiled to WebAssembly            | [docs](https://effect.website/docs/v4/api/sql-sqlite-wasm)         |
+| [`@effect/ai-anthropic`](packages/ai/anthropic)                       | Anthropic provider for the Effect AI modules             | [docs](https://effect.website/docs/v4/api/ai-anthropic)            |
+| [`@effect/ai-openai`](packages/ai/openai)                             | OpenAI provider for the Effect AI modules                | [docs](https://effect.website/docs/v4/api/ai-openai)               |
+| [`@effect/ai-typesafe`](packages/ai/typesafe)                         | TypeSafe decision provider for the Effect AI modules     | [docs](https://effect.website/docs/v4/api/ai-typesafe)             |
+| [`@effect/ai-openai-compat`](packages/ai/openai-compat)               | OpenAI-compatible API provider for the Effect AI modules | [docs](https://effect.website/docs/v4/api/ai-openai-compat)        |
+| [`@effect/ai-openrouter`](packages/ai/openrouter)                     | OpenRouter provider for the Effect AI modules            | [docs](https://effect.website/docs/v4/api/ai-openrouter)           |
+| [`@effect/atom-react`](packages/atom/react)                           | React bindings for Effect Atom                           | [docs](https://effect.website/docs/v4/api/atom-react)              |
+| [`@effect/atom-solid`](packages/atom/solid)                           | SolidJS bindings for Effect Atom                         | [docs](https://effect.website/docs/v4/api/atom-solid)              |
+| [`@effect/atom-vue`](packages/atom/vue)                               | Vue bindings for Effect Atom                             | [docs](https://effect.website/docs/v4/api/atom-vue)                |
+| [`@effect/opentelemetry`](packages/opentelemetry)                     | [OpenTelemetry](https://opentelemetry.io) integration    | [docs](https://effect.website/docs/v4/api/opentelemetry)           |
+| [`@effect/vitest`](packages/vitest)                                   | Helpers for testing with [Vitest](https://vitest.dev)    | [docs](https://effect.website/docs/v4/api/vitest)                  |
+| [`@effect/docgen`](packages/tools/docgen)                             | Documentation generator for Effect projects              | [docs](https://effect.website/docs/v4/api/docgen)                  |
+| [`@effect/doctest`](packages/tools/doctest)                           | Runs JSDoc examples as Vitest tests                      | [docs](https://effect.website/docs/v4/api/doctest)                 |
+| [`@effect/openapi-generator`](packages/tools/openapi-generator)       | Generate Effect code from OpenAPI specifications         | [docs](https://effect.website/docs/v4/api/openapi-generator)       |
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Third-party material in this
-repository (the Workbench MCP App renderer derived from the MIT-licensed MCP Inspector) is covered by
-its own notices in [packages/workbench/THIRD_PARTY_NOTICES](packages/workbench/THIRD_PARTY_NOTICES).
+MIT

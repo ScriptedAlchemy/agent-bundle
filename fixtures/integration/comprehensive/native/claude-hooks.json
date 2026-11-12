@@ -1,6 +1,0 @@
-{
-  "description": "Claude native integration hook",
-  "hooks": {
-    "SessionStart": [{ "hooks": [{ "command": "echo claude-native", "type": "command" }] }]
-  }
-}
