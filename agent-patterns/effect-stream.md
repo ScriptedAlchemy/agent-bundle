@@ -1,7 +1,7 @@
 # Effect Stream patterns
 
 Source: `repos/effect/packages/effect/src/Stream.ts` (vendored v4, package
-`4.0.0-rc.117`). Refresh when the subtree moves. Read
+`4.0.0`). Refresh when the subtree moves. Read
 `repos/effect/LLMS.md` § Working with Streams first.
 
 Stage 2 replaces the #145 pull-gated Flight `TransformStream` with Effect
@@ -74,7 +74,7 @@ add a second gate (`TransformStream` + manual pause) around an Effect stream.
   reporter, not only on the stream, share `createAgentRenderEventSequence`.
 - After a producer fail, a later `pull()` with HWM 0 must *reject*, not
   resolve. `controller.error` alone can lose the error if no read is pending.
-- Flight is not Ndjson. Do not adopt `effect/unstable/encoding` for this
+- Flight is not Ndjson. Do not adopt `effect/encoding` for this
   pipeline.
 
 ## What to avoid
@@ -82,7 +82,7 @@ add a second gate (`TransformStream` + manual pause) around an Effect stream.
 - `for await` over a stream you already have as `Stream`: use `mapEffect` /
   `runForEach`.
 - Encoding/decoding JSON by hand when `Stream.pipeThroughChannel` +
-  `effect/unstable/encoding` (Ndjson / SchemaBinary) would do. Unstable
+  `effect/encoding` (Ndjson / SchemaBinary) would do. Unstable
   encoding is **not** adopted; list it in `docs/effect-conventions.md`
   before first use.
 - Constructing `new ReadableStream` to paper over missing backpressure

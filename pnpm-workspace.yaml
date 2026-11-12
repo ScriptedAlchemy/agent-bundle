@@ -26,3 +26,5 @@ allowBuilds:
 # Drop the patch once a release awaits the adds.
 patchedDependencies:
   '@rspress/core@2.0.21': patches/@rspress__core@2.0.21.patch
+  # The pinned preview still imports the Arbitrary path removed in Effect 4.0.0.
+  effect-rstest@0.1.0: patches/effect-rstest@0.1.0.patch

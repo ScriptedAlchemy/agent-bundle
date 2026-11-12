@@ -123,7 +123,7 @@
     "ajv-formats": "3.0.1",
     "chokidar": "5.0.0",
     "commander": "15.0.0",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0",
     "es-module-lexer": "3.0.2",
     "fast-glob": "3.3.3",
     "ignore": "7.0.9",
