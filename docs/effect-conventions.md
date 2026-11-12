@@ -570,8 +570,13 @@ place of the script's outcome.
 
 ### Terminal and Stdio: user-facing CLI text
 
+Re-verified on 4.0.0: the Node terminal and stdio adapters are unchanged
+from rc.117. `Terminal.display` writes stdout, EOF maps to `QuitError`,
+and the separate `Stdio` sinks retain byte-exact machine output. The
+scaffolder production bundle is 500.3 kB (rsbuild/Rslib size table).
+
 Adopted 2026-09-03 for the first-party `agent-bundle` CLI (`src/cli.ts`); the
-Node implementations come from `@effect/platform-node-shared@4.0.0-rc.117`,
+Node implementations come from `@effect/platform-node-shared@4.0.0`,
 the same dependency `platform.ts` builds `platformLayer` from (never
 `@effect/platform-node`, for the consumer-footprint reason above).
 `effect/Terminal` is the sanctioned way to touch stdin/stdout for
@@ -740,8 +745,8 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
-| `effect/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement (rc.117: 2929.0 kB / 649.8 kB gzip total); stream-backed derived atoms allowed since rc.117 (Effect-TS/effect#7535) |
-| `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O, `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); host-contracts validators, `services/*`, `eval/*`, and the post-build readers (phase 2, ordinary-I/O modules, 2026-09-03); the dev server's services on one session-scoped runtime created in `startDevServer` (phase 2, dev server, 2026-09-03); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
+| `effect/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement (4.0.0: 2843.6 kB / 628.7 kB gzip total); stream-backed derived atoms allowed since rc.117 (Effect-TS/effect#7535) |
+| `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O, `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); host-contracts validators, `services/*`, `eval/*`, and the post-build readers (phase 2, ordinary-I/O modules, 2026-09-03); the dev server's services on one session-scoped runtime created in `startDevServer` (phase 2, dev server, 2026-09-03); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` interruption exit contract (4.0.0 maps both SIGINT and SIGTERM interruption to 130) |
 | `@effect/platform-node-shared` (`NodeTerminal` / `NodeStdio`) + `effect/Terminal`, `effect/Stdio` | first-party CLI command output, diagnostics, and machine output (`src/cli.ts`, `src/effect/terminal.ts`, `src/effect/cli-runtime.ts`), loaded lazily on the first command write (2026-09-03); Commander's help/version/argv-error text and the scaffolder's `--help` / flag-error text stay on synchronous process writes for the cold-start budget | re-pin re-checks `Terminal.display` stays stdout-only, `readLine` EOF → `QuitError`, the `Stdio` sink contract, and re-measures `agent-bundle --version` startup against the recorded ≈60 ms (`cli.test.ts` fails the build if the trivial invocations resolve an `effect` module) |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
 
@@ -779,7 +784,6 @@ Effect 4.0.0 promotes the module paths without stabilizing APIs tagged
 to import `effect/Arbitrary` in its runtime and declarations. Remove the
 patch only after replacing the preview with an adapter that uses that path.
 
-
 1. Bump the exact `effect` version in `packages/rsc-runtime/package.json`,
    `packages/agent-bundle/package.json`, `packages/workbench/package.json`,
    and `packages/create-agent-bundle/package.json`.
@@ -798,6 +802,15 @@ patch only after replacing the preview with an adapter that uses that path.
 6. Re-run the hook cold-start check.
 
 ## Open decisions (maintainer)
+
+The 2026-09-25 Effect RC pin below is superseded by the synchronized 4.0.0
+migration on 2026-11-12 (#880, #882), with language-service 0.87.5.
+Re-verified the adopted modules against the matching release source:
+`FileSystem` still lacks `lstat`, numeric `O_NOFOLLOW`, and directory fsync;
+`@effect/platform-node` still requires Redis, so `agent-bundle` keeps its
+shared-platform layer. Schema projections remain available and
+`onExcessProperty` still defaults to `ignore`, so the existing decision to
+keep zod at public and wire boundaries stands.
 
 Divergences between the vendored guidance (`repos/effect/LLMS.md`, read-only)
 and what the repo does today. Recorded, not decided; each

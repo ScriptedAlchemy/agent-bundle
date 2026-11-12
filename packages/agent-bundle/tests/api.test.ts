@@ -1,5 +1,5 @@
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
-import { chmod, mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -2135,9 +2135,9 @@ it('canonicalizes copied script extensions in emitted artifact paths', async () 
     const generated = join(output, 'scripts', 'upper.sh');
 
     await expect(readFile(generated, 'utf8')).resolves.toBe(await readFile(source, 'utf8'));
-    await expect(readFile(join(output, 'scripts', 'upper.SH'), 'utf8')).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
+    const scriptNames = await readdir(join(output, 'scripts'));
+    expect(scriptNames).toContain('upper.sh');
+    expect(scriptNames).not.toContain('upper.SH');
     expect(result.build.manifest.files).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'copy', path: 'scripts/upper.sh' }),
     ]));
