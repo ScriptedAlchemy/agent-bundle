@@ -458,7 +458,7 @@ const probeEndpoint = (endpoint: string): Effect.Effect<EndpointProbe, EventRunt
         finish(Effect.succeed('missing'));
         return;
       }
-      if (error.code === 'ECONNREFUSED') {
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTSOCK') {
         finish(Effect.succeed('stale'));
         return;
       }
