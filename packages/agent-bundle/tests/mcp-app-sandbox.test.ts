@@ -230,7 +230,9 @@ it('bounds proxy shutdown when an idle client holds a connection open', async ()
   });
   const socket = connect(Number(new URL(proxy.url).port), '127.0.0.1');
   await once(socket, 'connect');
-  const socketClosed = once(socket, 'close');
+  const socketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+  let socketError: Error | undefined;
+  socket.once('error', (error) => { socketError = error; });
 
   try {
     const closed = await Promise.race([
@@ -240,6 +242,7 @@ it('bounds proxy shutdown when an idle client holds a connection open', async ()
     expect(closed).toBe(true);
     await socketClosed;
     expect(socket.destroyed).toBe(true);
+    if (socketError !== undefined) expect(socketError).toMatchObject({ code: 'ECONNRESET' });
   } finally {
     socket.destroy();
     await proxy.close();
