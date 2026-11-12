@@ -317,8 +317,8 @@ importers:
         specifier: 14.0.0
         version: 14.0.0
       ws:
-        specifier: 8.21.3
-        version: 8.21.3
+        specifier: 8.22.0
+        version: 8.22.0
       yaml:
         specifier: 2.9.1
         version: 2.9.1
@@ -330,8 +330,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       '@types/ws':
-        specifier: 8.18.1
-        version: 8.18.1
+        specifier: 8.18.2
+        version: 8.18.2
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
         version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
@@ -1545,8 +1545,8 @@ packages:
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
 
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -3316,8 +3316,8 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  ws@8.21.3:
-    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -3559,9 +3559,9 @@ snapshots:
 
   '@effect/platform-node-shared@4.0.0-rc.117(effect@4.0.0-rc.117)':
     dependencies:
-      '@types/ws': 8.18.1
+      '@types/ws': 8.18.2
       effect: 4.0.0-rc.117
-      ws: 8.21.3
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -4278,7 +4278,7 @@ snapshots:
       open-editor: 6.0.0
       pathe: 2.0.3
       sirv: 3.0.2
-      ws: 8.21.3
+      ws: 8.22.0
     optionalDependencies:
       playwright: 1.63.0
     transitivePeerDependencies:
@@ -4452,7 +4452,7 @@ snapshots:
 
   '@types/unist@3.0.3': {}
 
-  '@types/ws@8.18.1':
+  '@types/ws@8.18.2':
     dependencies:
       '@types/node': 26.5.1
 
@@ -6541,7 +6541,7 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  ws@8.21.3: {}
+  ws@8.22.0: {}
 
   wsl-utils@1.0.0:
     dependencies:
