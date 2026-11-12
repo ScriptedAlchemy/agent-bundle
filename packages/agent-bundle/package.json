@@ -110,7 +110,7 @@
   },
   "dependencies": {
     "@effect/platform-node-shared": "4.0.0",
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@rsbuild/core": "2.2.11",
