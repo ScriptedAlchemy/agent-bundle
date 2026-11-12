@@ -272,8 +272,15 @@ it('package-bound installer bins accept grokbot for install, uninstall, and doct
     await access(receipt);
     await access(join(grokHome, 'agent-bundle', 'marketplaces', 'grok-fixture'));
     stdout = '';
-    expect(await run(['doctor', '--host', 'grokbot'])).toBe(0);
-    expect(stdout).toContain('grokbot: available (directory)');
+    // Other workers can run temporary endpoints that the global Doctor scan reports as unhealthy.
+    expect([0, 1]).toContain(await run(['doctor', '--host', 'grokbot', '--json']));
+    expect(JSON.parse(stdout)).toMatchObject({
+      hosts: [{
+        diagnostics: expect.not.arrayContaining([expect.objectContaining({ severity: 'error' })]),
+        host: 'grokbot',
+        probe: { evidence: 'directory', status: 'available' },
+      }],
+    });
     stdout = '';
     expect(await run(['uninstall', 'grokbot'])).toBe(0);
     expect(stdout).toContain('Uninstalled grok-fixture@1.2.3 for grokbot');
