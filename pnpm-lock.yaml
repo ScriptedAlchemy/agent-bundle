@@ -513,8 +513,8 @@ importers:
         specifier: 2.0.23
         version: 2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/shared':
-        specifier: 2.0.23
-        version: 2.0.23(supports-color@7.2.0)
+        specifier: 2.0.21
+        version: 2.0.21(supports-color@7.2.0)
       '@shikijs/transformers':
         specifier: 4.4.3
         version: 4.4.3
@@ -1348,9 +1348,6 @@ packages:
 
   '@rspress/shared@2.0.21':
     resolution: {integrity: sha512-siCWkv1a4n6y7JdVRII+fwCRZGZtG5KGFfKi2w/Tt33UnIgh4XGqozZ5F/K0iZ/QUwg0wi93SoVdOQm2Q+wf8w==}
-
-  '@rspress/shared@2.0.23':
-    resolution: {integrity: sha512-kE2GXRCQ7GAl2wll1JBWRHEkZICKcWv3V86m8TkjiWb0eEdjACl3kns7j00KTq4UbE35kUPOs+0Lx8vGqK7q9w==}
 
   '@rstackjs/load-config@1.0.0':
     resolution: {integrity: sha512-eLp6lGEngk43kU6Z0iQNlGwgy4lLx/wtKdaBgoewHmWN0HHJRgQypewagqGxo+iNP4Yyf7pOXxAbsbH+L9Ay6A==}
@@ -4219,18 +4216,6 @@ snapshots:
       typescript: 6.0.3
 
   '@rspress/shared@2.0.21(supports-color@7.2.0)':
-    dependencies:
-      '@rsbuild/core': 2.2.11
-      '@shikijs/rehype': 4.4.3
-      '@types/react': 19.3.0
-      mdast-util-mdx-jsx: 3.2.0(supports-color@7.2.0)
-      unified: 11.0.5
-    transitivePeerDependencies:
-      - '@module-federation/runtime-tools'
-      - core-js
-      - supports-color
-
-  '@rspress/shared@2.0.23(supports-color@7.2.0)':
     dependencies:
       '@rsbuild/core': 2.2.11
       '@shikijs/rehype': 4.4.3
