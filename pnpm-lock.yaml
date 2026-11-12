@@ -16,6 +16,7 @@ pnpmfileChecksum: sha256-CjzDbxBVbwhtWuVc5QBOr0ymy8e8vyM9gWK88TVQjzA=
 
 patchedDependencies:
   '@rspress/core@2.0.21': 555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c
+  effect-rstest@0.1.0: c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263
 
 importers:
 
@@ -28,8 +29,8 @@ importers:
         specifier: 3.0.3
         version: 3.0.3
       '@effect/language-service':
-        specifier: 0.87.2
-        version: 0.87.2
+        specifier: 0.87.5
+        version: 0.87.5
       '@effect/tsgo':
         specifier: 0.45.0
         version: 0.45.0
@@ -43,11 +44,11 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       '@rsbuild/core':
-        specifier: 2.2.5
-        version: 2.2.5
+        specifier: 2.2.11
+        version: 2.2.11
       '@rsbuild/plugin-react':
         specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@rslib/core':
         specifier: 1.0.0
         version: 1.0.0(typescript@7.0.2)
@@ -80,7 +81,7 @@ importers:
         version: 1.63.0
       rsbuild-plugin-publint:
         specifier: 1.0.0
-        version: 1.0.0(@rsbuild/core@2.2.5)
+        version: 1.0.0(@rsbuild/core@2.2.11)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -197,11 +198,11 @@ importers:
         version: 4.6.4
     devDependencies:
       '@rsbuild/core':
-        specifier: 2.2.5
-        version: 2.2.5
+        specifier: 2.2.11
+        version: 2.2.11
       '@rsbuild/plugin-react':
         specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@rstest/core':
         specifier: 0.11.12
         version: 0.11.12
@@ -219,7 +220,7 @@ importers:
         version: 1.63.0
       rsbuild-plugin-rsc:
         specifier: 0.1.1
-        version: 0.1.1(@rsbuild/core@2.2.5)(react-server-dom-rspack@0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
+        version: 0.1.1(@rsbuild/core@2.2.11)(react-server-dom-rspack@0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
 
   examples/skills-starter:
     devDependencies:
@@ -254,8 +255,8 @@ importers:
         specifier: workspace:*
         version: link:../rsc-runtime
       '@effect/platform-node-shared':
-        specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117(effect@4.0.0-rc.117)
+        specifier: 4.0.0
+        version: 4.0.0(effect@4.0.0)
       '@modelcontextprotocol/client':
         specifier: 2.0.0
         version: 2.0.0
@@ -266,11 +267,11 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       '@rsbuild/core':
-        specifier: 2.2.5
-        version: 2.2.5
+        specifier: 2.2.11
+        version: 2.2.11
       '@rsbuild/plugin-react':
         specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@rslib/core':
         specifier: 1.0.0
         version: 1.0.0(typescript@7.0.2)
@@ -299,8 +300,8 @@ importers:
         specifier: 15.0.0
         version: 15.0.0
       effect:
-        specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117
+        specifier: 4.0.0
+        version: 4.0.0
       es-module-lexer:
         specifier: 3.0.2
         version: 3.0.2
@@ -317,8 +318,8 @@ importers:
         specifier: 14.0.0
         version: 14.0.0
       ws:
-        specifier: 8.21.3
-        version: 8.21.3
+        specifier: 8.22.0
+        version: 8.22.0
       yaml:
         specifier: 2.9.1
         version: 2.9.1
@@ -330,11 +331,11 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       '@types/ws':
-        specifier: 8.18.1
-        version: 8.18.1
+        specifier: 8.18.2
+        version: 8.18.2
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.0.0)
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -358,8 +359,8 @@ importers:
         specifier: 1.8.1
         version: 1.8.1
       '@effect/platform-node':
-        specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1)
+        specifier: 4.0.0
+        version: 4.0.0(effect@4.0.0)(redis@6.2.1)
       '@rslib/core':
         specifier: 1.0.0
         version: 1.0.0(typescript@7.0.2)
@@ -370,11 +371,11 @@ importers:
         specifier: 26.5.1
         version: 26.5.1
       effect:
-        specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117
+        specifier: 4.0.0
+        version: 4.0.0
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.0.0)
 
   packages/rsc-markdown-stream:
     devDependencies:
@@ -397,8 +398,8 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       effect:
-        specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117
+        specifier: 4.0.0
+        version: 4.0.0
       flare-redact:
         specifier: 1.6.1
         version: 1.6.1
@@ -426,7 +427,7 @@ importers:
         version: 19.3.0
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(@rstest/core@0.11.12)(effect@4.0.0-rc.117)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.0.0)
       micromark:
         specifier: 4.0.3
         version: 4.0.3(supports-color@7.2.0)
@@ -447,7 +448,7 @@ importers:
     dependencies:
       '@effect/atom-react':
         specifier: 4.0.0
-        version: 4.0.0(effect@4.0.0-rc.117)(react@19.3.0)(scheduler@0.27.0)
+        version: 4.0.0(effect@4.0.0)(react@19.3.0)(scheduler@0.27.0)
       '@modelcontextprotocol/client':
         specifier: 2.0.0
         version: 2.0.0
@@ -458,8 +459,8 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
       effect:
-        specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117
+        specifier: 4.0.0
+        version: 4.0.0
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -480,11 +481,11 @@ importers:
         version: 4.6.4
     devDependencies:
       '@rsbuild/core':
-        specifier: 2.2.5
-        version: 2.2.5
+        specifier: 2.2.11
+        version: 2.2.11
       '@rsbuild/plugin-react':
         specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@types/react':
         specifier: 19.3.0
         version: 19.3.0
@@ -501,20 +502,20 @@ importers:
         specifier: 2.0.21
         version: 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
       '@rspress/plugin-llms':
-        specifier: 2.0.22
-        version: 2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)
+        specifier: 2.0.23
+        version: 2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)
       '@rspress/plugin-sitemap':
-        specifier: 2.0.22
-        version: 2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
+        specifier: 2.0.23
+        version: 2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/plugin-twoslash':
-        specifier: 2.0.22
-        version: 2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)
+        specifier: 2.0.23
+        version: 2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)
       '@rspress/plugin-typedoc':
-        specifier: 2.0.22
-        version: 2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
+        specifier: 2.0.23
+        version: 2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/shared':
-        specifier: 2.0.22
-        version: 2.0.22(supports-color@7.2.0)
+        specifier: 2.0.21
+        version: 2.0.21(supports-color@7.2.0)
       '@shikijs/transformers':
         specifier: 4.4.3
         version: 4.4.3
@@ -702,21 +703,21 @@ packages:
       react: '>=19.0.0 <20.0.0'
       scheduler: '>=0.25.0 <0.28.0'
 
-  '@effect/language-service@0.87.2':
-    resolution: {integrity: sha512-CfiSoaVQO8pZgaMZGw5VvMvRGybsJ2LaSDoLYaqiVGvo/YYPYVR2GzUKY0h1NtIweq/+SQ5XLrvtzPIttWQ0GQ==}
+  '@effect/language-service@0.87.5':
+    resolution: {integrity: sha512-np/zJgk71/PyHxtoqyUKLYcpQhoRBI+L6+1Z0ILk35JSQ/lvXzwlwOwddYZLDkeC4bdF2ukKekqKlla/F88R5w==}
     hasBin: true
 
-  '@effect/platform-node-shared@4.0.0-rc.117':
-    resolution: {integrity: sha512-GyRkEfLBG49MwJe+/XDPiXYcQ44RA9p2z0AurlsWhR1cd1PqOUMEZU1pORL+/R5hR8aH6ZuqoJYD8lAc6h+wlA==}
+  '@effect/platform-node-shared@4.0.0':
+    resolution: {integrity: sha512-VBXHJU9UXVZPdQGGDRjGXpo+TpOzRwZuMrdKAtIxi1qwcRftmacZ1zTgIrzBa0Z2RA2KVkoOecQUsTlt/nJZhw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-rc.117
+      effect: ^4.0.0
 
-  '@effect/platform-node@4.0.0-rc.117':
-    resolution: {integrity: sha512-WbPcvQDkqXFnCeG6LohJ9eVNapCDhZbCpezhYKxm0IsZEk7swakRh7RkC1t2CXzd3hGmszTv2k9e/pXyZuL+wQ==}
+  '@effect/platform-node@4.0.0':
+    resolution: {integrity: sha512-/L+4MUbl8FejPKLHLROYSOebvHnfixkP8KiblSD/DE5uH5xENZBHaux4nH6XMnRP+lr8ajpEJFS8sUrmmxFJeQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-rc.117
+      effect: ^4.0.0
       redis: '>=5.0.0 <7.0.0'
 
   '@effect/tsgo-darwin-arm64@0.45.0':
@@ -1049,16 +1050,6 @@ packages:
       core-js:
         optional: true
 
-  '@rsbuild/core@2.2.5':
-    resolution: {integrity: sha512-nf34ri1iZduYhHUr5Vc79L7Eml+IlN0nFIaF/g3OW4WR/gShxuf5wVXS69/H8FTHJYN4SdYlNcefSZQluEMKgA==}
-    engines: {node: ^20.19.0 || >=22.12.0}
-    hasBin: true
-    peerDependencies:
-      core-js: '>= 3.0.0'
-    peerDependenciesMeta:
-      core-js:
-        optional: true
-
   '@rsbuild/plugin-react@2.1.0':
     resolution: {integrity: sha512-RQTIAWB/CwPjoWt9iAl+8HixeQVgZ7kEIBrWPCixfITyHdiD84h0YpUTpEUuz6kGHw1KXT9mHZ3Rwy6WG7aRDA==}
     peerDependencies:
@@ -1331,36 +1322,33 @@ packages:
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
 
-  '@rspress/plugin-llms@2.0.22':
-    resolution: {integrity: sha512-jMC+Q0NFD6PN0J6Apmcl2/UBuw8l6paUGLRd0EDOl9diBHcbshcTUAGRaihMKGZ02ED7Mfb7mgJ+CwJClYM04w==}
+  '@rspress/plugin-llms@2.0.23':
+    resolution: {integrity: sha512-yG9NA1uyQ+wBVrV8vYFAmdCkcymvj7pMRWNnJ6FT+m9xVv8SA+Ed8jsduuO5xQHNw/c9melXhS+VPQHvTK/isw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rspress/core': ^2.0.10
 
-  '@rspress/plugin-sitemap@2.0.22':
-    resolution: {integrity: sha512-2SNLW8Oh4osCyqnzea1WDVA9469Luwu0piNuh5HNjlzcgjguzynA3447WRFpqBL1Z/B7H5IB5SMcwYaMsgFhvQ==}
+  '@rspress/plugin-sitemap@2.0.23':
+    resolution: {integrity: sha512-r37TvCP2wuQX8JbA7hHti8JXhVx4HiaJPn702NgFhGyolGJYIUTRQCO2/ixiP1FZJuxZ4c0yb4ZyNeDa9ZPMlw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rspress/core': ^2.0.10
 
-  '@rspress/plugin-twoslash@2.0.22':
-    resolution: {integrity: sha512-gqWAhazd6zDPKBLeXE/NYnJtjDGCnpPf9YOWF7qBmRjvfLwdPld7p16sb+TEgHjeipze6I4t16krOdX7OUE3iA==}
+  '@rspress/plugin-twoslash@2.0.23':
+    resolution: {integrity: sha512-+5En3mmDTdhe8j5/P31qn9CjoAsEd0Fnv/I7w6Bp1AgRc0TsDaZ82JBngYKvGMAYGIQpY/qiOleHhFMG1sI/pA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rspress/core': ^2.0.10
       react: '>=18.0.0'
 
-  '@rspress/plugin-typedoc@2.0.22':
-    resolution: {integrity: sha512-iJka1VC3xh7W/qSC+DStxRoK83BS2oOQ9Kb80QDwOBwgRBPbMPMbXhVdotG/NpBZV2tADqrowrWf7IA8Xv39WA==}
+  '@rspress/plugin-typedoc@2.0.23':
+    resolution: {integrity: sha512-xl+4j5PFbCTSatxEdf9HoWTsBDAKbOLkPJR3l+8akqIOHhjmj+BaOf+8tL9LwXCYhtQ0OOdJEp65PU2c1Hk7sA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rspress/core': ^2.0.10
 
   '@rspress/shared@2.0.21':
     resolution: {integrity: sha512-siCWkv1a4n6y7JdVRII+fwCRZGZtG5KGFfKi2w/Tt33UnIgh4XGqozZ5F/K0iZ/QUwg0wi93SoVdOQm2Q+wf8w==}
-
-  '@rspress/shared@2.0.22':
-    resolution: {integrity: sha512-1UXwG6gAhWBw5vClv3wb2Oy8hPXYNgQwQ5zWXEG8auY5ZcMywvHCBi6pFJtYNOgXe5327lNgiOG0S1R8l0OLeg==}
 
   '@rstackjs/load-config@1.0.0':
     resolution: {integrity: sha512-eLp6lGEngk43kU6Z0iQNlGwgy4lLx/wtKdaBgoewHmWN0HHJRgQypewagqGxo+iNP4Yyf7pOXxAbsbH+L9Ay6A==}
@@ -1545,8 +1533,8 @@ packages:
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
 
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -1966,8 +1954,8 @@ packages:
       '@rstest/core': ^0.11.11
       effect: ^4.0.0-rc.113
 
-  effect@4.0.0-rc.117:
-    resolution: {integrity: sha512-UUyi9QiOW4nySFIBM3KnYbNMd9EZliOdKfBcyLD0mPMPheO2fkuXS5y0opjWc9oqzlJxPQICEGm8gGw3kh9j/w==}
+  effect@4.0.0:
+    resolution: {integrity: sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ==}
 
   emoji-regex@8.0.0:
     resolution: {integrity: sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==}
@@ -3189,8 +3177,8 @@ packages:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
     engines: {node: '>= 18'}
 
-  typedoc-plugin-markdown@4.13.0:
-    resolution: {integrity: sha512-OHaOLoMTS0wL2ud73WXvxv486mrUEtgXxW4iKiTOGJVipT/VBWY76rlVRMQGes7aVonoIf5roWRe1UvHbufLlQ==}
+  typedoc-plugin-markdown@4.13.1:
+    resolution: {integrity: sha512-d3jchJ4CyIrV9w9uozTSkfMYG8IEM1RvvGOaybJ/3rRporzoX7p0lprffo95GOGUviQqP0phjHJE3bY8PQbilA==}
     engines: {node: '>= 18'}
     peerDependencies:
       typedoc: 0.28.x
@@ -3230,8 +3218,8 @@ packages:
     resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
     engines: {node: '>=20.18.1'}
 
-  undici@8.11.0:
-    resolution: {integrity: sha512-AdzuGcAkzhbha3GgCSoUBx2P0quwym6qdFNCQz/fDGZc8w9XJ741wHUbt2kTmfPz+ZIOMkySFkiY7RXmiDDC8w==}
+  undici@8.12.4:
+    resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
 
   unhead@2.1.17:
@@ -3318,6 +3306,18 @@ packages:
 
   ws@8.21.3:
     resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -3549,29 +3549,29 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@effect/atom-react@4.0.0(effect@4.0.0-rc.117)(react@19.3.0)(scheduler@0.27.0)':
+  '@effect/atom-react@4.0.0(effect@4.0.0)(react@19.3.0)(scheduler@0.27.0)':
     dependencies:
-      effect: 4.0.0-rc.117
+      effect: 4.0.0
       react: 19.3.0
       scheduler: 0.27.0
 
-  '@effect/language-service@0.87.2': {}
+  '@effect/language-service@0.87.5': {}
 
-  '@effect/platform-node-shared@4.0.0-rc.117(effect@4.0.0-rc.117)':
+  '@effect/platform-node-shared@4.0.0(effect@4.0.0)':
     dependencies:
-      '@types/ws': 8.18.1
-      effect: 4.0.0-rc.117
-      ws: 8.21.3
+      '@types/ws': 8.18.2
+      effect: 4.0.0
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1)':
+  '@effect/platform-node@4.0.0(effect@4.0.0)(redis@6.2.1)':
     dependencies:
-      '@effect/platform-node-shared': 4.0.0-rc.117(effect@4.0.0-rc.117)
-      effect: 4.0.0-rc.117
+      '@effect/platform-node-shared': 4.0.0(effect@4.0.0)
+      effect: 4.0.0
       redis: 6.2.1
-      undici: 8.11.0
+      undici: 8.12.4
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -3942,26 +3942,19 @@ snapshots:
     transitivePeerDependencies:
       - '@module-federation/runtime-tools'
 
-  '@rsbuild/core@2.2.5':
-    dependencies:
-      '@rspack/core': 2.2.3(@swc/helpers@0.5.23)
-      '@swc/helpers': 0.5.23
-    transitivePeerDependencies:
-      - '@module-federation/runtime-tools'
-
-  '@rsbuild/plugin-react@2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))':
+  '@rsbuild/plugin-react@2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))':
     dependencies:
       '@rspack/plugin-react-refresh': 2.0.2(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-refresh@0.18.0)
       react-refresh: 0.18.0
     optionalDependencies:
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
     transitivePeerDependencies:
       - '@rspack/core'
 
   '@rslib/core@1.0.0(typescript@7.0.2)':
     dependencies:
-      '@rsbuild/core': 2.2.5
-      rsbuild-plugin-dts: 1.0.0(@rsbuild/core@2.2.5)(typescript@7.0.2)
+      '@rsbuild/core': 2.2.11
+      rsbuild-plugin-dts: 1.0.0(@rsbuild/core@2.2.11)(typescript@7.0.2)
     optionalDependencies:
       typescript: 7.0.2
     transitivePeerDependencies:
@@ -4154,8 +4147,8 @@ snapshots:
     dependencies:
       '@mdx-js/mdx': 3.1.1(supports-color@7.2.0)
       '@mdx-js/react': 3.1.1(@types/react@19.3.0)(react@19.3.0)
-      '@rsbuild/core': 2.2.5
-      '@rsbuild/plugin-react': 2.1.0(@rsbuild/core@2.2.5)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
+      '@rsbuild/core': 2.2.11
+      '@rsbuild/plugin-react': 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.2.8(@swc/helpers@0.5.23))
       '@rspress/shared': 2.0.21(supports-color@7.2.0)
       '@shikijs/rehype': 4.4.3
       '@types/mdast': 4.0.4
@@ -4198,7 +4191,7 @@ snapshots:
       - micromark-util-types
       - supports-color
 
-  '@rspress/plugin-llms@2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)':
+  '@rspress/plugin-llms@2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)':
     dependencies:
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
       remark-mdx: 3.1.1(supports-color@7.2.0)
@@ -4209,11 +4202,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@rspress/plugin-sitemap@2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))':
+  '@rspress/plugin-sitemap@2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))':
     dependencies:
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
 
-  '@rspress/plugin-twoslash@2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)':
+  '@rspress/plugin-twoslash@2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)':
     dependencies:
       '@floating-ui/dom': 1.8.0
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
@@ -4228,28 +4221,16 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@rspress/plugin-typedoc@2.0.22(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))':
+  '@rspress/plugin-typedoc@2.0.23(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))':
     dependencies:
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.8(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
       typedoc: 0.28.20
-      typedoc-plugin-markdown: 4.13.0(typedoc@0.28.20)
+      typedoc-plugin-markdown: 4.13.1(typedoc@0.28.20)
       typescript: 6.0.3
 
   '@rspress/shared@2.0.21(supports-color@7.2.0)':
     dependencies:
-      '@rsbuild/core': 2.2.5
-      '@shikijs/rehype': 4.4.3
-      '@types/react': 19.3.0
-      mdast-util-mdx-jsx: 3.2.0(supports-color@7.2.0)
-      unified: 11.0.5
-    transitivePeerDependencies:
-      - '@module-federation/runtime-tools'
-      - core-js
-      - supports-color
-
-  '@rspress/shared@2.0.22(supports-color@7.2.0)':
-    dependencies:
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
       '@shikijs/rehype': 4.4.3
       '@types/react': 19.3.0
       mdast-util-mdx-jsx: 3.2.0(supports-color@7.2.0)
@@ -4287,7 +4268,7 @@ snapshots:
 
   '@rstest/core@0.11.12':
     dependencies:
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
       '@types/chai': 5.2.3
     transitivePeerDependencies:
       - '@module-federation/runtime-tools'
@@ -4452,7 +4433,7 @@ snapshots:
 
   '@types/unist@3.0.3': {}
 
-  '@types/ws@8.18.1':
+  '@types/ws@8.18.2':
     dependencies:
       '@types/node': 26.5.1
 
@@ -4762,12 +4743,12 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(@rstest/core@0.11.12)(effect@4.0.0-rc.117):
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.0.0):
     dependencies:
       '@rstest/core': 0.11.12
-      effect: 4.0.0-rc.117
+      effect: 4.0.0
 
-  effect@4.0.0-rc.117: {}
+  effect@4.0.0: {}
 
   emoji-regex@8.0.0: {}
 
@@ -6182,22 +6163,22 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  rsbuild-plugin-dts@1.0.0(@rsbuild/core@2.2.5)(typescript@7.0.2):
+  rsbuild-plugin-dts@1.0.0(@rsbuild/core@2.2.11)(typescript@7.0.2):
     dependencies:
       '@ast-grep/napi': 0.45.2
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
     optionalDependencies:
       typescript: 7.0.2
 
-  rsbuild-plugin-publint@1.0.0(@rsbuild/core@2.2.5):
+  rsbuild-plugin-publint@1.0.0(@rsbuild/core@2.2.11):
     dependencies:
       publint: 0.3.24
     optionalDependencies:
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
 
-  rsbuild-plugin-rsc@0.1.1(@rsbuild/core@2.2.5)(react-server-dom-rspack@0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)):
+  rsbuild-plugin-rsc@0.1.1(@rsbuild/core@2.2.11)(react-server-dom-rspack@0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)):
     dependencies:
-      '@rsbuild/core': 2.2.5
+      '@rsbuild/core': 2.2.11
       react-server-dom-rspack: 0.1.0(@rspack/core@2.2.8(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
 
   run-applescript@7.1.0: {}
@@ -6401,7 +6382,7 @@ snapshots:
       media-typer: 1.1.1
       mime-types: 3.0.2
 
-  typedoc-plugin-markdown@4.13.0(typedoc@0.28.20):
+  typedoc-plugin-markdown@4.13.1(typedoc@0.28.20):
     dependencies:
       typedoc: 0.28.20
 
@@ -6449,7 +6430,7 @@ snapshots:
 
   undici@7.29.0: {}
 
-  undici@8.11.0: {}
+  undici@8.12.4: {}
 
   unhead@2.1.17:
     dependencies:
@@ -6542,6 +6523,8 @@ snapshots:
   wrappy@1.0.2: {}
 
   ws@8.21.3: {}
+
+  ws@8.22.0: {}
 
   wsl-utils@1.0.0:
     dependencies:

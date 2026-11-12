@@ -315,6 +315,10 @@ its findings keep their `AB6019`–`AB6022` codes prefixed with `Bundle at …` 
 `Installed copy at … (scope …)`. Doctor never runs the `--plugin-dir` load check twice: its
 registration proof and the rows' `errors` already hold that verdict.
 
+Doctor recognizes stale runtime endpoint files on macOS as well as refused socket
+connections. It reports these through `AB7314` without deleting them; starting the
+event runtime can replace the stale endpoint.
+
 | Code | Severity | Meaning |
 | --- | --- | --- |
 | `AB7330` | info | The bundle's lifecycle stage on this host and its four observations; unobservable stages (a live session's loaded plugins on every host, Cursor's server-assigned enabled state) are typed `unavailable`, never guessed. |

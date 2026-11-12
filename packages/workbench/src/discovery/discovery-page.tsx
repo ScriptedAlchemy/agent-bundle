@@ -1,5 +1,5 @@
 import { useAtom, useAtomValue } from '@effect/atom-react';
-import { AsyncResult } from 'effect/unstable/reactivity';
+import { AsyncResult } from 'effect/reactivity';
 import React, { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import {
