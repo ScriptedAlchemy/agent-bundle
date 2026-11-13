@@ -6,14 +6,14 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
+import openCodeCapabilities from '../src/adapters/capabilities/opencode-2.2.6.json' with { type: 'json' };
+
 import { sharedPackedTarball, npmInstallArguments } from './support/shared-pack.ts';
 import { packedNativeEnvironment } from './support/packed-native-smoke.ts';
 import { readOpenCodeVersion, runOpenCodeNativeAcceptance, assertCompiledOpenCodeMcp, writeOpenCodeFixture } from './support/opencode-host.ts';
 import { removeTree } from './support/remove-tree.ts';
 
 const execute = promisify(execFile);
-const binary = process.env.AB_OPENCODE_NATIVE_BINARY ?? 'opencode';
-process.env.PATH = `${dirname(binary)}${delimiter}${process.env.PATH ?? ''}`;
 
 it('loads a packed native V2 package through its generated package-bound installer and the pinned host', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-opencode-packed-'));
@@ -22,6 +22,20 @@ it('loads a packed native V2 package through its generated package-bound install
   const artifact = join(project, 'artifact');
   const workspaceRoot = process.cwd();
   try {
+    const host = join(root, 'host');
+    const binary = process.env.AB_OPENCODE_NATIVE_BINARY ?? join(host, 'node_modules', '@opencode', 'cli', 'bin', 'opencode.exe');
+    const hostBin = process.env.AB_OPENCODE_NATIVE_BINARY === undefined ? join(host, 'node_modules', '.bin') : dirname(binary);
+    const environment = {
+      ...packedNativeEnvironment(process.env),
+      PATH: `${hostBin}${delimiter}${process.env.PATH ?? ''}`,
+    };
+    if (process.env.AB_OPENCODE_NATIVE_BINARY === undefined) {
+      await execute('npm', [
+        'install', '--no-audit', '--no-fund', '--prefix', host,
+        `@opencode/cli@${openCodeCapabilities.observedCliVersion}`,
+      ], { cwd: root, env: environment, timeout: 180_000 });
+    }
+    expect(await readOpenCodeVersion(binary)).toBe(openCodeCapabilities.observedCliVersion);
     await mkdir(project, { recursive: true });
     const [agentBundle, runtime, markdownStream] = await Promise.all([
       sharedPackedTarball('agent-bundle'),
@@ -29,7 +43,6 @@ it('loads a packed native V2 package through its generated package-bound install
       sharedPackedTarball('markdown-stream'),
     ]);
     await writeOpenCodeFixture(project);
-    const environment = packedNativeEnvironment(process.env);
     await execute('npm', [
       'install',
       '--omit=dev',
@@ -65,7 +78,6 @@ it('loads a packed native V2 package through its generated package-bound install
       .map(String)
       .find((path) => path.endsWith('movie-library-install.js'));
     expect(installBin).toBeDefined();
-    expect(await readOpenCodeVersion(binary)).toBe('2.2.6');
 
     await Promise.all([
       removeTree(join(project, 'src')),
