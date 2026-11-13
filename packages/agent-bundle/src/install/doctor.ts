@@ -81,7 +81,7 @@ import { bundleInventory, installedBundleInventory, readBundleIdentity, type Plu
 import { inspectInstalledStateOwnership, resolveInstalledStateRoots } from './state-root.ts';
 
 /** Hosts with a full Doctor report; `grokbot` has its own read-only report (install/grokbot.ts). */
-export type DoctorHost = Exclude<InstallHost, 'amp' | 'grokbot'>;
+export type DoctorHost = Exclude<InstallHost, 'amp' | 'grokbot' | 'opencode'>;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
 export type DoctorInventoryStatus = 'known' | 'skipped' | 'unknown';
 export type DoctorFindingState =

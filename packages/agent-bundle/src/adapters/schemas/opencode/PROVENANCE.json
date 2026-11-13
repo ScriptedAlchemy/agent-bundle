@@ -11,15 +11,18 @@
   "schemas": {
     "config.schema.json": {
       "source": "https://opencode.ai/config.json",
+      "bytes": 72298,
       "sha256": "7204a56f845a69f186bd0b6cd47111178357bb170e22cd2666940cbe03a39302"
     },
     "mcp.schema.json": {
       "source": "local strict contract derived from the canonical MCP normalized model and the V2 MCP local/remote transform API",
+      "bytes": 1578,
       "sha256": "e303bfb0350195bbea54f533448d476e8b62c086b77eb52b4f0f0d02bcdd0407"
     },
     "package.schema.json": {
-      "source": "local strict contract derived from the V2 local plugin package loading documentation and @opencode/plugin@2.2.6 package metadata",
-      "sha256": "023224fa6c632fc198c2872cdce22a7c5579d564538436bc034e8ea9a52c0f5c"
+      "source": "local strict contract derived from the V2 local plugin package loading documentation and the structural id/setup ABI proven on the installed host",
+      "bytes": 1217,
+      "sha256": "6b6b45540ccc42f0566074105b0d6ce174f69ad50a472afaed46b7f9d90d8b5e"
     }
   }
 }

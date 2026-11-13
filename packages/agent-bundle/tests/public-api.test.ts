@@ -398,12 +398,14 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       "  codex: { nativeHooks: './codex-hooks.json' },",
       "  plugin: { name: 'packed-root-types' },",
       "  portable: { compatibility: 'v1' },",
+      '  opencode: {},',
       '};',
       '',
       'const claudeHook: string | undefined = config.claude?.nativeHooks;',
       'const codexHook: string | undefined = config.codex?.nativeHooks;',
       'const portableValue: unknown = config.portable?.compatibility;',
-      'void [claudeHook, codexHook, portableValue];',
+      'const openCodeValue: unknown = config.opencode;',
+      'void [claudeHook, codexHook, portableValue, openCodeValue];',
       '',
     ].join('\n'));
 

@@ -415,6 +415,7 @@
             "claude",
             "codex",
             "cursor",
+            "opencode",
             "portable"
           ],
           "description": "The shipped adapter that planned this projection, by identity; absent for an advanced-registry adapter."

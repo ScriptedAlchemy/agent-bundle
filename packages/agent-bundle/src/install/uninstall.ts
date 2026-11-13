@@ -1749,6 +1749,8 @@ const uninstallProgram = Effect.fnUntraced(function*(
       return yield* liftPromise(() => uninstallPublicCli(options, identity, 'claude', scope, policy));
     case 'codex':
       return yield* liftPromise(() => uninstallPublicCli(options, identity, 'codex', scope, policy));
+    case 'opencode':
+      return yield* Effect.fail(failure('AB7000', 'OpenCode lifecycle support is not yet available on this build.', options.host));
     case 'cursor': {
       if (scope !== 'user') {
         return yield* Effect.fail(failure('AB7003', `Cursor plugin uninstallation supports only user scope, not ${scope}.`, 'cursor'));

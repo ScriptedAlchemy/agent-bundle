@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 export const templateNames = ['minimal', 'mcp-server', 'cli-tool'] as const;
 export type TemplateName = (typeof templateNames)[number];
 
-export const targetNames = ['amp', 'portable', 'claude', 'codex', 'cursor'] as const;
+export const targetNames = ['amp', 'portable', 'claude', 'codex', 'cursor', 'opencode'] as const;
 export type TargetName = (typeof targetNames)[number];
 
 export interface HostCatalogEntry {
@@ -37,6 +37,7 @@ export const hostCatalog: Readonly<Record<TargetName, HostCatalogEntry>> = Objec
   claude: Object.freeze({ installable: true, refusedTemplates: Object.freeze({}) }),
   codex: Object.freeze({ installable: true, refusedTemplates: Object.freeze({}) }),
   cursor: Object.freeze({ installable: true, refusedTemplates: Object.freeze({}) }),
+  opencode: Object.freeze({ installable: true, refusedTemplates: Object.freeze({}) }),
   portable: Object.freeze({ installable: false, refusedTemplates: Object.freeze({}) }),
 });
 

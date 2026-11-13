@@ -61,8 +61,8 @@ interface DoctorCommandOptions {
 }
 
 export const installHost = (value: string): InstallHost => {
-  if (value === 'amp' || value === 'claude' || value === 'codex' || value === 'cursor' || value === 'grokbot') return value;
-  throw new InvalidArgumentError('Install host must be amp, claude, codex, cursor, or grokbot.');
+  if (value === 'amp' || value === 'claude' || value === 'codex' || value === 'cursor' || value === 'opencode' || value === 'grokbot') return value;
+  throw new InvalidArgumentError('Install host must be amp, claude, codex, cursor, opencode, or grokbot.');
 };
 
 const devInstallHost = (value: string): DevInstallHost => {
