@@ -1,16 +1,22 @@
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import {
   openCodeAdapter,
   openCodeArtifactPaths,
-  openCodeMcpServer,
+  openCodePluginEntrySource,
   openCodePluginPackage,
   openCodePluginValidator,
   openCodeConfigValidator,
   openCodeMcpValidator,
 } from '../src/adapters/opencode.ts';
 import { readTargetMcpServers } from '../src/services/mcp-runtime.ts';
+import { removeTree } from './support/remove-tree.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
 const configPath = '/workspace/agent-bundle.config.ts';
@@ -152,7 +158,7 @@ it('emits the artifact root as a relocatable native V2 package and project confi
   }));
 });
 
-it('lowers canonical MCP servers to the native V2 local and remote transform shapes', () => {
+it('lowers canonical MCP servers to the native V2 local and remote transform shapes', async () => {
   const model = plugin();
   const documents = writes(model);
   const internal = JSON.parse(documents[openCodeArtifactPaths.mcp]!) as {
@@ -175,27 +181,52 @@ it('lowers canonical MCP servers to the native V2 local and remote transform sha
     url: 'https://mcp.example.test/stream',
   });
 
-  const pluginRoot = '/installed/movie-library';
-  const roots = { pluginData: '/installed/movie-library/state', pluginRoot, workspaceRoot: '/work' };
-  expect(openCodeMcpServer(internal.mcpServers['library']!, roots)).toEqual({
-    command: [
-      'node',
-      '/installed/movie-library/mcp/library.mjs',
-      '--data',
-      '/installed/movie-library/state',
-    ],
-    cwd: '/installed/movie-library',
-    environment: {
-      AGENT_BUNDLE_PLUGIN_ROOT: '/installed/movie-library',
-      CACHE_DIR: '/work/cache',
-    },
-    type: 'local',
-  });
-  expect(openCodeMcpServer(internal.mcpServers['remote']!, roots)).toEqual({
-    headers: { Authorization: 'Bearer literal' },
-    type: 'remote',
-    url: 'https://mcp.example.test/stream',
-  });
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-opencode-mcp-emission-'));
+  try {
+    await mkdir(join(root, 'skills', 'movie-library'), { recursive: true });
+    await writeFile(join(root, 'skills', 'movie-library', 'SKILL.md'), '# Movie library\n');
+    await writeFile(join(root, 'index.js'), openCodePluginEntrySource(model, internal, []));
+    const plugin = await import(pathToFileURL(join(root, 'index.js')).href);
+    const registered: Record<string, unknown> = {};
+    await plugin.default.setup({
+      location: { directory: '/work' },
+      mcp: {
+        transform: async (apply: (editor: { set(name: string, value: Record<string, unknown>): void }) => void) => {
+          apply({ set: (name, value) => { registered[name] = value; } });
+          return { dispose: async () => undefined };
+        },
+      },
+      skill: {
+        transform: async (apply: (editor: { add(value: unknown): void }) => void) => {
+          apply({ add: () => undefined });
+          return { dispose: async () => undefined };
+        },
+      },
+    });
+    expect(registered).toEqual({
+      library: {
+        command: [
+          'node',
+          `${resolve(root)}/mcp/library.mjs`,
+          '--data',
+          `${resolve(root, 'state')}`,
+        ],
+        cwd: resolve(root),
+        environment: {
+          AGENT_BUNDLE_PLUGIN_ROOT: resolve(root),
+          CACHE_DIR: '/work/cache',
+        },
+        type: 'local',
+      },
+      remote: {
+        headers: { Authorization: 'Bearer literal' },
+        type: 'remote',
+        url: 'https://mcp.example.test/stream',
+      },
+    });
+  } finally {
+    await removeTree(root);
+  }
 
   const result = readTargetMcpServers(openCodeAdapter.mcpRuntime!, internal);
   expect(result.status).toBe('found');

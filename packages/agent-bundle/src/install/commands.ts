@@ -56,7 +56,7 @@ interface UninstallCommandOptions {
 
 interface DoctorCommandOptions {
   readonly from?: string;
-  readonly host: readonly (DoctorHost | 'grokbot')[];
+  readonly host: readonly (DoctorHost | 'grokbot' | 'opencode')[];
   readonly json?: boolean;
 }
 
@@ -66,8 +66,8 @@ export const installHost = (value: string): InstallHost => {
 };
 
 const devInstallHost = (value: string): DevInstallHost => {
-  if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
-  throw new InvalidArgumentError('Development install host must be claude, codex, or cursor.');
+  if (value === 'claude' || value === 'codex' || value === 'cursor' || value === 'opencode') return value;
+  throw new InvalidArgumentError('Development install host must be claude, codex, cursor, or opencode.');
 };
 
 export const collectInstallHost = (value: string, previous: readonly DevInstallHost[]): readonly DevInstallHost[] =>
@@ -83,15 +83,15 @@ const installScope = (value: string): InstallScope => {
   throw new InvalidArgumentError('Install scope must be user, project, or local.');
 };
 
-const doctorHost = (value: string): DoctorHost | 'grokbot' => {
-  if (value === 'claude' || value === 'codex' || value === 'cursor' || value === 'grokbot') return value;
-  throw new InvalidArgumentError('Doctor host must be claude, codex, cursor, or grokbot.');
+const doctorHost = (value: string): DoctorHost | 'grokbot' | 'opencode' => {
+  if (value === 'claude' || value === 'codex' || value === 'cursor' || value === 'opencode' || value === 'grokbot') return value;
+  throw new InvalidArgumentError('Doctor host must be claude, codex, cursor, opencode, or grokbot.');
 };
 
 const collectDoctorHost = (
   value: string,
-  previous: readonly (DoctorHost | 'grokbot')[],
-): readonly (DoctorHost | 'grokbot')[] =>
+  previous: readonly (DoctorHost | 'grokbot' | 'opencode')[],
+): readonly (DoctorHost | 'grokbot' | 'opencode')[] =>
   [...previous, doctorHost(value)];
 
 export const registerLifecycleCommands = (program: Command, options: LifecycleCommandOptions): void => {
@@ -103,7 +103,7 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
   const installCommand = fromOption(
     program.command('install')
       .description('Install a built bundle into a supported host')
-      .argument('<host>', 'Destination host: amp, claude, codex, cursor, or grokbot', installHost),
+      .argument('<host>', 'Destination host: amp, claude, codex, cursor, opencode, or grokbot', installHost),
     'Target bundle directory or artifact root',
     true,
   )
@@ -145,7 +145,7 @@ export const registerLifecycleCommands = (program: Command, options: LifecycleCo
   const uninstallCommand = fromOption(
     program.command('uninstall')
       .description('Remove a receipt-owned host install of a built bundle, and nothing else')
-      .argument('<host>', 'Host to uninstall from: amp, claude, codex, cursor, or grokbot', installHost),
+      .argument('<host>', 'Host to uninstall from: amp, claude, codex, cursor, opencode, or grokbot', installHost),
     'Target bundle directory or artifact root that identifies the plugin',
     true,
   )

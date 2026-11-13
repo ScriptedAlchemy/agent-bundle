@@ -66,7 +66,7 @@
       "shell": "^shell$",
       "file.read": "^read$",
       "file.write": "^(?:write|edit|patch)$",
-      "mcp": "^.*_.*$",
+      "mcp": "agent-bundle:mcp-inventory-prefix",
       "agent": "^subagent$"
     },
     "eventRoutes": {

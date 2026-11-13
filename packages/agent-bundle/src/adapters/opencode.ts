@@ -4,6 +4,7 @@ import { stableJson } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import { isPlainDataRecord } from '../core/strict-json.ts';
+import { escapeRegExp } from '../core/strings.ts';
 import {
   pathTokens,
   type NormalizedMcpServer,
@@ -140,51 +141,6 @@ const mcpRuntime = createTargetMcpRuntime({
   }),
 });
 
-export interface OpenCodeMcpRoots {
-  readonly pluginData: string;
-  readonly pluginRoot: string;
-  readonly workspaceRoot: string;
-}
-
-const replaceOpenCodeTokens = (value: string, roots: OpenCodeMcpRoots): string => value
-  .replaceAll(pathTokens.pluginRoot, roots.pluginRoot)
-  .replaceAll(pathTokens.pluginData, roots.pluginData)
-  .replaceAll(pathTokens.workspaceRoot, roots.workspaceRoot);
-
-/** Converts one entry in the compiler-owned table to the V2 transform's native local/remote shape. */
-export const openCodeMcpServer = (
-  server: Readonly<Record<string, unknown>>,
-  roots: OpenCodeMcpRoots,
-): Record<string, unknown> => {
-  const resolveValue = (value: unknown): unknown => typeof value === 'string' ? replaceOpenCodeTokens(value, roots) : value;
-  if (server['type'] === 'stdio') {
-    return {
-      ...(Array.isArray(server['args']) || typeof server['command'] === 'string'
-        ? {
-            command: [
-              replaceOpenCodeTokens(String(server['command']), roots),
-              ...(Array.isArray(server['args'])
-                ? server['args'].map((argument) => replaceOpenCodeTokens(String(argument), roots))
-                : []),
-            ],
-          }
-        : {}),
-      ...(server['cwd'] === undefined ? {} : { cwd: replaceOpenCodeTokens(String(server['cwd']), roots) }),
-      ...(isPlainDataRecord(server['env'])
-        ? { environment: Object.fromEntries(Object.entries(server['env']).map(([key, value]) => [key, resolveValue(value)])) }
-        : {}),
-      type: 'local',
-    };
-  }
-  return {
-    ...(isPlainDataRecord(server['headers'])
-      ? { headers: Object.fromEntries(Object.entries(server['headers']).map(([key, value]) => [key, resolveValue(value)])) }
-      : {}),
-    type: 'remote',
-    url: replaceOpenCodeTokens(String(server['url']), roots),
-  };
-};
-
 const planMcpServer = (
   server: NormalizedMcpServer,
 ): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
@@ -250,14 +206,24 @@ export const openCodePluginEntrySource = (
 ): string => {
   const commands = (model.commands ?? []).filter((command) => command.targets.includes(openCodeName));
   const skills = model.skills.filter((skill) => skill.targets.includes(openCodeName));
-  const hookDefinitions = hooks.map((entry) => ({
-    event: entry.event,
-    matcher: entry.nativeMatcher,
-    nativeEvent: entry.nativeEvent,
-    path: entry.relativePath,
-  }));
+  const hookDefinitions = hooks.map((entry) => {
+    const patterns = [
+      ...entry.hook.tools.flatMap((tool) => tool === 'mcp' ? [] : [hookContract.matchers[tool]!]),
+      ...(entry.hook.nativeTools ?? [])
+        .filter((selector) => selector.target === openCodeName)
+        .map((selector) => `^${escapeRegExp(selector.name)}$`),
+    ];
+    return {
+      event: entry.event,
+      matcher: patterns.length === 0 ? undefined : patterns.length === 1 ? patterns[0] : `(?:${patterns.join('|')})`,
+      mcp: entry.hook.tools.includes('mcp'),
+      nativeEvent: entry.nativeEvent,
+      path: entry.relativePath,
+    };
+  });
   return [
     "import { spawn } from 'node:child_process';",
+    "import { createHash } from 'node:crypto';",
     "import { readFile } from 'node:fs/promises';",
     "import { dirname, resolve } from 'node:path';",
     "import { fileURLToPath } from 'node:url';",
@@ -339,7 +305,14 @@ export const openCodePluginEntrySource = (
     '  const output = Buffer.concat(stdout).toString("utf8");',
     '  return output === "" ? undefined : JSON.parse(output);',
     '};',
-    'const matches = (definition, tool) => definition.matcher === undefined || new RegExp(definition.matcher, "u").test(tool);',
+    'const matches = async (ctx, definition, tool) => {',
+    '  let selected = definition.matcher === undefined ? !definition.mcp : new RegExp(definition.matcher, "u").test(tool);',
+    '  if (definition.mcp && !selected) {',
+    '    const servers = await ctx.mcp.list();',
+    '    selected = servers.some((server) => tool.startsWith(`${server.name}_`));',
+    '  }',
+    '  return selected;',
+    '};',
     `const pluginId = ${JSON.stringify(model.metadata.name)};`,
     'const applyContext = async (ctx, sessionID, definition, output) => {',
     '  const text = output?.hookSpecificOutput?.additionalContext;',
@@ -347,7 +320,7 @@ export const openCodePluginEntrySource = (
     '  if (typeof text !== "string" || text === "") throw new Error("OpenCode additionalContext must be a nonempty string.");',
     '  await ctx.session.instructions.entry.put({',
     '    sessionID,',
-    '    key: `${pluginId}:${definition.path}`,',
+    '    key: `agent-bundle-${createHash("sha256").update(`${pluginId}:${definition.path}`).digest("hex").slice(0, 24)}`,',
     '    value: text,',
     '  });',
     '};',
@@ -418,13 +391,13 @@ export const openCodePluginEntrySource = (
     '    for (const definition of hookDefinitions) {',
     '      if (definition.nativeEvent === "tool.execute.before") {',
     '        cleanup.push(await ctx.tool.hook("execute.before", async (event) => {',
-    '          if (!matches(definition, event.tool)) return;',
+    '          if (!await matches(ctx, definition, event.tool)) return;',
     '          const output = await runHook(definition, { hook_event_name: definition.nativeEvent, session_id: event.sessionID, cwd: ctx.location.directory, tool_input: event.input, tool_name: event.tool, tool_use_id: event.id }, new AbortController().signal);',
     '          await applyBeforeToolOutput(ctx, event, definition, output);',
     '        }));',
     '      } else if (definition.nativeEvent === "tool.execute.after" || definition.nativeEvent === "tool.execute.after.error") {',
     '        cleanup.push(await ctx.tool.hook("execute.after", async (event) => {',
-    '          if (!matches(definition, event.tool)) return;',
+    '          if (!await matches(ctx, definition, event.tool)) return;',
     '          if (definition.nativeEvent === "tool.execute.after" && event.status !== "completed") return;',
     '          if (definition.nativeEvent === "tool.execute.after.error" && event.status !== "error") return;',
     '          const output = await runHook(definition, { hook_event_name: definition.nativeEvent, session_id: event.sessionID, cwd: ctx.location.directory, tool_input: event.input, tool_name: event.tool, tool_response: event.status === "completed" ? event.result : event.error, tool_use_id: event.id, ...(event.status === "error" ? { error: event.error.message } : {}) }, new AbortController().signal);',

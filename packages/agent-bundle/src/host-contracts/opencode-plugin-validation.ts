@@ -34,6 +34,7 @@ export interface ValidateOpenCodePluginOptions {
 }
 
 interface OpenCodeStaticIssue {
+  readonly code: 'AB6040';
   readonly message: string;
   readonly severity: DiagnosticSeverity;
 }
@@ -66,10 +67,10 @@ export const validateOpenCodePluginFiles = async (options: {
       document = JSON.parse(await readFile(join(options.pluginDirectory, path), 'utf8')) as unknown;
     } catch (error) {
       if (!required && isErrno(error, 'ENOENT')) return;
-      issues.push({ message: `${path} is missing or invalid JSON (${errorMessage(error)}).`, severity: 'error' });
+      issues.push({ code: 'AB6040', message: `${path} is missing or invalid JSON (${errorMessage(error)}).`, severity: 'error' });
       return;
     }
-    if (!validate(document)) issues.push({ message: `${path} does not satisfy its pinned OpenCode V2 schema.`, severity: 'error' });
+    if (!validate(document)) issues.push({ code: 'AB6040', message: `${path} does not satisfy its pinned OpenCode V2 schema.`, severity: 'error' });
   };
   await read(openCodeArtifactPaths.config, openCodeConfigValidator, true);
   await read(openCodeArtifactPaths.package, openCodePluginValidator, true);

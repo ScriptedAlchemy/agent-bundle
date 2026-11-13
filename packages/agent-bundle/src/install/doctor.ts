@@ -26,6 +26,9 @@ import {
   validateCursorPluginSymlinks,
 } from '../host-contracts/cursor-plugin-validation.ts';
 import { validatePortablePluginFiles } from '../host-contracts/portable-plugin-validation.ts';
+import { validateOpenCodePluginFiles } from '../host-contracts/opencode-plugin-validation.ts';
+import { openCodeArtifactPaths } from '../adapters/opencode.ts';
+import { openCodeInstallLocation } from './opencode.ts';
 import type {
   BoundedChildProcessRequest,
   BoundedChildProcessResult,
@@ -114,7 +117,7 @@ export interface DoctorOptions {
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
   readonly from?: string;
   readonly home?: string;
-  readonly hosts?: readonly (DoctorHost | 'grokbot')[];
+  readonly hosts?: readonly (DoctorHost | 'grokbot' | 'opencode')[];
   readonly platform?: NodeJS.Platform;
 }
 
@@ -339,7 +342,7 @@ export interface DoctorHostReport {
     readonly marketplace?: string;
   };
   readonly diagnostics: readonly Diagnostic[];
-  readonly host: DoctorHost | 'grokbot';
+  readonly host: DoctorHost | 'grokbot' | 'opencode';
   readonly inventory: DoctorInventory;
   readonly probe: DoctorHostProbe;
   /** Agent Bundle store receipts under the host root, cross-checked against the host's inventory. */
@@ -402,7 +405,7 @@ const diagnostic = (
   message: string,
   recovery: string,
   severity: DiagnosticSeverity,
-  target?: DoctorHost | 'grokbot',
+  target?: DoctorHost | 'grokbot' | 'opencode',
 ): Diagnostic => Object.freeze({
   code,
   message,
@@ -412,7 +415,7 @@ const diagnostic = (
 });
 
 const versionFrom = (output: string): string | undefined =>
-  /(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)/u.exec(output)?.[1];
+  /(?:^|\s)[vV]?(\d+\.\d+\.\d+)(?:\s|$)/u.exec(output)?.[1];
 
 interface DoctorStaticValidationIssue {
   readonly code: string;
@@ -424,7 +427,7 @@ type DoctorStaticDiagnosticCode = 'AB7319' | 'AB7320';
 
 const staticValidationDiagnostics = (
   code: DoctorStaticDiagnosticCode,
-  host: DoctorHost,
+  host: DoctorHost | 'opencode',
   root: string,
   issues: readonly DoctorStaticValidationIssue[],
 ): readonly Diagnostic[] => freezeDiagnostics(issues.map((issue) => diagnostic(
@@ -439,7 +442,7 @@ const staticValidationDiagnostics = (
 
 const validateBundleFiles = async (
   root: string,
-  host: DoctorHost,
+  host: DoctorHost | 'opencode',
   files: readonly string[],
 ): Promise<readonly DoctorStaticValidationIssue[]> => {
   switch (host) {
@@ -449,6 +452,8 @@ const validateBundleFiles = async (
       return validateCodexPluginFiles({ pluginDirectory: root, target: host });
     case 'cursor':
       return validateCursorPluginFiles({ files, pluginDirectory: root, target: host });
+    case 'opencode':
+      return validateOpenCodePluginFiles({ pluginDirectory: root, target: host });
     default: {
       const exhaustive: never = host;
       throw new TypeError(`Unknown Doctor host ${String(exhaustive)}.`);
@@ -754,7 +759,7 @@ const inspectOperatorEnv = async (
 };
 
 const probeBinary = async (
-  host: Exclude<DoctorHost, 'cursor'>,
+  host: Exclude<DoctorHost, 'cursor'> | 'opencode',
   cwd: string,
   run: DoctorCommandRunner,
 ): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly probe: DoctorHostProbe }> => {
@@ -1361,7 +1366,7 @@ const publicHostInventory = async (
 };
 
 const malformedBundle = (
-  host: DoctorHost,
+  host: DoctorHost | 'opencode',
   error: unknown,
 ): {
   readonly diagnostics: readonly Diagnostic[];
@@ -1515,7 +1520,7 @@ const cursorStagedLifecycle = (repoRoot: string, imported: boolean): DoctorLifec
 const describeObservation = (observation: DoctorLifecycleObservation): string =>
   observation.status === 'observed' ? (observation.value ? 'yes' : 'no') : 'unavailable';
 
-const lifecycleDiagnostic = (host: DoctorHost, name: string, version: string, lifecycle: DoctorLifecycle): Diagnostic => {
+const lifecycleDiagnostic = (host: DoctorHost | 'opencode', name: string, version: string, lifecycle: DoctorLifecycle): Diagnostic => {
   const unavailableStages = lifecycleStages.filter((stage) => lifecycle[stage].status === 'unavailable');
   const detail = unavailableStages.length === 0
     ? ''
@@ -2782,6 +2787,107 @@ const doctorHost = async (
   });
 };
 
+const doctorOpenCode = async (
+  options: DoctorOptions,
+  home: string,
+  run: DoctorCommandRunner,
+): Promise<DoctorHostReport> => {
+  const probed = await probeBinary('opencode', home, run);
+  const diagnostics = [...probed.diagnostics];
+  if (options.from === undefined) {
+    return Object.freeze({
+      diagnostics: freezeDiagnostics(diagnostics),
+      host: 'opencode',
+      inventory: freezeInventory('skipped'),
+      probe: probed.probe,
+      receipts: Object.freeze([]),
+    });
+  }
+  try {
+    const identity = await readBundleIdentity(options.from, 'opencode');
+    const artifact = await bundleInventory(identity);
+    const location = openCodeInstallLocation(options, identity, 'user');
+    const installed = await exists(location.destination);
+    const receipt = await readInstallReceipt(location.destination);
+    const retainedRemnant = receipt !== undefined && isRemnantReceipt(receipt);
+    const staticDiagnostics = staticValidationDiagnostics(
+      'AB7319',
+      'opencode',
+      identity.bundleRoot,
+      await validateOpenCodePluginFiles({ pluginDirectory: identity.bundleRoot, target: 'opencode' }),
+    );
+    const comparison = await compareInstalledTree({
+      artifact,
+      destination: location.destination,
+      plugin: identity.plugin,
+      version: identity.version,
+    });
+    const lifecycle = lifecycleOf({
+      active: unavailable('OpenCode V2 exposes no reliable read-only local-plugin activation inventory; plugin.list may remain empty even after native setup.'),
+      enabled: unavailable('Directory discovery is not an enabled-state inventory; use native skill/MCP/command registration to exercise actual activation.'),
+      placed: observed(installed && !retainedRemnant, `package directory ${location.destination}`),
+      registered: observed(receipt !== undefined && !retainedRemnant, `receipt ${join(location.destination, installReceiptFile)}`),
+    });
+    diagnostics.push(...staticDiagnostics, lifecycleDiagnostic('opencode', identity.plugin, identity.version, lifecycle));
+    const state = retainedRemnant
+      ? 'missing'
+      : staticDiagnostics.some((entry) => entry.severity === 'error')
+      ? 'corrupt'
+      : comparison.status === 'current'
+        ? 'installed'
+        : comparison.status === 'stale'
+          ? 'drifted'
+          : comparison.status === 'foreign' || comparison.status === 'version-mismatch'
+            ? 'conflicted'
+            : 'missing';
+    const receiptSummary = receipt === undefined ? {} : {
+      receipt: Object.freeze({
+        contentHash: receipt.contentHash,
+        format: receipt.format,
+        installedAt: receipt.installedAt,
+        mode: receipt.mode,
+        scope: receipt.scope,
+        updatedAt: receipt.updatedAt,
+      }),
+    };
+    return Object.freeze({
+      diagnostics: freezeDiagnostics(diagnostics),
+      host: 'opencode',
+      inventory: freezeInventory(installed ? 'known' : 'skipped', installed ? [{
+        entry: openCodeArtifactPaths.entry,
+        name: identity.plugin,
+        path: location.destination,
+        state,
+        version: identity.version,
+        ...receiptSummary,
+      }] : []),
+      probe: probed.probe,
+      receipts: Object.freeze([]),
+      bundle: Object.freeze({
+        bundleRoot: identity.bundleRoot,
+        comparison: installComparison(comparison, location.destination),
+        lifecycle,
+        manifest: openCodeArtifactPaths.package,
+        name: identity.plugin,
+        path: location.destination,
+        state,
+        version: identity.version,
+        ...receiptSummary,
+      }),
+    });
+  } catch (error) {
+    const malformed = malformedBundle('opencode', error);
+    return Object.freeze({
+      diagnostics: freezeDiagnostics([...diagnostics, ...malformed.diagnostics]),
+      host: 'opencode',
+      inventory: freezeInventory('unknown'),
+      probe: probed.probe,
+      receipts: Object.freeze([]),
+      ...(malformed.finding === undefined ? {} : { bundle: malformed.finding }),
+    });
+  }
+};
+
 /** `AB7335`: which parts of a receipted Grok Bot sideload remain, and whether Grok Bot loaded it. */
 const grokBotSideloadDiagnostic = (plugin: string, sideload: DoctorGrokBotSideload): Diagnostic => {
   const where = `${sideload.repo} @ ${sideload.commit}, cache ${sideload.slug}`;
@@ -2938,11 +3044,15 @@ const doctorGrokBot = async (options: DoctorOptions, home: string): Promise<Doct
 export const runDoctor = async (options: DoctorOptions = {}): Promise<DoctorReport> => {
   const home = options.home ?? homedir();
   const run = options.commandRunner ?? defaultCommandRunner;
-  const hosts = options.hosts ?? Object.freeze(['claude', 'codex', 'cursor'] as const);
+  const hosts = options.hosts ?? Object.freeze(['claude', 'codex', 'cursor', 'opencode'] as const);
   const uniqueHosts = [...new Set(hosts)];
   const hostReports: DoctorHostReport[] = [];
   for (const host of uniqueHosts) {
-    hostReports.push(host === 'grokbot' ? await doctorGrokBot(options, home) : await doctorHost(host, options, home, run));
+    hostReports.push(host === 'grokbot'
+      ? await doctorGrokBot(options, home)
+      : host === 'opencode'
+        ? await doctorOpenCode(options, home, run)
+        : await doctorHost(host, options, home, run));
   }
   const endpoints = await scanEndpoints(
     options.endpointDirectory ?? doctorEndpointDirectory(),

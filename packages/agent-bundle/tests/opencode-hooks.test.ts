@@ -60,8 +60,8 @@ const native = JSON.parse(input);
 await import('node:fs/promises').then(({ appendFile }) => appendFile(process.env.HOOK_LOG, JSON.stringify(native) + '\\n'));
 let output;
 if (native.hook_event_name === 'tool.execute.before') {
-  output = native.tool_name === 'delete'
-    ? { hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: 'delete denied' } }
+  output = native.tool_name === 'shell'
+    ? { hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: 'shell denied' } }
     : { hookSpecificOutput: { additionalContext: 'before context', updatedInput: { filePath: 'safe.txt' } } };
 } else if (native.hook_event_name === 'tool.execute.after') {
   output = { hookSpecificOutput: { additionalContext: 'after context' } };
@@ -83,6 +83,8 @@ it('registers and applies native V2 hook outputs through the emitted structural 
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-opencode-hooks-'));
   try {
     const selected = model();
+    selected.hooks[0]!.tools = ['shell', 'mcp', 'file.read'];
+    selected.hooks[0]!.nativeTools = [{ name: 'browser_click', target: 'opencode' }];
     const plan = openCodeAdapter.plan(selected);
     expect(plan.diagnostics).toEqual([]);
     expect(plan.hookEntries?.map((entry) => entry.nativeEvent).sort()).toEqual([
@@ -109,7 +111,10 @@ it('registers and applies native V2 hook outputs through the emitted structural 
     const subscribeCalls: { types?: readonly string[]; signal?: AbortSignal }[] = [];
     const ctx = {
       location: { directory: '/workspace' },
-      mcp: { transform: async () => ({ dispose: async () => undefined }) },
+      mcp: {
+        list: async () => [{ name: 'generated-native-fixture', status: { status: 'connected' } }],
+        transform: async () => ({ dispose: async () => undefined }),
+      },
       skill: { transform: async () => ({ dispose: async () => undefined }) },
       command: { transform: async () => ({ dispose: async () => undefined }) },
       tool: {
@@ -151,15 +156,23 @@ it('registers and applies native V2 hook outputs through the emitted structural 
     await flush();
 
     const before = {
-      id: 'call-1', input: { filePath: 'unsafe.txt' }, sessionID: 'session-1', tool: 'read',
+      id: 'call-1', input: { filePath: 'unsafe.txt' }, sessionID: 'session-1', tool: 'generated-native-fixture_generated_native_echo',
     };
     await callbacks.get('tool.execute.before')![0]!(before as never);
+    const nativePositive = {
+      id: 'native-positive', input: { filePath: 'unsafe.txt' }, sessionID: 'session-1', tool: 'browser_click',
+    };
+    await callbacks.get('tool.execute.before')![0]!(nativePositive as never);
+    expect(nativePositive.input).toEqual({ filePath: 'safe.txt' });
+    await callbacks.get('tool.execute.before')![0]!({
+      id: 'builtin-not-mcp', input: {}, sessionID: 'session-1', tool: 'opencode_session_rename',
+    } as never);
     expect(before.input).toEqual({ filePath: 'safe.txt' });
     await expect(callbacks.get('tool.execute.before')![0]!({
-      id: 'call-denied', input: {}, sessionID: 'session-1', tool: 'delete',
-    } as never)).rejects.toThrow('delete denied');
+      id: 'call-denied', input: {}, sessionID: 'session-1', tool: 'shell',
+    } as never)).rejects.toThrow('shell denied');
     expect(instructionEntries).toContainEqual(expect.objectContaining({
-      key: expect.stringContaining('hooks-fixture'),
+      key: expect.stringMatching(/^agent-bundle-[0-9a-f]{24}$/u),
       sessionID: 'session-1',
       value: 'before context',
     }));
@@ -194,7 +207,9 @@ it('registers and applies native V2 hook outputs through the emitted structural 
       'tool.execute.after.error',
       'tool.execute.before',
       'tool.execute.before',
+      'tool.execute.before',
     ]);
+    expect(native.some((entry) => entry['tool_use_id'] === 'builtin-not-mcp')).toBe(false);
     expect(native.find((entry) => entry['hook_event_name'] === 'session.created')).toMatchObject({
       session_id: 'session-native',
       source: 'startup',
