@@ -58,9 +58,9 @@
   "hooks": {
     "registration": "api",
     "events": {
+      "sessionStart": "session.created",
       "beforeTool": "tool.execute.before",
-      "afterTool": "tool.execute.after",
-      "stop": "session.experimental.idle"
+      "afterTool": "tool.execute.after"
     },
     "matchers": {
       "shell": "^shell$",
@@ -123,8 +123,17 @@
         "state": "supported"
       },
       "session/start": {
-        "state": "unavailable",
-        "reason": "The V2 2.2.6 SessionHooks union has prompt, request/compaction/retry and experimental.idle, but no session-start hook. Plugin setup is not a session-start event."
+        "nativeEvent": "session.created",
+        "payload": {
+          "sessionId": "session_id",
+          "cwd": "cwd",
+          "source": "source"
+        },
+        "state": "supported",
+        "evidence": [
+          "2026-11-12: installed @opencode/cli 2.2.6 invoked context.event.subscribe({types:['session.created'],signal}) for a real local plugin; session.create emitted sessionID and location.directory without a provider/model call, and abort+await stopped the loop in cleanup.",
+          "Creation alone does not distinguish resume or clear, so the native source is always startup and no model/session result channel is inferred."
+        ]
       },
       "session/end": {
         "state": "unavailable",
