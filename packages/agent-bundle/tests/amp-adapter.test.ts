@@ -86,7 +86,7 @@ const writes = (model: NormalizedPlugin): Readonly<Record<string, string>> => Ob
 it('registers Amp as a built-in directory-plugin target with pinned evidence', () => {
   const registry = createDefaultRegistry();
 
-  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor', 'amp']);
+  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor', 'opencode', 'amp']);
   expect(registry.builtInHost('amp')).toBe('amp');
   expect(registry.supports('amp', 'hooks')).toBe(true);
   expect(registry.supports('amp', 'mcp')).toBe(true);
@@ -646,7 +646,7 @@ it('builds a relocatable self-contained Amp artifact with manifest and evidence 
       routeGraph: emptyCompiledRouteGraph,
     });
     const entryPath = '.amp/plugins/amp-review/index.js';
-    expect(result.manifest.manifestVersion).toBe(6);
+    expect(result.manifest.manifestVersion).toBe(7);
     expect(result.manifest.projections).toEqual([{
       builtInHost: 'amp',
       documents: { entry: entryPath },

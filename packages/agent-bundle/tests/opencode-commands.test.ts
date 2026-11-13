@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 import { expect, it } from '@rstest/core';
 
-import { openCodeAdapter, openCodePluginEntrySource } from '../src/adapters/opencode.ts';
+import { openCodePluginEntrySource } from '../src/adapters/opencode.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { removeTree } from './support/remove-tree.ts';
 
@@ -68,10 +68,20 @@ it('expands positional arguments in one literal pass without reprocessing argume
       prompt: { text: 'one two three four five six seven eight nine ten $& $$' },
       sessionID: 'session-1',
     });
+    const quotedInputs = [
+      '"one two" three four five six seven eight nine ten eleven',
+      "'one two' three four five six seven eight nine ten eleven",
+    ];
+    for (const text of quotedInputs) {
+      await registered!.execute({ delivery: 'steer', prompt: { text }, sessionID: 'session-1' });
+    }
     expect(prompts).toEqual([expect.objectContaining({
       sessionID: 'session-1',
       text: 'one / ten $& $$ / one two three four five six seven eight nine ten $& $$',
-    })]);
+    }), ...quotedInputs.map((text) => expect.objectContaining({
+      sessionID: 'session-1',
+      text: `one two / eleven / ${text}`,
+    }))]);
   } finally {
     await removeTree(root);
   }

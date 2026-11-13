@@ -184,7 +184,7 @@ const validManifest = (): ArtifactManifest => ({
     file('runtime/scripts/lint.mjs', 'bundle'),
     file('runtime/scripts/lint.worker.mjs', 'bundle'),
   ],
-  manifestVersion: 6,
+  manifestVersion: 7,
   projections: [
     {
       builtInHost: 'claude',
@@ -321,7 +321,7 @@ const minimalManifest = (): ArtifactManifest => ({
   distribution: { channels: ['local'], payloads: [] },
   executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
   files: [],
-  manifestVersion: 6,
+  manifestVersion: 7,
   projections: [],
   routes: { digest: hash('1'), events: [], layouts: [], providers: [], scripts: [], servers: [] },
   runtime: { node: '22.12.0' },
@@ -529,7 +529,7 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
  * sweep covers key deletion, unknown keys, and retyping). Both reject.
  */
 const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest) => void; readonly rule: string }[] = [
-  { apply: (manifest) => { (manifest as Record_).manifestVersion = 3; }, rule: 'manifestVersion is 6' },
+  { apply: (manifest) => { (manifest as Record_).manifestVersion = 6; }, rule: 'manifestVersion is 7' },
   { apply: (manifest) => { (manifest.compiler.producer as Record_).name = 'other'; }, rule: 'compiler.producer.name is agent-bundle' },
   { apply: (manifest) => { (manifest.compiler as Record_).recordVersion = 2; }, rule: 'compiler.recordVersion is 1' },
   { apply: (manifest) => { (manifest.routes.cli!.commands![0]!.projection as Record_).input = 'yaml'; }, rule: 'cli projection input is json' },
@@ -707,7 +707,7 @@ it('encodes the parser rules a schema can state, so both reject the same values'
   expect(outcomes).toEqual(schemaEncodedRules.map(({ rule }) => ({ parser: 'rejects', rule, schema: 'rejects' })));
 });
 
-it('accepts a JSON-mode CLI projection (manifestVersion 6) in both the parser and the schema', () => {
+it('accepts a JSON-mode CLI projection (manifestVersion 7) in both the parser and the schema', () => {
   const manifest = clone();
   (manifest.routes.cli!.commands![0]!.projection as Record_).input = 'json';
   expect(parseArtifactManifest(canonicalBytes(manifest))).toEqual(manifest);
@@ -753,7 +753,7 @@ it('leaves byte-level rules to the parser: a parsed value carries no formatting 
   expect(validateArtifactManifestSchema(JSON.parse(pretty))).toEqual([]);
 });
 
-it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 6 that matches the shipped file', async () => {
+it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 7 that matches the shipped file', async () => {
   expect(artifactManifestSchema.$schema).toBe('https://json-schema.org/draft/2020-12/schema');
   expect(artifactManifestSchema.$id).toBe('https://scriptedalchemy.github.io/agent-bundle/schemas/agent-bundle.manifest.schema.json');
   expect(artifactManifestSchema.type).toBe('object');
@@ -761,7 +761,7 @@ it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 6 tha
   expect(artifactManifestSchema.required).toEqual(Object.keys(minimalManifest()).sort());
   const properties = asObject(artifactManifestSchema.properties);
   expect(Object.keys(properties)).toEqual([...Object.keys(minimalManifest()), 'web'].sort());
-  expect(asObject(properties.manifestVersion).const).toBe(6);
+  expect(asObject(properties.manifestVersion).const).toBe(7);
 
   expect(Object.isFrozen(artifactManifestSchema)).toBe(true);
   expect(Object.isFrozen(properties)).toBe(true);

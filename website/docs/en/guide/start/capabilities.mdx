@@ -1,5 +1,5 @@
 ---
-description: 'Choose among all five built-in output targets, find the generated capability matrices, and distinguish plugin emission, client compatibility, browser presentation, and verified execution.'
+description: 'Choose among all six built-in output targets, find the generated capability matrices, and distinguish plugin emission, client compatibility, browser presentation, and verified execution.'
 ---
 
 # Targets and capability map
@@ -11,7 +11,7 @@ the same plugin interface.
 
 ## All built-in output targets
 
-These are the five built-in values of `targets` in `agent-bundle.config.ts`. They select what
+These are the six built-in values of `targets` in `agent-bundle.config.ts`. They select what
 the compiler emits, not an account, a model, or a running development session.
 
 | Target | Output and intended reader | Important boundary |
@@ -20,6 +20,7 @@ the compiler emits, not an account, a model, or a running development session.
 | `claude` | Claude Code: `.claude-plugin/plugin.json`, the generated marketplace entry, `hooks/hooks.json`, and `.mcp.json` where applicable. | Compiled semantic hooks and explicitly authored native hooks have different authoring contracts. Native additions such as LSP declarations stay Claude-specific. |
 | `codex` | Codex: `.codex-plugin/plugin.json` and explicit pointers to its own hook/MCP documents, plus `.agents/plugins/marketplace.json`. | CLI, editor, and desktop behavior must be qualified separately. Serving an MCP App resource does not imply that every Codex client displays it. |
 | `cursor` | Cursor: `.cursor-plugin/plugin.json` and its own hook/MCP documents; an optional marketplace document. | The owned local-copy installation path differs from native marketplace CLI installation. Do not write Cursor's global hook configuration by hand. |
+| `opencode` | Native OpenCode V2 package: root `index.js` and `package.json`, `.opencode/opencode.json`, commands, Skills, MCP transforms, and supported hook registrations. | Pinned to the V2 2.2.6 contract. No native marketplace, MCP App display, rules, agent documents, or LSP projection. Schema/version validation does not prove activation. |
 | `portable` | Agent Plugins 1.0.0: root `plugin.json`, Skills, and `mcp.json` where authored. | This is a format target, not a universal host. It does not define native hooks, rules, or slash-command documents. Each reader's supported subset is recorded separately. |
 
 Omitting `targets` selects `portable` alone. Explicit selection replaces that default:
@@ -115,6 +116,9 @@ The host matrix's **Recorded third-party clients** section describes readers of 
 output format. Its client names are not additional values for `targets`. A research issue for
 a host is also not an installed adapter.
 
+The native `opencode` target is separate from older OpenCode portable-client records. Select
+`targets: ['opencode']` for the V2 API package; a portable compatibility record does not describe
+that package's hooks or lifecycle.
 Read each client's tier and surface rows together. A skills-only reader may not read `plugin.json`.
 A reader of `mcp.json` may not expand the path tokens needed to start its server. An installation
 command may register a directory rather than copy it. A higher-priority manifest may redirect
@@ -131,7 +135,7 @@ here as supported targets.
 | Surface | Selection | What it does not imply |
 | --- | --- | --- |
 | Compilation | `targets` / build `--target` | All selected hosts expose identical features or share one native installation root. |
-| Development installation | `dev --install-host claude`, `codex`, or `cursor` | Every native target supports the live development proxy. Experimental Amp uses its documented copy/reload path; that path is not a live-activation proof. |
+| Development installation | `dev --install-host claude`, `codex`, `cursor`, or `opencode` | Every native target supports the live development proxy. Experimental Amp uses its documented copy/reload path; that path is not a live-activation proof. |
 | Embedded host terminal | The installed, supported Claude/Codex host-session integration | Authentication, trust, and successful model execution are supplied by the real host, not simulated by the Workbench. |
 | App presentation | A supported browser-host `--profile` | That profile is a native output target or the correct server launch projection. |
 | npm distribution | Pack the generated npm root | Installing the npm package automatically registers it with an agent host. |

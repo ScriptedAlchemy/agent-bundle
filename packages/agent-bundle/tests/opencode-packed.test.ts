@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -68,8 +68,8 @@ it('loads a packed native V2 package through its generated package-bound install
     expect(await readOpenCodeVersion(binary)).toBe('2.2.6');
 
     await Promise.all([
-      rm(join(project, 'src'), { force: true, recursive: true }),
-      rm(join(project, 'node_modules'), { force: true, recursive: true }),
+      removeTree(join(project, 'src')),
+      removeTree(join(project, 'node_modules')),
     ]);
     const installedOutput = await execute(process.execPath, [join(project, 'dist', installBin!), 'install', 'opencode', '--scope', 'project', '--json'], {
       cwd: project,

@@ -46,7 +46,7 @@ import { runtimeIgnoredRoot } from './runtime-path.ts';
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 
 /**
- * The framework-owned npm root: the proven artifact tree is copied unchanged,
+ * The framework-owned npm root: the proven artifact tree is copied,
  * then authored package-only bins and the optional library entry are added.
  * Routed CLI bins are never recompiled here; package.json points at the
  * artifact executable recorded by agent-bundle.manifest.json.
@@ -455,9 +455,9 @@ export const buildPackageOutputs = async (options: {
     const packageDocumentValue = await packageDocument(projectRoot, packageBuild, manifest, stagedPaths);
     const mergedPackage = nativeOpenCode
       ? {
-          ...packageDocumentValue,
           ...nativePackageValue,
-          ...(packageDocumentValue.bin === undefined ? {} : { bin: packageDocumentValue.bin }),
+          ...packageDocumentValue,
+          type: 'module',
           exports: {
             ...(typeof packageDocumentValue.exports === 'object' && packageDocumentValue.exports !== null ? packageDocumentValue.exports : {}),
             '.': './index.js',

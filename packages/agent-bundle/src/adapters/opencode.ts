@@ -3,7 +3,6 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
-import { isPlainDataRecord } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import {
   pathTokens,
@@ -41,6 +40,7 @@ import {
   createAdapterValidator,
   payloadCopyEntries,
   schemaDescriptorsFrom,
+  skillArtifactEntries,
   sortedEntries,
   sourceInputs,
   standardArtifactLayout,
@@ -274,7 +274,7 @@ export const openCodePluginEntrySource = (
     '  for (const character of raw.trim()) {',
     '    if (quote !== undefined) {',
     '      if (character === quote) quote = undefined; else current += character;',
-    '    } else if (character === "\\\"" || character === "\'") quote = character;',
+    `    } else if (character === '"' || character === "'") quote = character;`,
     '    else if (/\\s/u.test(character)) { if (current !== "") { args.push(current); current = ""; } }',
     '    else current += character;',
     '  }',
@@ -516,26 +516,8 @@ export const planOpenCodeArtifacts = (model: NormalizedPlugin): TargetArtifactPl
         .map((server) => server.provenance.sourcePath)),
     });
   }
-  for (const skill of model.skills) {
-    if (!isSelected(skill.targets)) continue;
-    if (skill.markdown !== undefined) {
-      entries.push({
-        content: skill.markdown,
-        kind: 'write',
-        relativePath: `skills/${skill.name}/SKILL.md`,
-        sourceInputs: sourceInputs(skill.source),
-      });
-    }
-    for (const resource of skill.resources) {
-      entries.push({
-        bytes: resource.bytes,
-        kind: 'copy',
-        relativePath: `skills/${skill.name}/${resource.relativePath}`,
-        source: resource.source,
-        sourceInputs: sourceInputs(skill.source, resource.source),
-      });
-    }
-  }
+  entries.push(...skillArtifactEntries(model, openCodeName, isSelected));
+
   for (const command of model.commands ?? []) {
     if (!isSelected(command.targets)) continue;
     entries.push({

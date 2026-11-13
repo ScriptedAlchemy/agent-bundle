@@ -6,7 +6,7 @@
     "Official V2 documentation: https://opencode.ai/docs/build/plugins and /server define Plugin.define({ id, setup(ctx) }); local package exports and .opencode/plugins loading are defined at those pages and /plugins.",
     "Matching public SDK tarball @opencode/plugin@2.2.6: dist/promise/plugin.d.ts declares setup(context) returning Cleanup|void; registration.d.ts declares Promise<Registration> with dispose(); mcp.d.ts, skill.d.ts, command.d.ts, tool.d.ts and session.d.ts define the transforms and hooks used by this adapter.",
     "Official V2 configuration schema pinned from https://opencode.ai/config.json (hash below). Config, skills, commands, agents and MCP field prose was checked against https://opencode.ai/docs/{config,skills,commands,agents,mcp-servers}, not inferred from the schema alone.",
-    "package.schema.json and mcp.schema.json are local strict contracts for the generated npm envelope and the compiler-owned canonical server table consumed by the V2 transform; they are not represented as OpenCode-published standalone document schemas."
+    "package.schema.json validates the native V2 entry fields inside an npm envelope while retaining ordinary npm metadata; mcp.schema.json is the local strict contract for the compiler-owned canonical server table consumed by the V2 transform. Neither is represented as an OpenCode-published standalone document schema."
   ],
   "schemas": {
     "config.schema.json": {
@@ -21,8 +21,8 @@
     },
     "package.schema.json": {
       "source": "local strict contract derived from the V2 local plugin package loading documentation and the structural id/setup ABI proven on the installed host",
-      "bytes": 1217,
-      "sha256": "6b6b45540ccc42f0566074105b0d6ce174f69ad50a472afaed46b7f9d90d8b5e"
+      "bytes": 1052,
+      "sha256": "28b6c4f5b868bdcfd1c7919af3e2ff81b540817d8e2630ecdf74f8aaeffe96c8"
     }
   }
 }

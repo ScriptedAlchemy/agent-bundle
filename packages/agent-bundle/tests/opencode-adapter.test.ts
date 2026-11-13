@@ -15,6 +15,9 @@ import {
   openCodeConfigValidator,
   openCodeMcpValidator,
 } from '../src/adapters/opencode.ts';
+import { parseSkill } from '../src/config/skill.ts';
+import { lowerSkillIr } from '../src/skills/lower.ts';
+import { parseSkillIr } from '../src/skills/parse-ir.ts';
 import { readTargetMcpServers } from '../src/services/mcp-runtime.ts';
 import { removeTree } from './support/remove-tree.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
@@ -155,6 +158,68 @@ it('emits the artifact root as a relocatable native V2 package and project confi
     kind: 'copy',
     relativePath: 'skills/movie-library/references/api.md',
   }));
+});
+
+it('lowers authored host extensions before emitting OpenCode skills', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-opencode-skill-'));
+  try {
+    const dir = join(root, 'movie-library');
+    await mkdir(dir);
+    await writeFile(join(dir, 'SKILL.md'), [
+      '---',
+      'name: movie-library',
+      'description: Search and manage movies.',
+      'targets:',
+      '  codex:',
+      '    interface:',
+      '      display_name: Movie library',
+      '---',
+      '',
+      '# Movie library',
+      '',
+      'Search before answering.',
+      '',
+    ].join('\n'));
+    const document = await parseSkill(dir, root);
+    const hostDocument = lowerSkillIr(parseSkillIr(document), 'opencode');
+    expect(hostDocument.diagnostics).toEqual([]);
+    const model = plugin();
+    const skill = model.skills[0]!;
+    const plan = openCodeAdapter.plan({
+      ...model,
+      skills: [{ ...skill, hostDocuments: { opencode: hostDocument } }],
+    });
+    const skillEntries = plan.entries.filter((entry) => entry.relativePath === 'skills/movie-library/SKILL.md');
+    expect(skillEntries).toEqual([expect.objectContaining({
+      kind: 'write',
+      content: hostDocument.skillMarkdown,
+      sourceInputs: [skill.source],
+    })]);
+    expect(hostDocument.skillMarkdown).not.toContain('targets:');
+    expect(plan.entries).toContainEqual(expect.objectContaining({
+      kind: 'copy',
+      relativePath: 'skills/movie-library/references/api.md',
+    }));
+  } finally {
+    await removeTree(root);
+  }
+});
+
+it('accepts npm metadata while enforcing the native package entry contract', () => {
+  const document = {
+    ...openCodePluginPackage(plugin()),
+    name: '@example/npm-package',
+    description: '',
+    private: true,
+    bin: { install: './bin/install.js' },
+    dependencies: { 'ordinary-runtime': '^1.0.0' },
+    engines: { node: '>=22.19.0', npm: '>=10' },
+    exports: { '.': './index.js', './helper': './bin/install.js' },
+    scripts: { test: 'node --test' },
+  };
+  expect(openCodePluginValidator(document)).toBe(true);
+  expect(openCodePluginValidator({ ...document, type: 'commonjs' })).toBe(false);
+  expect(openCodePluginValidator({ ...document, exports: { '.': './missing.js' } })).toBe(false);
 });
 
 it('lowers canonical MCP servers to the native V2 local and remote transform shapes', async () => {

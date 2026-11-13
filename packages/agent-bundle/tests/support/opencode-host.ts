@@ -1,7 +1,7 @@
 import { spawn, execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
@@ -109,6 +109,17 @@ export interface OpenCodeNativeAcceptanceReport {
   readonly version?: string;
 }
 
+interface OpenCodeNativeResponses {
+  readonly 'command.list': { readonly data: readonly { readonly name: string }[] };
+  readonly 'skill.list': { readonly data: readonly { readonly id: string; readonly path: string }[] };
+  readonly 'session.create': { readonly data: { readonly id: string } };
+  readonly 'experimental.session.instructions.entry.list': {
+    readonly data: readonly { readonly key: string; readonly value: string }[];
+  };
+  readonly 'mcp.list': { readonly data: OpenCodeNativeAcceptanceReport['mcp'] };
+  readonly 'session.command': unknown;
+}
+
 export const runOpenCodeNativeAcceptance = async (options: {
   readonly binary: string;
   readonly pluginRoot: string;
@@ -120,6 +131,7 @@ export const runOpenCodeNativeAcceptance = async (options: {
   } as NodeJS.ProcessEnv;
   const isolationRoot = await mkdtempAcceptanceRoot();
   for (const [key, name] of [
+    ['HOME', 'home'],
     ['XDG_CONFIG_HOME', 'config'],
     ['XDG_DATA_HOME', 'data'],
     ['XDG_CACHE_HOME', 'cache'],
@@ -127,6 +139,7 @@ export const runOpenCodeNativeAcceptance = async (options: {
   ] as const) {
     environment[key] = join(isolationRoot, name);
   }
+  await mkdir(join(isolationRoot, 'home'), { recursive: true });
   const child = spawn(options.binary, ['serve', '--stdio', '--port', '0'], {
     cwd: options.workingDirectory,
     env: environment,
@@ -136,11 +149,11 @@ export const runOpenCodeNativeAcceptance = async (options: {
   child.stderr.on('data', (chunk: Buffer) => { stderr.push(chunk); });
   const lines = createInterface({ input: child.stdout });
   let serverUrl: string | undefined;
-  const invoke = async (
-    operation: string,
+  const invoke = async <Operation extends keyof OpenCodeNativeResponses>(
+    operation: Operation,
     data?: unknown,
     parameters: readonly string[] = [],
-  ): Promise<any> => JSON.parse((await execute(options.binary, [
+  ): Promise<OpenCodeNativeResponses[Operation]> => JSON.parse((await execute(options.binary, [
     'api',
     '--server',
     serverUrl!,
@@ -156,40 +169,47 @@ export const runOpenCodeNativeAcceptance = async (options: {
   try {
     const [handshake] = await once(lines, 'line');
     serverUrl = (JSON.parse(handshake) as { readonly url: string }).url;
-    const deadline = Date.now() + 20_000;
-    let commands: { readonly data: readonly { readonly name: string }[] };
-    do {
-      commands = await invoke('command.list');
-      if (commands.data.some((command) => command.name === 'find-movie')) break;
-      if (Date.now() > deadline) throw new Error(`Generated commands were not registered: ${Buffer.concat(stderr)}`);
-      await delay();
-    } while (true);
+    const until = async <Value>(
+      read: () => Promise<Value>,
+      ready: (value: Value) => boolean,
+      message: string,
+    ): Promise<Value> => {
+      const deadline = Date.now() + 20_000;
+      let value = await read();
+      while (!ready(value)) {
+        if (Date.now() > deadline) throw new Error(`${message}: ${Buffer.concat(stderr)}`);
+        await delay();
+        value = await read();
+      }
+      return value;
+    };
+    const commands = await until(
+      () => invoke('command.list'),
+      (value) => value.data.some((command) => command.name === 'find-movie'),
+      'Generated commands were not registered',
+    );
     const commandNames = commands.data.map((command) => command.name).sort();
     expect(commandNames).toEqual(expect.arrayContaining(['find-movie', 'positionals']));
 
     const skills = await invoke('skill.list');
-    const skill = skills.data.find((entry: { readonly id?: unknown }) => entry.id === 'movie-library');
+    const skill = skills.data.find((entry) => entry.id === 'movie-library');
     expect(skill, `Native skill registration missing: ${Buffer.concat(stderr)}`).toBeDefined();
+    expect(await realpath(skill!.path)).toBe(await realpath(join(options.pluginRoot, 'skills/movie-library/SKILL.md')));
 
     const session = await invoke('session.create', { title: 'Native OpenCode acceptance' });
-    const sessionID = session.data.id as string;
-    let instructions: { readonly data: readonly { readonly key: string; readonly value: string }[] };
-    const contextDeadline = Date.now() + 20_000;
-    do {
-      instructions = await invoke('experimental.session.instructions.entry.list', undefined, ['--param', `sessionID=${sessionID}`]);
-      if (instructions.data.some((entry) => entry.value === 'Native movie session context') && instructions.data.every((entry) => /^agent-bundle-[0-9a-f]{24}$/u.test(entry.key))) break;
-      if (Date.now() > contextDeadline) throw new Error(`session.created context did not reach instructions: ${Buffer.concat(stderr)}`);
-      await delay();
-    } while (true);
+    const sessionID = session.data.id;
+    await until(
+      () => invoke('experimental.session.instructions.entry.list', undefined, ['--param', `sessionID=${sessionID}`]),
+      (value) => value.data.some((entry) => entry.value === 'Native movie session context')
+        && value.data.every((entry) => /^agent-bundle-[0-9a-f]{24}$/u.test(entry.key)),
+      'session.created context did not reach instructions',
+    );
 
-    let mcp: { readonly data: OpenCodeNativeAcceptanceReport['mcp'] };
-    const mcpDeadline = Date.now() + 20_000;
-    do {
-      mcp = await invoke('mcp.list');
-      if (mcp.data.some((server) => server.name === 'library' && server.status?.status === 'connected')) break;
-      if (Date.now() > mcpDeadline) throw new Error(`Generated MCP did not connect: ${Buffer.concat(stderr)}`);
-      await delay();
-    } while (true);
+    const mcp = await until(
+      () => invoke('mcp.list'),
+      (value) => value.data.some((server) => server.name === 'library' && server.status?.status === 'connected'),
+      'Generated MCP did not connect',
+    );
     const mcpData = mcp.data;
     expect(mcpData.some((server) => server.name === 'library' && server.status?.status === 'connected')).toBe(true);
 
