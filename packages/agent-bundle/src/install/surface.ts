@@ -233,6 +233,40 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
   '',
 ];
 
+const openCodeInstructions = (model: NormalizedPlugin): string[] => [
+  '## OpenCode V2',
+  '',
+  `The bundle root is a native OpenCode V2 package. Its \`index.js\` default-exports \`Plugin.define\` from`,
+  '`@opencode/plugin@2.2.6`, and `.opencode/opencode.json` loads that package from the artifact root. The setup',
+  'registers the selected MCP servers, skills, commands, and supported V2 hooks. It never substitutes manually',
+  'copied portable skills for native registration.',
+  '',
+  'Install into the current project or the user-wide OpenCode configuration with the optional Agent Bundle CLI:',
+  '',
+  '```sh',
+  'npx agent-bundle install opencode --from ./ --scope project',
+  'npx agent-bundle install opencode --from ./ --scope user',
+  '```',
+  '',
+  `Project scope copies the package to \`./.opencode/plugins/${model.metadata.name}\`; user scope copies it to`,
+  `\`\${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/${model.metadata.name}\`. OpenCode discovers either package.`,
+  'Run OpenCode from the target project. Re-running the installer is a no-op for identical bytes, replaces same-version',
+  'content drift, and requires `--replace` for a different installed version. Foreign directories are refused.',
+  '',
+  'Inspect and remove receipt-owned installs with:',
+  '',
+  '```sh',
+  'npx agent-bundle doctor --host opencode --from ./',
+  'npx agent-bundle uninstall opencode --from ./ --scope project --plan',
+  'npx agent-bundle uninstall opencode --from ./ --scope project',
+  '```',
+  '',
+  'Use the same scope for uninstall as for installation. Unrelated OpenCode configuration and unowned files are',
+  'preserved. Durable runtime state is kept unless `--purge-data --confirm-purge` is explicit. A native V2 session',
+  'start hook and an MCP Apps display surface are not published at this pin, so the target does not claim them.',
+  '',
+];
+
 const ampInstructions = (model: NormalizedPlugin): string[] => [
   '## Amp',
   '',
@@ -459,6 +493,8 @@ const instructionsFor = (
       return codexInstructions(model);
     case 'cursor':
       return cursorInstructions(model);
+    case 'opencode':
+      return openCodeInstructions(model);
     case 'portable':
       return portableInstructions(planned);
     default: {

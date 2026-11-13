@@ -1,0 +1,25 @@
+{
+  "observedCliVersion": "2.2.6",
+  "retrieved": "2026-11-12",
+  "evidence": [
+    "Installed host: /opt/homebrew/bin/opencode reports `opencode v2.2.6`; its CLI exposes --standalone, --server, api, service, reload, serve, and plugin add/list/check/update/remove.",
+    "Official V2 documentation: https://opencode.ai/docs/build/plugins and /server define Plugin.define({ id, setup(ctx) }); local package exports and .opencode/plugins loading are defined at those pages and /plugins.",
+    "Matching public SDK tarball @opencode/plugin@2.2.6: dist/promise/plugin.d.ts declares setup(context) returning Cleanup|void; registration.d.ts declares Promise<Registration> with dispose(); mcp.d.ts, skill.d.ts, command.d.ts, tool.d.ts and session.d.ts define the transforms and hooks used by this adapter.",
+    "Official V2 configuration schema pinned from https://opencode.ai/config.json (hash below). Config, skills, commands, agents and MCP field prose was checked against https://opencode.ai/docs/{config,skills,commands,agents,mcp-servers}, not inferred from the schema alone.",
+    "package.schema.json and mcp.schema.json are local strict contracts for the generated npm envelope and the compiler-owned canonical server table consumed by the V2 transform; they are not represented as OpenCode-published standalone document schemas."
+  ],
+  "schemas": {
+    "config.schema.json": {
+      "source": "https://opencode.ai/config.json",
+      "sha256": "7204a56f845a69f186bd0b6cd47111178357bb170e22cd2666940cbe03a39302"
+    },
+    "mcp.schema.json": {
+      "source": "local strict contract derived from the canonical MCP normalized model and the V2 MCP local/remote transform API",
+      "sha256": "e303bfb0350195bbea54f533448d476e8b62c086b77eb52b4f0f0d02bcdd0407"
+    },
+    "package.schema.json": {
+      "source": "local strict contract derived from the V2 local plugin package loading documentation and @opencode/plugin@2.2.6 package metadata",
+      "sha256": "023224fa6c632fc198c2872cdce22a7c5579d564538436bc034e8ea9a52c0f5c"
+    }
+  }
+}

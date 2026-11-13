@@ -240,6 +240,10 @@ import {
   validatePortablePlugin,
   type PortablePluginValidationReport,
 } from './host-contracts/portable-plugin-validation.ts';
+import {
+  validateOpenCodePlugin,
+  type OpenCodePluginValidationReport,
+} from './host-contracts/opencode-plugin-validation.ts';
 import type { EvalComparison } from './eval/compare.ts';
 import { EvalRunStoreError } from './eval/errors.ts';
 import {
@@ -285,11 +289,12 @@ import {
 import { runWithPlatform, withTempDirectory } from './effect/platform.ts';
 import { liftPromise } from './effect/lift.ts';
 
-export { validateClaudePlugin, validateCodexPlugin, validateCursorPlugin, validatePortablePlugin };
+export { validateClaudePlugin, validateCodexPlugin, validateCursorPlugin, validateOpenCodePlugin, validatePortablePlugin };
 export type {
   ClaudePluginValidationReport,
   CodexPluginValidationReport,
   CursorPluginValidationReport,
+  OpenCodePluginValidationReport,
   PortablePluginValidationReport,
 };
 
@@ -432,6 +437,7 @@ export interface ValidateResult {
     | ClaudePluginValidationReport
     | CodexPluginValidationReport
     | CursorPluginValidationReport
+    | OpenCodePluginValidationReport
     | PortablePluginValidationReport
   )[];
   readonly model?: NormalizedPlugin;
@@ -776,6 +782,8 @@ const hostValidationReport = (
       return validateCodexPlugin({ pluginDirectory, strict, target });
     case 'cursor':
       return validateCursorPlugin({ pluginDirectory, target });
+    case 'opencode':
+      return validateOpenCodePlugin({ pluginDirectory, target });
     case 'portable':
       return validatePortablePlugin({ pluginDirectory, target });
     case 'claude':
