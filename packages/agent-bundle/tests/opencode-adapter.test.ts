@@ -115,8 +115,7 @@ it('registers OpenCode V2 as a first-class target with native document and runti
 });
 
 it('emits the artifact root as a relocatable native V2 package and project config', () => {
-  const model = plugin();
-  model.commands = [{
+  const model: NormalizedPlugin = { ...plugin(), commands: [{
     body: 'Find $ARGUMENTS and summarize the result.\n',
     frontmatter: { description: 'Find a movie' },
     id: 'command:find-movie',
@@ -125,14 +124,14 @@ it('emits the artifact root as a relocatable native V2 package and project confi
     provenance: { kind: 'conventional', sourcePath: '/workspace/src/commands/find-movie.md' },
     source: '/workspace/src/commands/find-movie.md',
     targets: ['opencode'],
-  }];
+  }] };
   const plan = openCodeAdapter.plan(model);
   expect(plan.diagnostics).toEqual([]);
   const documents = writes(model);
   const config = JSON.parse(documents['.opencode/opencode.json']!) as Record<string, unknown>;
   expect(config).toEqual({
     $schema: 'https://opencode.ai/config.json',
-    plugins: ['..'],
+    plugins: ['.'],
   });
   expect(openCodeConfigValidator(config)).toBe(true);
 
@@ -186,6 +185,12 @@ it('lowers canonical MCP servers to the native V2 local and remote transform sha
     await mkdir(join(root, 'skills', 'movie-library'), { recursive: true });
     await writeFile(join(root, 'skills', 'movie-library', 'SKILL.md'), '# Movie library\n');
     await writeFile(join(root, 'index.js'), openCodePluginEntrySource(model, internal, []));
+    await writeFile(join(root, openCodeArtifactPaths.mcp), JSON.stringify({
+      mcpServers: {
+        library: { ...internal.mcpServers['library'], args: ['dev-proxy.mjs'] },
+        remote: internal.mcpServers['remote'],
+      },
+    }));
     const plugin = await import(pathToFileURL(join(root, 'index.js')).href);
     const registered: Record<string, unknown> = {};
     await plugin.default.setup({
@@ -207,9 +212,7 @@ it('lowers canonical MCP servers to the native V2 local and remote transform sha
       library: {
         command: [
           'node',
-          `${resolve(root)}/mcp/library.mjs`,
-          '--data',
-          `${resolve(root, 'state')}`,
+          'dev-proxy.mjs',
         ],
         cwd: resolve(root),
         environment: {
@@ -228,6 +231,11 @@ it('lowers canonical MCP servers to the native V2 local and remote transform sha
     await removeTree(root);
   }
 
+  expect(openCodeAdapter.mcpRuntime!.resolveValue('cwd', {
+    pluginData: '/data',
+    pluginRoot: '/plugin',
+    workspaceRoot: '/workspace',
+  }, pathTokens.pluginRoot)).toEqual({ diagnostics: [], value: '/plugin' });
   const result = readTargetMcpServers(openCodeAdapter.mcpRuntime!, internal);
   expect(result.status).toBe('found');
   if (result.status === 'found') {
@@ -239,8 +247,7 @@ it('lowers canonical MCP servers to the native V2 local and remote transform sha
 });
 
 it('fails closed on unsupported MCP path tokens and invalid native documents', () => {
-  const model = plugin();
-  model.mcpServers = [{
+  const model: NormalizedPlugin = { ...plugin(), mcpServers: [{
     args: ['${CLAUDE_PLUGIN_ROOT}/mcp/library.mjs'],
     command: 'node',
     id: 'mcp:library',
@@ -248,7 +255,7 @@ it('fails closed on unsupported MCP path tokens and invalid native documents', (
     provenance: { kind: 'config', sourcePath: configPath },
     targets: ['opencode'],
     transport: 'stdio',
-  }];
+  }] };
   expect(openCodeAdapter.plan(model).diagnostics).toEqual([
     expect.objectContaining({ code: 'opencode.mcp.token', severity: 'error', target: 'opencode' }),
   ]);

@@ -82,9 +82,11 @@ const flush = async (): Promise<void> => {
 it('registers and applies native V2 hook outputs through the emitted structural plugin', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-opencode-hooks-'));
   try {
-    const selected = model();
-    selected.hooks[0]!.tools = ['shell', 'mcp', 'file.read'];
-    selected.hooks[0]!.nativeTools = [{ name: 'browser_click', target: 'opencode' }];
+    const selected: NormalizedPlugin = { ...model(), hooks: [{
+      ...model().hooks[0]!,
+      nativeTools: [{ name: 'browser_click', target: 'opencode' }],
+      tools: ['shell', 'mcp', 'file.read'],
+    }, ...model().hooks.slice(1)] };
     const plan = openCodeAdapter.plan(selected);
     expect(plan.diagnostics).toEqual([]);
     expect(plan.hookEntries?.map((entry) => entry.nativeEvent).sort()).toEqual([
@@ -217,6 +219,54 @@ it('registers and applies native V2 hook outputs through the emitted structural 
 
     await cleanup();
     expect(registrations.length).toBeGreaterThan(0);
+  } finally {
+    delete process.env.HOOK_LOG;
+    await removeTree(root);
+  }
+}, 30_000);
+
+it('isolates session.created hook failures per definition and keeps later sessions active', async () => {
+  const selected: NormalizedPlugin = { ...model(), hooks: [
+    hook('created-bad', 'sessionStart', { event: 'session/start', fallback: 'none', runtime: 'shared' }),
+    hook('created-good', 'sessionStart', { event: 'session/start', fallback: 'none', runtime: 'shared' }),
+  ] };
+  const plan = openCodeAdapter.plan(selected);
+  expect(plan.diagnostics).toEqual([]);
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-opencode-created-isolation-'));
+  try {
+    await mkdir(join(root, 'hooks'), { recursive: true });
+    await writeFile(join(root, 'index.js'), openCodePluginEntrySource(selected, undefined, plan.hookEntries ?? []));
+    await writeFile(join(root, 'hooks', 'created-bad.mjs'), 'throw new Error("intentional first hook failure");\n');
+    await writeFile(join(root, 'hooks', 'created-good.mjs'), wrapperFixture);
+    process.env.HOOK_LOG = join(root, 'events.ndjson');
+    const plugin = await import(pathToFileURL(join(root, 'index.js')).href);
+    const entries: Record<string, unknown>[] = [];
+    const controller = new AbortController();
+    await plugin.default.setup({
+      location: { directory: '/workspace' },
+      session: {
+        instructions: { entry: { put: async (entry: Record<string, unknown>) => { entries.push(entry); } } },
+      },
+      event: {
+        subscribe: (options: { signal?: AbortSignal }) => {
+          options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
+          return (async function* () {
+            for (const sessionID of ['session-first', 'session-second']) {
+              yield { type: 'session.created', data: { sessionID, location: { directory: '/workspace' } } };
+            }
+            await new Promise<void>((resolve) => controller.signal.addEventListener('abort', () => resolve(), { once: true }));
+          })();
+        },
+      },
+    });
+    for (let attempt = 0; attempt < 200 && entries.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry['sessionID'])).toEqual(['session-first', 'session-second']);
+    expect(entries.every((entry) => entry['value'] === 'session context')).toBe(true);
+    expect(entries.every((entry) => /^agent-bundle-[0-9a-f]{24}$/u.test(String(entry['key'])))).toBe(true);
+    controller.abort();
   } finally {
     delete process.env.HOOK_LOG;
     await removeTree(root);

@@ -109,7 +109,7 @@ const mcpRuntime = createTargetMcpRuntime({
   manifestPath: openCodeArtifactPaths.mcp,
   remoteTypes: ['streamable-http'],
   resolveValue: createMcpPathTokenResolver({
-    knownTokens: standardMcpPathTokens,
+    knownTokens: Object.freeze([...standardMcpPathTokens, ...Object.values(pathTokens)]),
     target: openCodeName,
     tokens: {
       args: {
@@ -349,7 +349,7 @@ export const openCodePluginEntrySource = (
     '  if (typeof output.reason !== "string" || output.reason === "") throw new Error("OpenCode idle continuation requires a nonempty reason.");',
     '  await ctx.session.synthetic({ sessionID: event.sessionID, text: output.reason });',
     '};',
-    `const mcpDocument = ${mcp === undefined ? 'undefined' : JSON.stringify(mcp)};`,
+    `const mcpDocument = ${mcp === undefined ? 'undefined' : 'JSON.parse(await readFile(new URL("agent-bundle.mcp.json", import.meta.url), "utf8"))'};`,
     '',
     'export default {',
     `  id: ${JSON.stringify(model.metadata.name)},`,
@@ -425,13 +425,17 @@ export const openCodePluginEntrySource = (
     '      const task = (async () => {',
     '        for await (const event of ctx.event.subscribe({ types: ["session.created"], signal: controller.signal })) {',
     '          for (const definition of definitions) {',
-    '            const output = await runHook(definition, {',
-    '              hook_event_name: definition.nativeEvent,',
-    '              session_id: event.data.sessionID,',
-    '              cwd: event.data.location?.directory ?? ctx.location.directory,',
-    '              source: "startup",',
-    '            }, controller.signal);',
-    '            await applyContext(ctx, event.data.sessionID, definition, output);',
+    '            try {',
+    '              const output = await runHook(definition, {',
+    '                hook_event_name: definition.nativeEvent,',
+    '                session_id: event.data.sessionID,',
+    '                cwd: event.data.location?.directory ?? ctx.location.directory,',
+    '                source: "startup",',
+    '              }, controller.signal);',
+    '              await applyContext(ctx, event.data.sessionID, definition, output);',
+    '            } catch (error) {',
+    '              if (!controller.signal.aborted) process.stderr.write(`OpenCode session.created hook ${definition.path} failed: ${error instanceof Error ? error.message : String(error)}\\n`);',
+    '            }',
     '          }',
     '        }',
     '      })();',
@@ -466,7 +470,7 @@ export const planOpenCodeArtifacts = (model: NormalizedPlugin): TargetArtifactPl
   diagnostics.push(...schemaDiagnostics('package', validatePackage(plugin), validatePackage.errors));
   const config = {
     $schema: 'https://opencode.ai/config.json',
-    plugins: ['..'],
+    plugins: ['.'],
   };
   diagnostics.push(...schemaDiagnostics('config', validateConfig(config), validateConfig.errors));
   for (const hook of model.hooks) {

@@ -250,7 +250,7 @@ export const uninstallOpenCode = async (
   await assertRealAncestors(location.destination, receipt.files);
   const retained = await listRetained(location.destination, new Set(receipt.files), new Set(receipt.directories));
   const files = [...receipt.files.map((file) => join(location.destination, file)), receiptPath];
-  const retainedReceipt = policy === 'keep' && retained.length > 0;
+  const retainedReceipt = retained.length > 0;
   const filesToRemove = retainedReceipt ? files.filter((path) => path !== receiptPath) : files;
   const internalDirectories = receipt.directories.map((directory) => join(location.destination, directory));
   const hostDirectories = receipt.hostDirectories.map((directory) => join(location.hostRoot, directory));

@@ -61,7 +61,7 @@ const cliProjectionSchema = z.strictObject({
 });
 const hostProjectionSchema = z.strictObject({
   diagnostics: z.array(diagnosticSchema),
-  host: z.enum(['claude', 'codex', 'cursor']),
+  host: z.enum(['claude', 'codex', 'cursor', 'opencode']),
   native: jsonObjectSchema.optional(),
 });
 const projectionSchema = z.strictObject({
@@ -72,7 +72,7 @@ const projectionSchema = z.strictObject({
 const invocationEventSchema = z.strictObject({
   canonical: jsonObjectSchema,
   event: textSchema,
-  host: z.enum(['claude', 'codex', 'cursor']).optional(),
+  host: z.enum(['claude', 'codex', 'cursor', 'opencode']).optional(),
   native: jsonObjectSchema.optional(),
 });
 const invocationSurfaceSchema = z.discriminatedUnion('kind', [
@@ -84,7 +84,7 @@ const invocationSurfaceSchema = z.discriminatedUnion('kind', [
   }),
   z.strictObject({
     fixtureId: textSchema.optional(),
-    host: z.enum(['claude', 'codex', 'cursor']).optional(),
+    host: z.enum(['claude', 'codex', 'cursor', 'opencode']).optional(),
     kind: z.literal('event'),
   }),
   z.strictObject({ kind: z.literal('script') }),

@@ -23,7 +23,7 @@ const writeBundle = async (root: string, version: string, marker: string): Promi
     writeFile(join(root, 'agent-bundle.mcp.json'), '{"mcpServers":{}}\n'),
   ]);
   await mkdir(join(root, '.opencode'), { recursive: true });
-  await writeFile(join(root, '.opencode', 'opencode.json'), '{"$schema":"https://opencode.ai/config.json","plugins":[".."]}\n');
+  await writeFile(join(root, '.opencode', 'opencode.json'), '{"$schema":"https://opencode.ai/config.json","plugins":["."]}\n');
   await writeInstallFixtureManifest(root, { name: pluginName, version }, [{ host: 'opencode', mcp: 'agent-bundle.mcp.json' }]);
 };
 
@@ -106,6 +106,7 @@ it('installs, diagnoses, replaces, and uninstalls a receipt-owned native V2 pack
         args: request.args,
         exitCode: 0,
         stderr: '',
+        signal: null,
         stdout: 'opencode v2.2.6\n',
       }),
       environment: {},
@@ -200,6 +201,99 @@ it('uses XDG user and explicit project roots, and refuses a foreign package dire
       environment: { XDG_CONFIG_HOME: xdg }, from: bundle, home, host: 'opencode', replace: true, scope: 'user',
     })).rejects.toThrow();
     await expect(readFile(join(system.destination!, 'unowned.txt'), 'utf8')).resolves.toBe('foreign\n');
+  } finally {
+    await removeTree(root);
+  }
+}, 30_000);
+
+it('reports the drifted alternative instead of letting a healthy scope hide it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-opencode-two-scopes-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const projectRoot = join(root, 'project');
+  const workingDirectory = process.cwd();
+  await mkdir(projectRoot, { recursive: true });
+  try {
+    await writeBundle(bundle, '1.0.0', 'first');
+    await installBundle({ from: bundle, home, host: 'opencode', projectRoot, scope: 'project' });
+    await installBundle({ environment: {}, from: bundle, home, host: 'opencode', scope: 'user' });
+    await writeBundle(bundle, '1.0.0', 'second');
+    await installBundle({ environment: {}, from: bundle, home, host: 'opencode', scope: 'user' });
+    process.chdir(projectRoot);
+    const report = await runDoctor({
+      commandRunner: async () => ({ args: ['--version'], exitCode: 0, signal: null, stderr: '', stdout: 'opencode v2.2.6\n' }),
+      environment: {},
+      from: bundle,
+      home,
+      hosts: ['opencode'],
+    });
+    expect(report.hosts[0]?.bundle).toMatchObject({
+      state: 'drifted',
+      comparison: { status: 'stale' },
+    });
+    expect(report.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'AB7336',
+      severity: 'warning',
+    }));
+
+    await writeFile(join(projectRoot, '.opencode', 'plugins', pluginName, 'operator-notes.txt'), 'keep this operator note\n');
+    await uninstallBundle({
+      from: bundle, home, host: 'opencode', projectRoot, scope: 'project',
+    });
+    const withRemnant = await runDoctor({
+      commandRunner: async () => ({ args: ['--version'], exitCode: 0, signal: null, stderr: '', stdout: 'opencode v2.2.6\n' }),
+      environment: {},
+      from: bundle,
+      home,
+      hosts: ['opencode'],
+    });
+    expect(withRemnant.hosts[0]?.bundle).toMatchObject({
+      comparison: { status: 'current' },
+      state: 'installed',
+    });
+    expect(withRemnant.diagnostics.filter((entry) => entry.code === 'AB7336')).toEqual([]);
+    expect(withRemnant.hosts[0]?.inventory.findings).toContainEqual(expect.objectContaining({
+      path: join(projectRoot, '.opencode', 'plugins', pluginName),
+      state: 'missing',
+      receipt: expect.objectContaining({ scope: 'project' }),
+    }));
+  } finally {
+    process.chdir(workingDirectory);
+    await removeTree(root);
+  }
+}, 30_000);
+
+it('preserves remnant authority for retained state under an explicit purge request', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-opencode-purge-remnant-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  try {
+    await writeBundle(bundle, '1.0.0', 'purge');
+    await installBundle({ from: bundle, home, host: 'opencode', scope: 'user' });
+    const destination = join(home, '.config', 'opencode', 'plugins', pluginName);
+    await mkdir(join(destination, 'state'), { recursive: true });
+    await writeFile(join(destination, 'state', 'retained.json'), '{"retained":true}\n');
+    const removed = await uninstallBundle({
+      from: bundle,
+      home,
+      host: 'opencode',
+      purgeData: true,
+      confirmPurge: true,
+      scope: 'user',
+    });
+    expect(removed.receipt).toMatchObject({ status: 'remnant' });
+    await expect(readFile(join(destination, 'state', 'retained.json'), 'utf8')).resolves.toBe('{"retained":true}\n');
+    expect((await uninstallBundle({
+      from: bundle,
+      home,
+      host: 'opencode',
+      purgeData: true,
+      confirmPurge: true,
+      scope: 'user',
+    })).receipt).toMatchObject({ status: 'remnant' });
+    expect((await installBundle({
+      from: bundle, home, host: 'opencode', scope: 'user',
+    })).state).toBe('installed');
   } finally {
     await removeTree(root);
   }

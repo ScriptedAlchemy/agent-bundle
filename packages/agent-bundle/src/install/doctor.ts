@@ -2806,73 +2806,127 @@ const doctorOpenCode = async (
   try {
     const identity = await readBundleIdentity(options.from, 'opencode');
     const artifact = await bundleInventory(identity);
-    const location = openCodeInstallLocation(options, identity, 'user');
-    const installed = await exists(location.destination);
-    const receipt = await readInstallReceipt(location.destination);
-    const retainedRemnant = receipt !== undefined && isRemnantReceipt(receipt);
+    const inspected: {
+      readonly comparison: DoctorInstallComparison;
+      readonly lifecycle: DoctorLifecycle;
+      readonly path: string;
+      readonly receipt?: DoctorReceiptSummary;
+      readonly state: DoctorFindingState;
+    }[] = [];
     const staticDiagnostics = staticValidationDiagnostics(
       'AB7319',
       'opencode',
       identity.bundleRoot,
       await validateOpenCodePluginFiles({ pluginDirectory: identity.bundleRoot, target: 'opencode' }),
     );
-    const comparison = await compareInstalledTree({
-      artifact,
-      destination: location.destination,
-      plugin: identity.plugin,
-      version: identity.version,
-    });
-    const lifecycle = lifecycleOf({
-      active: unavailable('OpenCode V2 exposes no reliable read-only local-plugin activation inventory; plugin.list may remain empty even after native setup.'),
-      enabled: unavailable('Directory discovery is not an enabled-state inventory; use native skill/MCP/command registration to exercise actual activation.'),
-      placed: observed(installed && !retainedRemnant, `package directory ${location.destination}`),
-      registered: observed(receipt !== undefined && !retainedRemnant, `receipt ${join(location.destination, installReceiptFile)}`),
-    });
-    diagnostics.push(...staticDiagnostics, lifecycleDiagnostic('opencode', identity.plugin, identity.version, lifecycle));
-    const state = retainedRemnant
-      ? 'missing'
-      : staticDiagnostics.some((entry) => entry.severity === 'error')
-      ? 'corrupt'
-      : comparison.status === 'current'
-        ? 'installed'
-        : comparison.status === 'stale'
-          ? 'drifted'
-          : comparison.status === 'foreign' || comparison.status === 'version-mismatch'
-            ? 'conflicted'
-            : 'missing';
-    const receiptSummary = receipt === undefined ? {} : {
-      receipt: Object.freeze({
-        contentHash: receipt.contentHash,
-        format: receipt.format,
-        installedAt: receipt.installedAt,
-        mode: receipt.mode,
-        scope: receipt.scope,
-        updatedAt: receipt.updatedAt,
-      }),
-    };
+    for (const scope of ['project', 'user'] as const) {
+      const location = openCodeInstallLocation(options, identity, scope);
+      const installed = await exists(location.destination);
+      const receipt = installed ? await readInstallReceipt(location.destination) : undefined;
+      const retainedRemnant = receipt !== undefined && isRemnantReceipt(receipt);
+      const nativeComparison = retainedRemnant
+        ? {
+            artifactContentHash: artifact.hash,
+            installedContentHash: receipt.contentHash,
+            installedPath: location.destination,
+            status: 'not-installed' as const,
+          }
+        : installed
+          ? installComparison(await compareInstalledTree({
+            artifact,
+            destination: location.destination,
+            plugin: identity.plugin,
+            version: identity.version,
+          }), location.destination)
+          : {
+              artifactContentHash: artifact.hash,
+              installedPath: location.destination,
+              status: 'not-installed' as const,
+            };
+      const lifecycle = lifecycleOf({
+        active: unavailable('OpenCode V2 exposes no reliable read-only local-plugin activation inventory; plugin.list may remain empty even after native setup.'),
+        enabled: unavailable('Directory discovery is not an enabled-state inventory; use native skill/MCP/command registration to exercise actual activation.'),
+        placed: observed(installed && !retainedRemnant, `package directory ${location.destination}`),
+        registered: observed(receipt !== undefined && !retainedRemnant, `receipt ${join(location.destination, installReceiptFile)}`),
+      });
+      const state = retainedRemnant
+        ? 'missing'
+        : staticDiagnostics.some((entry) => entry.severity === 'error')
+          ? 'corrupt'
+          : nativeComparison.status === 'current'
+            ? 'installed'
+            : nativeComparison.status === 'stale'
+              ? 'drifted'
+              : nativeComparison.status === 'foreign' || nativeComparison.status === 'version-mismatch'
+                ? 'conflicted'
+                : 'missing';
+      inspected.push({
+        comparison: nativeComparison,
+        lifecycle,
+        path: location.destination,
+        state,
+        ...(receipt === undefined ? {} : {
+          receipt: Object.freeze({
+            contentHash: receipt.contentHash,
+            format: receipt.format,
+            installedAt: receipt.installedAt,
+            mode: receipt.mode,
+            scope: receipt.scope,
+            updatedAt: receipt.updatedAt,
+          }),
+        }),
+      });
+    }
+    const selected = inspected.toSorted((left, right) => {
+      const rank = (entry: typeof left): number => {
+        if (entry.comparison.status === 'current') return 3;
+        if (entry.comparison.status === 'stale' || entry.comparison.status === 'version-mismatch' || entry.comparison.status === 'foreign') return 4;
+        if (entry.comparison.status === 'not-installed') return 0;
+        return 1;
+      };
+      return rank(right) - rank(left);
+    })[0]!;
+    for (const entry of inspected) {
+      if (entry.comparison.status !== 'stale' && entry.comparison.status !== 'version-mismatch' && entry.comparison.status !== 'foreign') continue;
+      const installedContentHash = entry.comparison.installedContentHash;
+      if (installedContentHash === undefined) continue;
+      const detail = entry.comparison.status === 'stale'
+        ? describeContentComparison(identity.plugin, identity.version, { ...entry.comparison, installedContentHash, status: 'stale' as const })
+        : entry.comparison.status === 'version-mismatch'
+          ? describeContentComparison(identity.plugin, identity.version, { ...entry.comparison, installedContentHash, status: 'version-mismatch' as const })
+          : describeContentComparison(identity.plugin, identity.version, { ...entry.comparison, installedContentHash, status: 'foreign' as const });
+      diagnostics.push(diagnostic(
+        'AB7336',
+        `OpenCode install at ${entry.path} is ${entry.state}: ${detail}`,
+        'Replace or remove the stale OpenCode package at this path; a healthy alternative scope does not erase this finding.',
+        'warning',
+        'opencode',
+      ));
+    }
+    diagnostics.push(...staticDiagnostics, lifecycleDiagnostic('opencode', identity.plugin, identity.version, selected.lifecycle));
     return Object.freeze({
       diagnostics: freezeDiagnostics(diagnostics),
       host: 'opencode',
-      inventory: freezeInventory(installed ? 'known' : 'skipped', installed ? [{
+      inventory: freezeInventory(inspected.some((entry) => entry.receipt !== undefined) ? 'known' : 'skipped', inspected.map((entry) => ({
         entry: openCodeArtifactPaths.entry,
         name: identity.plugin,
-        path: location.destination,
-        state,
+        path: entry.path,
+        state: entry.state,
         version: identity.version,
-        ...receiptSummary,
-      }] : []),
+        ...(entry.receipt === undefined ? {} : { receipt: entry.receipt }),
+      }))),
       probe: probed.probe,
       receipts: Object.freeze([]),
       bundle: Object.freeze({
         bundleRoot: identity.bundleRoot,
-        comparison: installComparison(comparison, location.destination),
-        lifecycle,
+        comparison: selected.comparison,
+        lifecycle: selected.lifecycle,
         manifest: openCodeArtifactPaths.package,
         name: identity.plugin,
-        path: location.destination,
-        state,
+        path: selected.path,
+        state: selected.state,
         version: identity.version,
-        ...receiptSummary,
+        ...(selected.receipt === undefined ? {} : { receipt: selected.receipt }),
       }),
     });
   } catch (error) {

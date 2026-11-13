@@ -236,8 +236,8 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
 const openCodeInstructions = (model: NormalizedPlugin): string[] => [
   '## OpenCode V2',
   '',
-  `The bundle root is a native OpenCode V2 package. Its \`index.js\` default-exports \`Plugin.define\` from`,
-  '`@opencode/plugin@2.2.6`, and `.opencode/opencode.json` loads that package from the artifact root. The setup',
+  'The bundle root is a native OpenCode V2 package. Its `index.js` default-exports the structural `{ id, setup }`',
+  'definition proven by the pinned 2.2.6 loader, with no runtime package dependency. `.opencode/opencode.json` loads that package through the project config. The setup',
   'registers the selected MCP servers, skills, commands, and supported V2 hooks. It never substitutes manually',
   'copied portable skills for native registration.',
   '',
@@ -262,8 +262,9 @@ const openCodeInstructions = (model: NormalizedPlugin): string[] => [
   '```',
   '',
   'Use the same scope for uninstall as for installation. Unrelated OpenCode configuration and unowned files are',
-  'preserved. Durable runtime state is kept unless `--purge-data --confirm-purge` is explicit. A native V2 session',
-  'start hook and an MCP Apps display surface are not published at this pin, so the target does not claim them.',
+  'preserved. Unowned durable state and other retained entries are preserved even when a purge is requested; a remnant',
+  'receipt keeps later reinstall and doctor ownership accurate. Creation-only `session.created` context is supported',
+  'through native event subscription, without inventing resume or clear semantics; an MCP Apps display surface is not claimed.',
   '',
 ];
 
