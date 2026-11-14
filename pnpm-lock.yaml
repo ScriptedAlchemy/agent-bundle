@@ -12,8 +12,6 @@ overrides:
   twoslash>typescript: npm:typescript@6.0.3
   typedoc>typescript: npm:typescript@6.0.3
 
-pnpmfileChecksum: sha256-CjzDbxBVbwhtWuVc5QBOr0ymy8e8vyM9gWK88TVQjzA=
-
 patchedDependencies:
   effect-rstest@0.1.0: c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263
 
@@ -100,8 +98,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/agent-bundle
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -130,8 +128,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/agent-bundle
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -157,8 +155,8 @@ importers:
         specifier: 1.63.0
         version: 1.63.0
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -176,7 +174,7 @@ importers:
         version: 2.1.0
       '@modelcontextprotocol/ext-apps':
         specifier: 2.0.4
-        version: 2.0.4(@modelcontextprotocol/client@2.3.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.4.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.7)
+        version: 2.0.4(@modelcontextprotocol/client@2.3.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.4.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
       '@modelcontextprotocol/node':
         specifier: 2.1.2
         version: 2.1.2(@modelcontextprotocol/server@2.4.0)
@@ -184,14 +182,14 @@ importers:
         specifier: 2.4.0
         version: 2.4.0
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
       react-dom:
-        specifier: 19.3.0
-        version: 19.3.0(react@19.3.0)
+        specifier: 19.3.1
+        version: 19.3.1(react@19.3.1)
       react-server-dom-rspack:
-        specifier: 0.1.0
-        version: 0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 0.1.1
+        version: 0.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -219,7 +217,7 @@ importers:
         version: 1.63.0
       rsbuild-plugin-rsc:
         specifier: 0.1.1
-        version: 0.1.1(@rsbuild/core@2.3.2)(react-server-dom-rspack@0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
+        version: 0.1.1(@rsbuild/core@2.3.2)(react-server-dom-rspack@0.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.1(react@19.3.1))(react@19.3.1))
 
   examples/skills-starter:
     devDependencies:
@@ -242,8 +240,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/agent-bundle
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -336,8 +334,8 @@ importers:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
         version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.1.2)
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
       typescript-5:
         specifier: npm:typescript@5.9.3
         version: typescript@5.9.3
@@ -388,8 +386,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
 
   packages/rsc-runtime:
     dependencies:
@@ -403,8 +401,8 @@ importers:
         specifier: 1.6.1
         version: 1.6.1
       react-server-dom-rspack:
-        specifier: 0.1.0
-        version: 0.1.0(@rspack/core@2.2.3(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 0.1.1
+        version: 0.1.1(@rspack/core@2.2.3(@swc/helpers@0.5.24))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       rsc-markdown-stream:
         specifier: workspace:^
         version: link:../rsc-markdown-stream
@@ -434,11 +432,11 @@ importers:
         specifier: 3.0.0
         version: 3.0.0
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
       react-dom:
-        specifier: 19.3.0
-        version: 19.3.0(react@19.3.0)
+        specifier: 19.3.1
+        version: 19.3.1(react@19.3.1)
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -447,7 +445,7 @@ importers:
     dependencies:
       '@effect/atom-react':
         specifier: 4.1.2
-        version: 4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0)
+        version: 4.1.2(effect@4.1.2)(react@19.3.1)(scheduler@0.28.0)
       '@modelcontextprotocol/client':
         specifier: 2.3.0
         version: 2.3.0
@@ -461,14 +459,14 @@ importers:
         specifier: 4.1.2
         version: 4.1.2
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
       react-dom:
-        specifier: 19.3.0
-        version: 19.3.0(react@19.3.0)
+        specifier: 19.3.1
+        version: 19.3.1(react@19.3.1)
       react-markdown:
         specifier: 10.1.0
-        version: 10.1.0(@types/react@19.3.0)(react@19.3.0)(supports-color@7.2.0)
+        version: 10.1.0(@types/react@19.3.0)(react@19.3.1)(supports-color@7.2.0)
       remark-gfm:
         specifier: 4.0.1
         version: 4.0.1(supports-color@7.2.0)
@@ -496,7 +494,7 @@ importers:
     devDependencies:
       '@mdx-js/react':
         specifier: 3.1.1
-        version: 3.1.1(@types/react@19.3.0)(react@19.3.0)
+        version: 3.1.1(@types/react@19.3.0)(react@19.3.1)
       '@rspress/core':
         specifier: 2.1.1
         version: 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
@@ -508,10 +506,10 @@ importers:
         version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/plugin-twoslash':
         specifier: 2.1.1
-        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)
+        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.1)(supports-color@7.2.0)(typescript@7.0.2)
       '@rspress/plugin-typedoc':
         specifier: 2.1.1
-        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
+        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(typescript@7.0.2)
       '@rspress/shared':
         specifier: 2.1.1
         version: 2.1.1(supports-color@7.2.0)
@@ -528,11 +526,11 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       react:
-        specifier: 19.3.0
-        version: 19.3.0
+        specifier: 19.3.1
+        version: 19.3.1
       react-dom:
-        specifier: 19.3.0
-        version: 19.3.0(react@19.3.0)
+        specifier: 19.3.1
+        version: 19.3.1(react@19.3.1)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -1457,6 +1455,7 @@ packages:
     peerDependencies:
       '@rspress/core': ^2.1.0-beta.2
       react: '>=18.0.0'
+      typescript: ^5.5.0 || ^6.0.0
 
   '@rspress/plugin-typedoc@2.1.1':
     resolution: {integrity: sha512-NlivLGNcwDfLJxtfOciFrwnzErGNR+vt0A/D1VhCqRV4+BrWtoPPluBalGkr81jlbl5QPW1+AngiVmDRUa9iYQ==}
@@ -1575,6 +1574,8 @@ packages:
   '@shikijs/twoslash@4.4.3':
     resolution: {integrity: sha512-m7HNzunEIHRk1jCya3ngGsO3+8pYxrPIIxtdJewg/W8ceW/+m/mSsm4jM3L9DvYYNa8Rvbu7Dabt3BOpCclz8Q==}
     engines: {node: '>=20'}
+    peerDependencies:
+      typescript: '>=5.5.0'
 
   '@shikijs/types@3.23.0':
     resolution: {integrity: sha512-3JZ5HXOZfYjsYSk0yPwBrkupyYSLpAE26Qc0HLghhZNGTZg/SKxXIIgoxOpmmeQP0RRSDJTk1/vPfw9tbw+jSQ==}
@@ -2961,11 +2962,6 @@ packages:
     resolution: {integrity: sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA==}
     engines: {node: '>= 0.10'}
 
-  react-dom@19.3.0:
-    resolution: {integrity: sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==}
-    peerDependencies:
-      react: ^19.3.0
-
   react-dom@19.3.1:
     resolution: {integrity: sha512-Y0bARz53lhEC1NMCASs0/j+faB/zqt3R8hpvg1e8+61ZVJ4UL0UdC4cBbXfZMcIuhrfgeILTLe+ZeBCavQPtKQ==}
     peerDependencies:
@@ -3012,17 +3008,13 @@ packages:
       react-dom:
         optional: true
 
-  react-server-dom-rspack@0.1.0:
-    resolution: {integrity: sha512-KqDzmxBUZEcAphwg/PnEHOBkqTJjesTmLoBygLHie1gkiLINiZuVKPRccS6qDzfdj9ccYCaJ743IDYVh0wPf/w==}
+  react-server-dom-rspack@0.1.1:
+    resolution: {integrity: sha512-pgL4M/D3jFzn/2Dv8ppgFPrauyJjP29sFCV5EjSCLI29+NHIhumkhxnkiK8x0h5SQLPqUVVZfiAu3dn7Bl1RNg==}
     engines: {node: '>=0.10.0'}
     peerDependencies:
       '@rspack/core': ^2.2.0-0
       react: ^19.1.0
       react-dom: ^19.1.0
-
-  react@19.3.0:
-    resolution: {integrity: sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog==}
-    engines: {node: '>=0.10.0'}
 
   react@19.3.1:
     resolution: {integrity: sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==}
@@ -3327,6 +3319,8 @@ packages:
 
   twoslash@0.3.9:
     resolution: {integrity: sha512-rDclk+OtzuTX+tnea7DYLCkqGQ3eP0IyfD+kzUJ7t46X/NzlaxwrhecmEBNuSCuEn3V+n1PhcjUUQQ7gUJzX5Q==}
+    peerDependencies:
+      typescript: ^5.5.0 || ^6.0.0
 
   type-is@2.1.0:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
@@ -3342,6 +3336,8 @@ packages:
     resolution: {integrity: sha512-uSKqkh8Cr48vllnEy+jdaAgOeR6Y+QCBW7usgUsKj7gJEfR7stw9U/fE49LBnj2tPRKPY0c0EBJSWe9Appmplg==}
     engines: {node: '>= 18', pnpm: '>= 10'}
     hasBin: true
+    peerDependencies:
+      typescript: 5.0.x || 5.1.x || 5.2.x || 5.3.x || 5.4.x || 5.5.x || 5.6.x || 5.7.x || 5.8.x || 5.9.x || 6.0.x
 
   typescript@5.6.1-rc:
     resolution: {integrity: sha512-E3b2+1zEFu84jB0YQi9BORDjz9+jGbwwy1Zi3G0LUNw7a7cePUrHMRNy8aPh53nXpkFGVHSxIZo5vKTfYaFiBQ==}
@@ -3704,10 +3700,10 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0)':
+  '@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.1)(scheduler@0.28.0)':
     dependencies:
       effect: 4.1.2
-      react: 19.3.0
+      react: 19.3.1
       scheduler: 0.28.0
 
   '@effect/language-service@0.87.5': {}
@@ -3906,12 +3902,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.3.0)':
-    dependencies:
-      '@types/mdx': 2.0.14
-      '@types/react': 19.3.0
-      react: 19.3.0
-
   '@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.3.1)':
     dependencies:
       '@types/mdx': 2.0.14
@@ -3955,7 +3945,7 @@ snapshots:
     dependencies:
       zod: 4.6.7
 
-  '@modelcontextprotocol/ext-apps@2.0.4(@modelcontextprotocol/client@2.3.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.4.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.7)':
+  '@modelcontextprotocol/ext-apps@2.0.4(@modelcontextprotocol/client@2.3.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.4.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)':
     dependencies:
       '@modelcontextprotocol/client': 2.3.0
       '@modelcontextprotocol/core': 2.1.0
@@ -3963,8 +3953,8 @@ snapshots:
       zod: 4.6.7
     optionalDependencies:
       '@modelcontextprotocol/server': 2.4.0
-      react: 19.3.0
-      react-dom: 19.3.0(react@19.3.0)
+      react: 19.3.1
+      react-dom: 19.3.1(react@19.3.1)
 
   '@modelcontextprotocol/node@2.1.2(@modelcontextprotocol/server@2.4.0)':
     dependencies:
@@ -4492,27 +4482,28 @@ snapshots:
     dependencies:
       '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
 
-  '@rspress/plugin-twoslash@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)':
+  '@rspress/plugin-twoslash@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.1)(supports-color@7.2.0)(typescript@7.0.2)':
     dependencies:
       '@floating-ui/dom': 1.8.0
       '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
-      '@shikijs/twoslash': 4.4.3(supports-color@7.2.0)
+      '@shikijs/twoslash': 4.4.3(supports-color@7.2.0)(typescript@7.0.2)
       mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
       mdast-util-gfm: 3.1.0(supports-color@7.2.0)
       mdast-util-to-hast: 13.2.1
       picocolors: 1.1.1
-      react: 19.3.0
-      twoslash: 0.3.9(supports-color@7.2.0)
-      typescript: 6.0.3
+      react: 19.3.1
+      twoslash: 0.3.9(supports-color@7.2.0)(typescript@7.0.2)
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
 
-  '@rspress/plugin-typedoc@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))':
+  '@rspress/plugin-typedoc@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(typescript@7.0.2)':
     dependencies:
       '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
-      typedoc: 0.28.20
-      typedoc-plugin-markdown: 4.14.1(typedoc@0.28.20)
-      typescript: 6.0.3
+      typedoc: 0.28.20(typescript@7.0.2)
+      typedoc-plugin-markdown: 4.14.1(typedoc@0.28.20(typescript@7.0.2))
+    transitivePeerDependencies:
+      - typescript
 
   '@rspress/shared@2.1.1(supports-color@7.2.0)':
     dependencies:
@@ -4638,12 +4629,12 @@ snapshots:
       '@shikijs/core': 4.4.3
       '@shikijs/types': 4.4.3
 
-  '@shikijs/twoslash@4.4.3(supports-color@7.2.0)':
+  '@shikijs/twoslash@4.4.3(supports-color@7.2.0)(typescript@7.0.2)':
     dependencies:
       '@shikijs/core': 4.4.3
       '@shikijs/types': 4.4.3
-      twoslash: 0.3.9(supports-color@7.2.0)
-      typescript: 6.0.3
+      twoslash: 0.3.9(supports-color@7.2.0)(typescript@7.0.2)
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
 
@@ -4787,10 +4778,10 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@typescript/vfs@1.6.4(supports-color@7.2.0)(typescript@6.0.3)':
+  '@typescript/vfs@1.6.4(supports-color@7.2.0)(typescript@7.0.2)':
     dependencies:
       debug: 4.4.3(supports-color@7.2.0)
-      typescript: 6.0.3
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
 
@@ -6301,11 +6292,6 @@ snapshots:
       iconv-lite: 0.7.3
       unpipe: 1.0.0
 
-  react-dom@19.3.0(react@19.3.0):
-    dependencies:
-      react: 19.3.0
-      scheduler: 0.28.0
-
   react-dom@19.3.1(react@19.3.1):
     dependencies:
       react: 19.3.1
@@ -6313,7 +6299,7 @@ snapshots:
 
   react-lazy-with-preload@2.2.1: {}
 
-  react-markdown@10.1.0(@types/react@19.3.0)(react@19.3.0)(supports-color@7.2.0):
+  react-markdown@10.1.0(@types/react@19.3.0)(react@19.3.1)(supports-color@7.2.0):
     dependencies:
       '@types/hast': 3.0.5
       '@types/mdast': 4.0.4
@@ -6322,7 +6308,7 @@ snapshots:
       hast-util-to-jsx-runtime: 2.3.6(supports-color@7.2.0)
       html-url-attributes: 3.0.1
       mdast-util-to-hast: 13.2.1
-      react: 19.3.0
+      react: 19.3.1
       remark-parse: 11.0.0(supports-color@7.2.0)
       remark-rehype: 11.1.2
       unified: 11.0.5
@@ -6357,19 +6343,17 @@ snapshots:
     optionalDependencies:
       react-dom: 19.3.1(react@19.3.1)
 
-  react-server-dom-rspack@0.1.0(@rspack/core@2.2.3(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
+  react-server-dom-rspack@0.1.1(@rspack/core@2.2.3(@swc/helpers@0.5.24))(react-dom@19.3.1(react@19.3.1))(react@19.3.1):
     dependencies:
       '@rspack/core': 2.2.3(@swc/helpers@0.5.24)
-      react: 19.3.0
-      react-dom: 19.3.0(react@19.3.0)
+      react: 19.3.1
+      react-dom: 19.3.1(react@19.3.1)
 
-  react-server-dom-rspack@0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
+  react-server-dom-rspack@0.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.1(react@19.3.1))(react@19.3.1):
     dependencies:
       '@rspack/core': 2.3.2(@swc/helpers@0.5.24)
-      react: 19.3.0
-      react-dom: 19.3.0(react@19.3.0)
-
-  react@19.3.0: {}
+      react: 19.3.1
+      react-dom: 19.3.1(react@19.3.1)
 
   react@19.3.1: {}
 
@@ -6541,10 +6525,10 @@ snapshots:
     optionalDependencies:
       '@rsbuild/core': 2.3.2
 
-  rsbuild-plugin-rsc@0.1.1(@rsbuild/core@2.3.2)(react-server-dom-rspack@0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)):
+  rsbuild-plugin-rsc@0.1.1(@rsbuild/core@2.3.2)(react-server-dom-rspack@0.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)):
     dependencies:
       '@rsbuild/core': 2.3.2
-      react-server-dom-rspack: 0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      react-server-dom-rspack: 0.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
 
   run-applescript@7.1.0: {}
 
@@ -6737,11 +6721,11 @@ snapshots:
 
   twoslash-protocol@0.3.9: {}
 
-  twoslash@0.3.9(supports-color@7.2.0):
+  twoslash@0.3.9(supports-color@7.2.0)(typescript@7.0.2):
     dependencies:
-      '@typescript/vfs': 1.6.4(supports-color@7.2.0)(typescript@6.0.3)
+      '@typescript/vfs': 1.6.4(supports-color@7.2.0)(typescript@7.0.2)
       twoslash-protocol: 0.3.9
-      typescript: 6.0.3
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
 
@@ -6751,17 +6735,17 @@ snapshots:
       media-typer: 1.1.1
       mime-types: 3.0.2
 
-  typedoc-plugin-markdown@4.14.1(typedoc@0.28.20):
+  typedoc-plugin-markdown@4.14.1(typedoc@0.28.20(typescript@7.0.2)):
     dependencies:
-      typedoc: 0.28.20
+      typedoc: 0.28.20(typescript@7.0.2)
 
-  typedoc@0.28.20:
+  typedoc@0.28.20(typescript@7.0.2):
     dependencies:
       '@gerrit0/mini-shiki': 3.23.0
       lunr: 2.3.9
       markdown-it: 14.3.1
       minimatch: 10.2.6
-      typescript: 6.0.3
+      typescript: 7.0.2
       yaml: 2.9.1
 
   typescript@5.6.1-rc: {}
