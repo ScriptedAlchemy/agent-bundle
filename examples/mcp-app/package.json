@@ -20,6 +20,6 @@
     "agent-bundle": "workspace:*",
     "playwright": "1.63.0",
     "react": "19.3.0",
-    "zod": "4.6.4"
+    "zod": "4.6.6"
   }
 }
