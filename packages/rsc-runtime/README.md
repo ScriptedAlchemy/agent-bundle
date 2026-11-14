@@ -54,7 +54,7 @@ tables, task lists, nested async components, to one escaped Markdown string
 inside `Agent.Markdown`, replacing hand-concatenated strings in routes. React
 is the host's: the package declares React/React DOM `^19.2.0` as peers, the
 minor the suite proves, inside the `^19.1.0` its Flight binding
-`react-server-dom-rspack` `0.1.0` (an exact dependency) accepts, and
+`react-server-dom-rspack` `0.1.1` (an exact dependency) accepts, and
 react-dom itself insists that `react` and `react-dom` match exactly; the proof
 example compiles them with `rsbuild-plugin-rsc` `0.1.1`. `rsc-markdown-stream`
 is declared `workspace:^`, which pnpm's packer rewrites to the caret of the

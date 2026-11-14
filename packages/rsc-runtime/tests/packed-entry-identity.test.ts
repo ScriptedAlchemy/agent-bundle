@@ -130,6 +130,42 @@ describe.sequential('packed @agent-bundle/runtime entry identity', () => {
         sqliteRevisionError: { code: 'invalid-input', instanceOfStateError: true, name: 'AgentStateError' },
       });
 
+      const flightServer = join(consumer, 'flight-peer.mjs');
+      await writeFile(flightServer, [
+        "import { createElement } from 'react';",
+        "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
+        'const Content = async () => {',
+        '  await Promise.resolve();',
+        "  return createElement('agent-result', null, createElement('agent-markdown', null, 'Packed Flight peer'));",
+        '};',
+        'const wire = await new Response(renderAgentFlight(createElement(Content))).text();',
+        'process.stdout.write(wire, () => process.exit(0));',
+      ].join('\n'));
+      const flight = await execFile(
+        process.execPath,
+        ['--conditions=react-server', flightServer],
+        { cwd: consumer, env: installedEnvironment() },
+      );
+      const decoded = await execFile(process.execPath, [
+        '--input-type=module',
+        '--eval',
+        [
+          "import { version } from 'react';",
+          "import { createAgentRenderDispatcher } from '@agent-bundle/runtime';",
+          'const dispatcher = createAgentRenderDispatcher({ execute: async () => new Response(process.argv[1]).body });',
+          "const document = await dispatcher.dispatch({ invocation: { kind: 'tool', props: { input: {}, operationId: 'peer' } }, signal: new AbortController().signal });",
+          'process.stdout.write(JSON.stringify({ document, reactVersion: version }));',
+        ].join('\n'),
+        flight.stdout,
+      ], { cwd: consumer, env: installedEnvironment() });
+      expect(JSON.parse(decoded.stdout)).toMatchObject({
+        document: {
+          root: { children: [{ kind: 'markdown', text: 'Packed Flight peer' }], kind: 'result' },
+          status: 'success',
+        },
+        reactVersion: '19.2.8',
+      });
+
       const resolved = await execFile(
         process.execPath,
         ['--input-type=module', '--eval', "process.stdout.write(import.meta.resolve('@agent-bundle/runtime/package.json'));"],
