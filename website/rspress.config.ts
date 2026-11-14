@@ -106,6 +106,8 @@ const brandColor = '#0b8072';
 const isGeneratedLlmsTarget = (url: string): boolean => /(?:^|\/)llms(?:-full)?\.txt$/.test(url);
 
 export default defineConfig({
+  // The locale-specific plugin below owns Markdown and llms.txt generation.
+  llms: false,
   root: docsDir,
   base: '/agent-bundle/',
   siteOrigin: 'https://scriptedalchemy.github.io',
@@ -180,7 +182,7 @@ export default defineConfig({
     exclude: ['api'],
   },
   themeConfig: {
-    llmsUI: { placement: 'outline' },
+    llmsUI: { placement: 'outline', injectLlmsHint: false },
     editLink: {
       docRepoBaseUrl: `${repositoryUrl}/tree/main/website/docs`,
     },
