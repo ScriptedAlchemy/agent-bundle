@@ -99,7 +99,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",
-    "@rslib/core": "1.0.0",
+    "@rslib/core": "1.0.7",
     "@rspack/core": "2.2.3",
     "@rstest/core": "0.11.12",
     "@types/react": "19.3.0",
