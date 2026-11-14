@@ -394,7 +394,7 @@ describe('Flight compatibility pins', () => {
       devDependencies: Record<string, string>;
     };
 
-    expect(runtime.dependencies['react-server-dom-rspack']).toBe('0.1.0');
+    expect(runtime.dependencies['react-server-dom-rspack']).toBe('0.1.1');
     expect(example.devDependencies['rsbuild-plugin-rsc']).toBe('0.1.1');
   });
 });
