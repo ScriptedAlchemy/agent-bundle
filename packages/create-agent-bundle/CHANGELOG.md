@@ -1,5 +1,13 @@
 # create-agent-bundle
 
+## 0.1.9
+
+### Patch Changes
+
+- 7efcab9: Render `create-agent-bundle` interactive setup prompts with `@clack/prompts` 1.9.0. (#908)
+- Updated dependencies [15b13fc]
+  - @agent-bundle/runtime@0.2.2
+
 ## 0.1.8
 
 ### Patch Changes
