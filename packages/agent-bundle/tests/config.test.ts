@@ -264,11 +264,11 @@ it('reloads an edited native ESM config on each load', async () => {
 
     await writeFile(
       configPath,
-      "export default { plugin: { name: 'fresh' } };\n",
+      "export default { plugin: { name: 'fresher' } };\n",
     );
 
     await expect(loadConfig(options)).resolves.toMatchObject({
-      config: { plugin: { name: 'fresh' } },
+      config: { plugin: { name: 'fresher' } },
       configPath,
     });
   } finally {
