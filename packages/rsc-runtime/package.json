@@ -91,7 +91,7 @@
     }
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/server": "2.3.0",
     "effect": "4.1.2",
     "flare-redact": "1.6.1",
     "react-server-dom-rspack": "0.1.0",
