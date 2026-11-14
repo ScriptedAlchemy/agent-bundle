@@ -1,5 +1,34 @@
 # create-agent-bundle
 
+## 0.1.8
+
+### Patch Changes
+
+- 6e02c8c: Run `agent-bundle dev`, `create-agent-bundle`, and the state and Flight runtime on synchronized Effect 4.0.0 packages. (#880)
+- b9aec04: Add the OpenCode V2 `opencode` target with native package output, `install opencode` / `uninstall opencode`, `dev --install-host opencode`, and `doctor --host opencode`, plus `AB6040`, `AB6041`, and `AB7336` diagnostics. Advance `artifactManifestVersion` to 7 for the OpenCode built-in projection; the artifact APIs reject v6 manifests, so rebuild existing artifacts with this version. (#896)
+- e814e73: Build publishable packages and generated executables with compatible `@rslib/core` 1.0.7 and `@rsbuild/core` 2.3.2 versions. (#900)
+- 40ddeae: Run `agent-bundle dev`, `create-agent-bundle`, and the state and Flight runtime on synchronized Effect 4.1.2 packages. (#891)
+- Updated dependencies [6e02c8c]
+- Updated dependencies [b9aec04]
+- Updated dependencies [78f2387]
+- Updated dependencies [81d80cc]
+- Updated dependencies [6235e75]
+- Updated dependencies [7c25db2]
+- Updated dependencies [e814e73]
+- Updated dependencies [027de59]
+- Updated dependencies [9fc243d]
+- Updated dependencies [70f87cb]
+- Updated dependencies [9da052e]
+- Updated dependencies [70c79ba]
+- Updated dependencies [7fa77b2]
+- Updated dependencies [40ddeae]
+- Updated dependencies [81edc81]
+- Updated dependencies [42a16de]
+- Updated dependencies [c788e7c]
+- Updated dependencies [d28dd39]
+  - agent-bundle@0.5.0
+  - @agent-bundle/runtime@0.2.1
+
 ## 0.1.7
 
 ### Patch Changes
