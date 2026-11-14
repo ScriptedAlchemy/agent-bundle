@@ -1,4 +1,4 @@
-import { cp, mkdtemp, symlink } from 'node:fs/promises';
+import { cp, mkdtemp, realpath, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,7 +17,7 @@ export const copyExample = async (
   exampleRoot: string,
   options: { readonly linkPackages?: boolean; readonly prefix: string },
 ): Promise<CopiedExample> => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), options.prefix));
+  const workspaceRoot = await realpath(await mkdtemp(join(tmpdir(), options.prefix)));
   const projectRoot = join(workspaceRoot, 'examples', 'rsc-agent-runtime');
   await cp(exampleRoot, projectRoot, {
     filter: (source) => !['.agent-bundle', 'dist', 'node_modules'].includes(source.split('/').at(-1) ?? ''),
