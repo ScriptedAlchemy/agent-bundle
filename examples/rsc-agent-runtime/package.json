@@ -18,7 +18,7 @@
     "@agent-bundle/runtime": "workspace:*",
     "@modelcontextprotocol/client": "2.3.0",
     "@modelcontextprotocol/core": "2.1.0",
-    "@modelcontextprotocol/ext-apps": "2.0.0",
+    "@modelcontextprotocol/ext-apps": "2.0.4",
     "@modelcontextprotocol/node": "2.1.0",
     "@modelcontextprotocol/server": "2.3.0",
     "react": "19.3.0",
