@@ -279,8 +279,8 @@ importers:
         specifier: 0.9.2
         version: 0.9.2(jiti@2.7.0)
       '@rstackjs/load-config':
-        specifier: 1.0.0
-        version: 1.0.0(jiti@2.7.0)
+        specifier: 1.0.2
+        version: 1.0.2(jiti@2.7.0)
       '@rstest/core':
         specifier: ^0.11.10 || ^0.12.0
         version: 0.11.12
@@ -1468,8 +1468,8 @@ packages:
   '@rspress/shared@2.0.21':
     resolution: {integrity: sha512-siCWkv1a4n6y7JdVRII+fwCRZGZtG5KGFfKi2w/Tt33UnIgh4XGqozZ5F/K0iZ/QUwg0wi93SoVdOQm2Q+wf8w==}
 
-  '@rstackjs/load-config@1.0.0':
-    resolution: {integrity: sha512-eLp6lGEngk43kU6Z0iQNlGwgy4lLx/wtKdaBgoewHmWN0HHJRgQypewagqGxo+iNP4Yyf7pOXxAbsbH+L9Ay6A==}
+  '@rstackjs/load-config@1.0.2':
+    resolution: {integrity: sha512-7FR+QLthYyeE0ehN1V4izoQXMgHRf1b8u0Xj59zAZgwxqpT6Xv1tLhJZRLkXsIUqNlzIpolkezWZyI1C6/6HwA==}
     peerDependencies:
       jiti: ^2.0.0
     peerDependenciesMeta:
@@ -4493,7 +4493,7 @@ snapshots:
       - core-js
       - supports-color
 
-  '@rstackjs/load-config@1.0.0(jiti@2.7.0)':
+  '@rstackjs/load-config@1.0.2(jiti@2.7.0)':
     optionalDependencies:
       jiti: 2.7.0
 
