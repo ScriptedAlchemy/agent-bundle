@@ -9,11 +9,14 @@ docs, or examples' user code. The four-concept newcomer ledger is untouched.
 
 | Surface | Pin |
 | --- | --- |
-| npm `effect` | **`4.0.0`** (exact). Stable v4 release, synchronized with the React bindings and Node platform packages (#880, #882). Re-pin chores move the family together. |
+| npm `effect` | **`4.1.2`** (exact), synchronized with the React bindings and Node platform packages (#891). Re-pin chores move the family together. |
 | Vendored tree | `repos/effect` via `git subtree` from [Effect-TS/effect](https://github.com/Effect-TS/effect.git) at the release tag **`effect@4.0.0`** (v4). Pull the tag matching the npm pin, not `main`: upstream `main` can carry unreleased commits under the same version. |
 | `website` TypeScript | Native **`7.0.2`** runs `tsc`; the `typescript-6` alias stays on **`6.0.3`** for TypeDoc, Twoslash, and `rspress.config.ts` compiler-API calls. `.pnpmfile.cjs` turns those plugins' TypeScript peers into dependencies, and the scoped overrides in `pnpm-workspace.yaml` isolate them from TypeScript 7. Re-pin chores update the alias and overrides together. |
 
 Application code imports the npm package. Never import from `repos/**`.
+
+The read-only vendored reference remains at `effect@4.0.0`; use the installed
+4.1.2 source and types for APIs added or changed since that release.
 
 Read `repos/effect/LLMS.md` before writing Effect code. Refresh
 `agent-patterns/effect-*.md` when the subtree moves.
