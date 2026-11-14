@@ -16,7 +16,7 @@ export type {
 export const mcpCorrelationMetaKey = 'agent-bundle/correlationId';
 
 /** The host targets a Workbench MCP session may bind. */
-export const MCP_SESSION_TARGETS = Object.freeze(['claude', 'codex', 'cursor', 'portable'] as const);
+export const MCP_SESSION_TARGETS = Object.freeze(['claude', 'codex', 'cursor', 'opencode', 'portable'] as const);
 
 export type McpSessionTarget = (typeof MCP_SESSION_TARGETS)[number];
 

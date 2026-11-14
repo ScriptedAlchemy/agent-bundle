@@ -214,6 +214,7 @@ optional `hookEntries`, and `diagnostics`.
 | `claude` | `planClaudeArtifacts` in `adapters/claude.ts` | `adapters/capabilities/claude-2.1.260.json` |
 | `codex` | `planCodexArtifacts` in `adapters/codex.ts` | `adapters/capabilities/codex-0.147.0.json` |
 | `cursor` | `planCursorArtifacts` in `adapters/cursor.ts` | `adapters/capabilities/cursor-2026-08-28.json` |
+| `opencode` | `planOpenCodeArtifacts` in `adapters/opencode.ts` | `adapters/capabilities/opencode-2.2.6.json` |
 | `portable` | `portableAdapter.plan` in `adapters/portable.ts` | `adapters/capabilities/portable-1.0.0.json` |
 
 The capability JSON files are the host evidence the registry and the
@@ -228,13 +229,12 @@ are wired from that intersection so they advertise the same routes.
 
 `TargetRegistry` (`adapters/registry.ts`) is the only place adapters are
 registered. `createDefaultRegistry` registers `portable` as the default,
-then `codex`, `claude`, `cursor`, and `amp`. Registration order is not
+then `codex`, `claude`, `cursor`, `opencode`, and `amp`. Registration order is not
 target precedence: `planComposite` sorts the selection
 (`sortedProjections`) before planning it, and the composite identity is the
 sorted name join. There is no `plugin` adapter.
 
-`amp` is the one built-in host whose plugin is a generated directory rather
-than a set of declarative documents. Its plan writes an `index.js` PluginAPI
+`amp` emits a nested native plugin directory. Its plan writes an `index.js` PluginAPI
 factory under `.amp/plugins/{plugin}/` that registers Skills and event
 callbacks through the API, and its MCP configuration is skill-scoped: a
 canonical server needs exactly one Amp Skill, and a compiler-owned local
@@ -410,7 +410,7 @@ serializes it with `assembleArtifactManifest`: canonical `stableJson`
 plus a trailing newline. `parseArtifactManifest` rejects any other byte
 sequence, duplicate keys, unknown keys, missing keys, unsorted arrays,
 and a file entry that names the manifest itself. `manifestVersion` is
-`5`. The public reader is `build/manifest-file.ts`
+`7`. The public reader is `build/manifest-file.ts`
 `readArtifactManifest`: `ok`, `missing` (ENOENT only), or `invalid`.
 
 The schema is **closed in TypeScript** (`requireExactKeys` in
@@ -435,7 +435,7 @@ keeps only the outline.
 ### Sections the writer emits
 
 The document has two parts with two version numbers. The **public
-contract** (`manifestVersion: 6`) is what consumers read. The
+contract** (`manifestVersion: 7`) is what consumers read. The
 **compiler record** (`compiler`, `recordVersion: 1`) is the operational
 account of the run, producer, project digests, provenance, adapter
 revisions, pinned schemas, validation, and changes without bumping
@@ -443,7 +443,7 @@ revisions, pinned schemas, validation, and changes without bumping
 
 | Section | What it records |
 | --- | --- |
-| `manifestVersion` | `5` |
+| `manifestVersion` | `7` |
 | `application` | Host-independent identity: `id`, `name`, `version`, optional `description` |
 | `files[]` | Every emitted file except the manifest (`path`, `bytes`, `sha256`, `kind`, optional `mode`) |
 | `runtime` | `{ node }` from `NormalizedPlugin.runtime` |
@@ -526,8 +526,8 @@ handwritten MCP entries are parallel collections on `DiscoveredProject` /
 `NormalizedPlugin`. A later consumer that needs "every surface" still walks
 several fields.
 
-**Five planners, one merge.** `planClaudeArtifacts`, `planCodexArtifacts`,
-`planCursorArtifacts`, `portableAdapter.plan`, and `ampAdapter.plan` each
+**Six planners, one merge.** `planClaudeArtifacts`, `planCodexArtifacts`,
+`planCursorArtifacts`, `planOpenCodeArtifacts`, `portableAdapter.plan`, and `ampAdapter.plan` each
 walk the whole model and emit host documents. `compose.ts` merges bytes; it does not
 replace those planners with a single `project(application, capabilities)`
 function.
@@ -590,7 +590,7 @@ issue:
 
 Step 3 landed the authoritative `agent-bundle.manifest.json` as version 2;
 subsequent executable, distribution, and route-contract additions advanced
-the current contract to `manifestVersion` 6. The field contract is
+the current contract to `manifestVersion` 7. The field contract is
 [Artifact manifest](../../reference/artifact-manifest.mdx).
 #592 stays open until the remaining acceptance criteria on that issue
 land.

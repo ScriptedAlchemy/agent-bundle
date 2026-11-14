@@ -1,6 +1,7 @@
 import type { ClaudeConfigExtension } from '../adapters/claude.ts';
 import type { CodexConfigExtension } from '../adapters/codex.ts';
 import type { CursorConfigExtension } from '../adapters/cursor.ts';
+import type { OpenCodeConfigExtension } from '../adapters/opencode.ts';
 import type { PortableConfigExtension } from '../adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from '../core/types.ts';
 
@@ -60,7 +61,9 @@ export type AgentBundleConfig = CoreAgentBundleConfig
   & ClaudeConfigExtension
   & CodexConfigExtension
   & CursorConfigExtension
+  & OpenCodeConfigExtension
   & PortableConfigExtension;
+export type { OpenCodeHostConfig } from '../adapters/opencode.ts';
 export type {
   AgentBundleConfigExtensions,
   AgentBundleDevConfig,

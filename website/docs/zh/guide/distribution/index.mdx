@@ -80,9 +80,12 @@ npx --no-install agent-bundle validate --artifact artifact --strict
 
 ## 面向 npm 的那一半
 
-对于启用了包输出的项目，例如 MCP starter，`dist/` 包含完整 npm 根：原样复制的已校验产物、
+对于启用了包输出的项目，例如 MCP starter，`dist/` 包含完整 npm 根：已校验产物、
 生成的 `package.json`、标准包文档及声明的包专用 bin 或库输出。
 Tarball 内不会再嵌套一层 `artifact/`。
+
+选择 `opencode` 时，原生包与 npm 元数据共享根目录 `package.json`。包构建会合并二者，
+并更新交付清单中文件表对应文档的摘要。检查或安装 npm 根时，请使用随该根交付的清单。
 
 生成式路由 CLI 的 `package.json.bin` 直接指向产物中的 `bin/<name>.mjs`，
 操作表面与产物 CLI 相同，包括声明后的 `web`。

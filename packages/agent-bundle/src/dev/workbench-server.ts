@@ -731,7 +731,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       const targets = prepared.model.targets
         .map((target) => target.name)
         .filter((target): target is RouteInvocationEventHost =>
-          target === 'claude' || target === 'codex' || target === 'cursor');
+          target === 'claude' || target === 'codex' || target === 'cursor' || target === 'opencode');
       // Emitted scripts live once at the composite root; any selected target
       // whose layout has a scripts directory reads the same file.
       const scriptTarget = prepared.model.targets
