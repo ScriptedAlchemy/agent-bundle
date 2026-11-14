@@ -18,7 +18,7 @@
   },
   "devDependencies": {
     "@mdx-js/react": "3.1.1",
-    "@rspress/core": "2.0.21",
+    "@rspress/core": "2.1.1",
     "@rspress/plugin-llms": "2.1.1",
     "@rspress/plugin-sitemap": "2.1.1",
     "@rspress/plugin-twoslash": "2.1.1",
