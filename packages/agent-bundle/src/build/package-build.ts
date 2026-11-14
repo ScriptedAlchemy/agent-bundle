@@ -6,6 +6,7 @@ import { rspack } from '@rslib/core';
 
 import {
   parseJsonWithoutDuplicateKeys,
+  isPlainDataRecord,
   snapshotStrictJsonValue,
   type JsonValue,
 } from '../core/strict-json.ts';
@@ -36,6 +37,8 @@ import {
   terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
 import { readArtifactManifest } from './manifest-file.ts';
+import { reindexArtifactManifest } from './manifest-reindex.ts';
+import { stableJson } from '../core/digest.ts';
 import { artifactManifestName, type ArtifactManifest, type ArtifactManifestFileKind } from './manifest.ts';
 import { projectMeta } from './meta.ts';
 import { isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
@@ -43,7 +46,7 @@ import { runtimeIgnoredRoot } from './runtime-path.ts';
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 
 /**
- * The framework-owned npm root: the proven artifact tree is copied unchanged,
+ * The framework-owned npm root: the proven artifact tree is copied,
  * then authored package-only bins and the optional library entry are added.
  * Routed CLI bins are never recompiled here; package.json points at the
  * artifact executable recorded by agent-bundle.manifest.json.
@@ -438,15 +441,31 @@ export const buildPackageOutputs = async (options: {
       await copyFile(resolveArtifactDestination(compileRoot, file.path), destination);
     }
     const packageJsonSource = join(projectRoot, 'package.json');
-    if (existsSync(join(stageRoot, 'package.json'))) {
+    const nativeOpenCode = manifest.projections.some((projection) =>
+      projection.builtInHost === 'opencode' && projection.documents.plugin === 'package.json');
+    const nativePackageValue = nativeOpenCode
+      ? parseJsonWithoutDuplicateKeys(await readFile(join(stageRoot, 'package.json'), 'utf8'))
+      : {};
+    if (!isPlainDataRecord(nativePackageValue)) throw new Error('OpenCode artifact package.json must be an object.');
+    const nativePackagePath = join(stageRoot, 'package.json');
+    if (existsSync(nativePackagePath) && !nativeOpenCode) {
       throw new Error('Package metadata collides with artifact file "package.json".');
     }
     const stagedPaths = new Set((await listArtifactFiles(stageRoot)).map((file) => file.path));
-    await writeFile(
-      join(stageRoot, 'package.json'),
-      `${JSON.stringify(await packageDocument(projectRoot, packageBuild, manifest, stagedPaths), null, 2)}\n`,
-      'utf8',
-    );
+    const packageDocumentValue = await packageDocument(projectRoot, packageBuild, manifest, stagedPaths);
+    const mergedPackage = nativeOpenCode
+      ? {
+          ...nativePackageValue,
+          ...packageDocumentValue,
+          type: 'module',
+          exports: {
+            ...(typeof packageDocumentValue.exports === 'object' && packageDocumentValue.exports !== null ? packageDocumentValue.exports : {}),
+            '.': './index.js',
+          },
+        }
+      : packageDocumentValue;
+    await writeFile(nativePackagePath, `${stableJson(mergedPackage)}\n`, 'utf8');
+    if (nativeOpenCode) await reindexArtifactManifest(stageRoot, { changed: ['package.json'] });
     const packageSources = await copyStandardPackageFiles(projectRoot, stageRoot);
     packageSources.set('package.json', packageJsonSource);
     const evidence = await createCompileEvidenceRecord({

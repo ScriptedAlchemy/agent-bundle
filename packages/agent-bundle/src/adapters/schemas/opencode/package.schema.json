@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scriptedalchemy.github.io/agent-bundle/schemas/opencode/package.schema.json",
+  "title": "OpenCode V2 local plugin package contract",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["exports", "name", "type", "version"],
+  "properties": {
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "description": { "type": "string" },
+    "engines": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "node": { "type": "string", "minLength": 1 }
+      }
+    },
+    "exports": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["."],
+      "properties": {
+        ".": { "const": "./index.js" }
+      }
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+    },
+    "type": { "const": "module" },
+    "version": { "type": "string", "minLength": 1 }
+  }
+}

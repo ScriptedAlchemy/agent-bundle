@@ -162,7 +162,7 @@ const probeSchema = z.strictObject({
 const hostReportSchema = z.strictObject({
   bundle: bundleFindingSchema.optional(),
   diagnostics: z.array(diagnosticSchema),
-  host: z.enum(['claude', 'codex', 'cursor']),
+  host: z.enum(['claude', 'codex', 'cursor', 'opencode']),
   inventory: z.strictObject({
     findings: z.array(findingSchema),
     status: z.enum(['known', 'skipped', 'unknown']),
@@ -237,7 +237,7 @@ const mcpProbeFailureSchema = z.strictObject({
 const mcpProbeReportShape = {
   durationMs: z.number(),
   generatedAt: textSchema,
-  host: z.enum(['claude', 'codex', 'cursor']),
+  host: z.enum(['claude', 'codex', 'cursor', 'opencode']),
   launch: mcpProbeLaunchSchema,
   serverName: textSchema,
 } as const;

@@ -135,7 +135,7 @@ it.each([
     });
     expect(report.bundleSource).toBe(join(project.root, artifactDistPath));
     expect(report.manifestDigest).not.toBe('');
-    expect(report.hosts).toHaveLength(3);
+    expect(report.hosts.map((host) => host.host).sort()).toEqual(['claude', 'codex', 'cursor', 'opencode']);
     for (const host of report.hosts) {
       expect(Object.keys(host).sort()).toEqual(['bundle', 'diagnostics', 'host', 'inventory', 'probe']);
     }

@@ -157,6 +157,24 @@ it('decodes the render-history retention account and rejects an impossible one',
   }
 });
 
+it('decodes native OpenCode event responses and host projections', async () => {
+  const native = {
+    ...invocation,
+    event: {
+      canonical: { sessionId: 'ses-open' },
+      event: 'tool/after',
+      host: 'opencode',
+      native: { session_id: 'ses-open' },
+    },
+    projection: {
+      hosts: [{ diagnostics: [], host: 'opencode', native: { hookSpecificOutput: { additionalContext: 'ok' } } }],
+    },
+    surface: { host: 'opencode', kind: 'event' },
+  } satisfies RouteInvocation;
+  const client = new InvocationClient({ foreground: foreground(() => Response.json({ invocation: native })) });
+  await expect(client.invoke({ routeId: invocation.routeId, surface: native.surface })).resolves.toEqual(native);
+});
+
 it('preserves coded HTTP diagnostics', async () => {
   const client = new InvocationClient({ foreground: foreground(() => Response.json({
     diagnostic: { code: 'AB8232', message: 'No published build.' },

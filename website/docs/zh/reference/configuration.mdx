@@ -41,11 +41,13 @@ export default defineConfig({
 | `tools` | `{ rsbuild?, rspack? }` | 无。 |
 | `web` | `{ apps, open? }` | 无，省略则什么都不输出。 |
 
-宿主作用域的扩展键（`claude`、`codex`、`cursor`、`portable`）由各 target 适配器通过对
+宿主作用域的扩展键（`claude`、`codex`、`cursor`、`opencode`、`portable`）由各 target 适配器通过对
 `AgentBundleConfigExtensions` 的声明合并贡献。扩展值必须是严格的有限 JSON（`AB4500`），且宿主特定的值
 留在各自的适配器中，而不进入编译器核心。每个适配器所拥有的键的逐字段清单见
 [宿主作用域声明](../guide/authoring/index.mdx#宿主作用域声明)。
 
+使用 `targets: ['opencode']` 生成原生 OpenCode V2 包。可选的 `opencode` 宿主扩展块目前没有字段；
+命令、Skills、MCP 服务器与受支持的 hooks 使用普通组件声明。
 ### 生成的类型定义
 
 配置是一份 TypeScript 契约，而不是运行时 schema：`defineConfig` 接受一个 `AgentBundleConfig`（或返回
@@ -117,7 +119,7 @@ Claude Code 的 `.claude-plugin/plugin.json` 不携带描述字段，其固定 s
 
 ## targets
 
-`build` 铺进组合插件根目录的宿主投影：`amp`、`claude`、`codex`、`cursor` 与 `portable` 的任意组合。顺序无关，
+`build` 铺进组合插件根目录的宿主投影：`amp`、`claude`、`codex`、`cursor`、`opencode` 与 `portable` 的任意组合。顺序无关，
 选择会按名称排序，因此 `['codex', 'claude']` 与 `['claude', 'codex']` 构建出相同的字节。省略该键时只输出
 `portable` 投影。命令行上的 `--target` 会在单次运行中替换配置里的列表。其他任何名字（包括 `plugin`）都是
 未知 target（`AB4100`）。每个投影在根目录中放置什么，见 [Target 与产物](./targets-artifacts.mdx)。

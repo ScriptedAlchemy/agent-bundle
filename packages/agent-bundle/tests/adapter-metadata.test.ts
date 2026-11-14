@@ -179,6 +179,7 @@ it('records observed capability versions and rehashes schema snapshots against p
     { capabilityFile: 'codex-0.147.0.json', provenanceFile: 'codex/PROVENANCE.json', target: 'codex', versionKey: 'observedCliVersion' },
     { capabilityFile: 'claude-2.1.260.json', provenanceFile: 'claude/PROVENANCE.json', target: 'claude', versionKey: 'observedCliVersion' },
     { capabilityFile: 'cursor-2026-08-28.json', provenanceFile: 'cursor/PROVENANCE.json', target: 'cursor', versionKey: 'observedCliVersion' },
+    { capabilityFile: 'opencode-2.2.6.json', provenanceFile: 'opencode/PROVENANCE.json', target: 'opencode', versionKey: 'observedCliVersion' },
   ] as const;
 
   for (const { capabilityFile, provenanceFile, target, versionKey } of targets) {

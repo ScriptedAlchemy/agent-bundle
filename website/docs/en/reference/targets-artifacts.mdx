@@ -1,5 +1,5 @@
 ---
-description: 'All five built-in output projections, their native discovery paths, composite constraints, canonical artifact/npm roots, and manifest-owned executable and web bindings.'
+description: 'All six built-in output projections, their native discovery paths, composite constraints, canonical artifact/npm roots, and manifest-owned executable and web bindings.'
 ---
 
 # Targets and artifacts
@@ -12,7 +12,7 @@ what is emitted and which object downstream tools consume.
 
 `agent-bundle build` writes one composite artifact root, `artifact/` by default.
 `output.distPath` or CLI `--output` moves the root; it does not redesign the layout inside it.
-The five built-in projections are **`amp`, `claude`, `codex`, `cursor`, and `portable`**.
+The six built-in projections are **`amp`, `claude`, `codex`, `cursor`, `opencode`, and `portable`**.
 
 Omitting `targets` selects only `portable`. An explicit selection can combine built-in projections
 when the authored components satisfy their compatibility rules. Target order does not change the
@@ -36,6 +36,10 @@ artifact/
 ├── .cursor-plugin/plugin.json
 ├── .cursor-plugin/hooks.json
 ├── .cursor-plugin/mcp.json
+├── .opencode/opencode.json            # OpenCode package configuration
+├── index.js                           # OpenCode V2 structural plugin
+├── package.json                       # OpenCode package entry
+├── agent-bundle.mcp.json               # OpenCode canonical MCP bindings, when authored
 ├── .mcp.json                          # Claude MCP document
 ├── plugin.json                        # portable manifest
 ├── mcp.json                           # portable MCP document
@@ -67,6 +71,7 @@ host has content at a conventional fallback path. Do not delete those barriers a
 | `claude` | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
 | `codex` | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
 | `cursor` | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | `.cursor-plugin/marketplace.json` when requested |
+| `opencode` | Root `package.json` and `index.js`; `.opencode/opencode.json` | Native V2 API registrations | `agent-bundle.mcp.json`, loaded by the emitted plugin | None generated |
 | `portable` | `plugin.json` | No native-hook component in the format | `mcp.json` | None generated |
 
 Paths are stable across valid single-target and multi-target selections. Codex and Cursor use
@@ -125,6 +130,7 @@ step** using the generated npm root; a directory build is not already a tarball.
 | `claude` | Native marketplace registration and plugin installation from the declared composite root. |
 | `codex` | Native marketplace registration and plugin addition from the declared composite root. |
 | `cursor` | Receipt-owned local copy or the explicitly selected marketplace workflow. |
+| `opencode` | Copy the self-contained root into the project or user native plugin directory, directly or through the receipt-owned installer. |
 | `portable` | Follow the recorded reader's instructions. The included `install.mjs` is the documented Cursor-compatible path, not a universal installer for every portable reader. |
 
 The framework's `install --from` resolves the selected native location from the composite root.
@@ -141,7 +147,7 @@ proof. npm installation does not automatically register a plugin with a host.
 
 ## agent-bundle.manifest.json
 
-The current closed artifact contract is **`manifestVersion: 6`**. It is the index of the built
+The current closed artifact contract is **`manifestVersion: 7`**. It is the index of the built
 application, not another file the plugin author maintains.
 
 | Section | Responsibility |

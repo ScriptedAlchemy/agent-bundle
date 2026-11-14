@@ -13,6 +13,7 @@ import { liftPromise, type LiftedRejection } from '../effect/lift.ts';
 import { claudePluginRowErrors } from '../host-contracts/claude-plugin-validation.ts';
 import { stageCursorMarketplace } from './cursor-marketplace.ts';
 import { installGrokBot } from './grokbot.ts';
+import { installOpenCode } from './opencode.ts';
 import type { GrokBotSideloadOptions, GrokBotSideloadResult } from './grokbot-sideload.ts';
 import {
   bundleInventory,
@@ -50,7 +51,7 @@ import { recordInstalledState } from './state-root.ts';
 /** `grokbot` installs the Cursor projection through a Grok Bot marketplace; see install/grokbot.ts. */
 export type InstallHost = BundleIdentityHost | 'grokbot';
 export type DevInstallHost = Exclude<InstallHost, 'amp' | 'grokbot'>;
-export type PublicInstallHost = Exclude<InstallHost, 'amp' | 'cursor' | 'grokbot'>;
+export type PublicInstallHost = Exclude<InstallHost, 'amp' | 'cursor' | 'grokbot' | 'opencode'>;
 export type InstallScope = 'local' | 'project' | 'user';
 export type InstallResultState = 'already-installed' | 'installed' | 'replaced' | 'staged';
 
@@ -1286,6 +1287,8 @@ const installProgram = Effect.fnUntraced(function*(
     }
     case 'cursor':
       return yield* installCursor(options, identity, scope);
+    case 'opencode':
+      return yield* liftPromise(() => installOpenCode(options, identity, scope));
     default: {
       const exhaustive: never = options.host;
       return yield* Effect.fail(failure('AB7000', `Unsupported install host ${String(exhaustive)}.`, options.host));

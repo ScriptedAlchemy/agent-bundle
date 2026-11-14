@@ -21,7 +21,7 @@ import type { RequestContextProvenance } from '../../contracts/request-provenanc
 export type RouteInvocationKind = 'cli' | 'event-route' | 'prompt' | 'resource' | 'script' | 'tool';
 
 /** The hosts an event route can be invoked as; `canonical` submits the canonical payload directly. */
-export type RouteInvocationEventHost = 'claude' | 'codex' | 'cursor';
+export type RouteInvocationEventHost = 'claude' | 'codex' | 'cursor' | 'opencode';
 
 export type RouteInvocationSurface =
   | Readonly<{ readonly kind: 'mcp' }>
@@ -182,7 +182,7 @@ const nativeEventLineage = (
   native: JsonObject,
   target: string,
 ): RequestContextProvenance['lineage'] => {
-  if (target !== 'claude' && target !== 'codex' && target !== 'cursor') {
+  if (target !== 'claude' && target !== 'codex' && target !== 'cursor' && target !== 'opencode') {
     return { reason: 'no-subagent-events', state: 'unavailable' };
   }
   if (target === 'cursor') return { reason: 'no-shared-runtime', state: 'unavailable' };

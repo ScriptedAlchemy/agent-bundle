@@ -41,12 +41,15 @@ export default defineConfig({
 | `tools` | `{ rsbuild?, rspack? }` | None. |
 | `web` | `{ apps, open? }` | None, omit it and nothing is emitted. |
 
-Host-scoped extension keys (`claude`, `codex`, `cursor`, `portable`) are contributed by target
+Host-scoped extension keys (`claude`, `codex`, `cursor`, `opencode`, `portable`) are contributed by target
 adapters through declaration merging on `AgentBundleConfigExtensions`. Extension values must be
 strict finite JSON (`AB4500`), and host-specific values stay in their adapter rather than in
 compiler core. The field-by-field list of every adapter-owned key is in
 [Host-scoped declarations](../guide/authoring/index.mdx#host-scoped-declarations).
 
+Use `targets: ['opencode']` to emit the native OpenCode V2 package. Its optional `opencode`
+host-extension block currently has no fields; commands, Skills, MCP servers, and supported hooks
+use the ordinary component declarations.
 ### Generated type definitions
 
 The config is a TypeScript contract, not a runtime schema: `defineConfig` accepts an
@@ -131,7 +134,7 @@ rejected with `AB4001` so an un-typechecked config cannot silently ignore it.
 ## targets
 
 The host projections `build` lays into the composite plugin root: any combination of `amp`,
-`claude`, `codex`, `cursor`, and `portable`. Order is irrelevant, the selection is sorted by name, so
+`claude`, `codex`, `cursor`, `opencode`, and `portable`. Order is irrelevant, the selection is sorted by name, so
 `['codex', 'claude']` and `['claude', 'codex']` build the same bytes. Omit the key and only the
 `portable` projection is emitted. `--target` on the command line replaces the configured list for
 one run. Any other name, `plugin` included, is an unknown target (`AB4100`). What each projection

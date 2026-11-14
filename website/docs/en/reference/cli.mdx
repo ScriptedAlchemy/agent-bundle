@@ -37,7 +37,7 @@ npx agent-bundle --version
 | `--root <root>` | `process.cwd()` | Project root. |
 | `--config <path>` | none | Configuration file relative to `--root`. |
 | `--mode <mode>` | `production` | Configuration mode. |
-| `--target <target>` | config `targets`, else `portable` | Host projection to select: `amp`, `claude`, `codex`, `cursor`, or `portable`. Repeatable; the selection replaces the configured `targets` for this run, and every selected host lands in the one composite root whatever the order. Any other name, `plugin` included, is `AB4100`. |
+| `--target <target>` | config `targets`, else `portable` | Host projection to select: `amp`, `claude`, `codex`, `cursor`, `opencode`, or `portable`. Repeatable; the selection replaces the configured `targets` for this run, and every selected host lands in the one composite root whatever the order. Any other name, `plugin` included, is `AB4100`. |
 | `--json` | off | Write one machine-readable JSON document. |
 
 **Artifact commands** (`mcp list`, `mcp invoke`, `mcp run`, `serve-app`, `hooks list`, `hooks simulate`):
@@ -56,7 +56,7 @@ candidates. `hooks simulate` still requires it, because a hook wrapper is compil
 | `--root <root>` | `process.cwd()` | Project root. |
 | `--port <port>` | ephemeral | Loopback TCP port. |
 | `--agent-api` / `--no-agent-api` | config `dev.agentApi` | Enable or disable the authenticated Agent API on `/mcp`. |
-| `--install-host <host>` | none | Install and re-sync a development host. Repeatable; `claude`, `codex`, or `cursor`. |
+| `--install-host <host>` | none | Install and re-sync a development host. Repeatable; `claude`, `codex`, `cursor`, or `opencode`. |
 | `--open` / `--no-open` | `--no-open` | Open the workbench after the foreground server starts. |
 | `--workbench-dev-origin <origin>` | none | Accept Workbench UI requests from this loopback contributor HMR origin (the Rsbuild dev server, for example `http://localhost:3000`). Repeatable; a non-loopback or non-origin value makes `agent-bundle dev` exit before serving anything. See [Contributor UI HMR](../guide/development/workbench.mdx#contributor-ui-hmr). |
 
@@ -191,9 +191,9 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `<host>` | **required** | `amp`, `claude`, `codex`, `cursor`, or `grokbot`. `grokbot` installs the Cursor projection: it stages a committed marketplace repository under `~/.grokbot/agent-bundle/marketplaces/<name>` (`$GROK_BOT_HOME` overrides `~/.grokbot`), writes a receipt, and prints the remaining Grok Bot steps. A clean, receipt-owned staging repository is restaged on same-version content drift, or for a new version with `--replace`. Grok Bot registers plugins server-side from hosted Git marketplaces, so nothing is registered locally. |
+| `<host>` | **required** | `amp`, `claude`, `codex`, `cursor`, `opencode`, or `grokbot`. `grokbot` installs the Cursor projection: it stages a committed marketplace repository under `~/.grokbot/agent-bundle/marketplaces/<name>` (`$GROK_BOT_HOME` overrides `~/.grokbot`), writes a receipt, and prints the remaining Grok Bot steps. A clean, receipt-owned staging repository is restaged on same-version content drift, or for a new version with `--replace`. Grok Bot registers plugins server-side from hosted Git marketplaces, so nothing is registered locally. |
 | `--from <root>` | `process.cwd()` | The composite root holding `agent-bundle.manifest.json`. Identity comes from `application` and `projections[host]`; other hosts use `documents.plugin`, while Amp copies only the directory containing `documents.entry`. `AB7001` covers a missing/invalid manifest, projection, required host file, unsafe local name, or missing Claude/Codex marketplace identity. |
-| `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Amp accepts `project` and `user` (its system root); Codex, Cursor, and Grok Bot are user-scoped. Run Amp project-scope installation from the destination project root. |
+| `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Amp accepts `project` and `user` (its system root), as does OpenCode; Codex, Cursor, and Grok Bot are user-scoped. Run Amp or OpenCode project-scope installation from the destination project root. |
 | `--mode <mode>` | `local` | Cursor only. `local` copies the bundle into `~/.cursor/plugins/local/<name>`; `marketplace` stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step that makes Cursor manage the plugin as a marketplace install. |
 | `--replace` | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
 | `--no-sideload` | sideload on | `grokbot` only. On a computer with Grok Bot agent-data (`GROK_BOT_AGENT_DATA_DIR`, then `/home/box/agent-data`, `~/.grokbot/agent-data`, the macOS application-support root), `install grokbot` also writes the plugin into Grok Bot's own clone of the marketplace, `<agent-data>/plugins/marketplaces/github.com/<owner>/<repo>/<sha>/<name>`, adds it to that clone's `.cursor-plugin/marketplace.json` (or `.claude-plugin/marketplace.json`), and writes the cache copy `<agent-data>/plugins/cache/<slug>/<name>/<sha>` with `.cache-complete`. `<sha>` is the clone folder Grok Bot already has. Each folder carries `.agent-bundle-sideload.json` and the receipt records the exact manifest entry written: a folder without the marker, an entry that differs from the recorded one, or a path reached through a symbolic link is never touched, and such a conflict, a missing clone, or missing agent-data skips the sideload instead of failing. Folders land by rename from a fully written sibling, and the manifest is re-read immediately before its atomic rename so entries Grok Bot added meanwhile are kept. If the manifest or the receipt cannot be written, the sideload is rolled back, so nothing unrecorded stays behind. The receipt records every path, reruns are idempotent, and `uninstall grokbot` removes exactly them. Grok Bot loads only plugins its account plugin listing returns: until that lists the plugin, its next plugin sync removes the cache copy, and a new marketplace commit replaces the clone folder. `--no-sideload` or `GROK_BOT_SIDELOAD=0` turns it off. |
@@ -216,6 +216,8 @@ During install, an explicit state root that does not yet exist is created and re
 `.agent-bundle-state-owner.json`, which records the installation identity. Parent directories may
 be created to reach it but are never claimed or recursively removed.
 
+OpenCode supports `project` and `user` scopes. See [OpenCode lifecycle](../guide/distribution/installation.mdx#opencode-v2-lifecycle) for native paths and retained-state rules.
+
 ## uninstall
 
 ```sh
@@ -225,9 +227,9 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `<host>` | **required** | `amp`, `claude`, `codex`, `cursor`, or `grokbot` (removes the staged repository and receipt, plus the receipted sideload folders, cache copy, and manifest entry that still carry this plugin's marker, and names the Grok Bot plugin id to uninstall in Grok Bot). |
+| `<host>` | **required** | `amp`, `claude`, `codex`, `cursor`, `opencode`, or `grokbot` (removes the staged repository and receipt, plus the receipted sideload folders, cache copy, and manifest entry that still carry this plugin's marker, and names the Grok Bot plugin id to uninstall in Grok Bot). |
 | `--from <root>` | `process.cwd()` | The composite root whose `agent-bundle.manifest.json` identifies the plugin (name, version, marketplace), read exactly as `install` reads it (`AB7001` on the same conditions). |
-| `--scope <scope>` | `user` | The scope the plugin was installed at (Claude or Amp). |
+| `--scope <scope>` | `user` | The scope the plugin was installed at (Claude, Amp, or OpenCode). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
 | `--keep-data` | on | Keep every recorded framework state root, derived web-data, and a recorded Cursor `PLUGIN_DATA` directory. This is the default; the flag makes it explicit and preserves the ownership receipt for a later purge. |
 | `--purge-data` | off | Remove only receipt-recorded, installation-owned durable-data roots. Refused (`AB7008`) without `--confirm-purge`; shared, externally managed, marker-less, foreign-marker, and otherwise unproven roots are retained and listed. |
@@ -270,7 +272,7 @@ environment or home a source of purge authority: Doctor and uninstall report the
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, `cursor`, or the opt-in `grokbot` (reports receipts plus the plugin id, version, and installed commit from the Grok Bot computer's plugin cache, `AB7334`, and which parts of a receipted sideload remain and whether Grok Bot loaded it, `AB7335`). |
+| `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, `cursor`, `opencode`, or the opt-in `grokbot` (reports receipts plus the plugin id, version, and installed commit from the Grok Bot computer's plugin cache, `AB7334`, and which parts of a receipted sideload remain and whether Grok Bot loaded it, `AB7335`). |
 | `--from <root>` | none | The composite root to compare against, read through its `agent-bundle.manifest.json` as `install` reads it: identity from `application`, each inspected host from its `projections[]` row (`AB7001` when the manifest does not describe the host). |
 | `--json` | off | Write one machine-readable JSON document. |
 

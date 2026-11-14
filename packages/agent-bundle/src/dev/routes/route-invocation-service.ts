@@ -97,7 +97,7 @@ const defaultTimeoutMs = 60_000;
 const defaultConcurrency = 2;
 const childTerminationGraceMs = 250;
 const childTerminationPollMs = 10;
-const concreteHosts = new Set<RouteInvocationEventHost>(['claude', 'codex', 'cursor']);
+const concreteHosts = new Set<RouteInvocationEventHost>(['claude', 'codex', 'cursor', 'opencode']);
 const invocationKinds = new Set<RouteInvocationKind>(['cli', 'event-route', 'prompt', 'resource', 'script', 'tool']);
 
 export interface RouteInvocationFixture {
