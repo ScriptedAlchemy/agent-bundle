@@ -315,7 +315,7 @@ export interface RuntimeEvent {
 export interface DevHostSyncEvent {
   readonly diagnostics: readonly Diagnostic[];
   readonly epochId: string;
-  readonly host: 'claude' | 'codex' | 'cursor';
+  readonly host: 'claude' | 'codex' | 'cursor' | 'opencode';
   readonly state: 'failed' | 'succeeded';
 }
 

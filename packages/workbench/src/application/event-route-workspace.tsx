@@ -34,13 +34,14 @@ import './workspace.css';
 
 export type EventHostSelection = 'canonical' | RouteInvocationEventHost;
 
-export const eventHosts: readonly RouteInvocationEventHost[] = Object.freeze(['claude', 'codex', 'cursor']);
+export const eventHosts: readonly RouteInvocationEventHost[] = Object.freeze(['claude', 'codex', 'cursor', 'opencode']);
 
 const hostLabels: Readonly<Record<EventHostSelection, string>> = Object.freeze({
   canonical: 'Canonical',
   claude: 'Claude',
   codex: 'Codex',
   cursor: 'Cursor',
+  opencode: 'OpenCode',
 });
 
 const isEventHost = (value: string): value is RouteInvocationEventHost => (eventHosts as readonly string[]).includes(value);

@@ -236,7 +236,7 @@ export type AgentEventPayload<E extends CanonicalAgentEvent = CanonicalAgentEven
 };
 
 /** The hosts whose native envelopes the framework maps into canonical payloads. */
-export type AgentEventPayloadHost = 'amp' | 'claude' | 'codex' | 'cursor';
+export type AgentEventPayloadHost = 'amp' | 'claude' | 'codex' | 'cursor' | 'opencode';
 
 /**
  * How a host spells one canonical field. `decode` names a transformation
@@ -381,6 +381,14 @@ export const agentEventPayloadNativeKeys: Readonly<
     'tool/after': pick(standardKeys, [...codexTool, 'toolResponse']),
     'tool/before': pick(standardKeys, codexTool),
   }),
+  opencode: Object.freeze({
+    'prompt/submit': pick(standardKeys, ['sessionId', 'cwd', 'prompt']),
+    'session/start': pick(standardKeys, ['sessionId', 'cwd', 'source']),
+    stop: pick(standardKeys, ['sessionId', 'cwd']),
+    'tool/after': pick(standardKeys, ['sessionId', 'cwd', 'toolName', 'toolInput', 'toolResponse', 'toolUseId']),
+    'tool/before': pick(standardKeys, ['sessionId', 'cwd', 'toolName', 'toolInput', 'toolUseId']),
+    'tool/failure': pick(standardKeys, ['sessionId', 'cwd', 'toolName', 'toolInput', 'toolUseId', 'error']),
+  }),
   cursor: Object.freeze({
     'agent/start': pick(cursorKeys, [...cursorSession, 'agentId', 'agentType']),
     // subagentStop documents subagent_type and agent_transcript_path; subagent_id
@@ -399,4 +407,4 @@ export const agentEventPayloadNativeKeys: Readonly<
 });
 
 export const isAgentEventPayloadHost = (target: string): target is AgentEventPayloadHost =>
-  target === 'amp' || target === 'claude' || target === 'codex' || target === 'cursor';
+  target === 'amp' || target === 'claude' || target === 'codex' || target === 'cursor' || target === 'opencode';

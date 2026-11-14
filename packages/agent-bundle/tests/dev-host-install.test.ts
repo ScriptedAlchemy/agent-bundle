@@ -181,6 +181,20 @@ it('defines the stage-1 proxy command shape with an absolute framework CLI entry
     ],
     command: process.execPath,
   });
+  expect(await devProxyServerCommand('/workspace/project', 'library', 'opencode')).toEqual({
+    args: [
+      join(process.cwd(), 'packages', 'agent-bundle', 'bin', 'agent-bundle.js'),
+      'dev',
+      'proxy',
+      '--root',
+      '/workspace/project',
+      '--server',
+      'library',
+      '--target',
+      'opencode',
+    ],
+    command: process.execPath,
+  });
 });
 
 it('installs a marked public-host dev variant from a stable source and removes it on teardown and restart', async () => {

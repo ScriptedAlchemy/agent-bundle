@@ -11,7 +11,7 @@ import { errorMessage, isErrno } from '../core/errors.ts';
 import { isPortablePathSegment } from '../core/paths.ts';
 import { manifestInventory, treeInventory, type TreeInventory } from './receipt.ts';
 
-export type BundleIdentityHost = 'amp' | 'claude' | 'codex' | 'cursor';
+export type BundleIdentityHost = 'amp' | 'claude' | 'codex' | 'cursor' | 'opencode';
 
 export interface PluginIdentity {
   readonly bundleRoot: string;
@@ -98,7 +98,7 @@ export const readBundleIdentity = async (
         );
       }
       const marketplace = projection.marketplace?.name;
-      if (host !== 'amp' && host !== 'cursor' && marketplace === undefined) {
+      if (host !== 'amp' && host !== 'cursor' && host !== 'opencode' && marketplace === undefined) {
         throw failure('AB7001', `${host} bundle has no marketplace identity.`, host);
       }
       const plugin = result.manifest.application.name;

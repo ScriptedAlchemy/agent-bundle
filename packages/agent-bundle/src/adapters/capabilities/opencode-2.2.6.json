@@ -1,0 +1,249 @@
+{
+  "host": "opencode",
+  "observedCliVersion": "2.2.6",
+  "evidence": {
+    "pluginApi": "https://opencode.ai/docs/build/plugins and @opencode/plugin@2.2.6/dist/promise/plugin.d.ts",
+    "mcp": "https://opencode.ai/docs/build/plugins/server#mcp and @opencode/plugin@2.2.6/dist/promise/mcp.d.ts",
+    "skills": "https://opencode.ai/docs/build/plugins/server#skills and @opencode/plugin@2.2.6/dist/promise/skill.d.ts",
+    "commands": "https://opencode.ai/docs/build/plugins/server#commands and @opencode/plugin@2.2.6/dist/promise/command.d.ts",
+    "hooks": "https://opencode.ai/docs/build/plugins/server#hooks and @opencode/plugin@2.2.6/dist/promise/{tool,session,permission}.d.ts",
+    "loading": "https://opencode.ai/docs/plugins and https://opencode.ai/docs/build/plugins#load"
+  },
+  "plugin": {
+    "package": {
+      "state": "supported",
+      "evidence": "V2 loads a directory package with package.json name/exports and a default Plugin.define definition. The artifact root is that package, so shared MCP/hook/App/CLI outputs retain their existing relative paths."
+    },
+    "marketplace": {
+      "state": "unavailable",
+      "reason": "OpenCode V2 directory plugins use discovery or the plugins array, not a native marketplace manifest. `opencode plugin add` manages global package plugins and is not a local directory install path."
+    },
+    "rules": {
+      "state": "unavailable",
+      "reason": "No canonical rules lowering is implemented for OpenCode. Configured instructions exist, but this adapter does not claim they're equivalent to the canonical rule component."
+    },
+    "agents": {
+      "state": "unavailable",
+      "reason": "The normalized application has no authored agent component to lower into V2 agents."
+    },
+    "web": {
+      "state": "unavailable",
+      "reason": "V2 2.2.6 documents MCP tools/resources/prompts but no MCP Apps display surface. Serving an App resource does not prove an OpenCode UI renders it."
+    }
+  },
+  "mcp": {
+    "stdio": true,
+    "streamableHttp": true,
+    "tasks": {
+      "state": "unavailable",
+      "reason": "The pinned MCP guide includes protocol revision selection but does not document task-augmented tools/call for plugin-generated servers."
+    }
+  },
+  "commands": {
+    "state": "supported",
+    "evidence": "ctx.command.transform registers a native V2 command whose execute callback calls ctx.session.prompt. Argument substitution follows the V2 command template rules."
+  },
+  "skills": {
+    "state": "supported",
+    "evidence": "ctx.skill.transform registers path-backed native V2 skills; this is not a copied portable-skill compatibility claim.",
+    "hostFrontmatter": {
+      "state": "degraded",
+      "reason": "V2 uses path-derived IDs, description, and metadata.opencode/autoinvoke. Host-specific frontmatter from other targets is not forwarded."
+    },
+    "markdownTokens": {
+      "state": "unavailable",
+      "reason": "No OpenCode V2 Skill Markdown interpolation syntax is documented at this pin."
+    }
+  },
+  "hooks": {
+    "registration": "api",
+    "events": {
+      "sessionStart": "session.created",
+      "beforeTool": "tool.execute.before",
+      "afterTool": "tool.execute.after"
+    },
+    "matchers": {
+      "shell": "^shell$",
+      "file.read": "^read$",
+      "file.write": "^(?:write|edit|patch)$",
+      "mcp": "agent-bundle:mcp-inventory-prefix",
+      "agent": "^subagent$"
+    },
+    "eventRoutes": {
+      "prompt/submit": {
+        "nativeEvent": "session.prompt",
+        "payload": {
+          "sessionId": "session_id",
+          "cwd": "cwd",
+          "prompt": "prompt"
+        },
+        "state": "supported"
+      },
+      "tool/before": {
+        "nativeEvent": "tool.execute.before",
+        "payload": {
+          "sessionId": "session_id",
+          "cwd": "cwd",
+          "toolName": "tool_name",
+          "toolInput": "tool_input",
+          "toolUseId": "tool_use_id"
+        },
+        "state": "supported"
+      },
+      "tool/after": {
+        "nativeEvent": "tool.execute.after",
+        "payload": {
+          "sessionId": "session_id",
+          "cwd": "cwd",
+          "toolName": "tool_name",
+          "toolInput": "tool_input",
+          "toolResponse": "tool_response",
+          "toolUseId": "tool_use_id"
+        },
+        "state": "supported"
+      },
+      "tool/failure": {
+        "nativeEvent": "tool.execute.after.error",
+        "payload": {
+          "sessionId": "session_id",
+          "cwd": "cwd",
+          "toolName": "tool_name",
+          "toolInput": "tool_input",
+          "toolUseId": "tool_use_id",
+          "error": "error"
+        },
+        "state": "supported"
+      },
+      "stop": {
+        "nativeEvent": "session.experimental.idle",
+        "payload": {
+          "sessionId": "session_id",
+          "cwd": "cwd"
+        },
+        "state": "supported"
+      },
+      "session/start": {
+        "nativeEvent": "session.created",
+        "payload": {
+          "sessionId": "session_id",
+          "cwd": "cwd",
+          "source": "source"
+        },
+        "state": "supported",
+        "evidence": [
+          "2026-11-12: installed @opencode/cli 2.2.6 invoked context.event.subscribe({types:['session.created'],signal}) for a real local plugin; session.create emitted sessionID and location.directory without a provider/model call, and abort+await stopped the loop in cleanup.",
+          "Creation alone does not distinguish resume or clear, so the native source is always startup and no model/session result channel is inferred."
+        ]
+      },
+      "session/end": {
+        "state": "unavailable",
+        "reason": "No V2 2.2.6 session-end hook is published."
+      },
+      "agent/start": {
+        "state": "unavailable",
+        "reason": "Subagent definitions exist, but no V2 2.2.6 subagent-start domain hook is published."
+      },
+      "agent/stop": {
+        "state": "unavailable",
+        "reason": "Subagent definitions exist, but no V2 2.2.6 subagent-stop domain hook is published."
+      },
+      "agent/idle": {
+        "state": "unavailable",
+        "reason": "experimental.idle is session-idle, not a teammate-idle event."
+      },
+      "workspace/open": {
+        "state": "unavailable",
+        "reason": "Plugin setup receives location context, not a per-workspace-open hook."
+      },
+      "compact/before": {
+        "state": "unavailable",
+        "reason": "The V2 compaction hook lacks a reliable manual/auto trigger field needed by the canonical compact/before contract."
+      },
+      "compact/after": {
+        "state": "unavailable",
+        "reason": "No V2 2.2.6 post-compaction hook is published."
+      },
+      "permission/request": {
+        "state": "unavailable",
+        "reason": "permission.evaluate has action/resources/effect, not the canonical tool envelope; the adapter does not fabricate one."
+      },
+      "permission/denied": {
+        "state": "unavailable",
+        "reason": "permission.evaluate does not run after an explicit configured deny, so it cannot observe canonical permission/denied."
+      },
+      "config/change": {
+        "state": "unavailable",
+        "reason": "V2 config reload is not exposed as the canonical config/change envelope."
+      },
+      "file/change": {
+        "state": "unavailable",
+        "reason": "No V2 2.2.6 file-change plugin hook is published."
+      },
+      "model-switch/before": {
+        "state": "unavailable",
+        "reason": "session.switchModel is an API operation, not a before-model-switch hook."
+      },
+      "model-switch/after": {
+        "state": "unavailable",
+        "reason": "session.switchModel is an API operation, not an after-model-switch hook."
+      },
+      "stop/failure": {
+        "state": "unavailable",
+        "reason": "experimental.idle does not run after failure; the retry hook is not the canonical stop/failure event."
+      },
+      "task/create": {
+        "state": "unavailable",
+        "reason": "No V2 2.2.6 task-created plugin hook is published."
+      },
+      "task/complete": {
+        "state": "unavailable",
+        "reason": "No V2 2.2.6 task-completed plugin hook is published."
+      }
+    },
+    "features": {
+      "timeout": {
+        "state": "unavailable",
+        "reason": "V2 domain hook registration exposes no per-handler timeout option. Wrappers retain their internal execution timeouts but no native timeout is claimed."
+      },
+      "toolMatchers": {
+        "state": "supported",
+        "evidence": "Tool hook callbacks expose event.tool; generated OpenCode callbacks apply canonical matchers before spawning a wrapper."
+      }
+    }
+  },
+  "install": {
+    "state": "supported",
+    "scopes": ["project", "user"],
+    "evidence": "V2 auto-discovers package directories under project .opencode/plugins and the global config plugins directory. Agent Bundle copies its receipt-owned native package there rather than invoking the package-only global plugin add command."
+  },
+  "noticeDelivery": {
+    "current-response": {
+      "state": "supported",
+      "sensitivity": "internal",
+      "sensitivityEvidence": "2026-11-12: V2 hook callbacks run in the OpenCode server process, but public text delivered through prompt/tool mutations is model-visible, so only internal content is advertised."
+    },
+    "next-event": {
+      "state": "supported",
+      "sensitivity": "internal",
+      "sensitivityEvidence": "2026-11-12: experimental.idle admits a synthetic message into the same execution, and text is model-visible."
+    },
+    "directed-push": {
+      "state": "unavailable",
+      "reason": "2026-11-12: No plugin-directed cross-actor delivery API is pinned."
+    },
+    "host-toast": {
+      "state": "unavailable",
+      "reason": "2026-11-12: No plugin-facing toast API is pinned for the server host."
+    },
+    "mcp-inbox": {
+      "state": "supported",
+      "sensitivity": "internal",
+      "sensitivityEvidence": "2026-11-12: Inbox identity is transport-derived and not authenticated by this host; secret content is withheld."
+    },
+    "mcp-resource-updated": {
+      "state": "supported",
+      "sensitivity": "internal",
+      "sensitivityEvidence": "2026-11-12: Resource update notices contain only the inbox URI."
+    }
+  }
+}
