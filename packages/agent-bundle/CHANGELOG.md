@@ -1,5 +1,41 @@
 # agent-bundle
 
+## 0.5.0
+
+### Minor Changes
+
+- b9aec04: Add the OpenCode V2 `opencode` target with native package output, `install opencode` / `uninstall opencode`, `dev --install-host opencode`, and `doctor --host opencode`, plus `AB6040`, `AB6041`, and `AB7336` diagnostics. Advance `artifactManifestVersion` to 7 for the OpenCode built-in projection; the artifact APIs reject v6 manifests, so rebuild existing artifacts with this version. (#896)
+
+### Patch Changes
+
+- 6e02c8c: Run `agent-bundle dev`, `create-agent-bundle`, and the state and Flight runtime on synchronized Effect 4.0.0 packages. (#880)
+- 78f2387: Recognize stale runtime endpoint files on macOS in `agent-bundle dev` and `agent-bundle doctor`, preserving `AB7314` stale-endpoint diagnostics. (#884)
+- 81d80cc: Update `agent-bundle dev` MCP connections to `@modelcontextprotocol/client` 2.3.0. (#887)
+- 6235e75: Serve generated MCP HTTP endpoints with `@modelcontextprotocol/node` 2.1.0. (#888)
+- 7c25db2: Build React views with `@rsbuild/plugin-react` 2.1.1. (#899)
+- e814e73: Build publishable packages and generated executables with compatible `@rslib/core` 1.0.7 and `@rsbuild/core` 2.3.2 versions. (#900)
+- 027de59: Load `agent-bundle` project configuration with `@rstackjs/load-config` 1.0.2. (#901)
+- 9fc243d: Inspect emitted module imports during `agent-bundle validate --artifact` with `es-module-lexer` 3.0.4. (#902)
+- 70f87cb: Serve generated MCP HTTP endpoints with `@modelcontextprotocol/node` 2.1.2 and align MCP servers to its supported 2.4.0 peer. (#903)
+- 9da052e: Honor nested `.gitignore` patterns such as `a/***/b` and `f*o/*/*` during `agent-bundle build` discovery, Skill resource packaging, and development watching. (#904)
+- 70c79ba: Keep `agent-bundle build` and runtime schema typing compatible with Zod 4.6.7. (#905)
+- 7fa77b2: Render agent documents and Flight responses with React 19.3.1 and `react-server-dom-rspack` 0.1.1. (#906)
+- 40ddeae: Run `agent-bundle dev`, `create-agent-bundle`, and the state and Flight runtime on synchronized Effect 4.1.2 packages. (#891)
+- 81edc81: Run generated MCP servers and the `agent-bundle dev` server with `@modelcontextprotocol/server` 2.3.0. (#889)
+- 42a16de: Build `agent-bundle` artifacts and MCP App views with `@rsbuild/core` 2.2.11. (#881)
+- c788e7c: Update the `agent-bundle dev` WebSocket transport to `ws` 8.22.0 and its matching types. (#879)
+- d28dd39: Keep `agent-bundle` and `@agent-bundle/runtime` compatible with Zod 4.6.6. (#886)
+- Updated dependencies [6e02c8c]
+- Updated dependencies [81d80cc]
+- Updated dependencies [e814e73]
+- Updated dependencies [70f87cb]
+- Updated dependencies [70c79ba]
+- Updated dependencies [7fa77b2]
+- Updated dependencies [40ddeae]
+- Updated dependencies [81edc81]
+- Updated dependencies [d28dd39]
+  - @agent-bundle/runtime@0.2.1
+
 ## 0.4.0
 
 ### Minor Changes
