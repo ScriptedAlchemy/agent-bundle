@@ -91,14 +91,14 @@
     }
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.0.0",
-    "effect": "4.0.0",
+    "@modelcontextprotocol/server": "2.3.0",
+    "effect": "4.1.2",
     "flare-redact": "1.6.1",
     "react-server-dom-rspack": "0.1.0",
     "rsc-markdown-stream": "workspace:^"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.0",
     "@rslib/core": "1.0.7",
     "@rspack/core": "2.2.3",
     "@rstest/core": "0.11.12",
@@ -108,6 +108,6 @@
     "micromark-extension-gfm": "3.0.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "zod": "4.6.4"
+    "zod": "4.6.6"
   }
 }
