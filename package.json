@@ -77,8 +77,8 @@
     "@types/node": "26.5.1",
     "agent-bundle": "workspace:*",
     "pkg-pr-new": "0.0.93",
-    "playwright": "1.63.0",
-    "playwright-core": "1.63.0",
+    "playwright": "1.65.1",
+    "playwright-core": "1.65.1",
     "rsbuild-plugin-publint": "1.0.0",
     "typescript": "7.0.2"
   }
