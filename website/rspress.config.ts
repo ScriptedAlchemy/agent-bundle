@@ -182,7 +182,7 @@ export default defineConfig({
     exclude: ['api'],
   },
   themeConfig: {
-    llmsUI: { placement: 'outline' },
+    llmsUI: { placement: 'outline', injectLlmsHint: false },
     editLink: {
       docRepoBaseUrl: `${repositoryUrl}/tree/main/website/docs`,
     },
