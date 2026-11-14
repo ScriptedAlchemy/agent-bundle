@@ -64,7 +64,7 @@ describe('@agent-bundle/runtime manifest', () => {
     expect(peers.zod).toBe('^4.6.4');
     expect(runtimeManifest.peerDependenciesMeta).not.toHaveProperty('zod');
     expect(runtimeManifest.dependencies).not.toHaveProperty('zod');
-    expect(runtimeManifest.devDependencies.zod).toBe('4.6.6');
+    expect(runtimeManifest.devDependencies.zod).toBe('4.6.7');
   });
 
   it('documents the React contract the manifest declares', async () => {
