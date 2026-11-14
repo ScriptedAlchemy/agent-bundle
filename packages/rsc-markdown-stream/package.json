@@ -55,6 +55,6 @@
     "@rslib/core": "1.0.7",
     "@rstest/core": "0.11.12",
     "@types/react": "19.3.0",
-    "react": "19.3.0"
+    "react": "19.3.1"
   }
 }
