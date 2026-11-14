@@ -1,4 +1,4 @@
-import { Effect, Layer, Sink, Stdio, Terminal } from 'effect';
+import { type Cause, Effect, Layer, Queue, Sink, Stdio, Terminal } from 'effect';
 
 import type { CliOutput } from '../../src/cli.ts';
 
@@ -33,6 +33,12 @@ export const captureCliTerminal = (lines: readonly string[] = []): CapturedCliTe
     readLine: Effect.suspend(() =>
       scripted.length > 0 ? Effect.succeed(scripted.shift()!) : Effect.fail(new Terminal.QuitError({}))),
     rows: Effect.succeed(24),
+    size: Effect.gen(function* () {
+      const queue = yield* Queue.sliding<Terminal.Size, Cause.Done>(1);
+      yield* Effect.addFinalizer(() => Queue.end(queue));
+      yield* Queue.offer(queue, { columns: 80, rows: 24 });
+      return queue;
+    }),
   });
   const stdio = Stdio.layerTest({
     stderr: () => Sink.forEach((chunk: string | Uint8Array) => Effect.sync(() => void err.push(chunkText(chunk)))),
