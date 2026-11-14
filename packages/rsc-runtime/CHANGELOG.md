@@ -1,5 +1,22 @@
 # @agent-bundle/runtime
 
+## 0.2.1
+
+### Patch Changes
+
+- 6e02c8c: Run `agent-bundle dev`, `create-agent-bundle`, and the state and Flight runtime on synchronized Effect 4.0.0 packages. (#880)
+- 81d80cc: Update `agent-bundle dev` MCP connections to `@modelcontextprotocol/client` 2.3.0. (#887)
+- e814e73: Build publishable packages and generated executables with compatible `@rslib/core` 1.0.7 and `@rsbuild/core` 2.3.2 versions. (#900)
+- 70f87cb: Serve generated MCP HTTP endpoints with `@modelcontextprotocol/node` 2.1.2 and align MCP servers to its supported 2.4.0 peer. (#903)
+- 70c79ba: Keep `agent-bundle build` and runtime schema typing compatible with Zod 4.6.7. (#905)
+- 7fa77b2: Render agent documents and Flight responses with React 19.3.1 and `react-server-dom-rspack` 0.1.1. (#906)
+- 40ddeae: Run `agent-bundle dev`, `create-agent-bundle`, and the state and Flight runtime on synchronized Effect 4.1.2 packages. (#891)
+- 81edc81: Run generated MCP servers and the `agent-bundle dev` server with `@modelcontextprotocol/server` 2.3.0. (#889)
+- d28dd39: Keep `agent-bundle` and `@agent-bundle/runtime` compatible with Zod 4.6.6. (#886)
+- Updated dependencies [e814e73]
+- Updated dependencies [7fa77b2]
+  - rsc-markdown-stream@0.1.4
+
 ## 0.2.0
 
 ### Minor Changes

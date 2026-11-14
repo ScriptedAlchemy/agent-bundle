@@ -1,5 +1,12 @@
 # rsc-markdown-stream
 
+## 0.1.4
+
+### Patch Changes
+
+- e814e73: Build publishable packages and generated executables with compatible `@rslib/core` 1.0.7 and `@rsbuild/core` 2.3.2 versions. (#900)
+- 7fa77b2: Render agent documents and Flight responses with React 19.3.1 and `react-server-dom-rspack` 0.1.1. (#906)
+
 ## 0.1.3
 
 ### Patch Changes
