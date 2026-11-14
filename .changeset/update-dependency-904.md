@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-Apply project ignore rules during `agent-bundle build` with `ignore` 7.0.14. (#904)
+Honor nested `.gitignore` patterns such as `a/***/b` and `f*o/*/*` during `agent-bundle build` discovery, Skill resource packaging, and development watching. (#904)
