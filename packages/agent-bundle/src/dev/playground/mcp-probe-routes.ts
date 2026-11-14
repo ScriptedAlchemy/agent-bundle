@@ -44,7 +44,7 @@ const matchesProbeRoute = (requestTarget: string | undefined): boolean => {
 const invalidRequest = badRequest('AB8220', 'MCP probe request is not valid.');
 
 const isHost = (value: unknown): value is McpProbeHost =>
-  value === 'claude' || value === 'codex' || value === 'cursor';
+  value === 'claude' || value === 'codex' || value === 'cursor' || value === 'opencode';
 
 const probeRequest = async (
   request: IncomingMessage,

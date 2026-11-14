@@ -83,6 +83,8 @@ export const hostLabelFor = (host: DiscoveryHost): string => {
       return 'Codex';
     case 'cursor':
       return 'Cursor';
+    case 'opencode':
+      return 'OpenCode';
     default: {
       const exhaustive: never = host;
       return exhaustive;

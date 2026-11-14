@@ -190,6 +190,7 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 | `claude` | `adapters/claude.ts` 中的 `planClaudeArtifacts` | `adapters/capabilities/claude-2.1.260.json` |
 | `codex` | `adapters/codex.ts` 中的 `planCodexArtifacts` | `adapters/capabilities/codex-0.147.0.json` |
 | `cursor` | `adapters/cursor.ts` 中的 `planCursorArtifacts` | `adapters/capabilities/cursor-2026-08-28.json` |
+| `opencode` | `adapters/opencode.ts` 中的 `planOpenCodeArtifacts` | `adapters/capabilities/opencode-2.2.6.json` |
 | `portable` | `adapters/portable.ts` 中的 `portableAdapter.plan` | `adapters/capabilities/portable-1.0.0.json` |
 
 这些能力 JSON 文件是注册表与生成的[宿主参考](../../reference/hosts.md)页面所读取的宿主
@@ -200,11 +201,11 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 声明的是同一组路由。
 
 `TargetRegistry`（`adapters/registry.ts`）是注册适配器的唯一位置。`createDefaultRegistry`
-先把 `portable` 注册为默认值，然后注册 `codex`、`claude`、`cursor` 与 `amp`。注册顺序不是
+先把 `portable` 注册为默认值，然后注册 `codex`、`claude`、`cursor`、`opencode` 与 `amp`。注册顺序不是
 目标优先级：`planComposite` 在规划前先对所选集合排序（`sortedProjections`），复合身份就是
 排序后的名称连接。不存在 `plugin` 适配器。
 
-`amp` 是唯一一个插件形态为生成目录、而非一组声明式文档的内置宿主。它的规划在
+`amp` 输出嵌套的原生插件目录。它的规划在
 `.amp/plugins/{plugin}/` 下写出一个 `index.js` PluginAPI 工厂，由该 API 注册 Skill 与事件
 回调；其 MCP 配置是 Skill 作用域的：一个规范服务器需要恰好一个 Amp Skill，而由编译器拥有的
 本地服务器会被拒绝，因为固定的契约没有记录可用于启动它的插件根 token。逐表面的证据仍在生成的
@@ -357,7 +358,7 @@ prompt 路由则返回经校验的协议结果（来自 `document.value`）。CL
 `build/manifest-routes.ts` 的 `artifactRoutesFor`。`writeManifest` 再用
 `assembleArtifactManifest` 将其序列化：规范的 `stableJson` 加一个末尾换行。
 `parseArtifactManifest` 拒绝任何其他字节序列、重复键、未知键、缺失键、未排序
-的数组，以及指向清单自身的文件条目。`manifestVersion` 为 `5`。公开读取方是
+的数组，以及指向清单自身的文件条目。`manifestVersion` 为 `7`。公开读取方是
 `build/manifest-file.ts` 的 `readArtifactManifest`：`ok`、`missing`（仅
 ENOENT）或 `invalid`。
 
@@ -379,7 +380,7 @@ ENOENT）或 `invalid`。
 
 ### 写入器发出的分节
 
-文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 6`）
+文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 7`）
 是消费者读取的部分。**编译器记录**（`compiler`，`recordVersion: 1`）是
 这次运行的操作性账目，生产者、项目摘要、来源、适配器修订、固定的
 schema、验证结果，它的变化不会推动 `manifestVersion`；消费者读取方
@@ -387,7 +388,7 @@ schema、验证结果，它的变化不会推动 `manifestVersion`；消费者�
 
 | 分节 | 记录什么 |
 | --- | --- |
-| `manifestVersion` | `5` |
+| `manifestVersion` | `7` |
 | `application` | 与宿主无关的身份：`id`、`name`、`version`，可选的 `description` |
 | `files[]` | 除清单自身外的每个发出文件（`path`、`bytes`、`sha256`、`kind`，可选的 `mode`） |
 | `runtime` | 来自 `NormalizedPlugin.runtime` 的 `{ node }` |
@@ -462,8 +463,8 @@ schema、验证结果，它的变化不会推动 `manifestVersion`；消费者�
 原生钩子与手写的 MCP 入口是 `DiscoveredProject` / `NormalizedPlugin` 上彼此平行的集合。
 之后需要“每一个表面”的消费者仍要遍历多个字段。
 
-**五个规划器，一次合并。** `planClaudeArtifacts`、`planCodexArtifacts`、
-`planCursorArtifacts`、`portableAdapter.plan` 与 `ampAdapter.plan` 各自遍历整个模型并输出
+**六个规划器，一次合并。** `planClaudeArtifacts`、`planCodexArtifacts`、
+`planCursorArtifacts`、`planOpenCodeArtifacts`、`portableAdapter.plan` 与 `ampAdapter.plan` 各自遍历整个模型并输出
 宿主文档。
 `compose.ts` 合并的是字节；它并没有用单个 `project(application, capabilities)` 函数取代
 这些规划器。
@@ -517,7 +518,7 @@ flag 元数据来自字面量 `config.inputJsonSchema`；编译后的可执行�
 | [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) | 基于同一桥接的生产 `web` 表面 |
 
 第 3 步以版本 2 落地了权威的 `agent-bundle.manifest.json`；后续的可执行、分发与路由契约字段
-把当前契约推进到 `manifestVersion` 6。
+把当前契约推进到 `manifestVersion` 7。
 字段契约见 [产物清单](../../reference/artifact-manifest.mdx)。#592
 会一直保持打开，直到该 issue 上剩余的验收标准落地。
 

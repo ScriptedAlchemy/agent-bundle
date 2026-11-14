@@ -1,4 +1,4 @@
-export type DiscoveryHost = 'claude' | 'codex' | 'cursor';
+export type DiscoveryHost = 'claude' | 'codex' | 'cursor' | 'opencode';
 export type DiscoveryProbeStatus = 'available' | 'failed' | 'unavailable';
 export type DiscoveryInventoryStatus = 'known' | 'skipped' | 'unknown';
 export type DiscoveryFindingState =

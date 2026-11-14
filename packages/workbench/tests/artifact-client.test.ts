@@ -80,6 +80,49 @@ it('reads one epoch inspection over the same foreground session', async () => {
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/artifacts/epochs/epoch-1' }]);
 });
 
+it('preserves OpenCode entry documents in application hosts and projections', async () => {
+  const openCodeInspection = {
+    ...inspection,
+    application: {
+      ...inspection.application,
+      hosts: [{
+        builtIn: true,
+        documents: [
+          { kind: 'entry', path: 'index.js' },
+          { kind: 'plugin', path: 'package.json' },
+          { kind: 'mcp', path: 'agent-bundle.mcp.json' },
+        ],
+        host: 'opencode',
+      }],
+    },
+    projections: [{
+      documents: { entry: 'index.js', mcp: 'agent-bundle.mcp.json', plugin: 'package.json' },
+      host: 'opencode',
+      tree: { children: [], kind: 'directory', name: 'opencode', path: 'opencode' },
+    }],
+  };
+  const client = new ArtifactClient({
+    foreground: foreground(recordingFetch([], () => response({ inspection: openCodeInspection }))),
+  });
+
+  await expect(client.inspect('epoch-1')).resolves.toMatchObject({
+    application: {
+      hosts: [{
+        documents: [
+          { kind: 'entry', path: 'index.js' },
+          { kind: 'plugin', path: 'package.json' },
+          { kind: 'mcp', path: 'agent-bundle.mcp.json' },
+        ],
+        host: 'opencode',
+      }],
+    },
+    projections: [{
+      documents: { entry: 'index.js', mcp: 'agent-bundle.mcp.json', plugin: 'package.json' },
+      host: 'opencode',
+    }],
+  });
+});
+
 it('encodes the requested epoch id into the inspection path', async () => {
   const calls: RecordedRequest[] = [];
   const client = new ArtifactClient({ foreground: foreground(recordingFetch(calls, () => response({ inspection }))) });
@@ -175,6 +218,35 @@ it.each([
   {
     body: { inspection: { ...inspection, version: 1 } },
     name: 'an inspection version',
+    read: (client: ArtifactClient): Promise<unknown> => client.inspect('epoch-1'),
+  },
+  {
+    body: {
+      inspection: {
+        ...inspection,
+        application: {
+          ...inspection.application,
+          hosts: [{
+            ...inspection.application.hosts[0]!,
+            documents: [{ kind: 'entrypoint', path: 'index.js' }],
+          }],
+        },
+      },
+    },
+    name: 'an unknown application host document kind',
+    read: (client: ArtifactClient): Promise<unknown> => client.inspect('epoch-1'),
+  },
+  {
+    body: {
+      inspection: {
+        ...inspection,
+        projections: [{
+          ...inspection.projections[0]!,
+          documents: { entrypoint: 'index.js', plugin: 'package.json' },
+        }],
+      },
+    },
+    name: 'an unknown projection document key',
     read: (client: ArtifactClient): Promise<unknown> => client.inspect('epoch-1'),
   },
   {
