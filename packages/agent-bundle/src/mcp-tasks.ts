@@ -12,7 +12,7 @@
  * A client that does not ask for a task sees no change, and a server whose
  * tools never opted in advertises no `tasks` capability at all.
  *
- * The SDK release the server is built on (`@modelcontextprotocol/server@2.0.0`)
+ * The SDK release the server is built on (`@modelcontextprotocol/server@2.3.0`)
  * carries the task wire vocabulary but no task runtime, and its `tools/call`
  * result validation admits `CallToolResult` only. The lifecycle therefore
  * lives in a {@link Server} subclass: `_wrapHandler` is the SDK's documented
