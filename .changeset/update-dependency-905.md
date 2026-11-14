@@ -3,4 +3,4 @@
 "@agent-bundle/runtime": patch
 ---
 
-Use Zod 4.6.7 when building and testing `agent-bundle` schemas and rendered runtime routes. (#905)
+Keep `agent-bundle build` and runtime schema typing compatible with Zod 4.6.7. (#905)

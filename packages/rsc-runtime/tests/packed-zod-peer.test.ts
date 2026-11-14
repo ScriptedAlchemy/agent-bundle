@@ -20,7 +20,7 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const tscBin = join(workspaceRoot, 'node_modules', '.bin', 'tsc');
 
-const consumerZod = '4.6.6';
+const consumerZod = '4.6.7';
 const nestedZod = '4.5.4';
 const defineStateSource = [
   "import { defineState } from '@agent-bundle/runtime/state';",
@@ -169,7 +169,7 @@ const packNestedZodRuntime = async (runtimeTarball: string, destination: string)
  * exact nested dependency must reproduce the brand error.
  */
 describe.sequential('packed @agent-bundle/runtime zod peer', () => {
-  it('typechecks a consumer zod@4.6.6 defineState schema against one physical peer install', async () => {
+  it('typechecks a consumer zod@4.6.7 defineState schema against one physical peer install', async () => {
     const [runtime, markdownStream] = await Promise.all([
       sharedPackedTarball('runtime'),
       sharedPackedTarball('markdown-stream'),
