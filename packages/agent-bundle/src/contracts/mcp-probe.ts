@@ -1,4 +1,4 @@
-export type McpProbeHost = 'claude' | 'codex' | 'cursor';
+export type McpProbeHost = 'claude' | 'codex' | 'cursor' | 'opencode';
 export type McpProbeStatus = 'ok' | 'timed-out' | 'unreachable';
 export type McpProbeFailureKind = 'connect' | 'handshake' | 'protocol';
 

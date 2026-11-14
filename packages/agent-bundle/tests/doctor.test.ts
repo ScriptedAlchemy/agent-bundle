@@ -3023,7 +3023,7 @@ it('rejects an invalid Doctor host as a usage error', async () => {
   const terminal = captureCliTerminal();
   const code = await runCli(['doctor', '--host', 'portable'], terminal.output);
   expect(code).toBe(2);
-  expect(terminal.stderr()).toContain('Doctor host must be claude, codex, cursor, or grokbot.');
+  expect(terminal.stderr()).toContain('Doctor host must be claude, codex, cursor, opencode, or grokbot.');
 });
 
 const writeHookedCursorPlugin = async (pluginRoot: string, version = '1.2.3'): Promise<void> => {

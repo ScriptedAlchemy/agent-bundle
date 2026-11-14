@@ -215,7 +215,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     const portableReadme = yield* readText(path.join(portableOnly.root, 'README.md'));
     expect(portableReadme).not.toMatch(/^npx --no-install agent-bundle install /mu);
     expect(portableReadme).toContain("no installable host target ('portable')");
-    expect(portableReadme).toContain('Add `amp`, `claude`, `codex`, or `cursor`');
+    expect(portableReadme).toContain('Add `amp`, `claude`, `codex`, `cursor`, or `opencode`');
 
     // The skills-only template has no install section and passes through, so
     // its prose must not name hosts the selection may not carry.

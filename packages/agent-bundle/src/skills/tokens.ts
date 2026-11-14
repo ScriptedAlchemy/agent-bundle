@@ -20,7 +20,7 @@ export const skillTokenSpellings = Object.freeze({
 
 export type SkillTokenId = keyof typeof skillTokenSpellings;
 
-export type SkillHost = 'amp' | 'claude' | 'codex' | 'cursor' | 'portable';
+export type SkillHost = 'amp' | 'claude' | 'codex' | 'cursor' | 'opencode' | 'portable';
 
 export type SkillDocumentKind =
   | 'commands'
@@ -121,6 +121,7 @@ const table: Record<SkillHost, HostDocumentTable> = {
       pluginRoot: portable('pluginRoot', 'codex', 'plugin-config', '${PLUGIN_ROOT}', codexPlugins),
     },
   },
+  opencode: {},
   cursor: {
     hooks: {
       pluginRoot: portable('pluginRoot', 'cursor', 'hooks', '${CURSOR_PLUGIN_ROOT}', cursorPlugins),
@@ -152,6 +153,7 @@ const noSkillMarkdown = {
   claude: claudeSkills,
   codex: `${codexSkills}: Codex documents no Skill Markdown interpolation engine`,
   cursor: `${cursorSkills}: documented \${VAR} interpolation belongs to plugin configuration, not Skill Markdown`,
+  opencode: 'https://opencode.ai/docs/skills (OpenCode V2 2.2.6): no Skill Markdown interpolation syntax is documented',
   portable: `${portableSkills}: portable Agent Skills define no runtime placeholder syntax`,
 } as const;
 
@@ -220,7 +222,7 @@ const hostSkillMarkdownSyntax = (host: SkillHost): readonly string[] =>
 export const foreignSkillMarkdownSyntax = (host: SkillHost): readonly string[] => {
   const owned = new Set(hostSkillMarkdownSyntax(host));
   const foreign = new Set<string>();
-  for (const other of ['amp', 'claude', 'codex', 'cursor', 'portable'] as const) {
+  for (const other of ['amp', 'claude', 'codex', 'cursor', 'opencode', 'portable'] as const) {
     if (other === host) continue;
     for (const syntax of hostSkillMarkdownSyntax(other)) {
       if (!owned.has(syntax)) foreign.add(syntax);

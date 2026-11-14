@@ -248,7 +248,7 @@ const invocationForRun = (
     status: run.status,
     surface: kind === 'event-route'
       ? Object.freeze({
-          ...(run.target === 'claude' || run.target === 'codex' || run.target === 'cursor'
+          ...(run.target === 'claude' || run.target === 'codex' || run.target === 'cursor' || run.target === 'opencode'
             ? { host: run.target }
             : {}),
           kind: 'event' as const,

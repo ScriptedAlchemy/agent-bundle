@@ -5,6 +5,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import type { RouteInvocation } from '../../agent-bundle/src/contracts/invocations.ts';
 import {
+  defaultEventHostSelection,
   eventFixturesFor,
   eventHostTarget,
   eventRequestFor,
@@ -70,6 +71,30 @@ describe('event fixtures', () => {
       label: 'PreToolUse · Claude',
     }]);
     expect(eventFixturesFor(undefined)).toEqual([]);
+  });
+
+  it('defaults and submits an OpenCode-only lifecycle fixture without a Claude fallback', () => {
+    const openCodeLifecycle: Lifecycle = {
+      ...lifecycle,
+      targets: [{
+        fixture: { label: 'session.created', native: { session_id: 'ses-open' } },
+        hostContractRevision: '2.2.6',
+        nativeEvent: 'session.created',
+        target: 'opencode',
+      }],
+    };
+    expect(defaultEventHostSelection({ ...eventLeaf, handler: './handler.ts' }, openCodeLifecycle)).toBe('opencode');
+    expect(eventFixturesFor(openCodeLifecycle)).toEqual([{
+      host: 'opencode',
+      id: 'opencode:session.created',
+      input: { session_id: 'ses-open' },
+      label: 'session.created · OpenCode',
+    }]);
+    expect(eventRequestFor('opencode', { input: { session_id: 'ses-open' } })).toEqual({
+      input: { session_id: 'ses-open' },
+      surface: { host: 'opencode', kind: 'event' },
+    });
+    expect(eventHostTarget(openCodeLifecycle, 'opencode')?.nativeEvent).toBe('session.created');
   });
 
   it('attaches the host while submitting the editor payload directly', () => {

@@ -151,6 +151,32 @@ it('decodes and deeply freezes a full discovery report through the foreground au
   expect(result.hosts[0]!.bundle?.mcpServers).toBeUndefined();
 });
 
+it('accepts native OpenCode discovery and MCP probe host reports', async () => {
+  const calls: RecordedRequest[] = [];
+  const client = new DiscoveryClient({ foreground: authority(calls, () => jsonResponse({
+    ...fullReport,
+    hosts: [{
+      diagnostics: [],
+      host: 'opencode',
+      inventory: { findings: [], status: 'skipped' },
+      probe: { status: 'available', version: '2.2.6' },
+    }],
+  })) });
+  const report = await client.discover();
+  expect(report.hosts[0]?.host).toBe('opencode');
+  expect(report.hosts[0]?.probe).toMatchObject({ version: '2.2.6' });
+});
+
+it('accepts OpenCode MCP probe responses', async () => {
+  const client = new DiscoveryClient({
+    foreground: authority([], () => jsonResponse({ ...okProbeReport, host: 'opencode' })),
+  });
+  await expect(client.probe({ host: 'opencode', serverName: 'library' })).resolves.toMatchObject({
+    host: 'opencode',
+    status: 'ok',
+  });
+});
+
 it('rejects unknown keys at every discovery response boundary', async () => {
   const firstHost = fullReport.hosts[1]!;
   const firstEndpointFinding = fullReport.endpoints.findings[0]!;

@@ -36,7 +36,7 @@ interface CapturedEvent {
   readonly nativeEvent: string;
 }
 
-type LivePayloadHost = Exclude<AgentEventPayloadHost, 'amp'>;
+type LivePayloadHost = Exclude<AgentEventPayloadHost, 'amp' | 'opencode'>;
 
 const liveFixtures: Readonly<Record<LivePayloadHost, string>> = {
   claude: 'claude-2.1.259-orchestration',

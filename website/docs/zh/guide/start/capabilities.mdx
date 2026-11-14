@@ -1,5 +1,5 @@
 ---
-description: '选择全部五个内置输出 target，查阅自动生成的能力矩阵，并区分插件生成、客户端兼容性、浏览器展示与经过验证的执行。'
+description: '选择全部六个内置输出 target，查阅自动生成的能力矩阵，并区分插件生成、客户端兼容性、浏览器展示与经过验证的执行。'
 ---
 
 # Target 与能力地图
@@ -10,7 +10,7 @@ description: '选择全部五个内置输出 target，查阅自动生成的能�
 
 ## 全部内置输出 target
 
-以下是 `agent-bundle.config.ts` 的 `targets` 支持的五个内置值。它们选择编译器生成的内容，
+以下是 `agent-bundle.config.ts` 的 `targets` 支持的六个内置值。它们选择编译器生成的内容，
 不是账户、模型或正在运行的开发会话。
 
 | Target | 输出与预期读取方 | 重要边界 |
@@ -19,6 +19,7 @@ description: '选择全部五个内置输出 target，查阅自动生成的能�
 | `claude` | Claude Code：`.claude-plugin/plugin.json`、生成的市场条目，以及适用时的 `hooks/hooks.json` 与 `.mcp.json`。 | 编译后的语义 hook 与显式编写的原生 hook 使用不同的编写契约。LSP 等原生扩展仍是 Claude 专属配置。 |
 | `codex` | Codex：`.codex-plugin/plugin.json`、指向自身 hook/MCP 文档的显式路径，以及 `.agents/plugins/marketplace.json`。 | CLI、编辑器和桌面客户端的行为需要分别限定。提供 MCP App 资源不意味着每个 Codex 客户端都会显示它。 |
 | `cursor` | Cursor：`.cursor-plugin/plugin.json`、自身 hook/MCP 文档，以及可选的市场文档。 | 具有所有权记录的本地复制安装路径不同于原生市场 CLI 安装。不要手工改写 Cursor 的全局 hook 配置。 |
+| `opencode` | 原生 OpenCode V2 包：根目录 `index.js` 与 `package.json`、`.opencode/opencode.json`、命令、Skills、MCP 转换和受支持的 hook 注册。 | 固定 V2 2.2.6 契约。不投影原生市场、MCP App 展示、rules、agent 文档或 LSP。Schema 与版本校验不能证明激活。 |
 | `portable` | Agent Plugins 1.0.0：根目录 `plugin.json`、Skills，以及编写了 MCP 时的 `mcp.json`。 | 这是格式 target，不是通用宿主。它不定义原生 hooks、rules 或斜杠命令文档。每个读取客户端支持的子集单独记录。 |
 
 省略 `targets` 时只选择 `portable`。显式配置会替换这个默认值：
@@ -104,6 +105,8 @@ Amp 就是当前例子：实验性、已核对契约、运行时未验证。没�
 宿主矩阵中的 **Recorded third-party clients** 部分描述现有输出格式的读取方。
 这些客户端名称不是 `targets` 的额外取值。某宿主的研究 issue 也不代表已经存在可安装的适配器。
 
+原生 `opencode` target 与旧版 OpenCode portable 客户端记录相互独立。使用
+`targets: ['opencode']` 选择 V2 API 包；portable 兼容性记录不描述该包的 hooks 或生命周期。
 同时阅读客户端的 tier 与各表面记录。仅支持 Skills 的客户端可能不读取 `plugin.json`。
 能读取 `mcp.json` 的客户端不一定展开启动服务器所需的路径占位符。安装命令可能只是注册目录，
 而不是复制目录。高优先级清单可能重定向组件路径；单独的 MCP 文件覆盖不一定遮蔽无关的 Skills。
@@ -118,7 +121,7 @@ Amp 就是当前例子：实验性、已核对契约、运行时未验证。没�
 | 表面 | 如何选择 | 不意味着什么 |
 | --- | --- | --- |
 | 编译 | `targets` / 构建 `--target` | 所有选中宿主提供相同功能，或共享完全相同的原生安装根目录。 |
-| 开发安装 | `dev --install-host claude`、`codex` 或 `cursor` | 每个原生 target 都支持实时开发代理。实验性 Amp 使用文档中的复制/重新加载路径；该路径不是现场激活证明。 |
+| 开发安装 | `dev --install-host claude`、`codex`、`cursor` 或 `opencode` | 每个原生 target 都支持实时开发代理。实验性 Amp 使用文档中的复制/重新加载路径；该路径不是现场激活证明。 |
 | 嵌入式宿主终端 | 已安装且受支持的 Claude/Codex 会话集成 | 身份验证、信任和成功的模型执行由真实宿主提供，不是 Workbench 模拟出来的。 |
 | App 展示 | 受支持的浏览器宿主 `--profile` | 该 profile 是原生输出 target，或它就是正确的服务器启动投影。 |
 | npm 分发 | 打包生成的 npm 根目录 | 安装 npm 包会自动把插件注册到智能体宿主。 |

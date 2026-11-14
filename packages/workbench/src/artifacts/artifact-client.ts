@@ -95,7 +95,7 @@ const isDistribution = (value: unknown): boolean => {
 
 const isExplorerDocument = (value: unknown): boolean =>
   exactRecord(value, ['kind', 'path']) &&
-  (value.kind === 'hooks' || value.kind === 'marketplace' || value.kind === 'mcp' || value.kind === 'plugin') &&
+  (value.kind === 'entry' || value.kind === 'hooks' || value.kind === 'marketplace' || value.kind === 'mcp' || value.kind === 'plugin') &&
   typeof value.path === 'string';
 
 const isExplorerHost = (value: unknown): boolean =>
@@ -207,8 +207,8 @@ const isRuntime = (value: unknown): boolean =>
   arrayOf(value.mcpServers, isMcpServer) && arrayOf(value.scripts, isScript);
 
 const isProjectionDocuments = (value: unknown): boolean =>
-  exactRecord(value, [], ['hooks', 'marketplace', 'mcp', 'plugin']) &&
-  ['hooks', 'marketplace', 'mcp', 'plugin'].every((key) =>
+  exactRecord(value, [], ['entry', 'hooks', 'marketplace', 'mcp', 'plugin']) &&
+  ['entry', 'hooks', 'marketplace', 'mcp', 'plugin'].every((key) =>
     !Object.hasOwn(value, key) || typeof value[key] === 'string');
 
 const isProjection = (value: unknown): boolean =>

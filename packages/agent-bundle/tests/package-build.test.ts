@@ -12,6 +12,9 @@ import { build, runMcp } from '../src/api.ts';
 import { packageCompileEvidenceFileName } from '../src/build/compile-evidence.ts';
 import { runCli } from '../src/cli.ts';
 import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
+import { validateOpenCodePluginFiles } from '../src/host-contracts/opencode-plugin-validation.ts';
+import { installBundle } from '../src/install/install.ts';
+import { runDoctor } from '../src/install/doctor.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { mcpServerStateDirectory } from '../src/core/mcp-state-directory.ts';
 import { removeTree } from './support/remove-tree.ts';
@@ -125,6 +128,62 @@ const unpublishedPackageOutput = async (root: string): Promise<void> => {
   await expect(stat(join(root, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect((await readdir(root)).filter((entry) => entry.startsWith('.dist.stage-'))).toEqual([]);
 };
+
+it('preserves npm identity and validates a native OpenCode npm-root install', async () => {
+  const root = await fixtureRoot({
+    'agent-bundle.config.ts': "export default { plugin: { name: 'native-identity' }, targets: ['opencode'], mcp: { servers: { echoer: {} } }, bin: { 'proof-bin': './src/bin.ts' } };\n",
+    'package.json': JSON.stringify({
+      name: '@proof/npm-identity',
+      description: '',
+      version: '1.0.0',
+      private: true,
+      type: 'module',
+      engines: { node: '>=22.19.0', npm: '>=10' },
+      exports: { './helper': './dist/bin/proof-bin.js' },
+    }),
+    'src/bin.ts': 'export const main = () => 0;\n',
+    'src/mcp/echoer.ts': [
+      'export default () => ({',
+      '  close() {},',
+      '  async connect(transport: { onmessage?: unknown }) { void transport; },',
+      '});',
+      '',
+    ].join('\n'),
+  });
+  const result = await build({ root, output: 'artifact', packageOutputs: true, hostValidation: false });
+  expect(result.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
+  expect(result.build.manifest.manifestVersion).toBe(7);
+  expect(result.build.manifest.projections).toEqual([expect.objectContaining({
+    builtInHost: 'opencode',
+    documents: { entry: 'index.js', mcp: 'agent-bundle.mcp.json', plugin: 'package.json' },
+    host: 'opencode',
+  })]);
+  const from = join(root, 'dist');
+  const metadata = JSON.parse(await readFile(join(from, 'package.json'), 'utf8')) as Record<string, unknown>;
+  expect(metadata).toMatchObject({
+    name: '@proof/npm-identity',
+    description: '',
+    bin: { 'proof-bin': './bin/proof-bin.js' },
+    engines: { node: '>=22.19.0', npm: '>=10' },
+    exports: { '.': './index.js', './helper': './bin/proof-bin.js' },
+  });
+  expect(await validateOpenCodePluginFiles({ pluginDirectory: from, target: 'opencode' })).toEqual([]);
+  const home = join(root, 'home');
+  const environment = { XDG_CONFIG_HOME: join(home, '.config') };
+  expect(await installBundle({ from, home, environment, host: 'opencode', scope: 'user' })).toMatchObject({
+    plugin: 'native-identity',
+    state: 'installed',
+  });
+  const report = await runDoctor({
+    from,
+    home,
+    environment,
+    hosts: ['opencode'],
+    commandRunner: async (request) => ({ args: request.args, exitCode: 0, signal: null, stderr: '', stdout: 'opencode v2.2.6\n' }),
+  });
+  expect(report.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
+  expect(report.hosts[0]?.bundle).toMatchObject({ state: 'installed', comparison: { status: 'current' } });
+}, 60_000);
 
 describe('framework-owned package build', () => {
   it('builds bin, lib, and dts outputs from conventions and stays deterministic', async () => {

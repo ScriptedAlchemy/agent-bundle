@@ -224,6 +224,60 @@ export interface StandardPluginArtifactsInput {
   readonly targetName: string;
 }
 
+/** Emit each selected host's lowered Skill document and its copied resources. */
+export const skillArtifactEntries = (
+  model: NormalizedPlugin,
+  targetName: string,
+  isSelected: (targets: readonly string[]) => boolean,
+): TargetArtifactEntry[] => {
+  const entries: TargetArtifactEntry[] = [];
+  for (const skill of model.skills) {
+    if (!isSelected(skill.targets)) continue;
+    const hostDocument = skill.hostDocuments?.[targetName];
+    const generatedSkill = hostDocument !== undefined && !hostDocument.passThrough;
+    if (generatedSkill) {
+      entries.push({
+        content: hostDocument.skillMarkdown,
+        kind: 'write',
+        relativePath: `skills/${skill.name}/SKILL.md`,
+        sourceInputs: sourceInputs(skill.source),
+      });
+      for (const sidecar of hostDocument.sidecars) {
+        if (sidecar.content === undefined) continue;
+        entries.push({
+          content: sidecar.content.endsWith('\n') ? sidecar.content : `${sidecar.content}\n`,
+          kind: 'write',
+          relativePath: `skills/${skill.name}/${sidecar.relativePath}`,
+          sourceInputs: sourceInputs(skill.source, sidecar.source),
+        });
+      }
+    } else if (skill.markdown !== undefined) {
+      // A rendered skill's SKILL.md is compiled from its component module.
+      entries.push({
+        content: skill.markdown,
+        kind: 'write',
+        relativePath: `skills/${skill.name}/SKILL.md`,
+        sourceInputs: sourceInputs(skill.source),
+      });
+    }
+    const skipCopies = new Set(generatedSkill
+      ? ['SKILL.md', ...hostDocument.sidecars.map((sidecar) => sidecar.relativePath)]
+      : []);
+    for (const resource of skill.resources) {
+      if (skipCopies.has(resource.relativePath)) continue;
+      entries.push({
+        bytes: resource.bytes,
+        kind: 'copy',
+        relativePath: `skills/${skill.name}/${resource.relativePath}`,
+        source: resource.source,
+        sourceInputs: sourceInputs(skill.source, resource.source),
+      });
+    }
+  }
+
+  return entries;
+};
+
 /**
  * Common plugin.json / .mcp.json / hooks / marketplace / skills / assets emission tail
  * shared by every plugin-shaped target adapter (Claude, Codex). Entry order, the
@@ -311,49 +365,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
       ),
     });
   }
-  for (const skill of model.skills) {
-    if (!isSelected(skill.targets)) continue;
-    const hostDocument = skill.hostDocuments?.[targetName];
-    const generatedSkill = hostDocument !== undefined && !hostDocument.passThrough;
-    if (generatedSkill) {
-      entries.push({
-        content: hostDocument.skillMarkdown,
-        kind: 'write',
-        relativePath: `skills/${skill.name}/SKILL.md`,
-        sourceInputs: sourceInputs(skill.source),
-      });
-      for (const sidecar of hostDocument.sidecars) {
-        if (sidecar.content === undefined) continue;
-        entries.push({
-          content: sidecar.content.endsWith('\n') ? sidecar.content : `${sidecar.content}\n`,
-          kind: 'write',
-          relativePath: `skills/${skill.name}/${sidecar.relativePath}`,
-          sourceInputs: sourceInputs(skill.source, sidecar.source),
-        });
-      }
-    } else if (skill.markdown !== undefined) {
-      // A rendered skill's SKILL.md is compiled from its component module.
-      entries.push({
-        content: skill.markdown,
-        kind: 'write',
-        relativePath: `skills/${skill.name}/SKILL.md`,
-        sourceInputs: sourceInputs(skill.source),
-      });
-    }
-    const skipCopies = new Set(generatedSkill
-      ? ['SKILL.md', ...hostDocument.sidecars.map((sidecar) => sidecar.relativePath)]
-      : []);
-    for (const resource of skill.resources) {
-      if (skipCopies.has(resource.relativePath)) continue;
-      entries.push({
-        bytes: resource.bytes,
-        kind: 'copy',
-        relativePath: `skills/${skill.name}/${resource.relativePath}`,
-        source: resource.source,
-        sourceInputs: sourceInputs(skill.source, resource.source),
-      });
-    }
-  }
+  entries.push(...skillArtifactEntries(model, targetName, isSelected));
 
   for (const asset of model.assets ?? []) {
     if (!isSelected(asset.targets)) continue;

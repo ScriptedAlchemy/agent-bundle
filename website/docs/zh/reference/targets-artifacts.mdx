@@ -1,5 +1,5 @@
 ---
-description: '全部五种内置输出投影、各自的原生发现路径、组合约束、规范 artifact/npm 根目录，以及由清单拥有的执行与 web 绑定。'
+description: '全部六种内置输出投影、各自的原生发现路径、组合约束、规范 artifact/npm 根目录，以及由清单拥有的执行与 web 绑定。'
 ---
 
 # Target 与产物
@@ -12,7 +12,7 @@ description: '全部五种内置输出投影、各自的原生发现路径、组
 
 `agent-bundle build` 写出一个组合产物根目录，默认是 `artifact/`。
 `output.distPath` 或 CLI `--output` 可以移动根目录，但不会重新设计内部布局。
-五种内置投影是 **`amp`、`claude`、`codex`、`cursor` 和 `portable`**。
+六种内置投影是 **`amp`、`claude`、`codex`、`cursor`、`opencode` 和 `portable`**。
 
 省略 `targets` 时只选择 `portable`。
 显式选择可以组合内置投影，但编写的组件必须符合兼容性规则。
@@ -36,6 +36,10 @@ artifact/
 ├── .cursor-plugin/plugin.json
 ├── .cursor-plugin/hooks.json
 ├── .cursor-plugin/mcp.json
+├── .opencode/opencode.json            # OpenCode 包配置
+├── index.js                           # OpenCode V2 结构化插件
+├── package.json                       # OpenCode 包入口
+├── agent-bundle.mcp.json               # 编写 MCP 时生成的 OpenCode 规范绑定
 ├── .mcp.json                          # Claude MCP 文档
 ├── plugin.json                        # portable 清单
 ├── mcp.json                           # portable MCP 文档
@@ -67,6 +71,7 @@ Amp 目录插件把已注册的 Skills 和执行支持保留在自身嵌套目�
 | `claude` | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
 | `codex` | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
 | `cursor` | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | 按需生成 `.cursor-plugin/marketplace.json` |
+| `opencode` | 根目录 `package.json` 与 `index.js`；`.opencode/opencode.json` | 原生 V2 API 注册 | 生成的插件读取 `agent-bundle.mcp.json` | 不生成 |
 | `portable` | `plugin.json` | 格式没有原生 hook 组件 | `mcp.json` | 不生成 |
 
 有效的单 target 与多 target 选择使用稳定路径。
@@ -122,6 +127,7 @@ Skills 由所选 targets 共享。宿主扩展若改变生成的 Skill 内容，
 | `claude` | 从声明的组合根进行原生市场注册和插件安装。 |
 | `codex` | 从声明的组合根进行原生市场注册和插件添加。 |
 | `cursor` | 基于 receipt 所有权的本地复制，或显式选择的市场工作流。 |
+| `opencode` | 直接复制或通过回执归属安装器，把自包含根目录放入项目或用户的原生插件目录。 |
 | `portable` | 遵循记录的读取方说明。内含 `install.mjs` 是文档中的 Cursor 兼容路径，不是所有 portable 读取方的通用安装器。 |
 
 框架的 `install --from` 从组合根解析所选原生位置。
@@ -136,7 +142,7 @@ npm 安装不会自动将插件注册到宿主。
 
 ## agent-bundle.manifest.json
 
-当前封闭产物契约为 **`manifestVersion: 6`**。
+当前封闭产物契约为 **`manifestVersion: 7`**。
 它是构建应用的索引，不是另一份需要插件作者维护的文件。
 
 | 部分 | 职责 |
