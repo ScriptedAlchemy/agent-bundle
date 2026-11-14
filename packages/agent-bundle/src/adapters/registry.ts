@@ -18,6 +18,7 @@ import {
 import { ampAdapter } from './amp.ts';
 import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
+import { openCodeAdapter } from './opencode.ts';
 import type { BuiltInHost } from './composite-layout.ts';
 import { cursorAdapter } from './cursor.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
@@ -540,6 +541,7 @@ const builtInAdapters: ReadonlyMap<TargetAdapter, BuiltInHost> = new Map<TargetA
   [claudeAdapter, 'claude'],
   [codexAdapter, 'codex'],
   [cursorAdapter, 'cursor'],
+  [openCodeAdapter, 'opencode'],
   [portableAdapter, 'portable'],
 ]);
 
@@ -819,4 +821,5 @@ export const createDefaultRegistry = (): TargetRegistry =>
     .register(codexAdapter)
     .register(claudeAdapter)
     .register(cursorAdapter)
+    .register(openCodeAdapter)
     .register(ampAdapter);

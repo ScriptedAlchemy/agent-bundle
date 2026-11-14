@@ -1,6 +1,6 @@
 import { useAtom } from '@effect/atom-react';
 import { Effect } from 'effect';
-import { Atom } from 'effect/unstable/reactivity';
+import { Atom } from 'effect/reactivity';
 import { useCallback, useEffect, useState } from 'react';
 
 import {

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scriptedalchemy.github.io/agent-bundle/schemas/opencode/mcp.schema.json",
+  "title": "Agent Bundle canonical MCP input for OpenCode V2 transforms",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mcpServers"],
+  "properties": {
+    "mcpServers": {
+      "type": "object",
+      "propertyNames": { "type": "string", "minLength": 1 },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command", "type"],
+            "properties": {
+              "args": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "command": { "type": "string", "minLength": 1 },
+              "cwd": { "type": "string", "minLength": 1 },
+              "env": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "type": { "const": "stdio" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "url"],
+            "properties": {
+              "headers": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "type": { "const": "streamable-http" },
+              "url": { "type": "string", "format": "uri", "pattern": "^https?://" }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -163,7 +163,7 @@ export interface ArtifactManifestProjectionMarketplace {
  * Claude projection" the way the build did — by adapter, never by the name
  * the project selected it under (#578 audit: names are selection, not identity).
  */
-export type ArtifactManifestBuiltInHost = 'amp' | 'claude' | 'codex' | 'cursor' | 'portable';
+export type ArtifactManifestBuiltInHost = 'amp' | 'claude' | 'codex' | 'cursor' | 'opencode' | 'portable';
 
 export interface ArtifactManifestProjection {
   /** The shipped adapter that planned this projection; absent for an advanced-registry adapter. */
@@ -720,7 +720,7 @@ const parseProjections = (value: unknown): readonly ArtifactManifestProjection[]
     }
     return {
       ...(projection.builtInHost === undefined ? {} : {
-        builtInHost: requireOneOf(projection.builtInHost, `${location}.builtInHost`, ['amp', 'claude', 'codex', 'cursor', 'portable'] as const),
+        builtInHost: requireOneOf(projection.builtInHost, `${location}.builtInHost`, ['amp', 'claude', 'codex', 'cursor', 'opencode', 'portable'] as const),
       }),
       documents,
       host: requireString(projection.host, `${location}.host`),

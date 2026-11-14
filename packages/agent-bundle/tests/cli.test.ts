@@ -616,7 +616,7 @@ it('includes a built-manifest summary on inspect --json after a build, and omits
     expect(JSON.parse(after.stdout).output.manifest).toMatchObject({
       application: { id: 'plugin:cli-fixture', name: 'cli-fixture', version: '1.0.0' },
       executables: { bins: [], hooks: 0, mcpServers: [], scripts: [] },
-      manifestVersion: 6,
+      manifestVersion: 7,
       projections: [{ host: 'codex' }, { host: 'portable' }],
     });
     expect(JSON.parse(after.stdout).output.manifest.path).toMatch(/agent-bundle\.manifest\.json$/u);
@@ -628,7 +628,7 @@ it('includes a built-manifest summary on inspect --json after a build, and omits
 
     const human = await runSourceCliWithOutput(['inspect', '--root', project.root]);
     expect(human).toMatchObject({ code: 0, stderr: '' });
-    expect(human.stdout).toContain('Built manifest: v6 cli-fixture (codex, portable)');
+    expect(human.stdout).toContain('Built manifest: v7 cli-fixture (codex, portable)');
 
     const artifact = await runSourceCliWithOutput([
       'inspect', '--artifact', join(project.root, 'dist'), '--json',
@@ -1127,7 +1127,7 @@ it('accepts Amp on the owned install surface without exposing it as a developmen
   }]);
   const dev = await runSourceCliWithOutput(['dev', '--install-host', 'amp']);
   expect(dev.code).toBe(2);
-  expect(dev.stderr).toContain('Development install host must be claude, codex, or cursor.');
+  expect(dev.stderr).toContain('Development install host must be claude, codex, cursor, or opencode.');
 });
 
 it('maps serve-app argv onto serveApp, prints the served URL, and closes the host once on a termination signal', async () => {
@@ -1271,7 +1271,7 @@ it('reports invalid CLI arguments as Commander usage errors', async () => {
     {
       args: ['dev', '--install-host', 'windsurf'],
       option: '--install-host <host>',
-      reason: 'Development install host must be claude, codex, or cursor.',
+      reason: 'Development install host must be claude, codex, cursor, or opencode.',
       value: 'windsurf',
     },
     {
@@ -1298,7 +1298,7 @@ it('reports invalid CLI arguments as Commander usage errors', async () => {
   const invalidInstallHost = await runSourceCliWithOutput(['install', 'windsurf']);
   expect(invalidInstallHost.code).toBe(2);
   expect(invalidInstallHost.stderr).toContain(
-    "error: command-argument value 'windsurf' is invalid for argument 'host'. Install host must be amp, claude, codex, cursor, or grokbot.",
+    "error: command-argument value 'windsurf' is invalid for argument 'host'. Install host must be amp, claude, codex, cursor, opencode, or grokbot.",
   );
   expect(invalidInstallHost.stderr).not.toContain('AB5000');
 });

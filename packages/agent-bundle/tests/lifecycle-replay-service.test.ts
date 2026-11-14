@@ -133,6 +133,45 @@ it('projects event routes across concrete hosts and diagnoses excluded targets',
   });
 });
 
+it('invokes event routes through OpenCode V2 native host projection', async () => {
+  const replayService = new LifecycleReplayService({
+    prepared: () => ({ graph, targets: ['opencode'] }),
+    loadRouteModule: async () => ({ default: async () => undefined }) as AgentRouteModule,
+    render: async () => ({
+      document: {
+        root: { children: [{ kind: 'context', text: 'OpenCode replay context' }], kind: 'result' },
+        status: 'success',
+        version: 1,
+      },
+      events: [],
+    } as never),
+  });
+  const replay = await replayService.replay({
+    binding: { manifestDigest: 'manifest-a', routeId: 'event:tool/after', target: 'opencode' },
+    native: {
+      cwd: '/tmp/lifecycle-replay',
+      hook_event_name: 'tool.execute.after',
+      session_id: 'session-opencode',
+      tool_input: { filePath: 'movie.json' },
+      tool_name: 'read',
+      tool_response: { content: 'ok' },
+      tool_use_id: 'tool-opencode',
+    },
+    source: 'observed',
+  });
+  if ('diagnostics' in replay) throw new Error('Expected OpenCode replay result');
+  expect(replay.nativeResponse).toMatchObject({
+    hookSpecificOutput: {
+      additionalContext: 'OpenCode replay context',
+      hookEventName: 'tool.execute.after',
+    },
+  });
+  expect(replay.requestContext.invocation).toMatchObject({
+    hostContractRevision: '2.2.6',
+    surface: 'tool/after',
+  });
+});
+
 it('fails closed before loading a route when the manifest binding is stale', async () => {
   await expect(service().replay({
     binding: { manifestDigest: 'manifest-old', routeId: 'event:tool/after', target: 'claude' },

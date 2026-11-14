@@ -92,9 +92,13 @@ credentials, mutable caches, or operator data as assets.
 ## The npm-facing half
 
 For a project with package output enabled, such as the MCP starter, `dist/` contains the complete
-npm root: the validated artifact copied unchanged, generated `package.json`, standard package
+npm root: the validated artifact, generated `package.json`, standard package
 documentation, and declared package-only bins/library output. There is no nested `artifact/`
 inside the tarball.
+
+When `opencode` is selected, the native package and npm metadata share root `package.json`.
+The package build combines them and updates the delivered manifest's file-table digest for that
+document. Use the manifest shipped in the npm root when checking or installing that root.
 
 For a generated routed CLI, `package.json.bin` points directly at `bin/<name>.mjs` from the
 artifact. It has the same operation surface as the artifact CLI, including `web` when declared.

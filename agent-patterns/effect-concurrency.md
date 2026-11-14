@@ -53,3 +53,8 @@ for an Effect stream, do not invent a second AbortSignal for that.
 - Using `Queue` when every subscriber needs every event (that's `PubSub`).
 - Coalescing rebuilds with debounce timers (`setTimeout`): `Latch` +
   fiber, not host timers (`globalTimersInEffect`).
+
+Effect 4.0.0 interrupts losing race participants even while other effects
+are starting. Concurrent `Effect.forEach` / `Effect.all` preserve sibling
+and callback cleanup failures alongside interruption; keep those causes
+intact until the package boundary.

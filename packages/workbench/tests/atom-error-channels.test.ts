@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@rstest/core';
 import { Cause } from 'effect';
-import { AsyncResult, AtomRegistry, type Atom } from 'effect/unstable/reactivity';
+import { AsyncResult, AtomRegistry, type Atom } from 'effect/reactivity';
 
 import { DiscoveryClientError, type HostDiscoveryReport } from '../src/discovery/discovery-client.ts';
 import { discoveryLoaderAtom, discoveryReportAtom } from '../src/discovery/discovery-atoms.ts';
