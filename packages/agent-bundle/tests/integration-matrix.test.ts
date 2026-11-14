@@ -36,7 +36,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
 
   try {
     await expect(readFile(join(root, 'package.json'), 'utf8').then(JSON.parse)).resolves.toMatchObject({
-      devDependencies: { '@modelcontextprotocol/server': '2.3.0' },
+      devDependencies: { '@modelcontextprotocol/server': '2.4.0' },
     });
     const inspection = await inspect({ root });
     expect(inspection.state).toBe('ready');
