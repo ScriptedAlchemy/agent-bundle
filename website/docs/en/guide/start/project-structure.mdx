@@ -82,6 +82,12 @@ discovery. Event files use `.ts` for lightweight results and `.tsx` for JSX; cal
 from a `.ts` handler to load its separate `.view.tsx` sibling. See
 [hooks](../authoring/hooks.mdx) for execution and provider access.
 
+Project-root `.gitignore` rules also filter discovered source files, Skill resources, and
+development watching. A full path segment containing two or more stars spans directories:
+`src/***/draft.ts` matches `src/nested/deep/draft.ts`, just like `src/**/draft.ts`.
+Patterns such as `f*o/*/*` match `foo/b/c`. The `.agent-bundle`, `.git`, `dist`, and
+`node_modules` directories remain excluded even when a negated rule tries to include them.
+
 Route metadata uses a bounded static grammar. Tools put it in `defineTool`'s inline object;
 resources, prompts, apps, and compatibility routes use `config` exports. Keep runtime work in
 the handler or domain module, and keep schemas authoritative rather than reconstructing
