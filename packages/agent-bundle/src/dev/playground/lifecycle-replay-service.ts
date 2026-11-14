@@ -43,7 +43,7 @@ import type {
 } from './lifecycle-render-protocol.ts';
 import { YieldableFrameworkError } from '../../effect/errors.ts';
 
-const concreteHosts = new Set(['claude', 'codex', 'cursor']);
+const concreteHosts = new Set(['claude', 'codex', 'cursor', 'opencode']);
 const projectionDiagnosticCode = 'lifecycle.projection.unsupported';
 
 const renderContext = (requestContext: RequestContextProvenance): RenderRouteContext => deepFreeze({

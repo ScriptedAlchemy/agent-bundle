@@ -1,22 +1,22 @@
 ---
-description: 'Install a built agent-bundle into Claude Code, Codex, Cursor, or experimental Amp: host scopes, receipt-owned copies, install.mjs, npm CLI parity, and Doctor.'
+description: 'Install a built agent-bundle into Claude Code, Codex, Cursor, OpenCode V2, or experimental Amp: host scopes, receipt-owned copies, install.mjs, npm CLI parity, and Doctor.'
 ---
 
 # Host installation
 
 The composite plugin root `build` emits contains one generated `INSTALL.md`, a section per
-selected host, with commands that use the bundle's real plugin and marketplace names. Every
-command in it is a host command (`claude plugin …`, `codex plugin …`) or the bundled
-`install.mjs`, so a consumer who receives the built root, from npm, a marketplace checkout, or
-a zip, never needs the `agent-bundle` CLI to install, reinstall, or uninstall it; `INSTALL.md`
-says so and marks the CLI optional wherever it is mentioned. The framework CLI performs those
-same operations for developers who have it, and every host installs from the same directory:
+selected host, with commands that use the bundle's real plugin and marketplace names.
+Follow its host-specific recipe: native host commands, the bundled Cursor `install.mjs`,
+or OpenCode native-directory placement. A plugin can also provide a package-bound installer
+through `agent-bundle/install`. The framework CLI offers receipt-owned lifecycle operations
+from the same composite directory:
 
 ```sh
 npx agent-bundle install claude --from artifact --scope user
 npx agent-bundle install codex --from artifact
 npx agent-bundle install cursor --from artifact
 npx agent-bundle install amp --from artifact --scope user
+npx agent-bundle install opencode --from artifact --scope project
 ```
 
 `--from` names the **composite root**: the directory that holds `agent-bundle.manifest.json`. The
@@ -39,6 +39,7 @@ plugin name for `cursor`.
 | Claude Code | Delegates to `claude plugin marketplace add` and `claude plugin install`. Claude Code loads `hooks/hooks.json` and `.mcp.json` from the plugin root on its own, so `.claude-plugin/plugin.json` carries no `hooks` pointer (Claude Code reports one at that file as a duplicate hooks file); the Codex and Cursor documents beside their own manifests in the same root are never read by Claude Code. For a `directory` marketplace, Claude Code resolves `${CLAUDE_PLUGIN_ROOT}` to that directory itself, not to its plugin cache, so rebuilding it changes the hooks a running session executes. | `user`, `project`, `local` |
 | Codex | Delegates to `codex plugin marketplace add` and `codex plugin add`. `.codex-plugin/plugin.json` points at its own `.codex-plugin/hooks.json` and `.codex-plugin/mcp.json`, so Codex never falls back to discovering another host's documents in the root. | `user` |
 | Cursor | Copies the root into `~/.cursor/plugins/local/<name>` (`--mode local`, the default), because Cursor publishes no non-interactive install verb; `--mode marketplace` instead stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step. Either way Cursor loads the hook and MCP documents `.cursor-plugin/plugin.json` names, `.cursor-plugin/hooks.json` and `.cursor-plugin/mcp.json`, beside the manifest, so plugin hooks run with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json` entry. | `user` |
+| OpenCode V2 | Copies the self-contained root into `<project>/.opencode/plugins/<name>` or `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/<name>`. New sessions discover the structural V2 plugin package; no runtime plugin SDK dependency or marketplace registration is required. | `project`, `user` |
 | Grok Bot | Stages the Cursor projection (the bundle must list `cursor` in `targets`) as a committed marketplace repository under `~/.grokbot/agent-bundle/marketplaces/<name>` (`$GROK_BOT_HOME` overrides `~/.grokbot`) and records a store receipt. Grok Bot installs Cursor-format plugins into the user's account only from hosted Git marketplaces, through its Marketplace UI, the in-chat plugin install tool, or `grokbot://app/v1/plugin/add?id=<plugin id>`, all keyed by a server-assigned plugin id; there is no local-folder import or CLI verb, so `install grokbot` prints the remaining steps (host the repository, add it as a marketplace, install from Grok Bot) instead of claiming a registration. On a computer with Grok Bot agent-data it also sideloads the plugin into Grok Bot's own clone of the `scriptedalchemy/plugins` marketplace (its manifest included) and plugin cache, under the clone commit Grok Bot already uses; Grok Bot loads that copy only once its account plugin listing names the plugin, and its plugin sync otherwise removes the cache copy (`--no-sideload`, `--sideload-repo`, and `--sideload-slug` in the [CLI reference](../../reference/cli.mdx#install)). `doctor --host grokbot` reports the plugin id and installed commit from the Grok Bot computer's plugin cache (`AB7334`) and the sideload state (`AB7335`); `uninstall grokbot` removes the staging, the receipted sideload, and the receipt, and names the plugin id to uninstall in Grok Bot. | `user` |
 
 Because the Claude and Codex projections always ship local marketplace manifests, their public
@@ -52,6 +53,40 @@ reload or standalone validator. Installation therefore returns the interactive r
 never runs it. In this account-less validation environment, `amp plugins list` and
 `amp skills list --json` require login; live registration, enabled state, and tool execution are
 recorded as **unverified**, not unsupported.
+
+## OpenCode V2 lifecycle
+
+Select `targets: ['opencode']`, build, then install from the emitted root. Project scope uses the
+current project directory; user scope honors `XDG_CONFIG_HOME`:
+
+```sh
+npx agent-bundle install opencode --from artifact --scope project
+npx agent-bundle install opencode --from artifact --scope user
+npx agent-bundle doctor --host opencode --from artifact
+npx agent-bundle uninstall opencode --from artifact --scope project --plan
+npx agent-bundle uninstall opencode --from artifact --scope project
+```
+
+OpenCode supports neither `local` scope nor marketplace installation here. An identical install
+is a no-op; same-version content drift is repaired, and a different version requires `--replace`.
+A foreign directory without a matching receipt is refused. Uninstall removes receipt-owned files;
+unowned entries, including plugin data under `state/`, remain even when purge is requested. A
+remnant receipt preserves ownership evidence so reinstall can reuse the directory safely.
+
+Doctor compares both project and user locations. `AB7336` identifies each stale, foreign, or
+version-mismatched copy, even when the other scope is healthy. An intentionally uninstalled
+remnant is treated as not installed. Enabled state and runtime activation inventory remain
+unavailable; content comparison alone does not prove that OpenCode loaded a plugin.
+
+Consumers can instead copy the complete emitted package into either native plugin directory.
+That package is self-contained, but a manual copy does not gain framework receipt ownership.
+An optional package-bound installer provides the same lifecycle operations without requiring a
+runtime compiler installation. The generated plugin reads its emitted `agent-bundle.mcp.json`
+when MCP servers are authored and registers supported hooks through the V2 API.
+
+Host validation checks the pinned package/config/MCP schemas (`AB6040`) and probes
+`opencode --version` (`AB6041`). OpenCode exposes no native plugin-validation command in this
+contract; these checks do not establish runtime activation.
 
 ## The standalone installer
 

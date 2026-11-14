@@ -19,6 +19,7 @@ import {
   cursorMcpValidator,
   cursorPluginValidator,
 } from '../../src/adapters/cursor.ts';
+import { openCodeArtifactPaths } from '../../src/adapters/opencode.ts';
 import { createAdapterValidator } from '../../src/adapters/types.ts';
 import { parseArtifactManifest } from '../../src/build/manifest.ts';
 import { reindexArtifactManifest } from '../../src/build/manifest-reindex.ts';
@@ -1982,6 +1983,8 @@ const hostMcpDocument = (host: DevInstallHost): string => {
       return codexArtifactPaths.mcp;
     case 'cursor':
       return cursorArtifactPaths.mcp;
+    case 'opencode':
+      return openCodeArtifactPaths.mcp;
     default: {
       const exhaustive: never = host;
       throw new TypeError(`Unknown install host ${String(exhaustive)}.`);
@@ -2000,6 +2003,8 @@ const liveHostDestination = (
       return join(roots.codexHome, 'plugins', 'cache', marketplace, plugin, version);
     case 'cursor':
       return join(roots.home, '.cursor', 'plugins', 'local', plugin);
+    case 'opencode':
+      return join(roots.home, '.config', 'opencode', 'plugins', plugin);
     default: {
       const exhaustive: never = host;
       return fail(`Unsupported live development host ${String(exhaustive)}.`);

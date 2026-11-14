@@ -96,7 +96,7 @@ export interface TargetHookContract {
   readonly wrapperSource: (entry: TargetHookWrapper) => string;
 }
 
-export type NativeEventStarterTarget = 'claude' | 'codex' | 'cursor';
+export type NativeEventStarterTarget = 'claude' | 'codex' | 'cursor' | 'opencode';
 
 /** Creates only fields required by the shared native event envelope validator. */
 export const createNativeEventStarter = (
@@ -1553,7 +1553,7 @@ export const nativeHookWrapperSource = (
     '};',
     'const validateNativeInput = (input) => {',
     '  requireString(input, "session_id");',
-    '  if (target === "codex") requireNullableString(input, "transcript_path"); else requireString(input, "transcript_path");',
+    '  if (target === "codex") requireNullableString(input, "transcript_path"); else if (target !== "opencode") requireString(input, "transcript_path");',
     '  requireString(input, "cwd");',
     '  if (input.hook_event_name !== nativeEvent) fail(`native hook_event_name must equal ${nativeEvent}`);',
     '  if (input.prompt_id !== undefined) requireString(input, "prompt_id");',
@@ -1589,8 +1589,8 @@ export const nativeHookWrapperSource = (
     '    requireNullableString(input, "last_assistant_message");',
     '    return;',
     '  }',
-    '  if (typeof input.stop_hook_active !== "boolean") fail("native Stop stop_hook_active must be a boolean");',
-    '  if (target === "codex") requireNullableString(input, "last_assistant_message"); else requireString(input, "last_assistant_message");',
+    '  if (target !== "opencode" && typeof input.stop_hook_active !== "boolean") fail("native Stop stop_hook_active must be a boolean");',
+    '  if (target === "codex") requireNullableString(input, "last_assistant_message"); else if (target !== "opencode") requireString(input, "last_assistant_message");',
     '};',
     'const run = async () => {',
     '  const handler = Reflect.get(handlerModule, "default");',

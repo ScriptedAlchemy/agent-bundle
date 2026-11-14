@@ -74,3 +74,12 @@ it('refuses a scripted target the selected template cannot carry', async () => {
 it('names the templates a refused target can still use', async () => {
   await expect(scripted('mcp-server', ['amp'])).rejects.toThrow('Templates for amp: minimal, or cli-tool');
 });
+
+it('accepts native OpenCode V2 for every starter template', async () => {
+  for (const template of templateNames) {
+    await expect(scripted(template, ['opencode'])).resolves.toMatchObject({
+      targets: ['opencode'],
+      template,
+    });
+  }
+});
