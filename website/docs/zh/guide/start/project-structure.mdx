@@ -77,6 +77,12 @@ my-plugin/
 事件文件使用 `.ts` 返回轻量结果，使用 `.tsx` 渲染 JSX；需要渲染前门控时，从 `.ts` 处理器调用 `ctx.render()` 请求同级 `.view.tsx`。
 执行方式与 provider 访问见[钩子](../authoring/hooks.mdx)。
 
+项目根目录的 `.gitignore` 规则也会过滤发现的源文件、Skill 资源和开发模式的文件监听。
+整个路径段由两个或更多星号组成时，可以跨越目录：`src/***/draft.ts` 与
+`src/**/draft.ts` 一样，都匹配 `src/nested/deep/draft.ts`。
+`f*o/*/*` 等模式匹配 `foo/b/c`。即使否定规则尝试重新包含，`.agent-bundle`、`.git`、
+`dist` 和 `node_modules` 目录仍会被排除。
+
 路由元数据使用有界静态语法。工具把它放入 `defineTool` 的内联对象；资源、提示、App 与兼容路由继续使用
 `config` 导出。运行时工作保留在处理器或领域模块中，Schema 保持唯一权威定义，不要在 CLI 和浏览器里
 分别重建协议类型。
