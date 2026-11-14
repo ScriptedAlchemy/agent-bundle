@@ -27,6 +27,10 @@ const connection = Effect.acquireRelease(
 - `Effect.scopedWith((scope) => ...)`: when you must hold the `Scope` value.
 
 Finalizers run in reverse acquire order. Interruption still runs them.
+`Scope.close` and `closeUnsafe` require a `Scope.Closeable` from
+`Scope.make` or `Scope.fork`; a borrowed `Scope.Scope` is not closeable.
+`Scope.close` runs finalizers uninterruptibly; disposing a `ManagedRuntime`
+waits for managed fibers and their cleanup before releasing its layers.
 
 Do not `ReadableStream.cancel()` a stream React still holds a reader on,
 that throws `ReadableStream is locked` (sync or as a rejected promise) and
@@ -80,7 +84,7 @@ the Effect and let `runPromise` observe the result.
 
 Do not allocate a bare `AbortController` inside `Effect.gen`; it must be the
 `acquireRelease` resource or come from `Effect.abortSignal`. No
-`@effect/language-service@0.87.2` rule flags this, review does.
+`@effect/language-service@0.87.5` rule flags this, review does.
 
 ## What to avoid
 

@@ -19,9 +19,10 @@ const pluginDocuments: Readonly<Record<Exclude<InstallHost, 'amp'>, string>> = O
   claude: '.claude-plugin/plugin.json',
   codex: '.codex-plugin/plugin.json',
   cursor: '.cursor-plugin/plugin.json',
+  opencode: 'package.json',
 });
 
-const marketplaceDocuments: Readonly<Record<Exclude<InstallHost, 'amp' | 'cursor'>, string>> = Object.freeze({
+const marketplaceDocuments: Readonly<Record<Exclude<InstallHost, 'amp' | 'cursor' | 'opencode'>, string>> = Object.freeze({
   claude: '.claude-plugin/marketplace.json',
   codex: '.agents/plugins/marketplace.json',
 });
@@ -65,9 +66,9 @@ export const writeInstallFixtureManifest = async (
   for (const projection of projections) {
     const entry = projection.host === 'amp'
       ? `.amp/plugins/${application.name}/index.js`
-      : undefined;
+      : projection.host === 'opencode' ? 'index.js' : undefined;
     const plugin = projection.host === 'amp' ? undefined : pluginDocuments[projection.host];
-    const marketplace = projection.host === 'amp' || projection.host === 'cursor'
+    const marketplace = projection.host === 'amp' || projection.host === 'cursor' || projection.host === 'opencode'
       ? undefined
       : marketplaceDocuments[projection.host];
     projectionRows.push({

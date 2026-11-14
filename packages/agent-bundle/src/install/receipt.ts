@@ -71,7 +71,9 @@ export type InstallRegistrationKind =
   | 'cursor-local-plugin'
   | 'cursor-marketplace-staging'
   | 'grokbot-marketplace-staging'
-  | 'grokbot-sideload';
+  | 'grokbot-sideload'
+  | 'opencode-project-plugin'
+  | 'opencode-user-plugin';
 
 export const installRegistrationKinds: readonly InstallRegistrationKind[] = Object.freeze([
   'amp-project-plugin',
@@ -84,6 +86,8 @@ export const installRegistrationKinds: readonly InstallRegistrationKind[] = Obje
   'cursor-marketplace-staging',
   'grokbot-marketplace-staging',
   'grokbot-sideload',
+  'opencode-project-plugin',
+  'opencode-user-plugin',
 ]);
 
 export interface InstallRegistration {

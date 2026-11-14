@@ -294,8 +294,10 @@ export const validateNativeEventEnvelope = (
     if (native.transcript_path !== null && typeof native.transcript_path !== 'string') {
       return nativeEventError('native transcript_path must be a string or null');
     }
-  } else {
+  } else if (target !== 'opencode') {
     requireNativeString(native, 'transcript_path');
+  } else if (Object.hasOwn(native, 'transcript_path')) {
+    requireNativeStringValue(native, 'transcript_path');
   }
   requireNativeString(native, 'cwd');
   if (canonicalEvent === 'session/end') {
@@ -307,7 +309,7 @@ export const validateNativeEventEnvelope = (
   }
   if (canonicalEvent === 'prompt/submit') {
     requireNativeStringValue(native, 'prompt');
-    requirePermissionMode(native);
+    if (target !== 'opencode') requirePermissionMode(native);
     if (target === 'codex') {
       requireNativeString(native, 'turn_id');
       requireNativeString(native, 'model');
@@ -419,7 +421,12 @@ export const validateNativeEventEnvelope = (
       requireNativeStringValue(native, 'compact_summary');
     }
   }
-  if (canonicalEvent === 'session/start') requireNativeString(native, 'source');
+  if (canonicalEvent === 'session/start') {
+    requireNativeString(native, 'source');
+    if (target === 'opencode' && native.source !== 'startup') {
+      return nativeEventError('OpenCode session.created is creation-only; source must equal startup');
+    }
+  }
   if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
     requireNativeString(native, 'tool_name');
     // The pinned rust-v0.147.0 pre-tool-use/post-tool-use input schemas declare
@@ -465,7 +472,7 @@ export const validateNativeEventEnvelope = (
     }
   }
   if (canonicalEvent === 'stop') {
-    if (typeof native.stop_hook_active !== 'boolean') {
+    if (target !== 'opencode' && typeof native.stop_hook_active !== 'boolean') {
       return nativeEventError('native stop_hook_active must be a boolean');
     }
     // The pinned rust-v0.147.0 stop.command.input schema types
@@ -474,7 +481,7 @@ export const validateNativeEventEnvelope = (
       if (native.last_assistant_message !== null && typeof native.last_assistant_message !== 'string') {
         return nativeEventError('native last_assistant_message must be a string or null');
       }
-    } else {
+    } else if (target !== 'opencode') {
       requireNativeString(native, 'last_assistant_message');
     }
   }

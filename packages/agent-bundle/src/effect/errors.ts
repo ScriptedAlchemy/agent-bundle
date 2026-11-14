@@ -78,7 +78,7 @@ export class YieldableFrameworkError extends Data.Error<YieldableFields> {
 // stack rendering. Defined on the prototype (not as class members) because
 // `Cause.YieldableError` types both as methods.
 for (const key of ['toJSON', nodeInspectSymbol] as const) {
-  Object.defineProperty(YieldableFrameworkError.prototype, key, {
+  void Object.defineProperty(YieldableFrameworkError.prototype, key, {
     configurable: true,
     enumerable: false,
     value: undefined,

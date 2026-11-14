@@ -108,7 +108,7 @@ describe('skill token registry', () => {
   });
 
   it('classifies the six canonical tokens per host in Skill Markdown', () => {
-    const hosts = ['amp', 'claude', 'codex', 'cursor', 'portable'] as const satisfies readonly SkillHost[];
+    const hosts = ['amp', 'claude', 'codex', 'cursor', 'opencode', 'portable'] as const satisfies readonly SkillHost[];
     const expected: Record<SkillHost, Record<keyof typeof skillTokenSpellings, 'none' | 'portable'>> = {
       amp: {
         arguments: 'none',
@@ -135,6 +135,14 @@ describe('skill token registry', () => {
         skillRoot: 'none',
       },
       cursor: {
+        arguments: 'none',
+        pluginData: 'none',
+        pluginRoot: 'none',
+        projectRoot: 'none',
+        sessionIdentity: 'none',
+        skillRoot: 'none',
+      },
+      opencode: {
         arguments: 'none',
         pluginData: 'none',
         pluginRoot: 'none',

@@ -73,6 +73,12 @@ const validManifest = (): ArtifactManifest => ({
         observedVersion: '0.147.0',
         schemas: [],
       },
+      {
+        adapterRevision: 'opencode-adapter-v1',
+        host: 'opencode',
+        observedVersion: '2.2.6',
+        schemas: [],
+      },
     ],
     agentSkills: {
       schemaSha256: hash('d'),
@@ -90,13 +96,16 @@ const validManifest = (): ArtifactManifest => ({
       sourceInputs,
     },
     provenance: [
+      provenance('agent-bundle.mcp.json'),
       provenance('claude/hooks.json'),
       provenance('claude/plugin.json'),
       provenance('codex/marketplace.json'),
       provenance('codex/mcp.json'),
       provenance('codex/plugin.json'),
+      provenance('index.js'),
       provenance('install.md'),
       provenance('install.sh'),
+      provenance('package.json'),
       provenance('runtime/bin/review.mjs', ['agent-bundle.config.ts', 'src/review.ts']),
       provenance('runtime/bin/review.worker.mjs', ['src/review.ts']),
       provenance('runtime/hooks/post-commit.mjs'),
@@ -111,7 +120,7 @@ const validManifest = (): ArtifactManifest => ({
     recordVersion: artifactCompilerRecordVersion,
     validation: {
       artifact: { status: 'passed' },
-      projections: [{ host: 'claude', status: 'passed' }, { host: 'codex', status: 'passed' }],
+      projections: [{ host: 'claude', status: 'passed' }, { host: 'codex', status: 'passed' }, { host: 'opencode', status: 'passed' }],
       source: { status: 'passed' },
     },
   },
@@ -154,13 +163,16 @@ const validManifest = (): ArtifactManifest => ({
     }],
   },
   files: [
+    file('agent-bundle.mcp.json', 'generated'),
     file('claude/hooks.json', 'generated'),
     file('claude/plugin.json', 'generated'),
     file('codex/marketplace.json', 'generated'),
     file('codex/mcp.json', 'generated'),
     file('codex/plugin.json', 'generated'),
+    file('index.js', 'generated'),
     file('install.md', 'copy'),
     file('install.sh', 'copy', { mode: 0o755 }),
+    file('package.json', 'generated'),
     file('runtime/bin/review.mjs', 'bundle', { mode: 0o755 }),
     file('runtime/bin/review.worker.mjs', 'bundle'),
     file('runtime/hooks/post-commit.mjs', 'bundle'),
@@ -172,7 +184,7 @@ const validManifest = (): ArtifactManifest => ({
     file('runtime/scripts/lint.mjs', 'bundle'),
     file('runtime/scripts/lint.worker.mjs', 'bundle'),
   ],
-  manifestVersion: 6,
+  manifestVersion: 7,
   projections: [
     {
       builtInHost: 'claude',
@@ -183,6 +195,11 @@ const validManifest = (): ArtifactManifest => ({
       documents: { marketplace: 'codex/marketplace.json', mcp: 'codex/mcp.json', plugin: 'codex/plugin.json' },
       host: 'codex',
       marketplace: { name: 'acme' },
+    },
+    {
+      builtInHost: 'opencode',
+      documents: { entry: 'index.js', mcp: 'agent-bundle.mcp.json', plugin: 'package.json' },
+      host: 'opencode',
     },
   ],
   routes: {
@@ -304,7 +321,7 @@ const minimalManifest = (): ArtifactManifest => ({
   distribution: { channels: ['local'], payloads: [] },
   executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
   files: [],
-  manifestVersion: 6,
+  manifestVersion: 7,
   projections: [],
   routes: { digest: hash('1'), events: [], layouts: [], providers: [], scripts: [], servers: [] },
   runtime: { node: '22.12.0' },
@@ -445,7 +462,7 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
     rule: 'files unique by path (duplicate sort key with a distinct payload)',
   },
   { apply: (manifest) => { manifest.compiler.project.sourceInputs.reverse(); }, rule: 'compiler.project.sourceInputs sorted by path' },
-  { apply: (manifest) => { manifest.compiler.provenance[7]!.sourceInputs.reverse(); }, rule: 'compiler.provenance[].sourceInputs sorted' },
+  { apply: (manifest) => { manifest.compiler.provenance.find((entry) => entry.sourceInputs.length > 1)!.sourceInputs.reverse(); }, rule: 'compiler.provenance[].sourceInputs sorted' },
   { apply: (manifest) => { manifest.compiler.provenance.reverse(); }, rule: 'compiler.provenance sorted by path' },
   { apply: (manifest) => { manifest.compiler.adapters.reverse(); }, rule: 'compiler.adapters sorted by host' },
   { apply: (manifest) => { manifest.projections.reverse(); }, rule: 'projections sorted by host' },
@@ -512,7 +529,7 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
  * sweep covers key deletion, unknown keys, and retyping). Both reject.
  */
 const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest) => void; readonly rule: string }[] = [
-  { apply: (manifest) => { (manifest as Record_).manifestVersion = 3; }, rule: 'manifestVersion is 6' },
+  { apply: (manifest) => { (manifest as Record_).manifestVersion = 6; }, rule: 'manifestVersion is 7' },
   { apply: (manifest) => { (manifest.compiler.producer as Record_).name = 'other'; }, rule: 'compiler.producer.name is agent-bundle' },
   { apply: (manifest) => { (manifest.compiler as Record_).recordVersion = 2; }, rule: 'compiler.recordVersion is 1' },
   { apply: (manifest) => { (manifest.routes.cli!.commands![0]!.projection as Record_).input = 'yaml'; }, rule: 'cli projection input is json' },
@@ -690,7 +707,7 @@ it('encodes the parser rules a schema can state, so both reject the same values'
   expect(outcomes).toEqual(schemaEncodedRules.map(({ rule }) => ({ parser: 'rejects', rule, schema: 'rejects' })));
 });
 
-it('accepts a JSON-mode CLI projection (manifestVersion 6) in both the parser and the schema', () => {
+it('accepts a JSON-mode CLI projection (manifestVersion 7) in both the parser and the schema', () => {
   const manifest = clone();
   (manifest.routes.cli!.commands![0]!.projection as Record_).input = 'json';
   expect(parseArtifactManifest(canonicalBytes(manifest))).toEqual(manifest);
@@ -736,7 +753,7 @@ it('leaves byte-level rules to the parser: a parsed value carries no formatting 
   expect(validateArtifactManifestSchema(JSON.parse(pretty))).toEqual([]);
 });
 
-it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 6 that matches the shipped file', async () => {
+it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 7 that matches the shipped file', async () => {
   expect(artifactManifestSchema.$schema).toBe('https://json-schema.org/draft/2020-12/schema');
   expect(artifactManifestSchema.$id).toBe('https://scriptedalchemy.github.io/agent-bundle/schemas/agent-bundle.manifest.schema.json');
   expect(artifactManifestSchema.type).toBe('object');
@@ -744,7 +761,7 @@ it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 6 tha
   expect(artifactManifestSchema.required).toEqual(Object.keys(minimalManifest()).sort());
   const properties = asObject(artifactManifestSchema.properties);
   expect(Object.keys(properties)).toEqual([...Object.keys(minimalManifest()), 'web'].sort());
-  expect(asObject(properties.manifestVersion).const).toBe(6);
+  expect(asObject(properties.manifestVersion).const).toBe(7);
 
   expect(Object.isFrozen(artifactManifestSchema)).toBe(true);
   expect(Object.isFrozen(properties)).toBe(true);

@@ -154,6 +154,7 @@ const validateFrontmatter = (
     case 'cursor':
       return schemaIssues(host, validateCursorSkillFrontmatter(frontmatter), source);
     case 'codex':
+    case 'opencode':
     case 'portable':
       return schemaIssues(host, validateAgentSkillsFrontmatter(frontmatter), source);
     default: {
@@ -251,6 +252,7 @@ export const lowerSkillIr = (ir: SkillIr, host: SkillHost): SkillHostDocument =>
         });
       }
       break;
+    case 'opencode':
     case 'portable':
       frontmatter = portableFrontmatter(ir.portable);
       break;
