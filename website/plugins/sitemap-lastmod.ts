@@ -194,13 +194,8 @@ function sitemapPath(config: UserConfig): string {
 }
 
 /**
- * `@rspress/plugin-sitemap` with `lastmod` taken from git history.
- *
- * Rspress runs every plugin's `afterBuild` in parallel
- * (`PluginDriver._runParallelAsyncHook`), so a second plugin cannot rely on
- * running after the sitemap has been written. This wraps the sitemap plugin
- * instead: its own hooks are kept as they are and the rewrite is chained onto
- * its `afterBuild`, so `sitemap.xml` exists before it is read.
+ * Configure Rspress sitemap generation and add `lastmod` from git history.
+ * Core emits the sitemap during compilation, before this `afterBuild` hook.
  */
 export function sitemapLastmod(options: SitemapLastmodOptions): RspressPlugin {
   const sitemap = pluginSitemap(options.sitemap);
