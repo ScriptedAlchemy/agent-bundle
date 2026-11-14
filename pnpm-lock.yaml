@@ -40,23 +40,23 @@ importers:
         specifier: 0.1.16
         version: 0.1.16(supports-color@7.2.0)
       '@modelcontextprotocol/server':
-        specifier: 2.0.0
-        version: 2.0.0
+        specifier: 2.3.0
+        version: 2.3.0
       '@rsbuild/core':
-        specifier: 2.2.11
-        version: 2.2.11
+        specifier: 2.3.2
+        version: 2.3.2
       '@rsbuild/plugin-react':
-        specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.3.2(@swc/helpers@0.5.23))
+        specifier: 2.1.1
+        version: 2.1.1(@rsbuild/core@2.3.2)(@rspack/core@2.3.2(@swc/helpers@0.5.23))
       '@rslib/core':
-        specifier: 1.0.0
-        version: 1.0.0(typescript@7.0.2)
+        specifier: 1.0.7
+        version: 1.0.7(typescript@7.0.2)
       '@rslint/core':
         specifier: 0.9.2
         version: 0.9.2(jiti@2.7.0)
       '@rstest/adapter-rslib':
         specifier: 0.11.12
-        version: 0.11.12(@rslib/core@1.0.0(typescript@7.0.2))(@rstest/core@0.11.12)(typescript@7.0.2)
+        version: 0.11.12(@rslib/core@1.0.7(typescript@7.0.2))(@rstest/core@0.11.12)(typescript@7.0.2)
       '@rstest/core':
         specifier: 0.11.12
         version: 0.11.12
@@ -80,7 +80,7 @@ importers:
         version: 1.63.0
       rsbuild-plugin-publint:
         specifier: 1.0.0
-        version: 1.0.0(@rsbuild/core@2.2.11)
+        version: 1.0.0(@rsbuild/core@2.3.2)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -103,8 +103,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       zod:
-        specifier: 4.6.4
-        version: 4.6.4
+        specifier: 4.6.6
+        version: 4.6.6
 
   examples/hooks-and-scripts:
     devDependencies:
@@ -118,8 +118,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/rsc-runtime
       '@modelcontextprotocol/server':
-        specifier: 2.0.0
-        version: 2.0.0
+        specifier: 2.3.0
+        version: 2.3.0
       '@rstest/core':
         specifier: 0.11.12
         version: 0.11.12
@@ -133,8 +133,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       zod:
-        specifier: 4.6.4
-        version: 4.6.4
+        specifier: 4.6.6
+        version: 4.6.6
 
   examples/mcp-app:
     devDependencies:
@@ -160,8 +160,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       zod:
-        specifier: 4.6.4
-        version: 4.6.4
+        specifier: 4.6.6
+        version: 4.6.6
 
   examples/rsc-agent-runtime:
     dependencies:
@@ -169,20 +169,20 @@ importers:
         specifier: workspace:*
         version: link:../../packages/rsc-runtime
       '@modelcontextprotocol/client':
-        specifier: 2.0.0
-        version: 2.0.0
+        specifier: 2.3.0
+        version: 2.3.0
       '@modelcontextprotocol/core':
         specifier: 2.1.0
         version: 2.1.0
       '@modelcontextprotocol/ext-apps':
         specifier: 2.0.0
-        version: 2.0.0(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.0.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.4)
+        version: 2.0.0(@modelcontextprotocol/client@2.3.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.6)
       '@modelcontextprotocol/node':
-        specifier: 2.0.0
-        version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.9)
+        specifier: 2.1.0
+        version: 2.1.0(@modelcontextprotocol/server@2.3.0)(hono@4.13.9)
       '@modelcontextprotocol/server':
-        specifier: 2.0.0
-        version: 2.0.0
+        specifier: 2.3.0
+        version: 2.3.0
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -193,15 +193,15 @@ importers:
         specifier: 0.1.0
         version: 0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       zod:
-        specifier: 4.6.4
-        version: 4.6.4
+        specifier: 4.6.6
+        version: 4.6.6
     devDependencies:
       '@rsbuild/core':
-        specifier: 2.2.11
-        version: 2.2.11
+        specifier: 2.3.2
+        version: 2.3.2
       '@rsbuild/plugin-react':
-        specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.3.2(@swc/helpers@0.5.24))
+        specifier: 2.1.1
+        version: 2.1.1(@rsbuild/core@2.3.2)(@rspack/core@2.3.2(@swc/helpers@0.5.24))
       '@rstest/core':
         specifier: 0.11.12
         version: 0.11.12
@@ -219,7 +219,7 @@ importers:
         version: 1.63.0
       rsbuild-plugin-rsc:
         specifier: 0.1.1
-        version: 0.1.1(@rsbuild/core@2.2.11)(react-server-dom-rspack@0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
+        version: 0.1.1(@rsbuild/core@2.3.2)(react-server-dom-rspack@0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
 
   examples/skills-starter:
     devDependencies:
@@ -245,8 +245,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0
       zod:
-        specifier: 4.6.4
-        version: 4.6.4
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/agent-bundle:
     dependencies:
@@ -254,26 +254,26 @@ importers:
         specifier: workspace:*
         version: link:../rsc-runtime
       '@effect/platform-node-shared':
-        specifier: 4.0.0
-        version: 4.0.0(effect@4.0.0)
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.2)
       '@modelcontextprotocol/client':
-        specifier: 2.0.0
-        version: 2.0.0
+        specifier: 2.3.0
+        version: 2.3.0
       '@modelcontextprotocol/node':
-        specifier: 2.0.0
-        version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.9)
-      '@modelcontextprotocol/server':
-        specifier: 2.0.0
-        version: 2.0.0
-      '@rsbuild/core':
-        specifier: 2.2.11
-        version: 2.2.11
-      '@rsbuild/plugin-react':
         specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.3.2(@swc/helpers@0.5.24))
+        version: 2.1.0(@modelcontextprotocol/server@2.3.0)(hono@4.13.9)
+      '@modelcontextprotocol/server':
+        specifier: 2.3.0
+        version: 2.3.0
+      '@rsbuild/core':
+        specifier: 2.3.2
+        version: 2.3.2
+      '@rsbuild/plugin-react':
+        specifier: 2.1.1
+        version: 2.1.1(@rsbuild/core@2.3.2)(@rspack/core@2.3.2(@swc/helpers@0.5.24))
       '@rslib/core':
-        specifier: 1.0.0
-        version: 1.0.0(typescript@7.0.2)
+        specifier: 1.0.7
+        version: 1.0.7(typescript@7.0.2)
       '@rslint/core':
         specifier: 0.9.2
         version: 0.9.2(jiti@2.7.0)
@@ -299,8 +299,8 @@ importers:
         specifier: 15.0.0
         version: 15.0.0
       effect:
-        specifier: 4.0.0
-        version: 4.0.0
+        specifier: 4.1.2
+        version: 4.1.2
       es-module-lexer:
         specifier: 3.0.2
         version: 3.0.2
@@ -334,7 +334,7 @@ importers:
         version: 8.18.2
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.0.0)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.1.2)
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -342,8 +342,8 @@ importers:
         specifier: npm:typescript@5.9.3
         version: typescript@5.9.3
       zod:
-        specifier: 4.6.4
-        version: 4.6.4
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/create-agent-bundle:
     dependencies:
@@ -358,11 +358,11 @@ importers:
         specifier: 1.8.1
         version: 1.8.1
       '@effect/platform-node':
-        specifier: 4.0.0
-        version: 4.0.0(effect@4.0.0)(redis@6.2.1)
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.2)(redis@6.2.1)
       '@rslib/core':
-        specifier: 1.0.0
-        version: 1.0.0(typescript@7.0.2)
+        specifier: 1.0.7
+        version: 1.0.7(typescript@7.0.2)
       '@rstest/core':
         specifier: 0.11.12
         version: 0.11.12
@@ -370,17 +370,17 @@ importers:
         specifier: 26.5.1
         version: 26.5.1
       effect:
-        specifier: 4.0.0
-        version: 4.0.0
+        specifier: 4.1.2
+        version: 4.1.2
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.0.0)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.1.2)
 
   packages/rsc-markdown-stream:
     devDependencies:
       '@rslib/core':
-        specifier: 1.0.0
-        version: 1.0.0(typescript@7.0.2)
+        specifier: 1.0.7
+        version: 1.0.7(typescript@7.0.2)
       '@rstest/core':
         specifier: 0.11.12
         version: 0.11.12
@@ -394,30 +394,30 @@ importers:
   packages/rsc-runtime:
     dependencies:
       '@modelcontextprotocol/server':
-        specifier: 2.0.0
-        version: 2.0.0
+        specifier: 2.3.0
+        version: 2.3.0
       effect:
-        specifier: 4.0.0
-        version: 4.0.0
+        specifier: 4.1.2
+        version: 4.1.2
       flare-redact:
         specifier: 1.6.1
         version: 1.6.1
       react-server-dom-rspack:
         specifier: 0.1.0
-        version: 0.1.0(@rspack/core@2.2.3(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 0.1.0(@rspack/core@2.2.3(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       rsc-markdown-stream:
         specifier: workspace:^
         version: link:../rsc-markdown-stream
     devDependencies:
       '@modelcontextprotocol/client':
-        specifier: 2.0.0
-        version: 2.0.0
+        specifier: 2.3.0
+        version: 2.3.0
       '@rslib/core':
-        specifier: 1.0.0
-        version: 1.0.0(typescript@7.0.2)
+        specifier: 1.0.7
+        version: 1.0.7(typescript@7.0.2)
       '@rspack/core':
         specifier: 2.2.3
-        version: 2.2.3(@swc/helpers@0.5.23)
+        version: 2.2.3(@swc/helpers@0.5.24)
       '@rstest/core':
         specifier: 0.11.12
         version: 0.11.12
@@ -426,7 +426,7 @@ importers:
         version: 19.3.0
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.0.0)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.1.2)
       micromark:
         specifier: 4.0.3
         version: 4.0.3(supports-color@7.2.0)
@@ -440,17 +440,17 @@ importers:
         specifier: 19.3.0
         version: 19.3.0(react@19.3.0)
       zod:
-        specifier: 4.6.4
-        version: 4.6.4
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/workbench:
     dependencies:
       '@effect/atom-react':
-        specifier: 4.0.0
-        version: 4.0.0(effect@4.0.0)(react@19.3.0)(scheduler@0.27.0)
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0)
       '@modelcontextprotocol/client':
-        specifier: 2.0.0
-        version: 2.0.0
+        specifier: 2.3.0
+        version: 2.3.0
       '@xterm/addon-fit':
         specifier: 0.11.0
         version: 0.11.0
@@ -458,8 +458,8 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
       effect:
-        specifier: 4.0.0
-        version: 4.0.0
+        specifier: 4.1.2
+        version: 4.1.2
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -476,15 +476,15 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
       zod:
-        specifier: 4.6.4
-        version: 4.6.4
+        specifier: 4.6.6
+        version: 4.6.6
     devDependencies:
       '@rsbuild/core':
-        specifier: 2.2.11
-        version: 2.2.11
+        specifier: 2.3.2
+        version: 2.3.2
       '@rsbuild/plugin-react':
-        specifier: 2.1.0
-        version: 2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.3.2(@swc/helpers@0.5.24))
+        specifier: 2.1.1
+        version: 2.1.1(@rsbuild/core@2.3.2)(@rspack/core@2.3.2(@swc/helpers@0.5.24))
       '@types/react':
         specifier: 19.3.0
         version: 19.3.0
@@ -499,19 +499,19 @@ importers:
         version: 3.1.1(@types/react@19.3.0)(react@19.3.0)
       '@rspress/core':
         specifier: 2.1.1
-        version: 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
+        version: 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
       '@rspress/plugin-llms':
         specifier: 2.1.1
-        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)
+        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)
       '@rspress/plugin-sitemap':
         specifier: 2.1.1
-        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
+        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/plugin-twoslash':
         specifier: 2.1.1
-        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)
+        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)
       '@rspress/plugin-typedoc':
         specifier: 2.1.1
-        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
+        version: 2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/shared':
         specifier: 2.1.1
         version: 2.1.1(supports-color@7.2.0)
@@ -540,8 +540,8 @@ importers:
         specifier: npm:typescript@6.0.3
         version: typescript@6.0.3
       zod:
-        specifier: 4.6.4
-        version: 4.6.4
+        specifier: 4.6.6
+        version: 4.6.6
 
 packages:
 
@@ -557,66 +557,66 @@ packages:
     resolution: {integrity: sha512-9ytjzGwxjm9Uz7I9avfbt5vlQt6uk9uRRESzJjqrznl6WKvI6dwYTo+vJ3U02Wrq/mR3iql/PzhvHhKdJIAjDQ==}
     engines: {node: '>=20'}
 
-  '@ast-grep/napi-darwin-arm64@0.45.2':
-    resolution: {integrity: sha512-29+sfXTJ7xxqgTuWAHA89gDAQIiJyAZ1ZiHoupjKIqyn0mhXrktO1WOghlDzyYs++hITEPOeXftxy48Y0tDGDQ==}
+  '@ast-grep/napi-darwin-arm64@0.51.1':
+    resolution: {integrity: sha512-kc9phT4a0wpM2GAjqn+RySI/pS7hET78TOvsjTdFeEnZ7tdh887wyqjp6+J1ZxVw+/N66m7TauoSLIzkqdeR1Q==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [darwin]
 
-  '@ast-grep/napi-darwin-x64@0.45.2':
-    resolution: {integrity: sha512-PUjh7Zf4dKNzYLOYhX5wU6O4BgRPdJnD9zkS1n+/5SeK0U1L5YL486RjNgFt9Xyff0PGtP/wDeoHMF5PhKEwsw==}
+  '@ast-grep/napi-darwin-x64@0.51.1':
+    resolution: {integrity: sha512-dB8Dm+B/aNPAxt6YUQEL3RWF/De9kbW/gdkG780lOpPOMD72injLbupiH/D1k6M76z6mTvqPQlTzTlXGmuxu3Q==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [darwin]
 
-  '@ast-grep/napi-linux-arm64-gnu@0.45.2':
-    resolution: {integrity: sha512-bnGKLLHWO13pjPChOFq7Ifqj3HJdOAxMQAGDCUC2JSJhO2YL8/xBZrpN0cHIWNuoUNSAXjCtr5AsCnPz/3jlFg==}
+  '@ast-grep/napi-linux-arm64-gnu@0.51.1':
+    resolution: {integrity: sha512-oUV+9XSdBwgMOneaG4qrDgDlbKOex/nwZ/xxN/LtrxHAN3y2DvUqG5Ds952F/shXJUxjqPRqsGUnB4chTpoj4Q==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@ast-grep/napi-linux-arm64-musl@0.45.2':
-    resolution: {integrity: sha512-FXVb4/V55THjhKxi5zWVrAO8JQj+/DiYP7JLsqenkm5V3UNuC8p2opGOyQpUvNpvcqJiZA9Hl+Onj/yfwSVr/A==}
+  '@ast-grep/napi-linux-arm64-musl@0.51.1':
+    resolution: {integrity: sha512-KvCR7JDFMAeEz7Ev84wkQOxCl8xJ/hZ3K2ps2Y0ZM52VrrAheT4Z7VmCTcYp8PZgO+DdocUP6WomCrYv1iEdFA==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@ast-grep/napi-linux-x64-gnu@0.45.2':
-    resolution: {integrity: sha512-mtEIPLV9MW2PBswFcp3ydM4T5Ub73s89SRd0QMT2+DfA9XBLCLhnC+r/Yt4eRgnf8FyNx49bFTPxXvFKscr9hw==}
+  '@ast-grep/napi-linux-x64-gnu@0.51.1':
+    resolution: {integrity: sha512-qjPDrnHd6mO3JfQS4VZRN5/W1as58y2jgb6sdZcSHvKvpwpYgt9Rlr37r6cwH8riA4uNpATrVH4jMnsAgZGYKg==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@ast-grep/napi-linux-x64-musl@0.45.2':
-    resolution: {integrity: sha512-WLLHxDmuXkb/e3mz/xDCrB2dZPzv1ntsepuRTtpaIGczxnQTgFSzX/CXPD0e1MfsU/QL1AiXxxni8w+NGy/ZpQ==}
+  '@ast-grep/napi-linux-x64-musl@0.51.1':
+    resolution: {integrity: sha512-KOmiN+hwt83aldhV7YvczKZb4hBDk+cksECV7r3Mtc67MkpBHt1scrp7NsjGS8jZf8NRLTptpODVy9tyFG4znw==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@ast-grep/napi-win32-arm64-msvc@0.45.2':
-    resolution: {integrity: sha512-04iOFaMzD2nf8CKw3nURWN42900wqPtUTQaMo1I2KRk3qbgtHSJjJoVJGAWUXkCq4LhPg3Xlk1s+ssWf4rNm2A==}
+  '@ast-grep/napi-win32-arm64-msvc@0.51.1':
+    resolution: {integrity: sha512-cMeOau20XOTpPoiAfwdE/ZhowXuxJerqn8MweyJOVxMwSMinQwAyrixeFXC/2oBff0j/UC5/DhnLL/Vg385MFA==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [win32]
 
-  '@ast-grep/napi-win32-ia32-msvc@0.45.2':
-    resolution: {integrity: sha512-tE3y0RQcajocKwpYLbgHKd4lzGGAx1wGMA0bGPsWdoFK8VSob6ZDuYdSlSdnaRs8jAc4F3axToNRKn15p+0/Dg==}
+  '@ast-grep/napi-win32-ia32-msvc@0.51.1':
+    resolution: {integrity: sha512-eOnpllchxkhlWLMOUk0gZNACVwLn+j50foGScB7RF312ApHhPMjY+hIlTpTFUKgDqF74U7AODOba7Xsg52M1MQ==}
     engines: {node: '>= 10'}
     cpu: [ia32]
     os: [win32]
 
-  '@ast-grep/napi-win32-x64-msvc@0.45.2':
-    resolution: {integrity: sha512-o8Z5Z42TAJe0fPnb11rrjtte58wlw/MuR4KpVMHl8IhJLBBR7gHR0E8wfMz88TxzsQz0U2KYev0k0a2fV4i0sQ==}
+  '@ast-grep/napi-win32-x64-msvc@0.51.1':
+    resolution: {integrity: sha512-MVgY2fgh/VHFLa+gpIPZLgwoXWeBIwz7gfJh79l71b9pJJm1F3c5fKzZNClnP362gV1e+svtJ0XiJXTUnCf52w==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
 
-  '@ast-grep/napi@0.45.2':
-    resolution: {integrity: sha512-hBA5c7JV6OM7zFWoLjUNZhsDpxEIEIeew5S3z1giwK5tPQqobuFfM2OhS45bN3E0+yQtgCX/o8/AEHKbGD3ykg==}
+  '@ast-grep/napi@0.51.1':
+    resolution: {integrity: sha512-pdIyBOsQy9E46s8W9qcEH9ZDjx5nacxnn0cP+17qTuM6D1YoIvKlaz8n8yE1dkTAP59yjCp2t3cpMnacq2YJkw==}
     engines: {node: '>= 10'}
 
   '@braidai/lang@1.1.2':
@@ -695,29 +695,29 @@ packages:
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
 
-  '@effect/atom-react@4.0.0':
-    resolution: {integrity: sha512-VPP2oOjj56iwOpL5aIGbu7Qhb4+1sFNdU16aI5of3JqToqWWX9eJPBfeiPyQ1eTYof1hnNX1auyRiTORSfLT6g==}
+  '@effect/atom-react@4.1.2':
+    resolution: {integrity: sha512-XRAm4lks2kzNFQIz9QTGKR02CaDTR9VJNRXDjDAR8OzM15ybrK4YkB7OlFZ9U+hxXe3DXJZx7RU1/xI2Em2PGQ==}
     peerDependencies:
-      effect: ^4.0.0
+      effect: ^4.1.2
       react: '>=19.0.0 <20.0.0'
-      scheduler: '>=0.25.0 <0.28.0'
+      scheduler: '>=0.25.0 <0.29.0'
 
   '@effect/language-service@0.87.5':
     resolution: {integrity: sha512-np/zJgk71/PyHxtoqyUKLYcpQhoRBI+L6+1Z0ILk35JSQ/lvXzwlwOwddYZLDkeC4bdF2ukKekqKlla/F88R5w==}
     hasBin: true
 
-  '@effect/platform-node-shared@4.0.0':
-    resolution: {integrity: sha512-VBXHJU9UXVZPdQGGDRjGXpo+TpOzRwZuMrdKAtIxi1qwcRftmacZ1zTgIrzBa0Z2RA2KVkoOecQUsTlt/nJZhw==}
-    engines: {node: '>=18.0.0'}
+  '@effect/platform-node-shared@4.1.2':
+    resolution: {integrity: sha512-wSwl9A/G1hcVvF8nLI+YfB3EyOIDvWS6+lsTZBkmgDnPBL7m8YWZF+1HD+mdEsb52SUGfukip46Q3gRwSdk3QA==}
+    engines: {node: '>=22.19.0'}
     peerDependencies:
-      effect: ^4.0.0
+      effect: ^4.1.2
 
-  '@effect/platform-node@4.0.0':
-    resolution: {integrity: sha512-/L+4MUbl8FejPKLHLROYSOebvHnfixkP8KiblSD/DE5uH5xENZBHaux4nH6XMnRP+lr8ajpEJFS8sUrmmxFJeQ==}
-    engines: {node: '>=18.0.0'}
+  '@effect/platform-node@4.1.2':
+    resolution: {integrity: sha512-ye0UjxORdd5Qu3paZ1LljgGOALWHt7muP9VTpjUSCNfcesiB/Hm7wPJIvZeu4gnwpTe5BtEnO1VHngWqjJp8mA==}
+    engines: {node: '>=22.19.0'}
     peerDependencies:
-      effect: ^4.0.0
-      redis: '>=5.0.0 <7.0.0'
+      effect: ^4.1.2
+      redis: '>=5.1.0 <7.0.0'
 
   '@effect/tsgo-darwin-arm64@0.45.0':
     resolution: {integrity: sha512-WUoiEVcm8E19QK6fl63lsssM4dkT9IFnULbmqQ6LBfv7H9uRkpE9S3thj8ZtZ+vl/QY8atwfuaTf+3A1m/kGtQ==}
@@ -867,20 +867,20 @@ packages:
       '@types/react': '>=16'
       react: '>=16'
 
-  '@modelcontextprotocol/client@2.0.0':
-    resolution: {integrity: sha512-8f1OghQ2rjzIOfqgUCP+8GiUWqRs89njoWLNqAe8kWmDePv3s1fZXseej+QXemssEuuOvLLmLO/kqM3IQHtISw==}
+  '@modelcontextprotocol/client@2.3.0':
+    resolution: {integrity: sha512-pbHtGj6EeFCHngFE8gtNPaKrsj8Mb1IMw45BLcaPML/m2WTxI7pyYmeNQvaux88Lw8BSO5r7nyRbUyIkICmGrg==}
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/conformance@0.1.16':
     resolution: {integrity: sha512-GI7qiN0r39/MH2srVUR3AXaEN0YLCro20lIBbnvc1frBhszenxvUifBuTzxeVQVagILfBzCIcnungUOma8OrgA==}
     hasBin: true
 
-  '@modelcontextprotocol/core@2.0.0':
-    resolution: {integrity: sha512-pJCEwGG7Lfr/+PQp9ZTwKXNeO5wzbfKL7H3MYpCorM4oFBoQrdjnBgEoqG+RjhsvS1FKrDbKux+M1HhlnGWqcA==}
-    engines: {node: '>=20'}
-
   '@modelcontextprotocol/core@2.1.0':
     resolution: {integrity: sha512-YdFj5gMRHr0gYNAhTbQDgjLHiEJdIAUYxomhKseUNye7ZGlISQmUoLh2sveFFCiQ7j2YMffT1kgSND0FSfIFjQ==}
+    engines: {node: '>=20'}
+
+  '@modelcontextprotocol/core@2.3.0':
+    resolution: {integrity: sha512-09BHFaNVBe5pB2AhzCfLj0cqmsKLERvZQ4FblzP90UMGLaXVqdZPByFjURwsUYCmxonUW2yAwgTTvle+8O2/8w==}
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/ext-apps@2.0.0':
@@ -901,11 +901,11 @@ packages:
       react-dom:
         optional: true
 
-  '@modelcontextprotocol/node@2.0.0':
-    resolution: {integrity: sha512-Y4hAC2XdGDUdDOCbLDOCA4+aL3NUldjsOWlDL/YwpAxrPhRm1xHd7lZ+mLacvZ9t3PaH28wgNoaLQGrIk1P2pg==}
+  '@modelcontextprotocol/node@2.1.0':
+    resolution: {integrity: sha512-6xg3iWVcOfiL8Y7rI6xUqXD0lI2AY5q3djsa/cOi1IJUSwx06t0gvhSwU/6mIIohrFlt40/ANUG56DQ0HLhILQ==}
     engines: {node: '>=20'}
     peerDependencies:
-      '@modelcontextprotocol/server': ^2.0.0
+      '@modelcontextprotocol/server': ^2.1.0
       hono: ^4.11.4
     peerDependenciesMeta:
       hono:
@@ -921,8 +921,8 @@ packages:
       '@cfworker/json-schema':
         optional: true
 
-  '@modelcontextprotocol/server@2.0.0':
-    resolution: {integrity: sha512-YhHWdHfpFMQfd0prsEnxKeS3Qz3ytIGmsS0sth4KDjnacIT7hxk6hXHkJ9KysxlkvTM+WZAtQbbcUhdoP4Hvtw==}
+  '@modelcontextprotocol/server@2.3.0':
+    resolution: {integrity: sha512-+6b0LdsQLmHsvS7J6sQJ4weTpzUn61fU1JKS+321/+IyDYoHW5CR2Tgqcs6GgAAQvlesCo6yX3xttgmx+XGtJw==}
     engines: {node: '>=20'}
 
   '@napi-rs/wasm-runtime@1.1.6':
@@ -1075,14 +1075,6 @@ packages:
       core-js:
         optional: true
 
-  '@rsbuild/plugin-react@2.1.0':
-    resolution: {integrity: sha512-RQTIAWB/CwPjoWt9iAl+8HixeQVgZ7kEIBrWPCixfITyHdiD84h0YpUTpEUuz6kGHw1KXT9mHZ3Rwy6WG7aRDA==}
-    peerDependencies:
-      '@rsbuild/core': ^2.0.0
-    peerDependenciesMeta:
-      '@rsbuild/core':
-        optional: true
-
   '@rsbuild/plugin-react@2.1.1':
     resolution: {integrity: sha512-tLtUedsRtTLS6M4VtwzI6aakFLOFdgl9Sh1ZNBWvxb0Te3EnHrppaE7UiYEmDUXQDJ50gfr6yyirtxY5N6moyg==}
     peerDependencies:
@@ -1091,13 +1083,13 @@ packages:
       '@rsbuild/core':
         optional: true
 
-  '@rslib/core@1.0.0':
-    resolution: {integrity: sha512-eZNXCWU1v5oti4+DKCunc76DkNnYqMgRtks9UyZRRFlmaK4pKAxhejeCUS+XkbMurGIAa+aDyVynQD7DXEgK1w==}
+  '@rslib/core@1.0.7':
+    resolution: {integrity: sha512-ew5zQApPo/MuNgsOoE//33gNzWJZEQopLX5/wDUdSxIZ5aKcW/ZDYZxuAWiw16EI6L51bh6WEKB9im1CeQQEAA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
       '@microsoft/api-extractor': ^7
-      typescript: ^5 || ^6 || ^7
+      typescript: ^5 || ^6 || ^7 || ^7.1.0-0
     peerDependenciesMeta:
       '@microsoft/api-extractor':
         optional: true
@@ -2082,8 +2074,8 @@ packages:
       '@rstest/core': ^0.11.11
       effect: ^4.0.0-rc.113
 
-  effect@4.0.0:
-    resolution: {integrity: sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ==}
+  effect@4.1.2:
+    resolution: {integrity: sha512-d3Oah1WyKxFLFh19yWheS5IXIVaITzxZ71JkE1rkUozq/6EcJSU5nPk5bF2QrSygZ3SQoiNQB8TsxFriyMeMaQ==}
 
   emoji-regex@8.0.0:
     resolution: {integrity: sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==}
@@ -2986,10 +2978,6 @@ packages:
     peerDependencies:
       react: ^19.2.0
 
-  react-refresh@0.18.0:
-    resolution: {integrity: sha512-QgT5//D3jfjJb6Gsjxv0Slpj23ip+HtOpnNgnb2S5zU3CB26G/IDPGoy4RJB42wzFE46DRsstbW6tKHoKbhAxw==}
-    engines: {node: '>=0.10.0'}
-
   react-refresh@0.19.0:
     resolution: {integrity: sha512-5HdstYgoJBbBofjapO5qCPcovECJCBfvjLb+iTcsmqDFVMRdqy0qs7iiInBJTUXmIFc2bjoc5b2HVLp2zRtYhQ==}
     engines: {node: '>=0.10.0'}
@@ -3123,13 +3111,13 @@ packages:
     resolution: {integrity: sha512-nLTrUKm2UyiL7rlhapu/Zl45FwNgkZGaCpZbIHajDYgwlJCOzLSk+cIPAnsEqV955GjILJnKbdQC1nVPz+gAYQ==}
     engines: {node: '>= 18'}
 
-  rsbuild-plugin-dts@1.0.0:
-    resolution: {integrity: sha512-FVoTsiTfSc0LPeSjrVhpvFOBRig0YXJq3Hp+bVxzh9/bzFvODzLRWOEux8q1Phe1oVCIIVSc2+Nb7kDcxIhosw==}
+  rsbuild-plugin-dts@1.0.7:
+    resolution: {integrity: sha512-r9+bGoY0EmOB5Jisxd7qFQNTTcMTtB0Ke0oDZDYEEAvrpzTCvjWH2UtsscUnOwyPeUauXR2fBME+Vny8aVD66w==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@microsoft/api-extractor': ^7
       '@rsbuild/core': ^2.0.0
-      typescript: ^5 || ^6 || ^7
+      typescript: ^5 || ^6 || ^7 || ^7.1.0-0
     peerDependenciesMeta:
       '@microsoft/api-extractor':
         optional: true
@@ -3487,6 +3475,18 @@ packages:
       utf-8-validate:
         optional: true
 
+  ws@8.23.0:
+    resolution: {integrity: sha512-wCkmX8QMOrKjgO8HW2WyDbTSGeqkocxgDzS9iR79rEAexty6/2qzilx3Ag8Tqf9ykop3irLKle0MtVn5qjVnoQ==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   wsl-utils@1.0.0:
     resolution: {integrity: sha512-Hl0ZOAs672vg+06kfujwRhoS6/jehvULrlFkuF2dRu6pHgA8U06h3xqNIqNNU1LTXPcedxByAR4GS6pwQK0mgA==}
     engines: {node: '>=20'}
@@ -3517,8 +3517,8 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
-  zod@4.6.4:
-    resolution: {integrity: sha512-AXSD6hvGdvRjajG/l1cC+d6IrhH+sjmPKtYeQdJIK8MFJl3LyClzS+o/YsVC+zQZPupAaeH5skwwm8YqYH7BqA==}
+  zod@4.6.6:
+    resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
@@ -3548,44 +3548,44 @@ snapshots:
       typescript: 5.6.1-rc
       validate-npm-package-name: 5.0.1
 
-  '@ast-grep/napi-darwin-arm64@0.45.2':
+  '@ast-grep/napi-darwin-arm64@0.51.1':
     optional: true
 
-  '@ast-grep/napi-darwin-x64@0.45.2':
+  '@ast-grep/napi-darwin-x64@0.51.1':
     optional: true
 
-  '@ast-grep/napi-linux-arm64-gnu@0.45.2':
+  '@ast-grep/napi-linux-arm64-gnu@0.51.1':
     optional: true
 
-  '@ast-grep/napi-linux-arm64-musl@0.45.2':
+  '@ast-grep/napi-linux-arm64-musl@0.51.1':
     optional: true
 
-  '@ast-grep/napi-linux-x64-gnu@0.45.2':
+  '@ast-grep/napi-linux-x64-gnu@0.51.1':
     optional: true
 
-  '@ast-grep/napi-linux-x64-musl@0.45.2':
+  '@ast-grep/napi-linux-x64-musl@0.51.1':
     optional: true
 
-  '@ast-grep/napi-win32-arm64-msvc@0.45.2':
+  '@ast-grep/napi-win32-arm64-msvc@0.51.1':
     optional: true
 
-  '@ast-grep/napi-win32-ia32-msvc@0.45.2':
+  '@ast-grep/napi-win32-ia32-msvc@0.51.1':
     optional: true
 
-  '@ast-grep/napi-win32-x64-msvc@0.45.2':
+  '@ast-grep/napi-win32-x64-msvc@0.51.1':
     optional: true
 
-  '@ast-grep/napi@0.45.2':
+  '@ast-grep/napi@0.51.1':
     optionalDependencies:
-      '@ast-grep/napi-darwin-arm64': 0.45.2
-      '@ast-grep/napi-darwin-x64': 0.45.2
-      '@ast-grep/napi-linux-arm64-gnu': 0.45.2
-      '@ast-grep/napi-linux-arm64-musl': 0.45.2
-      '@ast-grep/napi-linux-x64-gnu': 0.45.2
-      '@ast-grep/napi-linux-x64-musl': 0.45.2
-      '@ast-grep/napi-win32-arm64-msvc': 0.45.2
-      '@ast-grep/napi-win32-ia32-msvc': 0.45.2
-      '@ast-grep/napi-win32-x64-msvc': 0.45.2
+      '@ast-grep/napi-darwin-arm64': 0.51.1
+      '@ast-grep/napi-darwin-x64': 0.51.1
+      '@ast-grep/napi-linux-arm64-gnu': 0.51.1
+      '@ast-grep/napi-linux-arm64-musl': 0.51.1
+      '@ast-grep/napi-linux-x64-gnu': 0.51.1
+      '@ast-grep/napi-linux-x64-musl': 0.51.1
+      '@ast-grep/napi-win32-arm64-msvc': 0.51.1
+      '@ast-grep/napi-win32-ia32-msvc': 0.51.1
+      '@ast-grep/napi-win32-x64-msvc': 0.51.1
 
   '@braidai/lang@1.1.2': {}
 
@@ -3708,27 +3708,27 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@effect/atom-react@4.0.0(effect@4.0.0)(react@19.3.0)(scheduler@0.27.0)':
+  '@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0)':
     dependencies:
-      effect: 4.0.0
+      effect: 4.1.2
       react: 19.3.0
-      scheduler: 0.27.0
+      scheduler: 0.28.0
 
   '@effect/language-service@0.87.5': {}
 
-  '@effect/platform-node-shared@4.0.0(effect@4.0.0)':
+  '@effect/platform-node-shared@4.1.2(effect@4.1.2)':
     dependencies:
       '@types/ws': 8.18.2
-      effect: 4.0.0
-      ws: 8.22.0
+      effect: 4.1.2
+      ws: 8.23.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.0(effect@4.0.0)(redis@6.2.1)':
+  '@effect/platform-node@4.1.2(effect@4.1.2)(redis@6.2.1)':
     dependencies:
-      '@effect/platform-node-shared': 4.0.0(effect@4.0.0)
-      effect: 4.0.0
+      '@effect/platform-node-shared': 4.1.2(effect@4.1.2)
+      effect: 4.1.2
       redis: 6.2.1
       undici: 8.12.4
     transitivePeerDependencies:
@@ -3922,19 +3922,19 @@ snapshots:
       '@types/react': 19.3.0
       react: 19.3.1
 
-  '@modelcontextprotocol/client@2.0.0':
+  '@modelcontextprotocol/client@2.3.0':
     dependencies:
-      '@modelcontextprotocol/core': 2.0.0
+      '@modelcontextprotocol/core': 2.3.0
       cross-spawn: 7.0.6
       eventsource: 3.0.7
       eventsource-parser: 3.1.1
       jose: 6.2.10
       pkce-challenge: 5.0.1
-      zod: 4.6.4
+      zod: 4.6.6
 
   '@modelcontextprotocol/conformance@0.1.16(supports-color@7.2.0)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.30.0(supports-color@7.2.0)(zod@4.6.4)
+      '@modelcontextprotocol/sdk': 1.30.0(supports-color@7.2.0)(zod@4.6.6)
       '@octokit/rest': 22.0.1
       commander: 14.0.3
       eventsource-parser: 3.1.1
@@ -3942,38 +3942,38 @@ snapshots:
       jose: 6.2.10
       undici: 7.29.0
       yaml: 2.9.1
-      zod: 4.6.4
+      zod: 4.6.6
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color
 
-  '@modelcontextprotocol/core@2.0.0':
-    dependencies:
-      zod: 4.6.4
-
   '@modelcontextprotocol/core@2.1.0':
     dependencies:
-      zod: 4.6.4
+      zod: 4.6.6
 
-  '@modelcontextprotocol/ext-apps@2.0.0(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.0.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.4)':
+  '@modelcontextprotocol/core@2.3.0':
     dependencies:
-      '@modelcontextprotocol/client': 2.0.0
+      zod: 4.6.6
+
+  '@modelcontextprotocol/ext-apps@2.0.0(@modelcontextprotocol/client@2.3.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.6)':
+    dependencies:
+      '@modelcontextprotocol/client': 2.3.0
       '@modelcontextprotocol/core': 2.1.0
       '@standard-schema/spec': 1.1.0
-      zod: 4.6.4
+      zod: 4.6.6
     optionalDependencies:
-      '@modelcontextprotocol/server': 2.0.0
+      '@modelcontextprotocol/server': 2.3.0
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
 
-  '@modelcontextprotocol/node@2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.9)':
+  '@modelcontextprotocol/node@2.1.0(@modelcontextprotocol/server@2.3.0)(hono@4.13.9)':
     dependencies:
       '@hono/node-server': 1.19.17(hono@4.13.9)
-      '@modelcontextprotocol/server': 2.0.0
+      '@modelcontextprotocol/server': 2.3.0
     optionalDependencies:
       hono: 4.13.9
 
-  '@modelcontextprotocol/sdk@1.30.0(supports-color@7.2.0)(zod@4.6.4)':
+  '@modelcontextprotocol/sdk@1.30.0(supports-color@7.2.0)(zod@4.6.6)':
     dependencies:
       '@hono/node-server': 2.1.1(hono@4.13.9)
       ajv: 8.20.0
@@ -3990,15 +3990,15 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.6.4
-      zod-to-json-schema: 3.25.2(zod@4.6.4)
+      zod: 4.6.6
+      zod-to-json-schema: 3.25.2(zod@4.6.6)
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/server@2.0.0':
+  '@modelcontextprotocol/server@2.3.0':
     dependencies:
-      '@modelcontextprotocol/core': 2.0.0
-      zod: 4.6.4
+      '@modelcontextprotocol/core': 2.3.0
+      zod: 4.6.6
 
   '@napi-rs/wasm-runtime@1.1.6(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)':
     dependencies:
@@ -4137,21 +4137,12 @@ snapshots:
     transitivePeerDependencies:
       - '@module-federation/runtime-tools'
 
-  '@rsbuild/plugin-react@2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.3.2(@swc/helpers@0.5.23))':
+  '@rsbuild/plugin-react@2.1.1(@rsbuild/core@2.3.2)(@rspack/core@2.3.2(@swc/helpers@0.5.23))':
     dependencies:
-      '@rspack/plugin-react-refresh': 2.0.2(@rspack/core@2.3.2(@swc/helpers@0.5.23))(react-refresh@0.18.0)
-      react-refresh: 0.18.0
+      '@rspack/plugin-react-refresh': 2.0.2(@rspack/core@2.3.2(@swc/helpers@0.5.23))(react-refresh@0.19.0)
+      react-refresh: 0.19.0
     optionalDependencies:
-      '@rsbuild/core': 2.2.11
-    transitivePeerDependencies:
-      - '@rspack/core'
-
-  '@rsbuild/plugin-react@2.1.0(@rsbuild/core@2.2.11)(@rspack/core@2.3.2(@swc/helpers@0.5.24))':
-    dependencies:
-      '@rspack/plugin-react-refresh': 2.0.2(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-refresh@0.18.0)
-      react-refresh: 0.18.0
-    optionalDependencies:
-      '@rsbuild/core': 2.2.11
+      '@rsbuild/core': 2.3.2
     transitivePeerDependencies:
       - '@rspack/core'
 
@@ -4164,10 +4155,10 @@ snapshots:
     transitivePeerDependencies:
       - '@rspack/core'
 
-  '@rslib/core@1.0.0(typescript@7.0.2)':
+  '@rslib/core@1.0.7(typescript@7.0.2)':
     dependencies:
-      '@rsbuild/core': 2.2.11
-      rsbuild-plugin-dts: 1.0.0(@rsbuild/core@2.2.11)(typescript@7.0.2)
+      '@rsbuild/core': 2.3.2
+      rsbuild-plugin-dts: 1.0.7(@rsbuild/core@2.3.2)(typescript@7.0.2)
     optionalDependencies:
       typescript: 7.0.2
     transitivePeerDependencies:
@@ -4401,11 +4392,11 @@ snapshots:
       '@rspack/binding-win32-ia32-msvc': 2.3.2
       '@rspack/binding-win32-x64-msvc': 2.3.2
 
-  '@rspack/core@2.2.3(@swc/helpers@0.5.23)':
+  '@rspack/core@2.2.3(@swc/helpers@0.5.24)':
     dependencies:
       '@rspack/binding': 2.2.3
     optionalDependencies:
-      '@swc/helpers': 0.5.23
+      '@swc/helpers': 0.5.24
 
   '@rspack/core@2.2.8(@swc/helpers@0.5.23)':
     dependencies:
@@ -4426,17 +4417,11 @@ snapshots:
     optionalDependencies:
       '@swc/helpers': 0.5.24
 
-  '@rspack/plugin-react-refresh@2.0.2(@rspack/core@2.3.2(@swc/helpers@0.5.23))(react-refresh@0.18.0)':
+  '@rspack/plugin-react-refresh@2.0.2(@rspack/core@2.3.2(@swc/helpers@0.5.23))(react-refresh@0.19.0)':
     dependencies:
-      react-refresh: 0.18.0
+      react-refresh: 0.19.0
     optionalDependencies:
       '@rspack/core': 2.3.2(@swc/helpers@0.5.23)
-
-  '@rspack/plugin-react-refresh@2.0.2(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-refresh@0.18.0)':
-    dependencies:
-      react-refresh: 0.18.0
-    optionalDependencies:
-      '@rspack/core': 2.3.2(@swc/helpers@0.5.24)
 
   '@rspack/plugin-react-refresh@2.0.2(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-refresh@0.19.0)':
     dependencies:
@@ -4444,12 +4429,12 @@ snapshots:
     optionalDependencies:
       '@rspack/core': 2.3.2(@swc/helpers@0.5.24)
 
-  '@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)':
+  '@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)':
     dependencies:
       '@mdx-js/mdx': 3.1.1(supports-color@7.2.0)
       '@mdx-js/react': 3.1.1(@types/react@19.3.0)(react@19.3.1)
       '@rsbuild/core': 2.3.2
-      '@rsbuild/plugin-react': 2.1.1(@rsbuild/core@2.3.2)(@rspack/core@2.3.2(@swc/helpers@0.5.24))
+      '@rsbuild/plugin-react': 2.1.1(@rsbuild/core@2.3.2)(@rspack/core@2.3.2(@swc/helpers@0.5.23))
       '@rspress/shared': 2.1.1(supports-color@7.2.0)
       '@shikijs/rehype': 4.4.3
       '@shikijs/transformers': 4.4.3
@@ -4493,9 +4478,9 @@ snapshots:
       - micromark-util-types
       - supports-color
 
-  '@rspress/plugin-llms@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)':
+  '@rspress/plugin-llms@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(supports-color@7.2.0)':
     dependencies:
-      '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
+      '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
       remark-mdx: 3.1.1(supports-color@7.2.0)
       remark-parse: 11.0.0(supports-color@7.2.0)
       remark-stringify: 11.0.0
@@ -4504,14 +4489,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@rspress/plugin-sitemap@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))':
+  '@rspress/plugin-sitemap@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))':
     dependencies:
-      '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
+      '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
 
-  '@rspress/plugin-twoslash@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)':
+  '@rspress/plugin-twoslash@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))(react@19.3.0)(supports-color@7.2.0)':
     dependencies:
       '@floating-ui/dom': 1.8.0
-      '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
+      '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
       '@shikijs/twoslash': 4.4.3(supports-color@7.2.0)
       mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
       mdast-util-gfm: 3.1.0(supports-color@7.2.0)
@@ -4523,9 +4508,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@rspress/plugin-typedoc@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))':
+  '@rspress/plugin-typedoc@2.1.1(@rspress/core@2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0))':
     dependencies:
-      '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
+      '@rspress/core': 2.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
       typedoc: 0.28.20
       typedoc-plugin-markdown: 4.14.1(typedoc@0.28.20)
       typescript: 6.0.3
@@ -4546,9 +4531,9 @@ snapshots:
     optionalDependencies:
       jiti: 2.7.0
 
-  '@rstest/adapter-rslib@0.11.12(@rslib/core@1.0.0(typescript@7.0.2))(@rstest/core@0.11.12)(typescript@7.0.2)':
+  '@rstest/adapter-rslib@0.11.12(@rslib/core@1.0.7(typescript@7.0.2))(@rstest/core@0.11.12)(typescript@7.0.2)':
     dependencies:
-      '@rslib/core': 1.0.0(typescript@7.0.2)
+      '@rslib/core': 1.0.7(typescript@7.0.2)
       '@rstest/core': 0.11.12
     optionalDependencies:
       typescript: 7.0.2
@@ -5047,12 +5032,12 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.0.0):
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.1.2):
     dependencies:
       '@rstest/core': 0.11.12
-      effect: 4.0.0
+      effect: 4.1.2
 
-  effect@4.0.0: {}
+  effect@4.1.2: {}
 
   emoji-regex@8.0.0: {}
 
@@ -5642,7 +5627,7 @@ snapshots:
     dependencies:
       '@types/mdast': 4.0.4
       devlop: 1.1.0
-      mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
+      mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
       mdast-util-to-markdown: 2.1.2
       micromark-util-normalize-identifier: 2.0.1
     transitivePeerDependencies:
@@ -5651,7 +5636,7 @@ snapshots:
   mdast-util-gfm-strikethrough@2.0.0(supports-color@7.2.0):
     dependencies:
       '@types/mdast': 4.0.4
-      mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
+      mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
       mdast-util-to-markdown: 2.1.2
     transitivePeerDependencies:
       - supports-color
@@ -5659,7 +5644,7 @@ snapshots:
   mdast-util-gfm-strikethrough@2.0.1(supports-color@7.2.0):
     dependencies:
       '@types/mdast': 4.0.4
-      mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
+      mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
       mdast-util-to-markdown: 2.1.2
     transitivePeerDependencies:
       - supports-color
@@ -5669,7 +5654,7 @@ snapshots:
       '@types/mdast': 4.0.4
       devlop: 1.1.0
       markdown-table: 3.0.4
-      mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
+      mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
       mdast-util-to-markdown: 2.1.2
     transitivePeerDependencies:
       - supports-color
@@ -5678,7 +5663,7 @@ snapshots:
     dependencies:
       '@types/mdast': 4.0.4
       devlop: 1.1.0
-      mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
+      mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
       mdast-util-to-markdown: 2.1.2
     transitivePeerDependencies:
       - supports-color
@@ -5701,7 +5686,7 @@ snapshots:
       '@types/hast': 3.0.5
       '@types/mdast': 4.0.4
       devlop: 1.1.0
-      mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
+      mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
       mdast-util-to-markdown: 2.1.2
     transitivePeerDependencies:
       - supports-color
@@ -5725,7 +5710,7 @@ snapshots:
 
   mdast-util-mdx@3.0.0(supports-color@7.2.0):
     dependencies:
-      mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
+      mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
       mdast-util-mdx-expression: 2.0.1(supports-color@7.2.0)
       mdast-util-mdx-jsx: 3.2.0(supports-color@7.2.0)
       mdast-util-mdxjs-esm: 2.0.1(supports-color@7.2.0)
@@ -5739,7 +5724,7 @@ snapshots:
       '@types/hast': 3.0.5
       '@types/mdast': 4.0.4
       devlop: 1.1.0
-      mdast-util-from-markdown: 2.1.0(supports-color@7.2.0)
+      mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
       mdast-util-to-markdown: 2.1.2
     transitivePeerDependencies:
       - supports-color
@@ -6344,8 +6329,6 @@ snapshots:
       react: 19.3.1
       scheduler: 0.27.0
 
-  react-refresh@0.18.0: {}
-
   react-refresh@0.19.0: {}
 
   react-render-to-markdown@19.1.0(react@19.3.1):
@@ -6367,9 +6350,9 @@ snapshots:
     optionalDependencies:
       react-dom: 19.3.1(react@19.3.1)
 
-  react-server-dom-rspack@0.1.0(@rspack/core@2.2.3(@swc/helpers@0.5.23))(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
+  react-server-dom-rspack@0.1.0(@rspack/core@2.2.3(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
     dependencies:
-      '@rspack/core': 2.2.3(@swc/helpers@0.5.23)
+      '@rspack/core': 2.2.3(@swc/helpers@0.5.24)
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
 
@@ -6538,22 +6521,22 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  rsbuild-plugin-dts@1.0.0(@rsbuild/core@2.2.11)(typescript@7.0.2):
+  rsbuild-plugin-dts@1.0.7(@rsbuild/core@2.3.2)(typescript@7.0.2):
     dependencies:
-      '@ast-grep/napi': 0.45.2
-      '@rsbuild/core': 2.2.11
+      '@ast-grep/napi': 0.51.1
+      '@rsbuild/core': 2.3.2
     optionalDependencies:
       typescript: 7.0.2
 
-  rsbuild-plugin-publint@1.0.0(@rsbuild/core@2.2.11):
+  rsbuild-plugin-publint@1.0.0(@rsbuild/core@2.3.2):
     dependencies:
       publint: 0.3.24
     optionalDependencies:
-      '@rsbuild/core': 2.2.11
+      '@rsbuild/core': 2.3.2
 
-  rsbuild-plugin-rsc@0.1.1(@rsbuild/core@2.2.11)(react-server-dom-rspack@0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)):
+  rsbuild-plugin-rsc@0.1.1(@rsbuild/core@2.3.2)(react-server-dom-rspack@0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)):
     dependencies:
-      '@rsbuild/core': 2.2.11
+      '@rsbuild/core': 2.3.2
       react-server-dom-rspack: 0.1.0(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
 
   run-applescript@7.1.0: {}
@@ -6905,6 +6888,8 @@ snapshots:
 
   ws@8.22.0: {}
 
+  ws@8.23.0: {}
+
   wsl-utils@1.0.0:
     dependencies:
       is-wsl: 3.1.1
@@ -6928,10 +6913,10 @@ snapshots:
 
   yoctocolors@2.2.0: {}
 
-  zod-to-json-schema@3.25.2(zod@4.6.4):
+  zod-to-json-schema@3.25.2(zod@4.6.6):
     dependencies:
-      zod: 4.6.4
+      zod: 4.6.6
 
-  zod@4.6.4: {}
+  zod@4.6.6: {}
 
   zwitch@2.0.4: {}
