@@ -451,6 +451,39 @@ it('parses a skill directly with project-relative ignore rules', async () => {
   }
 });
 
+it('excludes nested skill resources matched by multi-star ignore patterns', async () => {
+  const fixture = await createProjectFixture();
+
+  try {
+    await Promise.all([
+      mkdir(join(fixture.skillDir, 'a/x/y'), { recursive: true }),
+      mkdir(join(fixture.skillDir, 'foo/b'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(fixture.root, '.gitignore'), [
+        '*.log',
+        'src/skills/review/a/***/b',
+        'src/skills/review/f*o/*/*',
+        '',
+      ].join('\n')),
+      writeFile(join(fixture.skillDir, 'a/x/y/b'), 'ignored\n'),
+      writeFile(join(fixture.skillDir, 'foo/b/c'), 'ignored\n'),
+      writeFile(join(fixture.skillDir, 'a/x/y/keep.txt'), 'retained\n'),
+    ]);
+
+    const skill = await parseSkill(fixture.skillDir);
+
+    expect(skill.resources.map((resource) => resource.relativePath)).toEqual([
+      'SKILL.md',
+      'a/x/y/keep.txt',
+      'assets/diagram.png',
+      'scripts/check.ts',
+    ]);
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
 it('reports a diagnostic when Skill Markdown has no frontmatter', async () => {
   const fixture = await createProjectFixture();
 
