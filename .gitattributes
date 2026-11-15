@@ -3,3 +3,7 @@
 # by core.autocrlf on checkout.
 /LICENSE text eol=lf
 /NOTICE text eol=lf
+
+# Published Node executables need LF shebangs on Windows checkouts.
+/packages/agent-bundle/bin/*.js text eol=lf
+/packages/create-agent-bundle/bin/*.js text eol=lf
