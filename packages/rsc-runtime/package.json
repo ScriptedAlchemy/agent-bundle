@@ -98,7 +98,7 @@
     "rsc-markdown-stream": "workspace:^"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.3.0",
+    "@modelcontextprotocol/client": "2.4.0",
     "@rslib/core": "1.0.7",
     "@rspack/core": "2.3.2",
     "@rstest/core": "0.12.6",
