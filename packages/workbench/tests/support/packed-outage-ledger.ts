@@ -183,6 +183,19 @@ const isTraceReplayCancellation = (request: NetworkLedgerEntry): boolean =>
   request.path === '/api/trace' && request.completedAt !== undefined && request.at <= request.completedAt &&
   (responseIsAbsent(request) || isSuccessStatus(request.status));
 
+const isProjectEventsCancellation = (request: NetworkLedgerEntry): boolean => {
+  if (
+    request.path !== '/api/project/events' || request.respondedAt === undefined || request.completedAt === undefined ||
+    !isSuccessStatus(request.status) || request.at > request.respondedAt || request.respondedAt > request.completedAt
+  ) return false;
+  let url: URL;
+  try { url = new URL(request.url); }
+  catch { return false; }
+  return url.origin === request.origin && url.pathname === request.path && url.hash.length === 0 &&
+    url.href === `${request.origin}${request.path}${url.search}` &&
+    (url.search.length === 0 || hasCanonicalAfterCursor(url));
+};
+
 /**
  * The playground screen retires a superseded in-flight catalog request when
  * its effect re-runs (one AbortController per effect), and route changes abort
@@ -190,6 +203,7 @@ const isTraceReplayCancellation = (request: NetworkLedgerEntry): boolean =>
  */
 const isKnownPreOutageClientCancellation = (request: NetworkLedgerEntry): boolean =>
   request.error === 'net::ERR_ABORTED' && request.method === 'GET' && (
+    isProjectEventsCancellation(request) ||
     knownStreamClass(request.path) !== undefined ||
     request.path === '/api/playground/catalog' ||
     isPlaygroundSessionReadCancellation(request) ||
