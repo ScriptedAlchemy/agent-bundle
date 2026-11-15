@@ -27,7 +27,7 @@ overrides:
   '@rspress/plugin-twoslash>typescript': npm:typescript@7.0.2
   '@rspress/plugin-typedoc>typescript': npm:typescript@7.0.2
   '@shikijs/twoslash>typescript': npm:typescript@6.0.3
-  'twoslash>typescript': npm:typescript@6.0.3
+  'twoslash>typescript': npm:typescript@7.0.2
   'typedoc>typescript': npm:typescript@6.0.3
 allowBuilds:
   '@google/genai': false
