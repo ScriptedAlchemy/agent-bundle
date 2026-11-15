@@ -95,6 +95,10 @@ export const writeExampleReport = async (): Promise<void> => {
   await writeFile(join(captureRoot, 'report.json'), `${JSON.stringify({ captures }, undefined, 2)}\n`);
 };
 
+const pendingNavigationSnapshots = new WeakMap<Page, () => void>();
+
+export const recordExampleNavigation = (page: Page): void => pendingNavigationSnapshots.get(page)?.();
+
 export const createExampleErrorLedger = (page: Page, origin: string): ExampleErrorLedger => {
   const ledger: ExampleErrorLedger = { consoleErrors: [], failedRequests: [], origin, pageErrors: [] };
   page.on('console', (message) => {
@@ -103,9 +107,13 @@ export const createExampleErrorLedger = (page: Page, origin: string): ExampleErr
   page.on('pageerror', (error) => ledger.pageErrors.push(error.message));
   const pending = new Set<Request>();
   const navigationCancellations = new WeakSet<Request>();
+  const recordPendingNavigation = (): void => {
+    for (const active of pending) navigationCancellations.add(active);
+  };
+  pendingNavigationSnapshots.set(page, recordPendingNavigation);
   page.on('request', (request) => {
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
-      for (const active of pending) navigationCancellations.add(active);
+      recordPendingNavigation();
     }
     pending.add(request);
   });
