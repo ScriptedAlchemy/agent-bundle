@@ -13,6 +13,7 @@ import {
   createExampleErrorLedger,
   exampleRoot,
   expectHealthyExamplePage,
+  recordExampleNavigation,
   waitForSettledWorkbench,
   writeExampleReport,
 } from './support/example-acceptance.ts';
@@ -97,6 +98,7 @@ e2e('accepts navigation cancellations while retaining active-document request fa
   const origin = `http://127.0.0.1:${address.port}`;
   const ledger = createExampleErrorLedger(page, origin);
   try {
+    recordExampleNavigation(page);
     await page.goto(origin);
     for (const method of ['GET', 'POST']) {
       const response = page.waitForResponse((entry) => entry.url() === `${origin}/hold`);
@@ -105,10 +107,27 @@ e2e('accepts navigation cancellations while retaining active-document request fa
         void fetch('/hold', { method: requestMethod }).then((result) => result.text()).catch(() => undefined);
       }, method);
       await response;
+      recordExampleNavigation(page);
       await page.goto(`${origin}/next`);
       await failed;
     }
-    expect(ledger.failedRequests).toHaveLength(2);
+    for (const method of ['GET', 'POST']) {
+      const response = page.waitForResponse((entry) => entry.url() === `${origin}/hold?before-navigation=1`);
+      const failed = page.waitForEvent('requestfailed', (request) => request.url() === `${origin}/hold?before-navigation=1`);
+      const controller = await page.evaluateHandle((requestMethod) => {
+        const abort = new AbortController();
+        void fetch('/hold?before-navigation=1', { method: requestMethod, signal: abort.signal })
+          .then((result) => result.text()).catch(() => undefined);
+        return abort;
+      }, method);
+      await response;
+      recordExampleNavigation(page);
+      await controller.evaluate((abort) => abort.abort());
+      await failed;
+      await page.goto(`${origin}/next`);
+      await controller.dispose();
+    }
+    expect(ledger.failedRequests).toHaveLength(4);
     await expectHealthyExamplePage(ledger);
 
     const failed = page.waitForEvent('requestfailed', (request) => request.url() === `${origin}/hold?active=1`);
@@ -548,6 +567,7 @@ e2e('renders the flagship compiled Application tree by server and kind in real C
     await captureExampleState(page, 'audiobook-curator', 'routes-catalog-by-server');
 
     await editWatchedSource(server, project.root, conversionSource, `${healthyConversion}\nconst = ;\n`, 'failed');
+    recordExampleNavigation(page);
     await page.reload();
     await waitForSettledWorkbench(page);
     await expect(workbenchTestId(page, 'problemsBadge')).toContainText(/[1-9]/u, { timeout: browserTimeout });
@@ -565,6 +585,7 @@ e2e('renders the flagship compiled Application tree by server and kind in real C
     // A malformed `/routes/…` path parses to the Application root: the shell
     // shows the select-a-route state and the first navigation canonicalizes
     // the URL to `/`.
+    recordExampleNavigation(page);
     await page.goto(workbenchUrl(server.url, '/routes/not-a-leaf/missing'));
     await waitForWorkbenchIdle(page);
     await expect(workbenchTestId(page, 'workspaceEmpty')).toBeVisible({ timeout: browserTimeout });
