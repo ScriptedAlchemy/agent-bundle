@@ -13,6 +13,7 @@ minimumReleaseAgeExclude:
   - '@effect/tsgo-linux-x64@0.69.0'
   - '@effect/tsgo-win32-arm64@0.69.0'
   - '@effect/tsgo-win32-x64@0.69.0'
+  - flare-redact@1.9.0
 # agent-bundle declares @agent-bundle/runtime as an optional peer by plain
 # range, not as a `workspace:` devDependency (npm refuses to install a tarball
 # whose manifest still carries one, #183); this override satisfies that peer
