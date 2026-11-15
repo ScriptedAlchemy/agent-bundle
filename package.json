@@ -7,7 +7,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "packageManager": "pnpm@11.23.0",
+  "packageManager": "pnpm@11.28.12",
   "scripts": {
     "build": "pnpm --filter rsc-markdown-stream build && pnpm --filter @agent-bundle/runtime build && pnpm --filter agent-bundle build && pnpm --filter create-agent-bundle build",
     "test": "pnpm build && pnpm test:unit && pnpm test:route-unit && pnpm test:projection && pnpm test:integration:run",
@@ -63,7 +63,7 @@
     "@arethetypeswrong/cli": "0.18.5",
     "@changesets/cli": "3.0.3",
     "@effect/language-service": "0.87.5",
-    "@effect/tsgo": "0.45.0",
+    "@effect/tsgo": "0.69.0",
     "@lydell/node-pty": "1.2.0-beta.18",
     "@modelcontextprotocol/conformance": "0.1.16",
     "@modelcontextprotocol/server": "2.4.0",
