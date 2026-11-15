@@ -138,7 +138,7 @@
     "@types/ws": "8.18.2",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e",
     "react": "19.3.1",
-    "typescript-5": "npm:typescript@7.0.2",
+    "typescript-5": "npm:typescript@5.9.3",
     "zod": "4.6.7"
   },
   "peerDependencies": {
