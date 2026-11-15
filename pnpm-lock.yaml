@@ -61,8 +61,8 @@ importers:
         specifier: 0.12.6
         version: 0.12.6
       '@rstest/playwright':
-        specifier: 0.11.12
-        version: 0.11.12(@rstest/core@0.12.6)(playwright@1.63.0)
+        specifier: 0.12.6
+        version: 0.12.6(@rstest/core@0.12.6)(playwright@1.63.0)
       '@types/node':
         specifier: 26.5.1
         version: 26.5.1
@@ -1291,11 +1291,11 @@ packages:
       jsdom:
         optional: true
 
-  '@rstest/playwright@0.11.12':
-    resolution: {integrity: sha512-fU9BjRnCTsJNw2oEOY1aq/ozSt5gGuZMW6NwVHZrdxmi/uwypoYIcWSAE/kWukRzAazaSdO+wYZ4fB2IC8kLCA==}
+  '@rstest/playwright@0.12.6':
+    resolution: {integrity: sha512-54cf6W7bIjFYwffRPUu/2inUhf8vmzYBCvZ7zb2PKLGa5ZA8V6g8nkxC9nT/exilE5qTKwTPzTgPFtC0lqMlQg==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
-      '@rstest/core': ^0.11.9
+      '@rstest/core': ^0.12.0
       playwright: ^1.49.1
 
   '@sec-ant/readable-stream@0.4.1':
@@ -4122,7 +4122,7 @@ snapshots:
       - '@module-federation/runtime-tools'
       - core-js
 
-  '@rstest/playwright@0.11.12(@rstest/core@0.12.6)(playwright@1.63.0)':
+  '@rstest/playwright@0.12.6(@rstest/core@0.12.6)(playwright@1.63.0)':
     dependencies:
       '@rstest/core': 0.12.6
       playwright: 1.63.0
