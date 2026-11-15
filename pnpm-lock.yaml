@@ -55,14 +55,14 @@ importers:
         specifier: 0.9.2
         version: 0.9.2(jiti@2.7.0)
       '@rstest/adapter-rslib':
-        specifier: 0.11.12
-        version: 0.11.12(@rslib/core@1.0.7(typescript@7.0.2))(@rstest/core@0.12.6)(typescript@7.0.2)
+        specifier: 0.12.6
+        version: 0.12.6(@rslib/core@1.0.7(typescript@7.0.2))(@rstest/core@0.12.6)(typescript@7.0.2)
       '@rstest/core':
         specifier: 0.12.6
         version: 0.12.6
       '@rstest/playwright':
-        specifier: 0.11.12
-        version: 0.11.12(@rstest/core@0.12.6)(playwright@1.63.0)
+        specifier: 0.12.6
+        version: 0.12.6(@rstest/core@0.12.6)(playwright@1.63.0)
       '@types/node':
         specifier: 26.5.1
         version: 26.5.1
@@ -1258,11 +1258,11 @@ packages:
       jiti:
         optional: true
 
-  '@rstest/adapter-rslib@0.11.12':
-    resolution: {integrity: sha512-YIJ+4uTmTYCPWtsoePZ9nTsA9j0OVa24sM0nvwWig4inhKJi50Aa7+yd//N9CtQ0Gc608BJ5S5fo9w/DfCSWYA==}
+  '@rstest/adapter-rslib@0.12.6':
+    resolution: {integrity: sha512-nU30P6gen7NF2BJVfzVkbZDg2F/jodO3RZutvOv7mlqnQS7OM/JoX/d5GzerpKSNi93K/1q/7NCRwASmvxVj3Q==}
     peerDependencies:
       '@rslib/core': '>=0.18.6 || ^1.0.0-0'
-      '@rstest/core': ^0.11.0
+      '@rstest/core': ^0.12.0
       typescript: ^5.0.0 || ^6.0.0 || ^7.0.0
     peerDependenciesMeta:
       typescript:
@@ -1291,11 +1291,11 @@ packages:
       jsdom:
         optional: true
 
-  '@rstest/playwright@0.11.12':
-    resolution: {integrity: sha512-fU9BjRnCTsJNw2oEOY1aq/ozSt5gGuZMW6NwVHZrdxmi/uwypoYIcWSAE/kWukRzAazaSdO+wYZ4fB2IC8kLCA==}
+  '@rstest/playwright@0.12.6':
+    resolution: {integrity: sha512-54cf6W7bIjFYwffRPUu/2inUhf8vmzYBCvZ7zb2PKLGa5ZA8V6g8nkxC9nT/exilE5qTKwTPzTgPFtC0lqMlQg==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
-      '@rstest/core': ^0.11.9
+      '@rstest/core': ^0.12.0
       playwright: ^1.49.1
 
   '@sec-ant/readable-stream@0.4.1':
@@ -4089,7 +4089,7 @@ snapshots:
     optionalDependencies:
       jiti: 2.7.0
 
-  '@rstest/adapter-rslib@0.11.12(@rslib/core@1.0.7(typescript@7.0.2))(@rstest/core@0.12.6)(typescript@7.0.2)':
+  '@rstest/adapter-rslib@0.12.6(@rslib/core@1.0.7(typescript@7.0.2))(@rstest/core@0.12.6)(typescript@7.0.2)':
     dependencies:
       '@rslib/core': 1.0.7(typescript@7.0.2)
       '@rstest/core': 0.12.6
@@ -4122,7 +4122,7 @@ snapshots:
       - '@module-federation/runtime-tools'
       - core-js
 
-  '@rstest/playwright@0.11.12(@rstest/core@0.12.6)(playwright@1.63.0)':
+  '@rstest/playwright@0.12.6(@rstest/core@0.12.6)(playwright@1.63.0)':
     dependencies:
       '@rstest/core': 0.12.6
       playwright: 1.63.0
