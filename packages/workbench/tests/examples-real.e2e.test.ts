@@ -114,6 +114,7 @@ e2e('accepts navigation cancellations while retaining active-document request fa
     for (const method of ['GET', 'POST']) {
       const response = page.waitForResponse((entry) => entry.url() === `${origin}/hold?before-navigation=1`);
       const failed = page.waitForEvent('requestfailed', (request) => request.url() === `${origin}/hold?before-navigation=1`);
+      recordExampleNavigation(page);
       const controller = await page.evaluateHandle((requestMethod) => {
         const abort = new AbortController();
         void fetch('/hold?before-navigation=1', { method: requestMethod, signal: abort.signal })
@@ -121,7 +122,6 @@ e2e('accepts navigation cancellations while retaining active-document request fa
         return abort;
       }, method);
       await response;
-      recordExampleNavigation(page);
       await controller.evaluate((abort) => abort.abort());
       await failed;
       await page.goto(`${origin}/next`);
