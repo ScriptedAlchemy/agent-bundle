@@ -25,7 +25,7 @@ minimumReleaseAgeExclude:
 overrides:
   '@agent-bundle/runtime': workspace:*
   '@rspress/plugin-twoslash>typescript': npm:typescript@6.0.3
-  '@rspress/plugin-typedoc>typescript': npm:typescript@6.0.3
+  '@rspress/plugin-typedoc>typescript': npm:typescript@7.0.2
   '@shikijs/twoslash>typescript': npm:typescript@6.0.3
   'twoslash>typescript': npm:typescript@6.0.3
   'typedoc>typescript': npm:typescript@6.0.3
