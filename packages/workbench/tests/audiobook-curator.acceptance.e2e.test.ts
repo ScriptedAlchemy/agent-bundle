@@ -11,6 +11,7 @@ import {
   copyExample,
   createExampleErrorLedger,
   expectHealthyExamplePage,
+  recordExampleNavigation,
   writeExampleReport,
 } from './support/example-acceptance.ts';
 import {
@@ -210,12 +211,14 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(rendered).toContainText(hmrMarker, { timeout: runTimeout });
     await editWatchedSource(server, project.root, searchSource, healthySearch, 'succeeded');
 
+    recordExampleNavigation(page);
     await page.goto(workbenchUrl(server.url, `${searchPath}?invocation=${encodeURIComponent(invocationId)}`));
     await waitForWorkbenchIdle(page);
     expect(new URL(page.url()).searchParams.get('invocation')).toBe(invocationId);
     await expect(workbenchTestId(page, 'routeWorkspace')).toBeVisible({ timeout: browserTimeout });
     await expectRenderedDocument(page, runTimeout);
     expect(await readInvocationId(page)).toBe(invocationId);
+    recordExampleNavigation(page);
     await page.reload();
     await waitForWorkbenchIdle(page);
     await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(new RegExp(`route-status--${finalEnvelope.invocation.status}`, 'u'));
@@ -244,12 +247,14 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(workbenchTestId(page, 'traceDetail')).toContainText(routeId, { timeout: browserTimeout });
     const entryId = detailPath.slice('/trace/'.length);
 
+    recordExampleNavigation(page);
     await page.goto(workbenchUrl(server.url, `/trace/${encodeURIComponent(entryId)}`));
     await waitForWorkbenchIdle(page);
     expect(new URL(page.url()).pathname).toBe(`/trace/${entryId}`);
     await expect(workbenchTestId(page, 'traceDetail')).toBeVisible({ timeout: browserTimeout });
     await expect(workbenchTestId(page, 'traceDetail')).toHaveAttribute('data-entry-id', entryId);
     await expect(workbenchTestId(page, 'traceDetail')).toContainText(correlationId);
+    recordExampleNavigation(page);
     await page.reload();
     await waitForWorkbenchIdle(page);
     await expect(workbenchTestId(page, 'traceDetail')).toHaveAttribute('data-entry-id', entryId);
@@ -263,6 +268,7 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(/route-status--succeeded/u, { timeout: browserTimeout });
     expect(await readInvocationId(page)).toBe(invocationId);
     await expectRenderedDocument(page, runTimeout);
+    recordExampleNavigation(page);
     await page.reload();
     await waitForWorkbenchIdle(page);
     await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(new RegExp(`route-status--${finalEnvelope.invocation.status}`, 'u'));
@@ -335,6 +341,7 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(sessionGroup.locator('[data-kind="hook.received"]').first()).toBeVisible({ timeout: browserTimeout });
 
     await editWatchedSource(server, project.root, conversionSource, `${healthyConversion}\nconst = ;\n`, 'failed');
+    recordExampleNavigation(page);
     await page.reload();
     await waitForWorkbenchIdle(page);
     const problemsBadge = workbenchTestId(page, 'problemsBadge');
@@ -352,12 +359,15 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(problemsBadge).not.toContainText(/[1-9]/u, { timeout: browserTimeout });
     await captureExampleState(page, 'audiobook-curator', 'problems-repaired');
 
+    recordExampleNavigation(page);
     await page.goto(workbenchUrl(server.url, searchPath));
     await waitForWorkbenchIdle(page);
     expect(new URL(page.url()).pathname).toBe(searchPath);
+    recordExampleNavigation(page);
     await page.reload();
     await waitForWorkbenchIdle(page);
     expect(new URL(page.url()).pathname).toBe(searchPath);
+    recordExampleNavigation(page);
     await page.goto(workbenchUrl(server.url, '/trace'));
     await waitForWorkbenchIdle(page);
     expect(new URL(page.url()).pathname).toBe('/trace');
@@ -371,6 +381,7 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     // A well-formed deep link to a route the catalog does not contain keeps its
     // URL and reports the unknown route; its escape hatch returns to the tree.
     const missingPath = '/routes/mcp/no-such-server/tool/missing';
+    recordExampleNavigation(page);
     await page.goto(workbenchUrl(server.url, missingPath));
     await waitForWorkbenchIdle(page);
     expect(new URL(page.url()).pathname).toBe(missingPath);
