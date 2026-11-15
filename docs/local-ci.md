@@ -6,7 +6,7 @@ exists because the hosted Verify work for one Node version takes ~13 minutes
 of runner time by current measurement (hosted CI splits it into a `fast` leg
 and two integration shards that run in parallel, see below). PR CI runs every
 leg on Node 24 plus the `fast` leg on Node 26, while pushes to `main` and
-`workflow_dispatch` run every leg on the full 22.19/24/26 matrix. The local
+`workflow_dispatch` run every leg on the full 22.22/24/26 matrix. The local
 gate keeps all three Node versions because local green is used to merge and
 must prove what the post-merge `main` run will prove. A many-core development
 machine can run all three legs plus the release gates concurrently. The
@@ -68,12 +68,12 @@ On PRs, hosted CI runs every leg on Node 24 and the `fast` leg on Node 26.
 
 | Local leg | Node | Steps | Mirrors hosted job |
 | --- | --- | --- | --- |
-| `verify-node22` | 22.19.x | `install`, `playwright install chrome`, `build` (publint runs inside each package's `rslib build`), `typecheck`, `lint`, `test:unit`, `test:route-unit`, `test:projection`, `test:integration` | `Verify (fast \| integration-1 \| integration-2, Node 22.19.0)` |
+| `verify-node22` | 22.22.x | `install`, `playwright install chrome`, `build` (publint runs inside each package's `rslib build`), `typecheck`, `lint`, `test:unit`, `test:route-unit`, `test:projection`, `test:integration` | `Verify (fast \| integration-1 \| integration-2, Node 22.22.0)` |
 | `verify-node24` | 24.x | same | `Verify (…, Node 24)` |
 | `verify-node26` | 26.x | same | `Verify (…, Node 26)` |
-| `gates-node22` | 22.19.x | `install`, `examples:check`, `check:release`, `eval:spot` | `examples-check`, `release-gates`, `rsc-runtime-micro-eval` |
+| `gates-node22` | 22.22.x | `install`, `examples:check`, `check:release`, `eval:spot` | `examples-check`, `release-gates`, `rsc-runtime-micro-eval` |
 
-The three hosted Node-22.19 jobs fold into one `gates-node22` worktree
+The three hosted Node-22.22 jobs fold into one `gates-node22` worktree
 because each of their entry scripts starts from `pnpm build` in a fresh
 install, which one worktree provides just as well as three.
 
@@ -98,7 +98,7 @@ The host-install proof suites (`host-install-proof.test.ts`,
 Claude and Codex legs whenever the `claude` or `codex` CLI is not on PATH.
 That skip is what let #364 change the Codex `interface.logo` emission and
 break both proofs on `main` without CI noticing. Hosted CI therefore runs a
-dedicated `host-install-proofs` job (Node 22.19) on every PR and `main` push:
+dedicated `host-install-proofs` job (Node 22.22) on every PR and `main` push:
 
 1. `node scripts/host-cli-pins.mjs print` reads the pins, the `hostCli`
    block in `packages/agent-bundle/src/adapters/schemas/claude/PROVENANCE.json`
@@ -160,7 +160,7 @@ examples, release-gates, and the pinned-CLI host-install proofs on
 PR critical path.
 
 Hosted CI therefore adds one extra job, `host-filesystem`, on
-`ubuntu-latest`, `macos-latest`, and `windows-latest` (Node 22.19, engines
+`ubuntu-latest`, `macos-latest`, and `windows-latest` (Node 22.22, engines
 floor, three cells, not a Node × OS product). It builds once and runs
 `pnpm test:host-filesystem` (`rstest.host-filesystem.config.ts`, which does
 not build the Workbench e2e example payload):
@@ -195,7 +195,7 @@ Hosted macOS and Windows results are the qualification for those runners.
 ## Node provisioning
 
 The runner introduces no new tooling. For each hosted runtime line
-(22.19.x, 24.x, 26.x) it resolves a Node binary from, in order:
+(22.22.x, 24.x, 26.x) it resolves a Node binary from, in order:
 
 1. `AGENT_BUNDLE_LOCAL_CI_NODE_22` / `_24` / `_26`, a Node binary or bin
    directory, for machines with bespoke layouts;
@@ -205,7 +205,7 @@ The runner introduces no new tooling. For each hosted runtime line
 
 Every resolved binary is version-checked against the hosted line before use.
 If a line is missing, the runner fails with the exact install command (e.g.
-`mise install node@22.19`). pnpm itself is pinned by reusing the entrypoint
+`mise install node@22.22`). pnpm itself is pinned by reusing the entrypoint
 that launched the runner, executed on each leg's own Node, so `pnpm`, its
 lifecycle children, and `pnpm exec node` all agree on the leg's runtime,
 `node_modules` trees (native modules such as the rspack bindings) are never

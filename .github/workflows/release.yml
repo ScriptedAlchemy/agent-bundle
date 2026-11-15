@@ -53,7 +53,7 @@ jobs:
       # ships is proven on the build the nightly packed matrix proved.
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
           playwright-browser: chromium
       - id: changesets
         uses: changesets/action@v2

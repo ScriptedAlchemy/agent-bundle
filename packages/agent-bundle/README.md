@@ -1,6 +1,6 @@
 # agent-bundle
 
-Compile a typed Agent Bundle configuration into Amp, portable, Codex, Claude Code, and Cursor artifacts. Node.js 22.19 or later is required.
+Compile a typed Agent Bundle configuration into Amp, portable, Codex, Claude Code, and Cursor artifacts. Node.js 22.22 or later is required.
 
 Full documentation: [scriptedalchemy.github.io/agent-bundle](https://scriptedalchemy.github.io/agent-bundle/).
 

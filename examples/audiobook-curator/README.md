@@ -13,7 +13,7 @@ From the repository root, launch the Workbench with:
 pnpm example:audiobook
 ```
 
-The package requires Node 22.19+, `ffprobe`, and `ffmpeg`. Optional features call
+The package requires Node 22.22+, `ffprobe`, and `ffmpeg`. Optional features call
 the foreign tools that provide their evidence: Audiobook Forge, Audiolocate in
 a selected Python environment, and `whisper-cli` with a selected model. Local
 media processes have no wall-clock deadline; caller cancellation and bounded

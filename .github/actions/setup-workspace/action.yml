@@ -40,7 +40,7 @@
 #   - uses: actions/checkout@v7
 #   - uses: ./.github/actions/setup-workspace
 #     with:
-#       node-version: ${{ matrix.node-version }}   # or a literal, e.g. 22.19.0
+#       node-version: ${{ matrix.node-version }}   # or a literal, e.g. 22.22.0
 #       playwright-browser: chromium                # only for browser-driving jobs
 #
 # A `./` action path resolves against the runner workspace, so
@@ -53,7 +53,7 @@ description: >-
 
 inputs:
   node-version:
-    description: Node.js version for pnpm/setup@v3's `runtime` input, e.g. `22.19.0`, `24`, `26`.
+    description: Node.js version for pnpm/setup@v3's `runtime` input, e.g. `22.22.0`, `24`, `26`.
     required: true
   playwright-browser:
     description: >-

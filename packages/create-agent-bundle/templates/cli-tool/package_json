@@ -4,7 +4,7 @@
   "description": "A routed command-line tool and library built with agent-bundle.",
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.22.0"
   },
   "exports": {
     ".": {

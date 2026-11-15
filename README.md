@@ -4,7 +4,7 @@ agent-bundle compiles an agent plugin (skills, hooks, MCP servers, and scripts, 
 
 Documentation: [scriptedalchemy.github.io/agent-bundle](https://scriptedalchemy.github.io/agent-bundle/) (English and 简体中文; guide, reference, generated type API, host capability matrices).
 
-Requires Node.js 22.19 or later.
+Requires Node.js 22.22 or later.
 
 ## Install
 
