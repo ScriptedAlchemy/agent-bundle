@@ -25,6 +25,7 @@ export interface ExampleCapture {
 }
 
 interface FailedRequest {
+  readonly canceledByNavigation: boolean;
   readonly error: string;
   readonly request: Request;
 }
@@ -100,23 +101,40 @@ export const createExampleErrorLedger = (page: Page, origin: string): ExampleErr
     if (message.type() === 'error') ledger.consoleErrors.push({ text: message.text(), url: message.location().url });
   });
   page.on('pageerror', (error) => ledger.pageErrors.push(error.message));
+  const pending = new Set<Request>();
+  const navigationCancellations = new WeakSet<Request>();
+  page.on('request', (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      for (const active of pending) navigationCancellations.add(active);
+    }
+    pending.add(request);
+  });
+  page.on('requestfinished', (request) => pending.delete(request));
   page.on('requestfailed', (request) => {
-    ledger.failedRequests.push({ error: request.failure()?.errorText ?? 'unknown request failure', request });
+    pending.delete(request);
+    ledger.failedRequests.push({
+      canceledByNavigation: navigationCancellations.has(request),
+      error: request.failure()?.errorText ?? 'unknown request failure',
+      request,
+    });
   });
   return ledger;
 };
 
-const allowedUnmountCancellation = ({ error, request }: FailedRequest, origin: string): boolean => {
-  if (error !== 'net::ERR_ABORTED' || request.method() !== 'GET') return false;
+const allowedUnmountCancellation = ({ canceledByNavigation, error, request }: FailedRequest, origin: string): boolean => {
+  if (error !== 'net::ERR_ABORTED') return false;
   const url = new URL(request.url());
   if (url.origin !== origin) return false;
+  if (canceledByNavigation) return true;
+  if (request.method() !== 'GET') return false;
   if (url.pathname === '/api/hooks') {
     const buildId = url.searchParams.get('epochId');
     return [...url.searchParams.keys()].length === 1
       && typeof buildId === 'string'
       && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u.test(buildId);
   }
-  return url.pathname === '/api/logs/stream'
+  return url.pathname === '/api/project/events'
+    || url.pathname === '/api/logs/stream'
     || url.pathname === '/api/logs/replay'
     || url.pathname === '/api/trace'
     || url.pathname === '/api/trace/stream'

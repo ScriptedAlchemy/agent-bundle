@@ -374,8 +374,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       if (appPreviewSource === null) throw new Error('The packed MCP App preview does not expose a proxy source.');
       appProxyOrigin = new URL(appPreviewSource, origin).origin;
       expect(appProxyOrigin).not.toBe(origin);
-      await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:blank').length, { timeout: browserTimeout }).toBe(1);
-      const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
+      await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:srcdoc').length, { timeout: browserTimeout }).toBe(1);
+      const appFrame = page.frames().find((frame) => frame.url() === 'about:srcdoc');
       if (appFrame === undefined) throw new Error('The packed MCP App proxy did not create an App frame.');
       await expect(appFrame.locator('#view')).toHaveText('packed release dashboard', { timeout: browserTimeout });
 
