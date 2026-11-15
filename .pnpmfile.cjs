@@ -7,6 +7,11 @@ const typescriptApiConsumers = new Set([
 ]);
 
 function readPackage(pkg) {
+  if (pkg.name === 'effect-rstest' && pkg.version === '0.1.0'
+    && pkg.peerDependencies?.['@rstest/core'] === '^0.11.11') {
+    // Let the pinned helper share the workspace's Rstest 0.12 runner.
+    pkg.peerDependencies['@rstest/core'] = '^0.11.11 || ^0.12.0';
+  }
   if (!typescriptApiConsumers.has(pkg.name)) {
     return pkg;
   }
