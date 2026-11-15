@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
@@ -79,6 +80,54 @@ const expectLeafWorkspace = async (page: Parameters<typeof captureExampleState>[
     }
   }
 };
+
+e2e('accepts navigation cancellations while retaining active-document request failures', async ({ page }) => {
+  const server = createServer((request, response) => {
+    if (request.url?.startsWith('/hold')) {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.flushHeaders();
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end('<main>Ready</main>');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('Expected a TCP test server.');
+  const origin = `http://127.0.0.1:${address.port}`;
+  const ledger = createExampleErrorLedger(page, origin);
+  try {
+    await page.goto(origin);
+    for (const method of ['GET', 'POST']) {
+      const response = page.waitForResponse((entry) => entry.url() === `${origin}/hold`);
+      const failed = page.waitForEvent('requestfailed', (request) => request.url() === `${origin}/hold`);
+      await page.evaluate((requestMethod) => {
+        void fetch('/hold', { method: requestMethod }).then((result) => result.text()).catch(() => undefined);
+      }, method);
+      await response;
+      await page.goto(`${origin}/next`);
+      await failed;
+    }
+    expect(ledger.failedRequests).toHaveLength(2);
+    await expectHealthyExamplePage(ledger);
+
+    const failed = page.waitForEvent('requestfailed', (request) => request.url() === `${origin}/hold?active=1`);
+    await page.evaluate(async () => {
+      const controller = new AbortController();
+      const response = await fetch('/hold?active=1', { signal: controller.signal });
+      const body = response.text().catch(() => undefined);
+      controller.abort();
+      await body;
+    });
+    await failed;
+    expect(ledger.pageErrors).toEqual([]);
+    expect(ledger.consoleErrors).toEqual([]);
+    await expect(expectHealthyExamplePage(ledger)).rejects.toThrow('/hold?active=1');
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+  }
+});
 
 e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
