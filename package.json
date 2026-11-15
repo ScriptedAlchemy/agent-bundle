@@ -7,7 +7,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "packageManager": "pnpm@11.23.0",
+  "packageManager": "pnpm@11.28.12",
   "scripts": {
     "build": "pnpm --filter rsc-markdown-stream build && pnpm --filter @agent-bundle/runtime build && pnpm --filter agent-bundle build && pnpm --filter create-agent-bundle build",
     "test": "pnpm build && pnpm test:unit && pnpm test:route-unit && pnpm test:projection && pnpm test:integration:run",
