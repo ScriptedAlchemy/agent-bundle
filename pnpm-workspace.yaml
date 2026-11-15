@@ -3,7 +3,7 @@ packages:
   - packages/workbench/src/inspector
   - examples/*
   - website
-# Qualify the exact tsgo release in #909 before the default waiting period.
+# Allow explicitly authorized package versions without the waiting period.
 minimumReleaseAgeExclude:
   - '@effect/tsgo@0.69.0'
   - '@effect/tsgo-darwin-arm64@0.69.0'
