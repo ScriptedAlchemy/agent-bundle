@@ -24,7 +24,7 @@ minimumReleaseAgeExclude:
 # same reason), and pkg-pr-new rewrites to the sibling preview URL.
 overrides:
   '@agent-bundle/runtime': workspace:*
-  '@rspress/plugin-twoslash>typescript': npm:typescript@6.0.3
+  '@rspress/plugin-twoslash>typescript': npm:typescript@7.0.2
   '@rspress/plugin-typedoc>typescript': npm:typescript@6.0.3
   '@shikijs/twoslash>typescript': npm:typescript@6.0.3
   'twoslash>typescript': npm:typescript@6.0.3
