@@ -359,11 +359,13 @@ credential-shaped member names, every finding replaced whole by `[REDACTED]`
 (the library's own masks keep a hint such as `AKIA***`; a notice crossing into
 another actor's context keeps nothing). Coverage: provider tokens (OpenAI,
 Anthropic, AWS, GitHub, GitLab, Slack, Stripe, Google, npm, and the other
-default detectors), JWTs, PEM private keys, `Bearer` / `Basic` headers,
+default detectors), JWTs, PEM private keys (including blocks with missing or
+mismatched closing footers), `Bearer` / `Basic` headers,
 `user:password@` URL credentials, `key=value` / `key: value` credential
 assignments in any language (the whole assignment is masked, key included),
 e-mail addresses (a recipient's identity is never surfaced through another
-actor's notice), card numbers, and IBANs; a string held directly under a
+actor's notice), card numbers, and IBANs (including space-separated printed
+groups); a string held directly under a
 credential-shaped member name (`password`, `token`, `apiKey`,
 `authorization`, …) is masked whole regardless of content, and member names
 themselves are scanned like any other string. Not redacted: paths (coordination

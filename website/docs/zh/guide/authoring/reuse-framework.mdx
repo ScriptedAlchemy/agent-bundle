@@ -137,6 +137,11 @@ asset 是代码侧不可变输入。缓存、数据库、登录后取得的 sess
 notice 使用框架 ledger 及[notice 矩阵](../../reference/notices.md)中的受支持通道。
 发布、尝试投递和确认接收是不同状态；写入成功不证明智能体已经看到了 notice。
 
+对于 `internal` notice，运行时会在投递前扫描自由文本，以及凭据类 JSON 成员名下的字符串。
+每个检测结果都会被完整替换为 `[REDACTED]`。检测范围包括以空格分组书写的 IBAN，
+以及结束标记缺失或不匹配的 PEM 私钥块。`public` notice 按原样投递；`secret` notice
+只能通过能力声明明确允许秘密内容的路由投递。
+
 ## 通过声明打包资源和可执行文件
 
 根据输入类型使用 Skill 自带资源目录、`assets`、约定脚本或 `definePrebuilt`。

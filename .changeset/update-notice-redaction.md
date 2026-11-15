@@ -2,4 +2,4 @@
 "@agent-bundle/runtime": patch
 ---
 
-Preserve secret redaction in `@agent-bundle/runtime` notices with flare-redact 1.9.0. (#923)
+Mask grouped IBANs and PEM private keys with missing or mismatched closing footers in `@agent-bundle/runtime` internal notices. (#923)

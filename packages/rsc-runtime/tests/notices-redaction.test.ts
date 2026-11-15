@@ -150,6 +150,15 @@ describe('secret pass (flare-redact)', () => {
     }
   });
 
+  it.each([
+    ['grouped IBAN', 'GB82 WEST 1234 5698 7654 32'],
+    ['truncated PEM', '-----BEGIN RSA PRIVATE KEY-----\nMIIEow'],
+    ['mismatched PEM footer', '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END CERTIFICATE-----'],
+  ])('masks %s completely', (_name, sample) => {
+    expect(containsSecretText(sample)).toBe(true);
+    expect(redactSecretText(sample)).toBe(NOTICE_REDACTION_MARK);
+  });
+
   it('redacts every prose field of a document and nothing else', () => {
     const snapshot: AgentDocument = {
       root: {

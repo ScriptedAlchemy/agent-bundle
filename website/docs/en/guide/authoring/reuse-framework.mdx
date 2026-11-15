@@ -162,6 +162,12 @@ Notices use the framework ledger and the supported channels in the
 [notice matrix](../../reference/notices.md). Publishing, attempting delivery, and acknowledging
 receipt are different states; a successful write is not proof that an agent saw the notice.
 
+For `internal` notices, the runtime scans free text and strings under credential-shaped JSON
+member names before delivery. Each finding is replaced wholly by `[REDACTED]`. Detection includes
+IBANs printed in space-separated groups and PEM private-key blocks whose closing footer is
+missing or mismatched. `public` notices are delivered as authored; `secret` notices require a
+route whose capability explicitly admits secret content.
+
 ## Package assets and executables through declarations
 
 Use Skills' own resource directories, `assets`, conventional scripts, or `definePrebuilt` for
