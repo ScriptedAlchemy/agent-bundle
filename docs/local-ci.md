@@ -205,9 +205,10 @@ The runner introduces no new tooling. For each hosted runtime line
 
 Every resolved binary is version-checked against the hosted line before use.
 If a line is missing, the runner fails with the exact install command (e.g.
-`mise install node@22.22`). pnpm itself is pinned by reusing the entrypoint
-that launched the runner, executed on each leg's own Node, so `pnpm`, its
-lifecycle children, and `pnpm exec node` all agree on the leg's runtime,
+`mise install node@22.22`). pnpm is pinned by reusing the entrypoint that
+launched the runner. JavaScript entrypoints execute on each leg's Node;
+native pnpm executables inherit that Node through the leg's `PATH`, so
+lifecycle children and `pnpm exec node` use the selected runtime.
 `node_modules` trees (native modules such as the rspack bindings) are never
 shared across Node ABIs, while the content-addressed pnpm store is shared
 safely.
