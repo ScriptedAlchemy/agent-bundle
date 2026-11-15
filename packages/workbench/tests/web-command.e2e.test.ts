@@ -227,7 +227,7 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     const appIframe = proxyFrame.locator('iframe#app');
     await expect(appIframe).toHaveAttribute('sandbox', 'allow-scripts');
     await expect(appIframe).toHaveAttribute('referrerpolicy', 'no-referrer');
-    const appFrame = await frameWhere(page, (frame) => frame.url() === 'about:blank' && frame.parentFrame() === proxyFrame, 'the App srcdoc frame inside the sandbox proxy');
+    const appFrame = await frameWhere(page, (frame) => frame.url() === 'about:srcdoc' && frame.parentFrame() === proxyFrame, 'the App srcdoc frame inside the sandbox proxy');
 
     await expect(appFrame.locator('#service')).toHaveText(healthyCompilerStatus.service, { timeout: browserTimeout });
     await expect(appFrame.locator('#status')).toHaveText(healthyCompilerStatus.status);
