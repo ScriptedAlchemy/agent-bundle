@@ -12,7 +12,7 @@ overrides:
   twoslash>typescript: npm:typescript@6.0.3
   typedoc>typescript: npm:typescript@6.0.3
 
-pnpmfileChecksum: sha256-CjzDbxBVbwhtWuVc5QBOr0ymy8e8vyM9gWK88TVQjzA=
+pnpmfileChecksum: sha256-nPhrWSKWl9esWbILZKHKVu/vjkVbxKl608m2KSWavrI=
 
 patchedDependencies:
   effect-rstest@0.1.0: c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263
@@ -1846,7 +1846,7 @@ packages:
     resolution: {integrity: sha512-5+p2KfQ++ASE/jODKn7/WvTEJoLGA0EQNol/Y4yO1KsB46ZgPcwyjmS7CwmM5B7UxzB6LzbdmXmgpoE1sAfh6w==, tarball: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e}
     version: 0.1.0
     peerDependencies:
-      '@rstest/core': ^0.11.11
+      '@rstest/core': ^0.11.11 || ^0.12.0
       effect: ^4.0.0-rc.113
 
   effect@4.1.2:
