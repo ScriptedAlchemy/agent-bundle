@@ -23,6 +23,15 @@
       "enabled": false
     },
     {
+      "description": "Keep JavaScript compiler API consumers on TypeScript 6 until their native API integrations are migrated.",
+      "matchDepNames": [
+        "twoslash>typescript",
+        "typedoc>typescript",
+        "typescript-6"
+      ],
+      "allowedVersions": "<7.0.0"
+    },
+    {
       "matchPackageNames": ["@rspress/*"],
       "groupName": "rspress"
     }
