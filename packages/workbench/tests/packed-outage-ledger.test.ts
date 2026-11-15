@@ -273,6 +273,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
           leftAt: 1_350,
           leftIndex: appendedIndex + 1,
           openedIndex: appendedIndex,
+          requestIndex: appendedIndex,
           respondedStream: true as const,
           url: `${valid.origin}/api/logs/stream?after=32`,
         }),
@@ -296,6 +297,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
           leftAt: 1_350,
           leftIndex: appendedIndex + 1,
           openedIndex: appendedIndex,
+          requestIndex: appendedIndex,
           url: `${valid.origin}/api/playground/catalog?epochId=recovered-epoch`,
         }),
       ]),
@@ -493,4 +495,28 @@ test('rejects unowned successful project stream cancellations after recovery', (
     expect(() => validateOutageLedger({ ...ledger, requests: [...ledger.requests, request] }))
       .toThrow(/unknown post-recovery failure/u);
   }
+});
+
+test('does not lend navigation ownership to a completed request sharing a pending request URL', () => {
+  const ledger = postRecoveryCancellationFixture();
+  const requestIndex = ledger.requests.length;
+  const url = `${ledger.origin}/api/artifacts/epochs/recovered-epoch`;
+  const completedFailure = ledgerRequest({
+    at: 1_400, respondedAt: 1_401, completedAt: 1_410, error: 'net::ERR_ABORTED',
+    method: 'GET', path: '/api/artifacts/epochs/recovered-epoch', status: 200, url,
+  });
+  const pendingSuccess = ledgerRequest({
+    at: 1_405, respondedAt: 1_406, completedAt: 1_411,
+    method: 'GET', path: '/api/artifacts/epochs/recovered-epoch', status: 200, url,
+  });
+  expect(() => validateOutageLedger({
+    ...ledger,
+    postRecovery: {
+      ...ledger.postRecovery!,
+      navigation: [...ledger.postRecovery!.navigation, {
+        leftAt: 1_410, leftIndex: requestIndex + 2, openedIndex: requestIndex, requestIndex: requestIndex + 1, url,
+      }],
+    },
+    requests: [...ledger.requests, completedFailure, pendingSuccess],
+  })).toThrow(/unknown post-recovery failure/u);
 });

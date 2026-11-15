@@ -41,6 +41,7 @@ export interface OutageLedger {
      * a request belongs to the visit when it sits in `[openedIndex, leftIndex)`.
      * A millisecond cannot order a request against a departure — a batch of
      * events and the stamp that follows it share one — but the array can. The
+     * `requestIndex` identifies the exact pending request, including when URLs repeat. The
      * abort itself must complete no earlier than `leftAt`: an abort that
      * finished before the departure was not the departure's doing.
      */
@@ -48,6 +49,7 @@ export interface OutageLedger {
       readonly leftAt: number;
       readonly leftIndex: number;
       readonly openedIndex: number;
+      readonly requestIndex: number;
       readonly respondedStream?: true;
       readonly url: string;
     }>[];
@@ -99,7 +101,7 @@ export const postRecoveryCancellationFixture = (): OutageLedger => {
       freshMcpSession: Object.freeze({ closeCompletedAt: 1_321, closeStartedAt: 1_320, id: freshMcpSessionId, openedAt: 1_310 }),
       // The Hooks visit owns exactly the last request of the ledger below.
       navigation: Object.freeze([
-        Object.freeze({ leftAt: 1_340, leftIndex: base.requests.length + 2, openedIndex: base.requests.length + 1, url: hooksUrl }),
+        Object.freeze({ leftAt: 1_340, leftIndex: base.requests.length + 2, openedIndex: base.requests.length + 1, requestIndex: base.requests.length + 1, url: hooksUrl }),
       ]),
     }),
     requests: Object.freeze([
@@ -312,7 +314,8 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
       // departure stamps, whatever millisecond they carry.
       const failures = postRecoveryFailures.filter((request) => {
         const index = ledger.requests.indexOf(request);
-        return request.url === navigation.url && index >= navigation.openedIndex && index < navigation.leftIndex &&
+        return index === navigation.requestIndex && request.url === navigation.url &&
+          index >= navigation.openedIndex && index < navigation.leftIndex &&
           ledgerFailureAt(request) >= navigation.leftAt;
       });
       assertOutageLedger(failures.length <= 1,
