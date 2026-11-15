@@ -12,6 +12,7 @@ import {
 import { applicationLeaves, type ApplicationLeaf, type ApplicationTree } from '../../src/application/application-tree-model.ts';
 import { routeInputLabel } from '../../src/routes/routes-model.ts';
 import { waitForWorkbenchIdle, workbenchUrl } from './workbench-e2e.ts';
+import { recordExampleNavigation } from './example-acceptance.ts';
 
 const browserTimeout = 15_000 * timeScale;
 /** Upper bound for the watcher's debounce plus one full development rebuild. */
@@ -159,6 +160,7 @@ export const openWorkbench = async (
   origin: string,
   path = '/',
 ): Promise<void> => {
+  recordExampleNavigation(page);
   await page.goto(workbenchUrl(origin, path));
   await waitForWorkbenchIdle(page);
 };
