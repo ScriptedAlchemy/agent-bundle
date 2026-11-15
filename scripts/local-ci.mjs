@@ -153,9 +153,8 @@ const resolveNodeBinary = async (line) => {
 /**
  * The pnpm CLI entrypoint, pinned to the pnpm this run was launched with:
  * npm_execpath when launched through `pnpm check:local-ci`, otherwise the
- * `pnpm` on PATH (a corepack shim is a Node script, which works the same
- * way). Each leg runs this entrypoint ON ITS OWN Node via a wrapper, so
- * pnpm and every lifecycle child agree on the leg's runtime.
+ * `pnpm` on PATH. JavaScript entrypoints use the leg's Node; native pnpm
+ * executables inherit it through the leg's PATH.
  */
 const resolvePnpmEntrypoint = async () => {
   const fromEnvironment = process.env.npm_execpath;
@@ -193,8 +192,8 @@ const buildLegEnvironment = (syntheticBinDirectory, overrides) => {
 };
 
 /**
- * node symlink, npm/npx exec wrappers, and a pnpm wrapper that pins pnpm to
- * the leg's Node. npm and npx must be exec wrappers to their real paths (not
+ * node symlink, npm/npx exec wrappers, and a pnpm wrapper. npm and npx must
+ * be exec wrappers to their real paths (not
  * symlinks): npm's shell launcher resolves its Node sibling relative to $0
  * without following symlinks, so a symlinked npm looks for node next to the
  * symlink and finds nothing.
@@ -214,7 +213,10 @@ const createSyntheticBinDirectory = async (leg, pnpmEntrypoint) => {
     const source = join(nodeBinDirectory, tool);
     if (existsSync(source)) await writeExecWrapper(tool, `"${source}"`);
   }
-  await writeExecWrapper('pnpm', `"${leg.nodeBinary}" "${pnpmEntrypoint}"`);
+  const pnpmCommand = /\.[cm]?js$/u.test(pnpmEntrypoint)
+    ? `"${leg.nodeBinary}" "${pnpmEntrypoint}"`
+    : `"${pnpmEntrypoint}"`;
+  await writeExecWrapper('pnpm', pnpmCommand);
   return directory;
 };
 
