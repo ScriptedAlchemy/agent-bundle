@@ -296,8 +296,8 @@ importers:
         specifier: 5.0.0
         version: 5.0.0
       commander:
-        specifier: 15.0.0
-        version: 15.0.0
+        specifier: 15.1.0
+        version: 15.1.0
       effect:
         specifier: 4.1.2
         version: 4.1.2
@@ -317,8 +317,8 @@ importers:
         specifier: 14.0.0
         version: 14.0.0
       ws:
-        specifier: 8.22.0
-        version: 8.22.0
+        specifier: 8.23.0
+        version: 8.23.0
       yaml:
         specifier: 2.9.1
         version: 2.9.1
@@ -400,8 +400,8 @@ importers:
         specifier: 4.1.2
         version: 4.1.2
       flare-redact:
-        specifier: 1.6.1
-        version: 1.6.1
+        specifier: 1.9.0
+        version: 1.9.0
       react-server-dom-rspack:
         specifier: 0.1.1
         version: 0.1.1(@rspack/core@2.3.2(@swc/helpers@0.5.24))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1740,8 +1740,8 @@ packages:
     resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
     engines: {node: '>=20'}
 
-  commander@15.0.0:
-    resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
+  commander@15.1.0:
+    resolution: {integrity: sha512-cgnQ88TRrWcC7pVq46RzJVRMktu3W2RcbnoidnfBsl1bmDCBwJS/udcIZpKoCrbAYYaCqsz1yZCVIgbIaU3ddQ==}
     engines: {node: '>=22.12.0'}
 
   compute-scroll-into-view@3.1.1:
@@ -1998,8 +1998,8 @@ packages:
     resolution: {integrity: sha512-S8KoZgRZN+a5rNwqTxlZZePjT/4cnm0ROV70LedRHZ0p8u9fRID0hJUZQpkKLzro8LfmC8sx23bY6tVNxv8pQA==}
     engines: {node: '>= 18.0.0'}
 
-  flare-redact@1.6.1:
-    resolution: {integrity: sha512-13Htu6VPk2ttxcoVOP909pXao6orrIBAMS/qWdhQn3/BS5AxSB5fpyqaPZnRGJhfBAM2M9T+RE662hxEpv6nGQ==}
+  flare-redact@1.9.0:
+    resolution: {integrity: sha512-K+SHDeE9IXRzrf5kcrloq19sJCynm2ki8cq67ZpJ3tmJyee92dDPpjDLUYduLk+gzLUD6+pFM7e1nuFK7jakXA==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -4506,7 +4506,7 @@ snapshots:
 
   commander@14.0.3: {}
 
-  commander@15.0.0: {}
+  commander@15.1.0: {}
 
   compute-scroll-into-view@3.1.1: {}
 
@@ -4779,7 +4779,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  flare-redact@1.6.1: {}
+  flare-redact@1.9.0: {}
 
   flexsearch@0.8.212: {}
 
