@@ -407,6 +407,6 @@ export const expectRenderedDocument = async (page: Page, timeout = browserTimeou
   await expect(document).toBeVisible({ timeout });
   await expect(document).toHaveAttribute('aria-busy', 'false', { timeout });
   await expect(document.locator('.rendered-document-body')).toBeVisible({ timeout });
-  await expect(document.locator('.rendered-document-diagnostics, .agent-document-error-node')).toHaveCount(0);
+  await expect(document.locator('.rendered-document-diagnostics, .agent-document-error-node')).toHaveCount(0, { timeout });
   return document;
 };
