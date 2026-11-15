@@ -193,7 +193,7 @@ it('publishes directly executable built entrypoints with declarations', async ()
   await buildPackage();
 
   const manifest = await readPackageManifest();
-  expect(manifest.engines?.node).toBe('>=22.19.0');
+  expect(manifest.engines?.node).toBe('>=22.22.0');
 
   for (const entrypoint of Object.values(manifest.exports)) {
     if (typeof entrypoint === 'string') {

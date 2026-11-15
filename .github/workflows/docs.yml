@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   build:
-    name: Docs site (Node 22.19)
+    name: Docs site (Node 22.22)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     # Third-party actions are pinned to full commit SHAs (a moving `vN` tag
@@ -58,7 +58,7 @@ jobs:
           filter: blob:none
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
       # Website-only PRs skip every ci.yml job that lints, so lint here too.
       - run: pnpm lint
       # TypeDoc consumes the declarations shipped from package dist trees.

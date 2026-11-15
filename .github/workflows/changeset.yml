@@ -42,7 +42,7 @@ jobs:
       - uses: ./.github/actions/setup-workspace
         if: github.event_name != 'merge_group'
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
       - name: Require a changeset for publishable package changes
         if: github.event_name != 'merge_group'
         env:

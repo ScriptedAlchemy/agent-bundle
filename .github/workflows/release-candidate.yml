@@ -26,7 +26,7 @@ env:
   AGENT_BUNDLE_PLAYWRIGHT_CHANNEL: chromium
 
 jobs:
-  # Same packed-release lane as nightly.yml's packed-matrix job: Node 22.19,
+  # Same packed-release lane as nightly.yml's packed-matrix job: Node 22.22,
   # setup-workspace + Playwright Chromium, `pnpm check:release` (pack dry-run,
   # lint:release, the full scaffolder template matrix, dist freshness).
   packed-release:
@@ -36,14 +36,14 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.ref == 'refs/heads/changeset-release/main'
-    name: Packed release (Node 22.19)
+    name: Packed release (Node 22.22)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
           playwright-browser: chromium
       - run: pnpm check:release
       - if: failure()

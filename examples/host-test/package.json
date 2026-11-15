@@ -6,7 +6,7 @@
   "description": "A host-probing agent-bundle plugin: every hook family, an MCP server, and a CLI that record exactly what each host sends.",
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "build": "agent-bundle build --output artifact",

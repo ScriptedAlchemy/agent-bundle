@@ -36,7 +36,7 @@ import {
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
 
-export const compilerHostNodeFloor = '22.19.0';
+export const compilerHostNodeFloor = '22.22.0';
 export const generatedExecutableSyntax = ((): 'es2022' => {
   const version = parseRuntimeVersion(compilerHostNodeFloor);
   if (version === undefined || version[0] < 22) {

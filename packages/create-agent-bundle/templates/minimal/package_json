@@ -5,7 +5,7 @@
   "description": "A skills-only agent plugin built with agent-bundle.",
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "build": "agent-bundle build --json --output artifact",

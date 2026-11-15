@@ -9,12 +9,12 @@
  * Hosted job → local leg mapping:
  * - verify — hosted as three parallel jobs per Node version, `fast` plus
  *   integration shards `integration-1|2`, fanned into the required
- *   `Verify gate` (Node 22.19 / 24 / 26 on main pushes; Node 24 plus the
+ *   `Verify gate` (Node 22.22 / 24 / 26 on main pushes; Node 24 plus the
  *   `fast` leg on Node 26 for PRs) → legs `verify-node22|24|26`: install,
  *   playwright chrome, build (publint runs inside it), typecheck, lint,
  *   test:unit, test:route-unit, test:projection, test:integration — the
  *   hosted legs' union, serially in one worktree.
- * - examples-check + release-gates + rsc-runtime-micro-eval (all Node 22.19)
+ * - examples-check + release-gates + rsc-runtime-micro-eval (all Node 22.22)
  *   → leg `gates-node22`: examples:check, check:release, eval:spot run
  *   sequentially in one worktree. Each of those scripts starts from
  *   `pnpm build`, so folding three hosted checkouts into one worktree keeps
@@ -87,7 +87,7 @@ const execGit = (args) => execFile('git', args, { cwd: repositoryRoot });
 
 /** The hosted Verify matrix. `spec` feeds version-manager lookups; `matches` pins the leg to the hosted runtime line. */
 const hostedNodeLines = [
-  { key: '22', spec: '22.19', hostedRuntime: '22.19.0', matches: (v) => v.major === 22 && v.minor === 19 },
+  { key: '22', spec: '22.22', hostedRuntime: '22.22.0', matches: (v) => v.major === 22 && v.minor === 22 },
   { key: '24', spec: '24', hostedRuntime: '24', matches: (v) => v.major === 24 },
   { key: '26', spec: '26', hostedRuntime: '26', matches: (v) => v.major === 26 },
 ];

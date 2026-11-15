@@ -49,7 +49,7 @@ jobs:
       - uses: ./.github/actions/setup-workspace
         if: inputs.host == 'both' || inputs.host == matrix.host
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
       # One build for every pool below, on a runner that starts from a fresh
       # checkout: every pool refuses to start over a missing or stale dist
       # (rstest.dist-freshness.setup.ts), `test:integration:run` reads the

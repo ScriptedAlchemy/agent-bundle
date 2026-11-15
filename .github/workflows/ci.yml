@@ -115,14 +115,14 @@ jobs:
     if: >-
       ${{ !cancelled() &&
       (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
-    name: Examples check (Node 22.19)
+    name: Examples check (Node 22.22)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
       # The shipped `agentBundleBrowserRstest` helper launches branded Chrome
       # (`channel: 'chrome'`), which Playwright cannot pin to a version, so
       # this suite runs on the Chrome preinstalled on the runner image and the
@@ -152,7 +152,7 @@ jobs:
   # `fast` leg on Node 26 — 20 of the 24 main-push failures in #576's
   # 200-run window were Node-26-only breaks in the unit/projection pools that
   # no PR leg had exercised — while main pushes and manual dispatches run
-  # every leg on the full supported matrix (22.19.0 = engines floor, 24, 26).
+  # every leg on the full supported matrix (22.22.0 = engines floor, 24, 26).
   # Branch protection requires the static "Verify gate" context below, never
   # a leg name (#549, #557), so this shape can change without touching it.
   verify:
@@ -173,7 +173,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: [fast, integration-1, integration-2]
-        node-version: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["24"]') || fromJSON('["22.19.0","24","26"]') }}
+        node-version: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["24"]') || fromJSON('["22.22.0","24","26"]') }}
         include: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('[{"leg":"fast","node-version":"26"}]') || fromJSON('[]') }}
     steps:
       - uses: actions/checkout@v7
@@ -298,7 +298,7 @@ jobs:
     if: >-
       ${{ !cancelled() &&
       (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
-    name: Release gates (Node 22.19)
+    name: Release gates (Node 22.22)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -306,7 +306,7 @@ jobs:
       # The packed pool includes packed-release.e2e, a Workbench browser suite.
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
           playwright-browser: chromium
       # Per-PR packed pool: single pack+install proofs plus the
       # minimal-template scaffolder smoke. The full template matrix runs in
@@ -341,14 +341,14 @@ jobs:
     if: >-
       ${{ !cancelled() &&
       (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
-    name: Host install proofs (Node 22.19)
+    name: Host install proofs (Node 22.22)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
       - name: Read pinned host CLI versions
         id: pins
         run: node scripts/host-cli-pins.mjs print
@@ -393,7 +393,7 @@ jobs:
   # in `dev-host-install.test.ts` skip here the same way they skip locally
   # when the binaries are absent. The slice uses
   # `rstest.host-filesystem.config.ts` (not `rstest.config.ts`) so it never
-  # builds the Workbench e2e example payload. One Node line (22.19, engines
+  # builds the Workbench e2e example payload. One Node line (22.22, engines
   # floor) keeps the matrix at three cells, not nine.
   host-filesystem:
     needs: changes
@@ -411,7 +411,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
       - run: pnpm build
       # Dist is already built; packed-install-bin's ad-hoc pack must not
       # rebuild it. Workbench is unused by this slice.
@@ -431,14 +431,14 @@ jobs:
     if: >-
       ${{ !cancelled() &&
       (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
-    name: RSC runtime micro-eval (Node 22.19)
+    name: RSC runtime micro-eval (Node 22.22)
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
       - run: pnpm eval:spot
 
   # release.yml qualifies each Version Packages candidate by dispatching this

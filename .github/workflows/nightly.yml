@@ -40,14 +40,14 @@ jobs:
   # reporter a hosted runner uses (#576). Non-blocking: nothing requires this
   # workflow, and a main push never waits on it.
   packed-matrix:
-    name: Packed release matrix (Node 22.19)
+    name: Packed release matrix (Node 22.22)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
           playwright-browser: chromium
       - run: pnpm check:release
       - if: failure()
@@ -65,14 +65,14 @@ jobs:
   # mcp-conformance-expected-failures.yml; the runner's report is kept as an
   # artifact for triage.
   mcp-conformance:
-    name: MCP conformance (Node 22.19)
+    name: MCP conformance (Node 22.22)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
         with:
-          node-version: 22.19.0
+          node-version: 22.22.0
       - run: pnpm test:mcp-conformance
         env:
           AGENT_BUNDLE_MCP_CONFORMANCE_OUTPUT: artifacts/mcp-conformance

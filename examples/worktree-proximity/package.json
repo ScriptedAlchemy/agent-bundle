@@ -6,7 +6,7 @@
   "description": "An advanced worktree-proximity coordination reference for agent-bundle.",
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.22.0"
   },
   "files": [
     "artifact",

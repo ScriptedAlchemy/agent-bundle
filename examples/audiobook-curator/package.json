@@ -6,7 +6,7 @@
   "description": "A complete framework-mode Claude and Codex audiobook-curation plugin, CLI, Skill, and MCP server.",
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.22.0"
   },
   "exports": {
     ".": {
