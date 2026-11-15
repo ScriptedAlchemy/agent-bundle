@@ -34,6 +34,11 @@
     {
       "matchPackageNames": ["@rspress/*"],
       "groupName": "rspress"
+    },
+    {
+      "description": "Keep the bundled JavaScript parser alias on TypeScript 5 until its compiler API is migrated.",
+      "matchDepNames": ["typescript-5"],
+      "allowedVersions": "<6.0.0"
     }
   ]
 }
