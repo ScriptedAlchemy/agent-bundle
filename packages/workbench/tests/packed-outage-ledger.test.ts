@@ -520,3 +520,27 @@ test('does not lend navigation ownership to a completed request sharing a pendin
     requests: [...ledger.requests, completedFailure, pendingSuccess],
   })).toThrow(/unknown post-recovery failure/u);
 });
+
+test('owns late old-document reads only before the recorded navigation commit', () => {
+  const ledger = postRecoveryCancellationFixture();
+  const requestIndex = ledger.requests.length;
+  const url = `${ledger.origin}/api/project/status`;
+  const failure = ledgerRequest({
+    at: 1_411, completedAt: 1_412, error: 'net::ERR_ABORTED',
+    method: 'GET', path: '/api/project/status', url,
+  });
+  const navigation = {
+    committedIndex: requestIndex + 1, leftAt: 1_410, leftIndex: requestIndex,
+    openedIndex: requestIndex - 1, requestIndex, url,
+  };
+  const withNavigation = (entry: typeof navigation) => ({
+    ...ledger,
+    postRecovery: { ...ledger.postRecovery!, navigation: [...ledger.postRecovery!.navigation, entry] },
+    requests: [...ledger.requests, failure],
+  });
+  expect(() => validateOutageLedger(withNavigation(navigation))).not.toThrow();
+  expect(() => validateOutageLedger(withNavigation({ ...navigation, committedIndex: requestIndex })))
+    .toThrow(/unknown post-recovery failure/u);
+  expect(() => validateOutageLedger(withNavigation({ ...navigation, leftAt: 1_413 })))
+    .toThrow(/unknown post-recovery failure/u);
+});
