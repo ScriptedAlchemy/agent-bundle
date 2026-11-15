@@ -172,11 +172,11 @@ importers:
         specifier: 2.4.0
         version: 2.4.0
       '@modelcontextprotocol/core':
-        specifier: 2.1.0
-        version: 2.1.0
+        specifier: 2.4.0
+        version: 2.4.0
       '@modelcontextprotocol/ext-apps':
         specifier: 2.0.4
-        version: 2.0.4(@modelcontextprotocol/client@2.4.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.4.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
+        version: 2.0.4(@modelcontextprotocol/client@2.4.0)(@modelcontextprotocol/core@2.4.0)(@modelcontextprotocol/server@2.4.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
       '@modelcontextprotocol/node':
         specifier: 2.1.2
         version: 2.1.2(@modelcontextprotocol/server@2.4.0)
@@ -282,7 +282,7 @@ importers:
         version: 1.0.2(jiti@2.7.0)
       '@rstest/core':
         specifier: ^0.11.10 || ^0.12.0
-        version: 0.11.12
+        version: 0.12.6
       acorn:
         specifier: 8.18.0
         version: 8.18.0
@@ -334,7 +334,7 @@ importers:
         version: 8.18.2
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.1.2)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.2)
       react:
         specifier: 19.3.1
         version: 19.3.1
@@ -874,10 +874,6 @@ packages:
   '@modelcontextprotocol/conformance@0.1.16':
     resolution: {integrity: sha512-GI7qiN0r39/MH2srVUR3AXaEN0YLCro20lIBbnvc1frBhszenxvUifBuTzxeVQVagILfBzCIcnungUOma8OrgA==}
     hasBin: true
-
-  '@modelcontextprotocol/core@2.1.0':
-    resolution: {integrity: sha512-YdFj5gMRHr0gYNAhTbQDgjLHiEJdIAUYxomhKseUNye7ZGlISQmUoLh2sveFFCiQ7j2YMffT1kgSND0FSfIFjQ==}
-    engines: {node: '>=20'}
 
   '@modelcontextprotocol/core@2.4.0':
     resolution: {integrity: sha512-z8QBKqdfXLPzkLQuG4xp8hrVEMm1PZ1IgxMN2sMbJiFiAKOWXnAzogXn2W4aqIBlP1ea6U5yiqVquvUNM1Cj6Q==}
@@ -3837,18 +3833,14 @@ snapshots:
       - '@cfworker/json-schema'
       - supports-color
 
-  '@modelcontextprotocol/core@2.1.0':
-    dependencies:
-      zod: 4.6.7
-
   '@modelcontextprotocol/core@2.4.0':
     dependencies:
       zod: 4.6.7
 
-  '@modelcontextprotocol/ext-apps@2.0.4(@modelcontextprotocol/client@2.4.0)(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/server@2.4.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)':
+  '@modelcontextprotocol/ext-apps@2.0.4(@modelcontextprotocol/client@2.4.0)(@modelcontextprotocol/core@2.4.0)(@modelcontextprotocol/server@2.4.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)':
     dependencies:
       '@modelcontextprotocol/client': 2.4.0
-      '@modelcontextprotocol/core': 2.1.0
+      '@modelcontextprotocol/core': 2.4.0
       '@standard-schema/spec': 1.1.0
       zod: 4.6.7
     optionalDependencies:
@@ -4857,6 +4849,11 @@ snapshots:
   effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.1.2):
     dependencies:
       '@rstest/core': 0.11.12
+      effect: 4.1.2
+
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.2):
+    dependencies:
+      '@rstest/core': 0.12.6
       effect: 4.1.2
 
   effect@4.1.2: {}
