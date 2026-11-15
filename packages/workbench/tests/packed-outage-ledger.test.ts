@@ -455,3 +455,29 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(navigationNonGetCancellation)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(navigationCancellationBeforeDeparture)).toThrow(/Foreground outage ledger rejected/u);
 });
+
+test('accepts only completed successful project stream cancellations before an outage', () => {
+  const ledger = outageLedgerFixture();
+  const stream = ledgerRequest({
+    at: 900, respondedAt: 900, completedAt: 901, error: 'net::ERR_ABORTED',
+    method: 'GET', path: '/api/project/events', status: 200,
+  });
+  const withStream = (request: NetworkLedgerEntry): OutageLedger => ({
+    ...ledger, requests: [request, ...ledger.requests],
+  });
+  validateOutageLedger(withStream(stream));
+  validateOutageLedger(withStream({ ...stream, url: `${stream.url}?after=7` }));
+  for (const rejected of [
+    { ...stream, method: 'POST' },
+    { ...stream, error: 'net::ERR_CONNECTION_RESET' },
+    { ...stream, respondedAt: undefined, status: undefined },
+    { ...stream, status: 500 },
+    { ...stream, completedAt: undefined },
+    { ...stream, respondedAt: 902 },
+    { ...stream, url: `${stream.url}?after=01` },
+    { ...stream, url: `${stream.url}?unexpected=7` },
+    { ...stream, url: `${stream.url}#ignored` },
+  ]) {
+    expect(() => validateOutageLedger(withStream(rejected))).toThrow(/unexpected pre-outage failures/u);
+  }
+});
