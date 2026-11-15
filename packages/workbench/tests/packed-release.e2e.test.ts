@@ -770,7 +770,17 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         openedIndex: number;
         respondedStream?: true;
         url: string;
-      }>> = [Object.freeze({ leftAt: Date.now(), leftIndex: browserRequests.length, openedIndex: comparisonsOpenedIndex, url: `${origin}/api/evals/runs` })];
+      }>> = [];
+      const recordPostRecoveryNavigation = (openedIndex: number): void => {
+        const leftAt = Date.now();
+        const leftIndex = browserRequests.length;
+        const pendingUrls = new Set(browserRequests.slice(openedIndex, leftIndex).filter((request) =>
+          request.origin === origin && request.method === 'GET' && request.completedAt === undefined,
+        ).map((request) => request.url));
+        for (const url of pendingUrls) postRecoveryNavigation.push(Object.freeze({ leftAt, leftIndex, openedIndex, url }));
+      };
+      recordPostRecoveryNavigation(comparisonsOpenedIndex);
+      const problemsOpenedIndex = browserRequests.length;
       await page.goto(workbenchUrl(origin, '/problems'));
       await page.getByTestId('problems-repair').click();
       const rebuiltWithRecoveredSessionResponse = await rebuiltWithRecoveredSession;
@@ -782,6 +792,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const recoveredEpochId = recoveredEpochStatus.epochId;
 
       phase = 'foreground restart/reconnect fresh B browser MCP session';
+      recordPostRecoveryNavigation(problemsOpenedIndex);
       await page.goto(workbenchUrl(origin, '/advanced/protocol'));
       await expectHeading(page, 'MCP playground');
       await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
@@ -842,29 +853,11 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         { heading: 'Problems', label: 'Problems' },
         { heading: 'Evals', label: 'Advanced' },
       ];
-      // Every abortable request a route issues on mount, so leaving the route
-      // before a loaded server answers is claimed by the route's record rather
-      // than reported as an unknown post-recovery failure.
-      const postRecoveryNavigationUrls = new Map<string, readonly string[]>([
-        ['Advanced', [`${origin}/api/evals/suites`, `${origin}/api/evals/runs`]],
-      ]);
-      let activeNavigationRoute: Readonly<{ openedIndex: number; urls?: readonly string[] }> | undefined;
-      // A departure is a test action with no wire event of its own, so it is
-      // stamped twice before the click: the instant, which the abort it
-      // provokes must not precede, and the ledger length, which orders the
-      // requests already handed over (the departed page's) against those that
-      // follow (the next page's) even when both share the instant's millisecond.
+      let activeNavigationOpenedIndex: number | undefined;
       const leaveActiveNavigationRoute = (): void => {
-        if (activeNavigationRoute === undefined) return;
-        const leftAt = Date.now();
-        const leftIndex = browserRequests.length;
-        for (const url of activeNavigationRoute.urls ?? []) postRecoveryNavigation.push(Object.freeze({
-          leftAt,
-          leftIndex,
-          openedIndex: activeNavigationRoute.openedIndex,
-          url,
-        }));
-        activeNavigationRoute = undefined;
+        if (activeNavigationOpenedIndex === undefined) return;
+        recordPostRecoveryNavigation(activeNavigationOpenedIndex);
+        activeNavigationOpenedIndex = undefined;
       };
       for (const route of navigationRoutes) {
         leaveActiveNavigationRoute();
@@ -879,8 +872,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
           await expect(page.getByTestId(route.testId)).toBeVisible({ timeout: browserTimeout });
         }
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        const routeUrls = [...(postRecoveryNavigationUrls.get(route.label) ?? [])];
-        activeNavigationRoute = Object.freeze({ openedIndex, urls: Object.freeze(routeUrls) });
+        activeNavigationOpenedIndex = openedIndex;
       }
       leaveActiveNavigationRoute();
       await page.getByTestId('workbench-nav').locator('[data-area="application"]').focus();
