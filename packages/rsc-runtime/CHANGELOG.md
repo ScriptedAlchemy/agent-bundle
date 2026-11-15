@@ -1,5 +1,11 @@
 # @agent-bundle/runtime
 
+## 0.2.2
+
+### Patch Changes
+
+- 15b13fc: Keep `@agent-bundle/runtime` Flight entrypoints compatible with `@rspack/core` 2.3.2. (#910)
+
 ## 0.2.1
 
 ### Patch Changes
