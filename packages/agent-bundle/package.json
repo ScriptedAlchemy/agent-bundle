@@ -122,7 +122,7 @@
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "chokidar": "5.0.0",
-    "commander": "15.0.0",
+    "commander": "15.1.0",
     "effect": "4.1.2",
     "es-module-lexer": "3.0.4",
     "fast-glob": "3.3.3",
