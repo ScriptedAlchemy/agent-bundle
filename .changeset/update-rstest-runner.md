@@ -4,4 +4,4 @@
 "create-agent-bundle": patch
 ---
 
-Keep package tests and generated project checks compatible with Rstest 0.12.6. (#913)
+Keep package development tests compatible with Rstest 0.12.6. (#913)
