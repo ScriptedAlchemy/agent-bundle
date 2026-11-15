@@ -1,6 +1,6 @@
 ---
 "@agent-bundle/runtime": patch
-"@agent-bundle/rsc-markdown-stream": patch
+"rsc-markdown-stream": patch
 "create-agent-bundle": patch
 ---
 
