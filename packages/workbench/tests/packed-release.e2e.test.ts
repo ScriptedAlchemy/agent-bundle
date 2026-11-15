@@ -768,16 +768,18 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         leftAt: number;
         leftIndex: number;
         openedIndex: number;
+        requestIndex: number;
         respondedStream?: true;
         url: string;
       }>> = [];
       const recordPostRecoveryNavigation = (openedIndex: number): void => {
         const leftAt = Date.now();
         const leftIndex = browserRequests.length;
-        const pendingUrls = new Set(browserRequests.slice(openedIndex, leftIndex).filter((request) =>
-          request.origin === origin && request.method === 'GET' && request.completedAt === undefined,
-        ).map((request) => request.url));
-        for (const url of pendingUrls) postRecoveryNavigation.push(Object.freeze({ leftAt, leftIndex, openedIndex, url }));
+        for (let requestIndex = openedIndex; requestIndex < leftIndex; requestIndex += 1) {
+          const request = browserRequests[requestIndex]!;
+          if (request.origin !== origin || request.method !== 'GET' || request.completedAt !== undefined) continue;
+          postRecoveryNavigation.push(Object.freeze({ leftAt, leftIndex, openedIndex, requestIndex, url: request.url }));
+        }
       };
       recordPostRecoveryNavigation(comparisonsOpenedIndex);
       const problemsOpenedIndex = browserRequests.length;
