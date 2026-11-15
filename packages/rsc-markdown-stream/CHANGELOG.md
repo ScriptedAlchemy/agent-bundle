@@ -1,5 +1,11 @@
 # rsc-markdown-stream
 
+## 0.1.5
+
+### Patch Changes
+
+- 6697fad: Keep package development tests compatible with Rstest 0.12.6. (#913)
+
 ## 0.1.4
 
 ### Patch Changes

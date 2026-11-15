@@ -1,5 +1,18 @@
 # create-agent-bundle
 
+## 0.1.10
+
+### Patch Changes
+
+- e101153: Keep `create-agent-bundle` development checks compatible with Node.js 26.6.6 type definitions. (#915)
+- 6697fad: Keep package development tests compatible with Rstest 0.12.6. (#913)
+- Updated dependencies [bdaab4c]
+- Updated dependencies [ddaf2e2]
+- Updated dependencies [06e4177]
+- Updated dependencies [6697fad]
+  - agent-bundle@0.5.1
+  - @agent-bundle/runtime@0.2.3
+
 ## 0.1.9
 
 ### Patch Changes
