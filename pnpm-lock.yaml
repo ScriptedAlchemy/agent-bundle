@@ -7,7 +7,7 @@ settings:
 overrides:
   '@agent-bundle/runtime': workspace:*
   '@rspress/plugin-twoslash>typescript': npm:typescript@7.0.2
-  '@rspress/plugin-typedoc>typescript': npm:typescript@6.0.3
+  '@rspress/plugin-typedoc>typescript': npm:typescript@7.0.2
   '@shikijs/twoslash>typescript': npm:typescript@7.0.2
   twoslash>typescript: npm:typescript@6.0.3
   typedoc>typescript: npm:typescript@6.0.3
@@ -4075,7 +4075,7 @@ snapshots:
       '@rspress/core': 2.1.3(@rspack/core@2.3.2(@swc/helpers@0.5.24))(micromark-util-types@2.0.2)(micromark@4.0.3(supports-color@7.2.0))(supports-color@7.2.0)
       typedoc: 0.28.20
       typedoc-plugin-markdown: 4.14.1(typedoc@0.28.20)
-      typescript: 6.0.3
+      typescript: 7.0.2
 
   '@rspress/shared@2.1.3(supports-color@7.2.0)':
     dependencies:
