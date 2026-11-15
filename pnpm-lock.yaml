@@ -8,7 +8,7 @@ overrides:
   '@agent-bundle/runtime': workspace:*
   '@rspress/plugin-twoslash>typescript': npm:typescript@7.0.2
   '@rspress/plugin-typedoc>typescript': npm:typescript@7.0.2
-  '@shikijs/twoslash>typescript': npm:typescript@6.0.3
+  '@shikijs/twoslash>typescript': npm:typescript@7.0.2
   twoslash>typescript: npm:typescript@6.0.3
   typedoc>typescript: npm:typescript@6.0.3
 
@@ -4198,7 +4198,7 @@ snapshots:
       '@shikijs/core': 4.6.0
       '@shikijs/types': 4.6.0
       twoslash: 0.3.9(supports-color@7.2.0)
-      typescript: 6.0.3
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
 
