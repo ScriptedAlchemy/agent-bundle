@@ -107,7 +107,9 @@ export const createExampleErrorLedger = (page: Page, origin: string): ExampleErr
   page.on('pageerror', (error) => ledger.pageErrors.push(error.message));
   const pending = new Set<Request>();
   const navigationCancellations = new WeakSet<Request>();
+  let navigationPending = false;
   const recordPendingNavigation = (): void => {
+    navigationPending = true;
     for (const active of pending) navigationCancellations.add(active);
   };
   pendingNavigationSnapshots.set(page, recordPendingNavigation);
@@ -115,10 +117,15 @@ export const createExampleErrorLedger = (page: Page, origin: string): ExampleErr
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
       recordPendingNavigation();
     }
+    if (navigationPending) navigationCancellations.add(request);
     pending.add(request);
+  });
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) navigationPending = false;
   });
   page.on('requestfinished', (request) => pending.delete(request));
   page.on('requestfailed', (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigationPending = false;
     pending.delete(request);
     ledger.failedRequests.push({
       canceledByNavigation: navigationCancellations.has(request),
