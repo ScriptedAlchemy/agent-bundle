@@ -273,6 +273,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
           leftAt: 1_350,
           leftIndex: appendedIndex + 1,
           openedIndex: appendedIndex,
+          requestIndex: appendedIndex,
           respondedStream: true as const,
           url: `${valid.origin}/api/logs/stream?after=32`,
         }),
@@ -296,6 +297,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
           leftAt: 1_350,
           leftIndex: appendedIndex + 1,
           openedIndex: appendedIndex,
+          requestIndex: appendedIndex,
           url: `${valid.origin}/api/playground/catalog?epochId=recovered-epoch`,
         }),
       ]),
@@ -454,4 +456,91 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(unknownPostRecoveryCancellation)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(navigationNonGetCancellation)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(navigationCancellationBeforeDeparture)).toThrow(/Foreground outage ledger rejected/u);
+});
+
+test('accepts only completed successful project stream cancellations before an outage', () => {
+  const ledger = outageLedgerFixture();
+  const stream = ledgerRequest({
+    at: 900, respondedAt: 900, completedAt: 901, error: 'net::ERR_ABORTED',
+    method: 'GET', path: '/api/project/events', status: 200,
+  });
+  const withStream = (request: NetworkLedgerEntry): OutageLedger => ({
+    ...ledger, requests: [request, ...ledger.requests],
+  });
+  validateOutageLedger(withStream(stream));
+  validateOutageLedger(withStream({ ...stream, url: `${stream.url}?after=7` }));
+  for (const rejected of [
+    { ...stream, method: 'POST' },
+    { ...stream, error: 'net::ERR_CONNECTION_RESET' },
+    { ...stream, respondedAt: undefined, status: undefined },
+    { ...stream, status: 500 },
+    { ...stream, completedAt: undefined },
+    { ...stream, respondedAt: 902 },
+    { ...stream, url: `${stream.url}?after=01` },
+    { ...stream, url: `${stream.url}?unexpected=7` },
+    { ...stream, url: `${stream.url}#ignored` },
+  ]) {
+    expect(() => validateOutageLedger(withStream(rejected))).toThrow(/unexpected pre-outage failures/u);
+  }
+});
+
+test('rejects unowned successful project stream cancellations after recovery', () => {
+  const ledger = postRecoveryCancellationFixture();
+  for (const suffix of ['', '?after=7']) {
+    const request = ledgerRequest({
+      at: 1_400, respondedAt: 1_401, completedAt: 1_402, error: 'net::ERR_ABORTED',
+      method: 'GET', path: '/api/project/events', status: 200,
+      url: `${ledger.origin}/api/project/events${suffix}`,
+    });
+    expect(() => validateOutageLedger({ ...ledger, requests: [...ledger.requests, request] }))
+      .toThrow(/unknown post-recovery failure/u);
+  }
+});
+
+test('does not lend navigation ownership to a completed request sharing a pending request URL', () => {
+  const ledger = postRecoveryCancellationFixture();
+  const requestIndex = ledger.requests.length;
+  const url = `${ledger.origin}/api/artifacts/epochs/recovered-epoch`;
+  const completedFailure = ledgerRequest({
+    at: 1_400, respondedAt: 1_401, completedAt: 1_410, error: 'net::ERR_ABORTED',
+    method: 'GET', path: '/api/artifacts/epochs/recovered-epoch', status: 200, url,
+  });
+  const pendingSuccess = ledgerRequest({
+    at: 1_405, respondedAt: 1_406, completedAt: 1_411,
+    method: 'GET', path: '/api/artifacts/epochs/recovered-epoch', status: 200, url,
+  });
+  expect(() => validateOutageLedger({
+    ...ledger,
+    postRecovery: {
+      ...ledger.postRecovery!,
+      navigation: [...ledger.postRecovery!.navigation, {
+        leftAt: 1_410, leftIndex: requestIndex + 2, openedIndex: requestIndex, requestIndex: requestIndex + 1, url,
+      }],
+    },
+    requests: [...ledger.requests, completedFailure, pendingSuccess],
+  })).toThrow(/unknown post-recovery failure/u);
+});
+
+test('owns late old-document reads only before the recorded navigation commit', () => {
+  const ledger = postRecoveryCancellationFixture();
+  const requestIndex = ledger.requests.length;
+  const url = `${ledger.origin}/api/project/status`;
+  const failure = ledgerRequest({
+    at: 1_411, completedAt: 1_412, error: 'net::ERR_ABORTED',
+    method: 'GET', path: '/api/project/status', url,
+  });
+  const navigation = {
+    committedIndex: requestIndex + 1, leftAt: 1_410, leftIndex: requestIndex,
+    openedIndex: requestIndex - 1, requestIndex, url,
+  };
+  const withNavigation = (entry: typeof navigation) => ({
+    ...ledger,
+    postRecovery: { ...ledger.postRecovery!, navigation: [...ledger.postRecovery!.navigation, entry] },
+    requests: [...ledger.requests, failure],
+  });
+  expect(() => validateOutageLedger(withNavigation(navigation))).not.toThrow();
+  expect(() => validateOutageLedger(withNavigation({ ...navigation, committedIndex: requestIndex })))
+    .toThrow(/unknown post-recovery failure/u);
+  expect(() => validateOutageLedger(withNavigation({ ...navigation, leftAt: 1_413 })))
+    .toThrow(/unknown post-recovery failure/u);
 });

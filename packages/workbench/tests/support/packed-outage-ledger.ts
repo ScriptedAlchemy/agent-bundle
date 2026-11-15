@@ -41,13 +41,18 @@ export interface OutageLedger {
      * a request belongs to the visit when it sits in `[openedIndex, leftIndex)`.
      * A millisecond cannot order a request against a departure — a batch of
      * events and the stamp that follows it share one — but the array can. The
+     * A full-document navigation can also own requests delivered after departure
+     * and before its main-frame commit (`committedIndex`).
+     * `requestIndex` identifies the exact request, including when URLs repeat. The
      * abort itself must complete no earlier than `leftAt`: an abort that
      * finished before the departure was not the departure's doing.
      */
     readonly navigation: readonly Readonly<{
+      readonly committedIndex?: number;
       readonly leftAt: number;
       readonly leftIndex: number;
       readonly openedIndex: number;
+      readonly requestIndex: number;
       readonly respondedStream?: true;
       readonly url: string;
     }>[];
@@ -99,7 +104,7 @@ export const postRecoveryCancellationFixture = (): OutageLedger => {
       freshMcpSession: Object.freeze({ closeCompletedAt: 1_321, closeStartedAt: 1_320, id: freshMcpSessionId, openedAt: 1_310 }),
       // The Hooks visit owns exactly the last request of the ledger below.
       navigation: Object.freeze([
-        Object.freeze({ leftAt: 1_340, leftIndex: base.requests.length + 2, openedIndex: base.requests.length + 1, url: hooksUrl }),
+        Object.freeze({ leftAt: 1_340, leftIndex: base.requests.length + 2, openedIndex: base.requests.length + 1, requestIndex: base.requests.length + 1, url: hooksUrl }),
       ]),
     }),
     requests: Object.freeze([
@@ -183,6 +188,20 @@ const isTraceReplayCancellation = (request: NetworkLedgerEntry): boolean =>
   request.path === '/api/trace' && request.completedAt !== undefined && request.at <= request.completedAt &&
   (responseIsAbsent(request) || isSuccessStatus(request.status));
 
+const isProjectEventsCancellation = (request: NetworkLedgerEntry): boolean => {
+  if (
+    request.error !== 'net::ERR_ABORTED' || request.method !== 'GET' || request.path !== '/api/project/events' ||
+    request.respondedAt === undefined || request.completedAt === undefined ||
+    !isSuccessStatus(request.status) || request.at > request.respondedAt || request.respondedAt > request.completedAt
+  ) return false;
+  let url: URL;
+  try { url = new URL(request.url); }
+  catch { return false; }
+  return url.origin === request.origin && url.pathname === request.path && url.hash.length === 0 &&
+    url.href === `${request.origin}${request.path}${url.search}` &&
+    (url.search.length === 0 || hasCanonicalAfterCursor(url));
+};
+
 /**
  * The playground screen retires a superseded in-flight catalog request when
  * its effect re-runs (one AbortController per effect), and route changes abort
@@ -257,7 +276,8 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
   const foreignFailures = requestFailed.filter((request) => request.origin !== ledger.origin);
   assertOutageLedger(foreignFailures.length === 0, `cross-origin request failures: ${JSON.stringify(foreignFailures)}`);
   const preOutageFailures = requestFailed.filter((request) =>
-    ledgerFailureAt(request) < ledger.outageStartedAt && !isKnownPreOutageClientCancellation(request),
+    ledgerFailureAt(request) < ledger.outageStartedAt &&
+      !isKnownPreOutageClientCancellation(request) && !isProjectEventsCancellation(request),
   );
   assertOutageLedger(preOutageFailures.length === 0, `unexpected pre-outage failures: ${JSON.stringify(preOutageFailures)}`);
   const postRecoveryFailures = ledger.requests.filter((request) => request.error !== undefined && ledgerFailureAt(request) >= ledger.recoveredAt);
@@ -297,7 +317,10 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
       // departure stamps, whatever millisecond they carry.
       const failures = postRecoveryFailures.filter((request) => {
         const index = ledger.requests.indexOf(request);
-        return request.url === navigation.url && index >= navigation.openedIndex && index < navigation.leftIndex &&
+        const startedDuringNavigation = navigation.committedIndex !== undefined &&
+          index >= navigation.leftIndex && index < navigation.committedIndex && request.at >= navigation.leftAt;
+        return index === navigation.requestIndex && request.url === navigation.url &&
+          ((index >= navigation.openedIndex && index < navigation.leftIndex) || startedDuringNavigation) &&
           ledgerFailureAt(request) >= navigation.leftAt;
       });
       assertOutageLedger(failures.length <= 1,

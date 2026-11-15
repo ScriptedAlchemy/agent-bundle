@@ -377,7 +377,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     }), { timeout: browserTimeout }).toMatchObject({
       response: { messages: expect.arrayContaining([expect.objectContaining({ method: 'ui/notifications/tool-result' })]) },
     });
-    await expect.poll(() => page.frames().find((frame) => frame.url() === 'about:blank')?.getByTestId('app-state').textContent(), {
+    await expect.poll(() => page.frames().find((frame) => frame.url() === 'about:srcdoc')?.getByTestId('app-state').textContent(), {
       timeout: browserTimeout,
     }).toContain('real-sdk-v2');
     await expect.poll(() => appRequests.some((request) => {
@@ -394,8 +394,8 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     await expect(consent).toContainText('External link: https://example.test/real-app-link');
     await expect(consent).toContainText('Download 1 file (1: text 17 B).');
     await expect(consent).toContainText('Display mode: inline');
-    await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:blank').length, { timeout: browserTimeout }).toBe(1);
-    const initialAppFrame = page.frames().find((frame) => frame.url() === 'about:blank');
+    await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:srcdoc').length, { timeout: browserTimeout }).toBe(1);
+    const initialAppFrame = page.frames().find((frame) => frame.url() === 'about:srcdoc');
     if (initialAppFrame === undefined) throw new Error('Expected the sandbox proxy to create the App srcdoc frame.');
     const initialAppState = initialAppFrame.getByTestId('app-state');
     await expect(initialAppState).toContainText('real-sdk-v2', { timeout: browserTimeout });
@@ -451,10 +451,10 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     await allowDisplayMode.scrollIntoViewIfNeeded();
     await allowDisplayMode.click();
     await expect.poll(async () => {
-      const current = page.frames().find((frame) => frame.url() === 'about:blank');
+      const current = page.frames().find((frame) => frame.url() === 'about:srcdoc');
       return current === undefined ? undefined : JSON.parse(await current.getByTestId('app-state').textContent() ?? 'null').displayReply;
     }, { timeout: browserTimeout }).toEqual({ mode: 'inline' });
-    const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
+    const appFrame = page.frames().find((frame) => frame.url() === 'about:srcdoc');
     if (appFrame === undefined) throw new Error('Expected the sandbox proxy to retain the App srcdoc frame.');
     expect(browserOpens).toContain('https://example.test/real-app-link');
     expect(browserOpens.some((url) => url.startsWith('data:application/json;charset=utf-8,'))).toBe(true);
@@ -617,8 +617,8 @@ e2e('renders a compiler-bundled App that calls the host through createAppClient'
     if (source === null) throw new Error('Expected the bundled App preview iframe to have a source.');
     expect(new URL(source).origin).not.toBe(foregroundOrigin);
     await expect(outerFrame).toHaveAttribute('data-mcp-app-relay-state', 'ready', { timeout: browserTimeout });
-    await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:blank').length, { timeout: browserTimeout }).toBe(1);
-    const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
+    await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:srcdoc').length, { timeout: browserTimeout }).toBe(1);
+    const appFrame = page.frames().find((frame) => frame.url() === 'about:srcdoc');
     if (appFrame === undefined) throw new Error('Expected the sandbox proxy to create the bundled App srcdoc frame.');
     await expect.poll(() => appRequests.some((request) => request.method === 'POST' && request.path.endsWith('/messages')), {
       timeout: browserTimeout,
@@ -712,7 +712,7 @@ e2e('runs the App workspace call lifecycle from pending to result, error, and ca
     const appText = async (): Promise<string | undefined> => {
       let text: string | undefined;
       for (const frame of page.frames()) {
-        if (frame.url() !== 'about:blank') continue;
+        if (frame.url() !== 'about:srcdoc') continue;
         try {
           const locator = frame.locator('#view');
           if (await locator.count() === 1) text = await locator.textContent() ?? undefined;
