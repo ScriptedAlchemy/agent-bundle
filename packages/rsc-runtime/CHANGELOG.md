@@ -1,5 +1,21 @@
 # @agent-bundle/runtime
 
+## 0.2.3
+
+### Patch Changes
+
+- bdaab4c: Keep `build` and artifact validation compatible with Acorn 8.19.0. (#921)
+  
+  Keep CLI commands and generated installers compatible with Commander 15.1.0. (#922)
+  
+  Mask grouped IBANs and PEM private keys with missing or mismatched closing footers in `@agent-bundle/runtime` internal notices. (#923)
+  
+  Keep `dev` Codex app-server connections compatible with WebSocket 8.23.0. (#926)
+- ddaf2e2: Keep `dev` sessions and `@agent-bundle/runtime` clients compatible with MCP client SDK 2.4.0. (#918)
+- 6697fad: Keep package development tests compatible with Rstest 0.12.6. (#913)
+- Updated dependencies [6697fad]
+  - rsc-markdown-stream@0.1.5
+
 ## 0.2.2
 
 ### Patch Changes
