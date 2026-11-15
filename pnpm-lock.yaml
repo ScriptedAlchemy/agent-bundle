@@ -282,7 +282,7 @@ importers:
         version: 1.0.2(jiti@2.7.0)
       '@rstest/core':
         specifier: ^0.11.10 || ^0.12.0
-        version: 0.12.6
+        version: 0.11.12
       acorn:
         specifier: 8.18.0
         version: 8.18.0
@@ -334,7 +334,7 @@ importers:
         version: 8.18.2
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.2)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.1.2)
       react:
         specifier: 19.3.1
         version: 19.3.1
@@ -4849,11 +4849,6 @@ snapshots:
   effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.11.12)(effect@4.1.2):
     dependencies:
       '@rstest/core': 0.11.12
-      effect: 4.1.2
-
-  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.2):
-    dependencies:
-      '@rstest/core': 0.12.6
       effect: 4.1.2
 
   effect@4.1.2: {}
