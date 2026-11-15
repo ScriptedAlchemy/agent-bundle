@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
@@ -12,6 +13,7 @@ import {
   createExampleErrorLedger,
   exampleRoot,
   expectHealthyExamplePage,
+  recordExampleNavigation,
   waitForSettledWorkbench,
   writeExampleReport,
 } from './support/example-acceptance.ts';
@@ -79,6 +81,72 @@ const expectLeafWorkspace = async (page: Parameters<typeof captureExampleState>[
     }
   }
 };
+
+e2e('accepts navigation cancellations while retaining active-document request failures', async ({ page }) => {
+  const server = createServer((request, response) => {
+    if (request.url?.startsWith('/hold')) {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.flushHeaders();
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end('<main>Ready</main>');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('Expected a TCP test server.');
+  const origin = `http://127.0.0.1:${address.port}`;
+  const ledger = createExampleErrorLedger(page, origin);
+  try {
+    recordExampleNavigation(page);
+    await page.goto(origin);
+    for (const method of ['GET', 'POST']) {
+      const response = page.waitForResponse((entry) => entry.url() === `${origin}/hold`);
+      const failed = page.waitForEvent('requestfailed', (request) => request.url() === `${origin}/hold`);
+      await page.evaluate((requestMethod) => {
+        void fetch('/hold', { method: requestMethod }).then((result) => result.text()).catch(() => undefined);
+      }, method);
+      await response;
+      recordExampleNavigation(page);
+      await page.goto(`${origin}/next`);
+      await failed;
+    }
+    for (const method of ['GET', 'POST']) {
+      const response = page.waitForResponse((entry) => entry.url() === `${origin}/hold?before-navigation=1`);
+      const failed = page.waitForEvent('requestfailed', (request) => request.url() === `${origin}/hold?before-navigation=1`);
+      recordExampleNavigation(page);
+      const controller = await page.evaluateHandle((requestMethod) => {
+        const abort = new AbortController();
+        void fetch('/hold?before-navigation=1', { method: requestMethod, signal: abort.signal })
+          .then((result) => result.text()).catch(() => undefined);
+        return abort;
+      }, method);
+      await response;
+      await controller.evaluate((abort) => abort.abort());
+      await failed;
+      await page.goto(`${origin}/next`);
+      await controller.dispose();
+    }
+    expect(ledger.failedRequests).toHaveLength(4);
+    await expectHealthyExamplePage(ledger);
+
+    const failed = page.waitForEvent('requestfailed', (request) => request.url() === `${origin}/hold?active=1`);
+    await page.evaluate(async () => {
+      const controller = new AbortController();
+      const response = await fetch('/hold?active=1', { signal: controller.signal });
+      const body = response.text().catch(() => undefined);
+      controller.abort();
+      await body;
+    });
+    await failed;
+    expect(ledger.pageErrors).toEqual([]);
+    expect(ledger.consoleErrors).toEqual([]);
+    await expect(expectHealthyExamplePage(ledger)).rejects.toThrow('/hold?active=1');
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+  }
+});
 
 e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
@@ -499,6 +567,7 @@ e2e('renders the flagship compiled Application tree by server and kind in real C
     await captureExampleState(page, 'audiobook-curator', 'routes-catalog-by-server');
 
     await editWatchedSource(server, project.root, conversionSource, `${healthyConversion}\nconst = ;\n`, 'failed');
+    recordExampleNavigation(page);
     await page.reload();
     await waitForSettledWorkbench(page);
     await expect(workbenchTestId(page, 'problemsBadge')).toContainText(/[1-9]/u, { timeout: browserTimeout });
@@ -516,6 +585,7 @@ e2e('renders the flagship compiled Application tree by server and kind in real C
     // A malformed `/routes/…` path parses to the Application root: the shell
     // shows the select-a-route state and the first navigation canonicalizes
     // the URL to `/`.
+    recordExampleNavigation(page);
     await page.goto(workbenchUrl(server.url, '/routes/not-a-leaf/missing'));
     await waitForWorkbenchIdle(page);
     await expect(workbenchTestId(page, 'workspaceEmpty')).toBeVisible({ timeout: browserTimeout });
