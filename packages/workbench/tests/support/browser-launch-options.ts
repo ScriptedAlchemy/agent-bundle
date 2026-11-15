@@ -12,12 +12,8 @@ import type { LaunchOptions } from 'playwright';
  *   tests one build, cached by Playwright version, instead of the Chrome the
  *   runner image happens to ship that week. Launched as `channel: 'chromium'`,
  *   which is the full Chromium build in the same new headless mode branded
- *   Chrome runs in — not the `chromium_headless_shell` build a bare headless
- *   `chromium.launch()` picks. The shell's legacy headless mode reports the
- *   MCP App sandbox's `srcdoc` frames differently and mcp-app-real.e2e's two
- *   frame-URL polls never settle under it (reproduced with Playwright 1.62.1,
- *   Chromium 151); `playwright install chromium` installs both builds, so the
- *   choice costs nothing.
+ *   Chrome runs in, rather than the separate headless-shell executable.
+ *   The MCP App tests identify srcdoc documents by their `about:srcdoc` URL.
  *
  * Any other value fails at module load rather than silently launching the
  * wrong browser.
