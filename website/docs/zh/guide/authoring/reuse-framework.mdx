@@ -139,8 +139,8 @@ notice 使用框架 ledger 及[notice 矩阵](../../reference/notices.md)中的�
 
 对于 `internal` notice，运行时会在投递前扫描自由文本，以及凭据类 JSON 成员名下的字符串。
 每个检测结果都会被完整替换为 `[REDACTED]`。检测范围包括以空格分组书写的 IBAN，
-以及结束标记缺失或不匹配的 PEM 私钥块。`public` notice 按原样投递；`secret` notice
-只能通过能力声明明确允许秘密内容的路由投递。
+以及结束标记缺失或不匹配的 PEM 私钥块。`public` notice 的内容不脱敏；`secret` 内容
+只能通过能力声明明确允许秘密内容的路由披露。
 
 ## 通过声明打包资源和可执行文件
 

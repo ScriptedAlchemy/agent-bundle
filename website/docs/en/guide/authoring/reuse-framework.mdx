@@ -165,8 +165,8 @@ receipt are different states; a successful write is not proof that an agent saw 
 For `internal` notices, the runtime scans free text and strings under credential-shaped JSON
 member names before delivery. Each finding is replaced wholly by `[REDACTED]`. Detection includes
 IBANs printed in space-separated groups and PEM private-key blocks whose closing footer is
-missing or mismatched. `public` notices are delivered as authored; `secret` notices require a
-route whose capability explicitly admits secret content.
+missing or mismatched. `public` notice content remains unredacted; `secret` content is disclosed
+only through routes whose capabilities explicitly admit it.
 
 ## Package assets and executables through declarations
 
