@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import type { Frame } from 'playwright-core';
 
 import {
   assertOutageLedger,
@@ -765,6 +766,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       // requests recorded between its arrival and departure stamps — delivery
       // order, which a millisecond cannot establish (see the ledger).
       const postRecoveryNavigation: Array<Readonly<{
+        committedIndex?: number;
         leftAt: number;
         leftIndex: number;
         openedIndex: number;
@@ -781,9 +783,29 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
           postRecoveryNavigation.push(Object.freeze({ leftAt, leftIndex, openedIndex, requestIndex, url: request.url }));
         }
       };
-      recordPostRecoveryNavigation(comparisonsOpenedIndex);
+      const navigateAfterRecovery = async (openedIndex: number, path: string): Promise<void> => {
+        const leftAt = Date.now();
+        const leftIndex = browserRequests.length;
+        recordPostRecoveryNavigation(openedIndex);
+        let committedIndex: number | undefined;
+        const recordCommit = (frame: Frame): void => {
+          if (frame === page.mainFrame() && committedIndex === undefined) committedIndex = browserRequests.length;
+        };
+        page.on('framenavigated', recordCommit);
+        try {
+          await page.goto(workbenchUrl(origin, path));
+        } finally {
+          page.off('framenavigated', recordCommit);
+        }
+        if (committedIndex === undefined) throw new Error('The post-recovery document navigation did not commit.');
+        for (let requestIndex = leftIndex; requestIndex < committedIndex; requestIndex += 1) {
+          const request = browserRequests[requestIndex]!;
+          if (request.origin !== origin || request.method !== 'GET') continue;
+          postRecoveryNavigation.push(Object.freeze({ committedIndex, leftAt, leftIndex, openedIndex, requestIndex, url: request.url }));
+        }
+      };
       const problemsOpenedIndex = browserRequests.length;
-      await page.goto(workbenchUrl(origin, '/problems'));
+      await navigateAfterRecovery(comparisonsOpenedIndex, '/problems');
       await page.getByTestId('problems-repair').click();
       const rebuiltWithRecoveredSessionResponse = await rebuiltWithRecoveredSession;
       expect(rebuiltWithRecoveredSessionResponse.request().headers()['x-agent-bundle-session']).toBe(browserGenerationBToken);
@@ -794,8 +816,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const recoveredEpochId = recoveredEpochStatus.epochId;
 
       phase = 'foreground restart/reconnect fresh B browser MCP session';
-      recordPostRecoveryNavigation(problemsOpenedIndex);
-      await page.goto(workbenchUrl(origin, '/advanced/protocol'));
+      await navigateAfterRecovery(problemsOpenedIndex, '/advanced/protocol');
       await expectHeading(page, 'MCP playground');
       await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
       await expect(page.locator('#mcp-epoch')).toHaveValue(recoveredEpochId, { timeout: browserTimeout });
