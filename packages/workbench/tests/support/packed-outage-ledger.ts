@@ -185,7 +185,8 @@ const isTraceReplayCancellation = (request: NetworkLedgerEntry): boolean =>
 
 const isProjectEventsCancellation = (request: NetworkLedgerEntry): boolean => {
   if (
-    request.path !== '/api/project/events' || request.respondedAt === undefined || request.completedAt === undefined ||
+    request.error !== 'net::ERR_ABORTED' || request.method !== 'GET' || request.path !== '/api/project/events' ||
+    request.respondedAt === undefined || request.completedAt === undefined ||
     !isSuccessStatus(request.status) || request.at > request.respondedAt || request.respondedAt > request.completedAt
   ) return false;
   let url: URL;
@@ -203,7 +204,6 @@ const isProjectEventsCancellation = (request: NetworkLedgerEntry): boolean => {
  */
 const isKnownPreOutageClientCancellation = (request: NetworkLedgerEntry): boolean =>
   request.error === 'net::ERR_ABORTED' && request.method === 'GET' && (
-    isProjectEventsCancellation(request) ||
     knownStreamClass(request.path) !== undefined ||
     request.path === '/api/playground/catalog' ||
     isPlaygroundSessionReadCancellation(request) ||
@@ -271,7 +271,8 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
   const foreignFailures = requestFailed.filter((request) => request.origin !== ledger.origin);
   assertOutageLedger(foreignFailures.length === 0, `cross-origin request failures: ${JSON.stringify(foreignFailures)}`);
   const preOutageFailures = requestFailed.filter((request) =>
-    ledgerFailureAt(request) < ledger.outageStartedAt && !isKnownPreOutageClientCancellation(request),
+    ledgerFailureAt(request) < ledger.outageStartedAt &&
+      !isKnownPreOutageClientCancellation(request) && !isProjectEventsCancellation(request),
   );
   assertOutageLedger(preOutageFailures.length === 0, `unexpected pre-outage failures: ${JSON.stringify(preOutageFailures)}`);
   const postRecoveryFailures = ledger.requests.filter((request) => request.error !== undefined && ledgerFailureAt(request) >= ledger.recoveredAt);

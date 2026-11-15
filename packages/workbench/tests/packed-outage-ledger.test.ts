@@ -481,3 +481,16 @@ test('accepts only completed successful project stream cancellations before an o
     expect(() => validateOutageLedger(withStream(rejected))).toThrow(/unexpected pre-outage failures/u);
   }
 });
+
+test('rejects unowned successful project stream cancellations after recovery', () => {
+  const ledger = postRecoveryCancellationFixture();
+  for (const suffix of ['', '?after=7']) {
+    const request = ledgerRequest({
+      at: 1_400, respondedAt: 1_401, completedAt: 1_402, error: 'net::ERR_ABORTED',
+      method: 'GET', path: '/api/project/events', status: 200,
+      url: `${ledger.origin}/api/project/events${suffix}`,
+    });
+    expect(() => validateOutageLedger({ ...ledger, requests: [...ledger.requests, request] }))
+      .toThrow(/unknown post-recovery failure/u);
+  }
+});
