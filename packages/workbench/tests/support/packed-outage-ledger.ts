@@ -41,11 +41,14 @@ export interface OutageLedger {
      * a request belongs to the visit when it sits in `[openedIndex, leftIndex)`.
      * A millisecond cannot order a request against a departure — a batch of
      * events and the stamp that follows it share one — but the array can. The
-     * `requestIndex` identifies the exact pending request, including when URLs repeat. The
+     * A full-document navigation can also own requests delivered after departure
+     * and before its main-frame commit (`committedIndex`).
+     * `requestIndex` identifies the exact request, including when URLs repeat. The
      * abort itself must complete no earlier than `leftAt`: an abort that
      * finished before the departure was not the departure's doing.
      */
     readonly navigation: readonly Readonly<{
+      readonly committedIndex?: number;
       readonly leftAt: number;
       readonly leftIndex: number;
       readonly openedIndex: number;
@@ -314,8 +317,10 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
       // departure stamps, whatever millisecond they carry.
       const failures = postRecoveryFailures.filter((request) => {
         const index = ledger.requests.indexOf(request);
+        const startedDuringNavigation = navigation.committedIndex !== undefined &&
+          index >= navigation.leftIndex && index < navigation.committedIndex && request.at >= navigation.leftAt;
         return index === navigation.requestIndex && request.url === navigation.url &&
-          index >= navigation.openedIndex && index < navigation.leftIndex &&
+          ((index >= navigation.openedIndex && index < navigation.leftIndex) || startedDuringNavigation) &&
           ledgerFailureAt(request) >= navigation.leftAt;
       });
       assertOutageLedger(failures.length <= 1,
