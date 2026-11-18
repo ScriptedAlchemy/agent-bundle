@@ -46,11 +46,11 @@
   },
   "devDependencies": {
     "@clack/prompts": "1.9.0",
-    "@effect/platform-node": "4.1.2",
+    "@effect/platform-node": "4.1.4",
     "@rslib/core": "1.0.7",
     "@rstest/core": "0.12.6",
     "@types/node": "26.6.6",
-    "effect": "4.1.2",
+    "effect": "4.1.4",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e"
   },
   "peerDependencies": {

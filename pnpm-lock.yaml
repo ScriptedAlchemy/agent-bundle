@@ -421,8 +421,8 @@ importers:
         specifier: workspace:*
         version: link:../rsc-runtime
       '@effect/platform-node-shared':
-        specifier: 4.1.2
-        version: 4.1.2(effect@4.1.2)
+        specifier: 4.1.4
+        version: 4.1.4(effect@4.1.4)
       '@modelcontextprotocol/client':
         specifier: 2.4.0
         version: 2.4.0
@@ -440,7 +440,7 @@ importers:
         version: 2.1.1(@rsbuild/core@2.3.2)(@rspack/core@2.3.2(@swc/helpers@0.5.24))
       '@rslib/core':
         specifier: 1.0.7
-        version: 1.0.7(typescript@7.0.2)
+        version: 1.0.7(typescript@5.9.3)
       '@rslint/core':
         specifier: 0.10.1
         version: 0.10.1(jiti@2.7.0)
@@ -466,8 +466,8 @@ importers:
         specifier: 15.1.0
         version: 15.1.0
       effect:
-        specifier: 4.1.2
-        version: 4.1.2
+        specifier: 4.1.4
+        version: 4.1.4
       es-module-lexer:
         specifier: 3.0.4
         version: 3.0.4
@@ -501,7 +501,7 @@ importers:
         version: 8.18.2
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.2)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.4)
       react:
         specifier: 19.3.1
         version: 19.3.1
@@ -525,8 +525,8 @@ importers:
         specifier: 1.9.0
         version: 1.9.0
       '@effect/platform-node':
-        specifier: 4.1.2
-        version: 4.1.2(effect@4.1.2)(redis@6.2.1)
+        specifier: 4.1.4
+        version: 4.1.4(effect@4.1.4)(redis@6.2.1)
       '@rslib/core':
         specifier: 1.0.7
         version: 1.0.7(typescript@7.0.2)
@@ -537,11 +537,11 @@ importers:
         specifier: 26.6.6
         version: 26.6.6
       effect:
-        specifier: 4.1.2
-        version: 4.1.2
+        specifier: 4.1.4
+        version: 4.1.4
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.2)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.4)
 
   packages/rsc-markdown-stream:
     devDependencies:
@@ -564,8 +564,8 @@ importers:
         specifier: 2.4.0
         version: 2.4.0
       effect:
-        specifier: 4.1.2
-        version: 4.1.2
+        specifier: 4.1.4
+        version: 4.1.4
       flare-redact:
         specifier: 1.9.0
         version: 1.9.0
@@ -593,7 +593,7 @@ importers:
         version: 19.3.0
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.2)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.4)
       micromark:
         specifier: 4.0.3
         version: 4.0.3(supports-color@7.2.0)
@@ -613,8 +613,8 @@ importers:
   packages/workbench:
     dependencies:
       '@effect/atom-react':
-        specifier: 4.1.2
-        version: 4.1.2(effect@4.1.2)(react@19.3.1)(scheduler@0.28.0)
+        specifier: 4.1.4
+        version: 4.1.4(effect@4.1.4)(react@19.3.1)(scheduler@0.28.0)
       '@modelcontextprotocol/client':
         specifier: 2.4.0
         version: 2.4.0
@@ -625,8 +625,8 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
       effect:
-        specifier: 4.1.2
-        version: 4.1.2
+        specifier: 4.1.4
+        version: 4.1.4
       react:
         specifier: 19.3.1
         version: 19.3.1
@@ -862,10 +862,10 @@ packages:
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
 
-  '@effect/atom-react@4.1.2':
-    resolution: {integrity: sha512-XRAm4lks2kzNFQIz9QTGKR02CaDTR9VJNRXDjDAR8OzM15ybrK4YkB7OlFZ9U+hxXe3DXJZx7RU1/xI2Em2PGQ==}
+  '@effect/atom-react@4.1.4':
+    resolution: {integrity: sha512-Xj58DcAzKsysHhzBCPaz2v1QAJq6NvMdGVmG7SV4zkw1RMiTZv8gaOXA1VqIRlpmvdspMwRe/BQ4eayuzRZTpQ==}
     peerDependencies:
-      effect: ^4.1.2
+      effect: ^4.1.4
       react: '>=19.0.0 <20.0.0'
       scheduler: '>=0.25.0 <0.29.0'
 
@@ -873,17 +873,17 @@ packages:
     resolution: {integrity: sha512-np/zJgk71/PyHxtoqyUKLYcpQhoRBI+L6+1Z0ILk35JSQ/lvXzwlwOwddYZLDkeC4bdF2ukKekqKlla/F88R5w==}
     hasBin: true
 
-  '@effect/platform-node-shared@4.1.2':
-    resolution: {integrity: sha512-wSwl9A/G1hcVvF8nLI+YfB3EyOIDvWS6+lsTZBkmgDnPBL7m8YWZF+1HD+mdEsb52SUGfukip46Q3gRwSdk3QA==}
+  '@effect/platform-node-shared@4.1.4':
+    resolution: {integrity: sha512-DWdfphHGOFJNj/mYadgpT3jIm8aRXDcPrQiGXFBH4p2H4XmA7iYMrPsI8NxVgZ7kNX0q1+FGJZJama0tINHRAg==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
-      effect: ^4.1.2
+      effect: ^4.1.4
 
-  '@effect/platform-node@4.1.2':
-    resolution: {integrity: sha512-ye0UjxORdd5Qu3paZ1LljgGOALWHt7muP9VTpjUSCNfcesiB/Hm7wPJIvZeu4gnwpTe5BtEnO1VHngWqjJp8mA==}
+  '@effect/platform-node@4.1.4':
+    resolution: {integrity: sha512-h7QExTPq/RfYtHP/8tMlgfBvqYsuJKhxfkU6w0+NaF/ihqQ8Y3GH9t28ltupQjoqMM7P6W5gy8rOji7F0qVrmg==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
-      effect: ^4.1.2
+      effect: ^4.1.4
       redis: '>=5.1.0 <7.0.0'
 
   '@effect/tsgo-darwin-arm64@0.69.0':
@@ -2008,8 +2008,8 @@ packages:
       '@rstest/core': ^0.11.11 || ^0.12.0
       effect: ^4.0.0-rc.113
 
-  effect@4.1.2:
-    resolution: {integrity: sha512-d3Oah1WyKxFLFh19yWheS5IXIVaITzxZ71JkE1rkUozq/6EcJSU5nPk5bF2QrSygZ3SQoiNQB8TsxFriyMeMaQ==}
+  effect@4.1.4:
+    resolution: {integrity: sha512-Tgrv/9FN+TZYyOn8XSli+fVqAfwDrDAkiX5Uu9vztINb675VTQdhD0gWI5Kzvhlh9QqzjZvw72iugqw5pwoghQ==}
 
   emoji-regex@8.0.0:
     resolution: {integrity: sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==}
@@ -3640,27 +3640,27 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.1)(scheduler@0.28.0)':
+  '@effect/atom-react@4.1.4(effect@4.1.4)(react@19.3.1)(scheduler@0.28.0)':
     dependencies:
-      effect: 4.1.2
+      effect: 4.1.4
       react: 19.3.1
       scheduler: 0.28.0
 
   '@effect/language-service@0.87.5': {}
 
-  '@effect/platform-node-shared@4.1.2(effect@4.1.2)':
+  '@effect/platform-node-shared@4.1.4(effect@4.1.4)':
     dependencies:
       '@types/ws': 8.18.2
-      effect: 4.1.2
+      effect: 4.1.4
       ws: 8.23.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.1.2(effect@4.1.2)(redis@6.2.1)':
+  '@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.2.1)':
     dependencies:
-      '@effect/platform-node-shared': 4.1.2(effect@4.1.2)
-      effect: 4.1.2
+      '@effect/platform-node-shared': 4.1.4(effect@4.1.4)
+      effect: 4.1.4
       redis: 6.2.1
       undici: 8.12.4
     transitivePeerDependencies:
@@ -4036,6 +4036,16 @@ snapshots:
       '@rsbuild/core': 2.3.2
     transitivePeerDependencies:
       - '@rspack/core'
+
+  '@rslib/core@1.0.7(typescript@5.9.3)':
+    dependencies:
+      '@rsbuild/core': 2.3.2
+      rsbuild-plugin-dts: 1.0.7(@rsbuild/core@2.3.2)(typescript@5.9.3)
+    optionalDependencies:
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - '@module-federation/runtime-tools'
+      - core-js
 
   '@rslib/core@1.0.7(typescript@7.0.2)':
     dependencies:
@@ -4751,12 +4761,12 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.2):
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e(patch_hash=c258c82e11d30fc298e865f2c01cfcd7cff29896b8661412a4552c90ba1af263)(@rstest/core@0.12.6)(effect@4.1.4):
     dependencies:
       '@rstest/core': 0.12.6
-      effect: 4.1.2
+      effect: 4.1.4
 
-  effect@4.1.2: {}
+  effect@4.1.4: {}
 
   emoji-regex@8.0.0: {}
 
@@ -6249,6 +6259,13 @@ snapshots:
       path-to-regexp: 8.4.2
     transitivePeerDependencies:
       - supports-color
+
+  rsbuild-plugin-dts@1.0.7(@rsbuild/core@2.3.2)(typescript@5.9.3):
+    dependencies:
+      '@ast-grep/napi': 0.51.1
+      '@rsbuild/core': 2.3.2
+    optionalDependencies:
+      typescript: 5.9.3
 
   rsbuild-plugin-dts@1.0.7(@rsbuild/core@2.3.2)(typescript@7.0.2):
     dependencies:
