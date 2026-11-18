@@ -109,7 +109,7 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/platform-node-shared": "4.1.2",
+    "@effect/platform-node-shared": "4.1.4",
     "@modelcontextprotocol/client": "2.4.0",
     "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
@@ -123,7 +123,7 @@
     "ajv-formats": "3.0.1",
     "chokidar": "6.0.0",
     "commander": "15.1.0",
-    "effect": "4.1.2",
+    "effect": "4.1.4",
     "es-module-lexer": "3.0.4",
     "fast-glob": "3.3.3",
     "ignore": "7.0.14",
