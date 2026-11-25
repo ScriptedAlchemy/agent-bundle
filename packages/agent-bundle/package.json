@@ -134,7 +134,7 @@
   },
   "devDependencies": {
     "@types/npm-package-arg": "6.1.4",
-    "@types/react": "19.3.0",
+    "@types/react": "19.3.3",
     "@types/ws": "8.18.2",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@cbbf87e",
     "react": "19.3.1",

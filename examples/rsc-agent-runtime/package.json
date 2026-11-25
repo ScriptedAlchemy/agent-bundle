@@ -30,7 +30,7 @@
     "@rsbuild/core": "2.3.2",
     "@rsbuild/plugin-react": "2.1.1",
     "@rstest/core": "0.12.6",
-    "@types/react": "19.3.0",
+    "@types/react": "19.3.3",
     "@types/react-dom": "19.3.0",
     "agent-bundle": "workspace:*",
     "playwright-core": "1.65.1",
