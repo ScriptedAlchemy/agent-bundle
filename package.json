@@ -74,7 +74,7 @@
     "@rstest/adapter-rslib": "0.12.6",
     "@rstest/core": "0.12.6",
     "@rstest/playwright": "0.12.6",
-    "@types/node": "26.6.6",
+    "@types/node": "26.6.11",
     "agent-bundle": "workspace:*",
     "pkg-pr-new": "0.0.93",
     "playwright": "1.65.1",
