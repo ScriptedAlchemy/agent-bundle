@@ -52,7 +52,7 @@
     "react": "^19.0.0"
   },
   "devDependencies": {
-    "@rslib/core": "1.0.7",
+    "@rslib/core": "1.1.0",
     "@rstest/core": "0.12.6",
     "@types/react": "19.3.0",
     "react": "19.3.1"
