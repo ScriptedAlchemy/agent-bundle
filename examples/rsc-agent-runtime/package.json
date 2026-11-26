@@ -27,7 +27,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@rsbuild/core": "2.3.2",
+    "@rsbuild/core": "2.3.5",
     "@rsbuild/plugin-react": "2.1.1",
     "@rstest/core": "0.12.6",
     "@types/react": "19.3.0",
